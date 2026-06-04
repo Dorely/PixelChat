@@ -1,0 +1,199 @@
+@page "/"
+@page "/chat"
+@using PixelChat.Chat
+@using PixelChat.Llm
+@using PixelChat.Models
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@inject IAssistantChatService ChatService
+@inject IWorkspaceChatRuntime ChatRuntime
+@inject ILlmProviderService ProviderService
+
+<PageTitle>PixelChat</PageTitle>
+
+<div class="chat-workspace">
+    <ChatSurface Title="PixelChat"
+                 Subtitle="@_providerSubtitle"
+                 Loading="@_loading"
+                 Messages="@_messages"
+                 Live="@_live"
+                 Error="@_error"
+                 Input="@_input"
+                 InputChanged="OnInputChanged"
+                 Placeholder="Ask about sprite prompts, style direction, or asset planning..."
+                 Running="@_running"
+                 ComposerDisabled="@(_loading || !_hasWorkingProvider)"
+                 SendDisabled="@(_loading || _running || !_hasWorkingProvider || string.IsNullOrWhiteSpace(_input))"
+                 CssClass="chat-workspace-surface"
+                 ForceScrollKey="@_forceScrollKey"
+                 ScrollKey="@_scrollKey"
+                 ResetComposerKey="@_resetComposerKey"
+                 OnSend="SendAsync"
+                 OnStop="StopAsync"
+                 OnClearError="ClearError">
+        <HeaderActions>
+            <a class="btn btn-sm btn-outline-secondary" href="settings/providers">Providers</a>
+            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_running" @onclick="ResetAsync">Reset</button>
+        </HeaderActions>
+    </ChatSurface>
+</div>
+
+@code {
+    private readonly List<ChatRenderableMessage> _messages = [];
+    private ChatLiveTurn? _live;
+    private string _input = string.Empty;
+    private string? _error;
+    private string _providerSubtitle = "Checking provider status...";
+    private bool _loading = true;
+    private bool _running;
+    private bool _hasWorkingProvider;
+    private int _forceScrollKey;
+    private int _scrollKey;
+    private int _resetComposerKey;
+
+    protected override async Task OnInitializedAsync()
+    {
+        ChatRuntime.StateChanged += OnChatRuntimeStateChanged;
+        await ReloadAsync();
+        ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
+    }
+
+    private async Task ReloadAsync()
+    {
+        _loading = true;
+        _messages.Clear();
+
+        var conversation = await ChatService.GetOrCreateAsync();
+        var persistedMessages = await ChatService.LoadMessagesAsync(conversation.Id);
+        _messages.AddRange(ToRenderable(persistedMessages));
+
+        var availability = await ProviderService.GetDefaultChatProviderAvailabilityAsync();
+        _hasWorkingProvider = availability.IsAvailable && availability.Provider is not null;
+        _providerSubtitle = _hasWorkingProvider
+            ? $"Default provider: {availability.Provider!.DisplayName ?? availability.Provider.Name} / {availability.Provider.ModelId}"
+            : availability.Message;
+
+        _loading = false;
+        _forceScrollKey++;
+        ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
+    }
+
+    private void OnChatRuntimeStateChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            var wasRunning = _running;
+            var snapshot = ChatRuntime.GetSnapshot();
+            ApplyChatRuntimeSnapshot(snapshot);
+            if (wasRunning && !snapshot.Running)
+            {
+                await ReloadAsync();
+                return;
+            }
+
+            _scrollKey++;
+            StateHasChanged();
+        });
+    }
+
+    private void ApplyChatRuntimeSnapshot(WorkspaceChatRuntimeSnapshot snapshot)
+    {
+        _running = snapshot.Running;
+        _live = snapshot.Live;
+        _error = snapshot.Error;
+    }
+
+    private Task OnInputChanged(string value)
+    {
+        _input = value;
+        return Task.CompletedTask;
+    }
+
+    private async Task SendAsync()
+    {
+        if (_running || string.IsNullOrWhiteSpace(_input))
+            return;
+
+        var text = _input.Trim();
+        _input = string.Empty;
+        _resetComposerKey++;
+        _error = null;
+
+        _messages.Add(new ChatRenderableMessage(
+            Guid.NewGuid(),
+            ChatMessageRole.User,
+            ChatMessageStatus.Completed,
+            text));
+        _scrollKey++;
+
+        try
+        {
+            await ChatRuntime.StartTurnAsync(text);
+            ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _running = false;
+        }
+    }
+
+    private Task StopAsync()
+    {
+        return ChatRuntime.StopTurnAsync();
+    }
+
+    private async Task ResetAsync()
+    {
+        if (_running)
+            return;
+
+        await ChatRuntime.ResetConversationAsync();
+        _error = null;
+        _input = string.Empty;
+        _live = null;
+        _resetComposerKey++;
+        await ReloadAsync();
+    }
+
+    private void ClearError()
+    {
+        _error = null;
+        ChatRuntime.ClearError();
+    }
+
+    private static List<ChatRenderableMessage> ToRenderable(IReadOnlyList<AssistantMessage> messages)
+    {
+        var renderable = new List<ChatRenderableMessage>(messages.Count);
+        foreach (var message in messages)
+        {
+            if (message.Role == AssistantMessageRole.System)
+                continue;
+
+            renderable.Add(new ChatRenderableMessage(
+                message.Id,
+                ToChatRole(message.Role),
+                ToChatStatus(message.Status),
+                message.Content));
+        }
+
+        return renderable;
+    }
+
+    private static ChatMessageRole ToChatRole(AssistantMessageRole role) =>
+        role == AssistantMessageRole.User ? ChatMessageRole.User : ChatMessageRole.Assistant;
+
+    private static ChatMessageStatus ToChatStatus(AssistantMessageStatus status) => status switch
+    {
+        AssistantMessageStatus.Failed => ChatMessageStatus.Failed,
+        AssistantMessageStatus.Cancelled => ChatMessageStatus.Cancelled,
+        AssistantMessageStatus.Pending => ChatMessageStatus.Pending,
+        _ => ChatMessageStatus.Completed
+    };
+
+    public ValueTask DisposeAsync()
+    {
+        ChatRuntime.StateChanged -= OnChatRuntimeStateChanged;
+        return ValueTask.CompletedTask;
+    }
+}

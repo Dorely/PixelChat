@@ -1,0 +1,40 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "PixelChat Electron",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build PixelChat",
+      "program": "${workspaceFolder}/PixelChat/bin/Debug/net10.0/win-x64/PixelChat.exe",
+      "args": [
+        "--electron"
+      ],
+      "cwd": "${workspaceFolder}/PixelChat",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
+    {
+      "name": "PixelChat Web",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build PixelChat",
+      "program": "${workspaceFolder}/PixelChat/bin/Debug/net10.0/win-x64/PixelChat.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/PixelChat",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_URLS": "http://localhost:1455"
+      },
+      "serverReadyAction": {
+        "action": "openExternally",
+        "pattern": "\\bNow listening on:\\s+(https?://\\S+)"
+      }
+    }
+  ]
+}
