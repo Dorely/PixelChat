@@ -102,7 +102,7 @@
     justify-content: flex-end;
 }
 
-.openai-provider-form {
+.codex-provider-form {
     display: flex;
     align-items: end;
     flex-wrap: wrap;
@@ -114,7 +114,7 @@
     min-width: 0;
 }
 
-.openai-model-field {
+.codex-model-field {
     width: min(22rem, 100%);
 }
 
@@ -204,6 +204,12 @@
 
 .provider-table .form-control {
     width: 100%;
+}
+
+.provider-name-input,
+.endpoint-input,
+.model-input {
+    min-width: 0;
 }
 
 .provider-key {
@@ -329,7 +335,7 @@
         align-self: flex-start;
     }
 
-    .openai-provider-form,
+    .codex-provider-form,
     .provider-inline-actions {
         align-items: stretch;
     }

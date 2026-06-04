@@ -57,8 +57,8 @@
 
         @if (_openAIAccountProvider is not null)
         {
-            <div class="openai-provider-form">
-                <div class="provider-field openai-model-field">
+            <div class="codex-provider-form">
+                <div class="provider-field codex-model-field">
                     <label class="form-label form-label-sm">Model</label>
                     <input type="text" class="form-control form-control-sm" @bind="_openAIAccountProvider.ModelId" />
                 </div>
@@ -69,7 +69,6 @@
                             @onclick="() => TestProviderAsync(_openAIAccountProvider)">
                         @(_testingProviderId == _openAIAccountProvider.Id ? "Testing..." : "Test")
                     </button>
-                    @RenderDefaultCell(_openAIAccountProvider)
                     <span class="badge-stack">@RenderChatStatus(_openAIAccountProvider)</span>
                 </div>
             </div>
@@ -84,9 +83,9 @@
             </div>
         </div>
 
-        @if (_endpointParents.Count == 0)
+        @if (_parents.Count == 0)
         {
-            <div class="empty-state">No endpoint providers configured yet.</div>
+            <div class="empty-state">No providers configured yet.</div>
         }
         else
         {
@@ -104,7 +103,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var provider in _endpointParents)
+                        @foreach (var provider in _parents)
                         {
                             <tr>
                                 <td class="provider-name-cell">
@@ -128,6 +127,17 @@
                                 </td>
                                 <td class="provider-actions-cell">
                                     <div class="action-row">
+                                        @if (provider.AuthType == AuthType.OAuth)
+                                        {
+                                            if (_oauthStatus.TryGetValue(provider.Id, out var connected) && connected)
+                                            {
+                                                <button type="button" class="btn btn-sm btn-outline-warning" @onclick="() => RevokeOAuthAsync(provider.Id)">Disconnect</button>
+                                            }
+                                            else
+                                            {
+                                                <a href="/auth/start/@provider.Id" class="btn btn-sm btn-outline-success">Connect</a>
+                                            }
+                                        }
                                         <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => SaveProviderAsync(provider)">Save</button>
                                         <button type="button" class="btn btn-sm btn-outline-info"
                                                 disabled="@(_testingProviderId is not null)"
@@ -261,7 +271,7 @@
 </div>
 
 @code {
-    private List<LlmProvider> _endpointParents = [];
+    private List<LlmProvider> _parents = [];
     private Dictionary<int, List<LlmProvider>> _children = [];
     private Dictionary<int, bool> _oauthStatus = [];
     private Dictionary<int, bool> _chatReadyStatus = [];
@@ -324,16 +334,14 @@
     private async Task ReloadAsync()
     {
         var all = await ProviderService.GetAllAsync();
-        _endpointParents = all
-            .Where(p => p.CredentialSourceId is null && !OpenAIAccountProvider.IsOpenAIAccount(p))
-            .ToList();
+        _parents = all.Where(p => p.CredentialSourceId is null).ToList();
         _children = all
             .Where(p => p.CredentialSourceId is int)
             .GroupBy(p => p.CredentialSourceId!.Value)
             .ToDictionary(g => g.Key, g => g.OrderBy(c => c.ModelId).ToList());
 
         _oauthStatus = [];
-        foreach (var provider in all.Where(p => p.AuthType == AuthType.OAuth))
+        foreach (var provider in _parents.Where(p => p.AuthType == AuthType.OAuth))
         {
             var token = await OpenAIAuth.GetValidTokenAsync(provider.Id);
             _oauthStatus[provider.Id] = token is not null;
@@ -344,7 +352,7 @@
             _chatReadyStatus[provider.Id] = await ProviderService.IsChatProviderWorkingAsync(provider.Id);
         _hasWorkingChatProvider = _chatReadyStatus.Values.Any(ready => ready);
 
-        _openAIAccountProvider = all.FirstOrDefault(p => p.Name == OpenAIAccountProvider.Name);
+        _openAIAccountProvider = _parents.FirstOrDefault(p => p.Name == OpenAIAccountProvider.Name);
         _openAIAccountConnected = _openAIAccountProvider is not null
             && _oauthStatus.TryGetValue(_openAIAccountProvider.Id, out var connected)
             && connected;
@@ -473,6 +481,13 @@
     {
         await ProviderService.DeleteAsync(provider.Id);
         SetStatus($"Provider '{provider.DisplayName ?? provider.Name}' deleted.", "success");
+        await ReloadAsync();
+    }
+
+    private async Task RevokeOAuthAsync(int id)
+    {
+        await OpenAIAuth.RevokeTokenAsync(id);
+        SetStatus("OAuth token revoked.", "success");
         await ReloadAsync();
     }
 
