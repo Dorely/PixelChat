@@ -26,7 +26,7 @@
 |------|-------------|
 | `PixelChat.csproj` | `net10.0` Blazor Web project with Electron.NET, EF Core SQLite, Microsoft.Extensions.AI, OpenAI SDK, runtime IDs, and warnings-as-errors. |
 | `Program.cs` | App host setup: Electron mode detection/window launch, Blazor Interactive Server, DI wiring, EF migrations, OAuth endpoints, and routing. |
-| `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OpenAI account OAuth redirect URI, SQLite connection string, Blazor hub size, and agent request timeout. |
+| `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OAuth redirect URI, SQLite, Blazor hub size, agent/tool limits, and image-generation defaults. |
 | `Properties/launchSettings.json` | Local launch profiles for browser-hosted HTTP and Electron desktop mode on `localhost:1455`. |
 | `Properties/electron-builder.json` | Electron/electron-builder packaging metadata for Windows, Linux, and macOS targets. |
 
@@ -40,10 +40,24 @@
 
 | File | Description |
 |------|-------------|
-| `IAssistantChatService.cs` / `AssistantChatService.cs` | Persistent text-only assistant turn service with provider resolution, streaming, cancellation, reset, and transcript persistence. |
-| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps active assistant turns alive across route changes and renderer reloads. |
-| `AssistantPromptBuilder.cs` | Builds the first-slice PixelChat system prompt for 2D game art planning and prompt guidance. |
-| `AssistantTurnUpdate.cs` | Streaming update records consumed by the chat page: text deltas, completion, and turn errors. |
+| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with visible context serialization, tool-call streaming, confirmation persistence, and transcript replay. |
+| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive, exposes confirmation/rejection, and signals workspace mutations across renderer reloads. |
+| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, and confirmation-gated tool use. |
+| `AssistantToolModels.cs` | Persisted tool-call manifest records and confirmation result models used by chat/runtime/UI. |
+| `AssistantToolRegistry.cs` | Tool registry for workspace state, context chips, mode/asset selection, generation, edit, recipe, marking, reference, and export actions. |
+| `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text deltas, tool-call deltas, pending confirmations, completions, and errors. |
+
+### Art/
+
+| File | Description |
+|------|-------------|
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, batches, masks, recipes, context chips, import, crop, generation, and masked edits. |
+| `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench and assistant tools. |
+| `ImageProviderModels.cs` | Provider abstraction plus generation/edit request and result records. |
+| `OpenAIAccountImageProvider.cs` | OpenAI account Responses image provider using Codex-style auth headers, SSE parsing, references, and masked edit payloads. |
+| `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, timeout, and reference defaults. |
+| `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
+| `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 
 ### Components/
 
@@ -57,14 +71,14 @@
 
 | File | Description |
 |------|-------------|
-| `ChatModels.cs` | UI-only chat transcript and live-turn models used by `ChatSurface`. |
-| `ChatSurface.razor` / `.razor.css` / `.razor.js` | Reusable text-chat shell for transcript rendering, streaming state, composer autosize, enter-to-send, and scroll-follow behavior. |
+| `ChatModels.cs` | UI-only chat transcript, live-turn, and tool confirmation models used by `ChatSurface`. |
+| `ChatSurface.razor` / `.razor.css` / `.razor.js` | Reusable chat shell for transcript rendering, tool cards, streaming state, composer autosize, enter-to-send, and scroll-follow behavior. |
 
 ### Components/Layout/
 
 | File | Description |
 |------|-------------|
-| `MainLayout.razor` / `.razor.css` | Desktop-style app shell with left navigation and full-height content area. |
+| `MainLayout.razor` / `.razor.css` | Full-height app layout that gives the workbench route the whole viewport. |
 | `NavMenu.razor` / `.razor.css` | Sidebar navigation for Chat and Providers. |
 | `ReconnectModal.razor` / `.razor.css` / `.razor.js` | Template reconnect UI shown when the SignalR circuit drops. |
 
@@ -72,7 +86,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` | Chat route at `/` and `/chat`; attaches to the persistent chat runtime and gates composer use on a tested provider. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat, Generate/Compare/Edit tabs, context panel, asset tray, and canvas editor helpers. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, defaults, API-key updates, and child model rows. |
@@ -81,20 +95,29 @@
 
 | File | Description |
 |------|-------------|
-| `AgentOptions.cs` | Configurable agent/chat options for OpenAI account request timeout. |
+| `AgentOptions.cs` | Configurable agent/chat options for OpenAI account timeout, tool-loop iterations, and model-facing tool result limits. |
 | `ChatClientFactory.cs` / `IChatClientFactory.cs` | Creates and tests Microsoft.Extensions.AI chat clients from persisted providers and effective credentials. |
 | `OpenAIAccountAuthService.cs` / `IOpenAIAccountAuthService.cs` | OpenAI account OAuth PKCE flow, token refresh, revocation, and token secret persistence. |
-| `OpenAIAccountChatClient.cs` | Text-streaming `IChatClient` bridge to the OpenAI account Responses SSE endpoint. |
+| `OpenAIAccountChatClient.cs` | Streaming `IChatClient` bridge to the OpenAI account Responses SSE endpoint with image inputs and function-call events. |
 | `OpenAIAccountProvider.cs` | Constants and helpers for the OpenAI account provider and JWT account-id extraction. |
 | `LlmProviderService.cs` / `ILlmProviderService.cs` | Provider CRUD, readiness snapshots, credential status, default-provider selection, and effective API-key/token resolution. |
 | `SecretNames.cs` | Centralized secret key names for provider API keys and OAuth tokens. |
+| `ToolCallStreamingContent.cs` | `AIContent` records for provider-level function-call start and argument-delta streaming. |
+| `ToolCallArguments.cs` | Parser/normalizer for JSON and SDK tool-call arguments before `AIFunction` invocation. |
+| `StreamingToolCallTracker.cs` | Normalizes provider function-call start/delta/final content into app-level streaming tool updates. |
 
 ### Models/
 
 | File | Description |
 |------|-------------|
-| `AssistantConversation.cs` | EF entity for the single persistent assistant conversation. |
-| `AssistantMessage.cs` | EF entity and enums for transcript messages, roles, statuses, and errors. |
+| `Project.cs` | EF entity for art workbench projects, active asset/batch, and active workspace mode. |
+| `ArtAsset.cs` | EF entity for imported, generated, edited, and cropped image BLOBs plus lineage, flags, prompt, and metadata. |
+| `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, lineage, and status. |
+| `PromptRecipe.cs` | EF entity for reusable visible prompt templates, style/avoid rules, examples, and preferred defaults. |
+| `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets. |
+| `ChatContextAttachment.cs` | EF entity for visible chat context chips referencing assets, masks, crops, recipes, or batches. |
+| `AssistantConversation.cs` | EF entity for project-scoped persistent assistant conversations. |
+| `AssistantMessage.cs` | EF entity and enums for transcript messages, tool roles, tool-call manifests, roles, statuses, and errors. |
 | `AuthType.cs` | Enum for provider authentication modes: none, API key, or OAuth. |
 | `LlmProvider.cs` | EF entity for chat endpoint/model rows, default selection, child model credential inheritance, and readiness snapshots. |
 | `OAuthToken.cs` | EF entity for OAuth token metadata; token values are stored through `ISecretStore`. |
@@ -104,7 +127,7 @@
 
 | File | Description |
 |------|-------------|
-| `AppDbContext.cs` | EF Core context for providers, OAuth metadata, stored secrets, and assistant transcripts; includes SQLite lock retry and model configuration. |
+| `AppDbContext.cs` | EF Core context for providers, OAuth metadata, stored secrets, assistant transcripts, projects, assets, batches, recipes, masks, and context chips. |
 | `DatabaseMigrationBootstrapper.cs` | Migration bootstrapper that clears stale SQLite migration locks before running EF migrations. |
 | `PersistenceServiceCollectionExtensions.cs` | DI extension that wires `AppDbContext` to SQLite from configuration. |
 | `SqliteConnectionSettings.cs` | SQLite connection-string builder and PRAGMA setup for busy timeout and WAL mode. |
@@ -114,6 +137,7 @@
 | File | Description |
 |------|-------------|
 | `20260604212229_InitialSchema.cs` / `.Designer.cs` | EF initial migration for providers, OAuth metadata, stored secrets, and assistant transcripts. |
+| `20260604224321_ArtWorkbenchFirstSlice.cs` / `.Designer.cs` | EF migration adding art projects/assets/batches/recipes/masks/context chips and assistant tool-call columns. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/
@@ -122,7 +146,7 @@
 |------|-------------|
 | `ILlmProviderRepository.cs` / `LlmProviderRepository.cs` | EF repository for provider CRUD, lookup, and default selection. |
 | `IOAuthTokenRepository.cs` / `OAuthTokenRepository.cs` | EF repository for OAuth token metadata replacement, lookup, and deletion. |
-| `IAssistantConversationRepository.cs` / `AssistantConversationRepository.cs` | EF repository for the global assistant conversation and ordered transcript messages. |
+| `IAssistantConversationRepository.cs` / `AssistantConversationRepository.cs` | EF repository for project-scoped assistant conversations, ordered transcript messages, and message lookup. |
 
 ### Secrets/
 

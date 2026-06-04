@@ -37,6 +37,7 @@ public sealed class OpenAIAccountChatClient : IChatClient
         for (var attempt = 1; attempt <= MaxBufferedResponseAttempts; attempt++)
         {
             var fullText = new StringBuilder();
+            var functionCalls = new List<FunctionCallContent>();
 
             try
             {
@@ -46,12 +47,15 @@ public sealed class OpenAIAccountChatClient : IChatClient
                     {
                         if (content is TextContent textContent && textContent.Text is { Length: > 0 })
                             fullText.Append(textContent.Text);
+                        else if (content is FunctionCallContent functionCall)
+                            functionCalls.Add(functionCall);
                     }
                 }
             }
             catch (HttpIOException ex) when (IsResponseEnded(ex)
                 && attempt < MaxBufferedResponseAttempts
                 && fullText.Length == 0
+                && functionCalls.Count == 0
                 && !cancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning(
@@ -61,7 +65,11 @@ public sealed class OpenAIAccountChatClient : IChatClient
                 continue;
             }
 
-            return new ChatResponse([new ChatMessage(ChatRole.Assistant, fullText.ToString())]);
+            var contents = new List<AIContent>();
+            if (fullText.Length > 0)
+                contents.Add(new TextContent(fullText.ToString()));
+            contents.AddRange(functionCalls);
+            return new ChatResponse([new ChatMessage(ChatRole.Assistant, contents)]);
         }
 
         throw new HttpRequestException("OpenAI account streaming response ended prematurely before assistant content after retry.");
@@ -73,8 +81,9 @@ public sealed class OpenAIAccountChatClient : IChatClient
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var bufferedMessages = chatMessages as IReadOnlyCollection<ChatMessage> ?? chatMessages.ToList();
-        var body = BuildRequestBody(bufferedMessages);
+        var body = BuildRequestBody(bufferedMessages, options);
         var json = JsonSerializer.Serialize(body);
+        var toolCount = options?.Tools?.Count ?? 0;
 
         using var request = new HttpRequestMessage(HttpMethod.Post, OpenAIAccountProvider.ResponsesEndpoint);
         request.Content = new StringContent(json, Encoding.UTF8);
@@ -87,11 +96,12 @@ public sealed class OpenAIAccountChatClient : IChatClient
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
         _logger.LogDebug(
-            "OpenAI account request: POST {Endpoint}, account={AccountId}, model={Model}, messages={MessageCount}, bodyChars={BodyChars}",
+            "OpenAI account request: POST {Endpoint}, account={AccountId}, model={Model}, messages={MessageCount}, tools={ToolCount}, bodyChars={BodyChars}",
             OpenAIAccountProvider.ResponsesEndpoint,
             _accountId,
             _model,
             bufferedMessages.Count,
+            toolCount,
             json.Length);
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -106,8 +116,12 @@ public sealed class OpenAIAccountChatClient : IChatClient
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
 
+        string? pendingCallId = null;
+        string? pendingFuncName = null;
+        var pendingArgs = new StringBuilder();
         var eventCount = 0;
         var outputTextChars = 0;
+        var functionCallCount = 0;
         string? lastEventType = null;
         var lastEventData = string.Empty;
 
@@ -122,10 +136,11 @@ public sealed class OpenAIAccountChatClient : IChatClient
             {
                 _logger.LogWarning(
                     ex,
-                    "OpenAI account streaming response ended prematurely after {EventCount} SSE events; lastEvent={LastEventType}; textChars={TextChars}; model={Model}; bodyChars={BodyChars}",
+                    "OpenAI account streaming response ended prematurely after {EventCount} SSE events; lastEvent={LastEventType}; textChars={TextChars}; functionCalls={FunctionCallCount}; model={Model}; bodyChars={BodyChars}",
                     eventCount,
                     lastEventType ?? "(none)",
                     outputTextChars,
+                    functionCallCount,
                     _model,
                     json.Length);
                 throw;
@@ -174,18 +189,88 @@ public sealed class OpenAIAccountChatClient : IChatClient
                     }
                     break;
 
+                case "response.output_item.added":
+                    if (evt.TryGetProperty("item", out var item)
+                        && item.TryGetProperty("type", out var itemType)
+                        && itemType.GetString() == "function_call")
+                    {
+                        pendingCallId = item.TryGetProperty("call_id", out var callId) ? callId.GetString() : null;
+                        pendingFuncName = item.TryGetProperty("name", out var name) ? name.GetString() : null;
+                        pendingArgs.Clear();
+                        if (pendingCallId is not null && pendingFuncName is not null)
+                        {
+                            yield return new ChatResponseUpdate
+                            {
+                                Role = ChatRole.Assistant,
+                                Contents = [new FunctionCallStartedContent(pendingCallId, pendingFuncName)]
+                            };
+                        }
+                    }
+                    break;
+
+                case "response.function_call_arguments.delta":
+                    if (evt.TryGetProperty("delta", out var argDelta))
+                    {
+                        var argumentsDelta = argDelta.GetString();
+                        if (!string.IsNullOrEmpty(argumentsDelta))
+                        {
+                            pendingArgs.Append(argumentsDelta);
+                            if (pendingCallId is not null && pendingFuncName is not null)
+                            {
+                                yield return new ChatResponseUpdate
+                                {
+                                    Role = ChatRole.Assistant,
+                                    Contents = [new FunctionCallArgumentsDeltaContent(pendingCallId, pendingFuncName, argumentsDelta)]
+                                };
+                            }
+                        }
+                    }
+                    break;
+
+                case "response.function_call_arguments.done":
+                    if (pendingCallId is not null && pendingFuncName is not null)
+                    {
+                        functionCallCount++;
+                        var argsJson = evt.TryGetProperty("arguments", out var doneArguments)
+                            ? doneArguments.GetString() ?? pendingArgs.ToString()
+                            : pendingArgs.ToString();
+                        IDictionary<string, object?>? argsDict = null;
+                        if (!string.IsNullOrEmpty(argsJson) && argsJson != "{}")
+                        {
+                            try
+                            {
+                                argsDict = JsonSerializer.Deserialize<Dictionary<string, object?>>(argsJson);
+                            }
+                            catch
+                            {
+                                argsDict = new Dictionary<string, object?> { ["raw"] = argsJson };
+                            }
+                        }
+
+                        yield return new ChatResponseUpdate
+                        {
+                            Role = ChatRole.Assistant,
+                            Contents = [new FunctionCallContent(pendingCallId, pendingFuncName, argsDict)]
+                        };
+
+                        pendingCallId = null;
+                        pendingFuncName = null;
+                        pendingArgs.Clear();
+                    }
+                    break;
+
                 case "response.completed" or "response.done":
                     _logger.LogDebug(
-                        "OpenAI account streaming response completed after {EventCount} SSE events. TextChars={TextChars}",
+                        "OpenAI account streaming response completed after {EventCount} SSE events. TextChars={TextChars}, FunctionCalls={FunctionCallCount}",
                         eventCount,
-                        outputTextChars);
+                        outputTextChars,
+                        functionCallCount);
                     yield break;
 
                 case "response.created":
                 case "response.in_progress":
                 case "response.content_part.added":
                 case "response.content_part.done":
-                case "response.output_item.added":
                 case "response.output_item.done":
                 case "response.output_text.done":
                 case "response.reasoning_summary_part.added":
@@ -197,10 +282,11 @@ public sealed class OpenAIAccountChatClient : IChatClient
 
                 case "response.failed":
                     _logger.LogError(
-                        "OpenAI account streaming response failed after {EventCount} SSE events; lastEvent={LastEventType}; textChars={TextChars}; model={Model}; bodyChars={BodyChars}; event={EventData}",
+                        "OpenAI account streaming response failed after {EventCount} SSE events; lastEvent={LastEventType}; textChars={TextChars}; functionCalls={FunctionCallCount}; model={Model}; bodyChars={BodyChars}; event={EventData}",
                         eventCount,
                         lastEventType ?? "(none)",
                         outputTextChars,
+                        functionCallCount,
                         _model,
                         json.Length,
                         Truncate(lastEventData, 2000));
@@ -208,10 +294,11 @@ public sealed class OpenAIAccountChatClient : IChatClient
 
                 case "error":
                     _logger.LogError(
-                        "OpenAI account streaming error after {EventCount} SSE events; lastEvent={LastEventType}; textChars={TextChars}; model={Model}; bodyChars={BodyChars}; event={EventData}",
+                        "OpenAI account streaming error after {EventCount} SSE events; lastEvent={LastEventType}; textChars={TextChars}; functionCalls={FunctionCallCount}; model={Model}; bodyChars={BodyChars}; event={EventData}",
                         eventCount,
                         lastEventType ?? "(none)",
                         outputTextChars,
+                        functionCallCount,
                         _model,
                         json.Length,
                         Truncate(lastEventData, 2000));
@@ -224,9 +311,10 @@ public sealed class OpenAIAccountChatClient : IChatClient
         }
 
         _logger.LogDebug(
-            "OpenAI account streaming response ended after {EventCount} SSE events without an explicit completion event. TextChars={TextChars}",
+            "OpenAI account streaming response ended after {EventCount} SSE events without an explicit completion event. TextChars={TextChars}, FunctionCalls={FunctionCallCount}",
             eventCount,
-            outputTextChars);
+            outputTextChars,
+            functionCallCount);
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
@@ -235,7 +323,7 @@ public sealed class OpenAIAccountChatClient : IChatClient
     {
     }
 
-    private Dictionary<string, object> BuildRequestBody(IEnumerable<ChatMessage> chatMessages)
+    private Dictionary<string, object> BuildRequestBody(IEnumerable<ChatMessage> chatMessages, ChatOptions? options)
     {
         var instructions = new List<string>();
         var inputItems = new List<object>();
@@ -248,17 +336,60 @@ public sealed class OpenAIAccountChatClient : IChatClient
                 continue;
             }
 
-            var text = message.Text ?? string.Empty;
+            var functionCalls = message.Contents.OfType<FunctionCallContent>().ToList();
+            if (functionCalls.Count > 0)
+            {
+                var textParts = message.Contents.OfType<TextContent>()
+                    .Where(text => text.Text is { Length: > 0 })
+                    .ToList();
+                if (textParts.Count > 0)
+                {
+                    inputItems.Add(new Dictionary<string, object>
+                    {
+                        ["role"] = "assistant",
+                        ["content"] = new[] { new { type = "output_text", text = string.Join("", textParts.Select(t => t.Text)) } }
+                    });
+                }
+
+                foreach (var call in functionCalls)
+                {
+                    inputItems.Add(new Dictionary<string, object>
+                    {
+                        ["type"] = "function_call",
+                        ["call_id"] = call.CallId ?? string.Empty,
+                        ["name"] = call.Name,
+                        ["arguments"] = call.Arguments is null ? "{}" : JsonSerializer.Serialize(call.Arguments)
+                    });
+                }
+                continue;
+            }
+
+            var functionResults = message.Contents.OfType<FunctionResultContent>().ToList();
+            if (functionResults.Count > 0)
+            {
+                foreach (var result in functionResults)
+                {
+                    inputItems.Add(new Dictionary<string, object>
+                    {
+                        ["type"] = "function_call_output",
+                        ["call_id"] = result.CallId ?? string.Empty,
+                        ["output"] = result.Result?.ToString() ?? string.Empty
+                    });
+                }
+                continue;
+            }
+
             if (message.Role == ChatRole.User)
             {
                 inputItems.Add(new Dictionary<string, object>
                 {
                     ["role"] = "user",
-                    ["content"] = new[] { new { type = "input_text", text } }
+                    ["content"] = BuildUserContent(message)
                 });
             }
             else if (message.Role == ChatRole.Assistant)
             {
+                var text = message.Text ?? string.Empty;
                 inputItems.Add(new Dictionary<string, object>
                 {
                     ["role"] = "assistant",
@@ -267,7 +398,7 @@ public sealed class OpenAIAccountChatClient : IChatClient
             }
         }
 
-        return new Dictionary<string, object>
+        var body = new Dictionary<string, object>
         {
             ["model"] = _model,
             ["stream"] = true,
@@ -277,6 +408,156 @@ public sealed class OpenAIAccountChatClient : IChatClient
                 ? string.Join("\n\n", instructions)
                 : "You are a helpful assistant."
         };
+
+        if (options?.Tools is { Count: > 0 } tools)
+        {
+            var openAiTools = new List<object>();
+            foreach (var tool in tools)
+            {
+                if (tool is not AIFunction function)
+                    continue;
+
+                var toolDef = new Dictionary<string, object>
+                {
+                    ["type"] = "function",
+                    ["name"] = function.Name,
+                    ["description"] = function.Description ?? string.Empty,
+                    ["strict"] = true,
+                    ["parameters"] = function.JsonSchema.ValueKind == JsonValueKind.Undefined
+                        ? EmptyStrictSchema()
+                        : PrepareStrictSchema(function.JsonSchema)
+                };
+                openAiTools.Add(toolDef);
+            }
+
+            if (openAiTools.Count > 0)
+            {
+                body["tools"] = openAiTools;
+                body["tool_choice"] = "auto";
+            }
+        }
+
+        return body;
+    }
+
+    private static List<Dictionary<string, object?>> BuildUserContent(ChatMessage message)
+    {
+        var content = new List<Dictionary<string, object?>>();
+        foreach (var item in message.Contents)
+        {
+            switch (item)
+            {
+                case TextContent textContent when textContent.Text is { Length: > 0 }:
+                    content.Add(new Dictionary<string, object?>
+                    {
+                        ["type"] = "input_text",
+                        ["text"] = textContent.Text,
+                    });
+                    break;
+                case DataContent dataContent when dataContent.HasTopLevelMediaType("image"):
+                    content.Add(new Dictionary<string, object?>
+                    {
+                        ["type"] = "input_image",
+                        ["image_url"] = dataContent.Uri,
+                    });
+                    break;
+            }
+        }
+
+        if (content.Count == 0)
+        {
+            content.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "input_text",
+                ["text"] = message.Text ?? string.Empty,
+            });
+        }
+
+        return content;
+    }
+
+    private static Dictionary<string, object> EmptyStrictSchema() =>
+        new()
+        {
+            ["type"] = "object",
+            ["properties"] = new Dictionary<string, object>(),
+            ["required"] = Array.Empty<string>(),
+            ["additionalProperties"] = false
+        };
+
+    private static JsonElement PrepareStrictSchema(JsonElement schema)
+    {
+        var prepared = EnforceStrictSchema(schema);
+        using var doc = JsonDocument.Parse(prepared.GetRawText());
+        return doc.RootElement.Clone();
+    }
+
+    private static JsonElement EnforceStrictSchema(JsonElement element, bool isPropertiesContainer = false)
+    {
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            var items = element.EnumerateArray().Select(item => EnforceStrictSchema(item)).ToList();
+            return JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(items));
+        }
+
+        if (element.ValueKind != JsonValueKind.Object)
+            return element;
+
+        if (isPropertiesContainer)
+        {
+            var properties = new Dictionary<string, object?>();
+            foreach (var prop in element.EnumerateObject())
+            {
+                properties[prop.Name] = prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
+                    ? EnforceStrictSchema(prop.Value)
+                    : prop.Value;
+            }
+
+            return JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(properties));
+        }
+
+        var dict = new Dictionary<string, object?>();
+        var isObject = false;
+        var hasProperties = false;
+        var hasAdditionalProperties = false;
+        var propertyNames = new List<string>();
+
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (prop.Name is "$defs" or "title")
+                continue;
+
+            if (prop.Name == "type"
+                && ((prop.Value.ValueKind == JsonValueKind.String && prop.Value.GetString() == "object")
+                    || (prop.Value.ValueKind == JsonValueKind.Array && prop.Value.EnumerateArray().Any(e => e.GetString() == "object"))))
+            {
+                isObject = true;
+            }
+
+            if (prop.Name == "properties")
+            {
+                hasProperties = true;
+                if (prop.Value.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var property in prop.Value.EnumerateObject())
+                        propertyNames.Add(property.Name);
+                }
+            }
+
+            if (prop.Name == "additionalProperties")
+                hasAdditionalProperties = true;
+
+            dict[prop.Name] = prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
+                ? EnforceStrictSchema(prop.Value, isPropertiesContainer: prop.Name == "properties")
+                : prop.Value;
+        }
+
+        if ((isObject || hasProperties) && !hasAdditionalProperties)
+            dict["additionalProperties"] = false;
+        if (isObject || hasProperties)
+            dict["required"] = propertyNames;
+
+        return JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(dict));
     }
 
     private static bool IsResponseEnded(HttpIOException exception) =>

@@ -5,10 +5,14 @@ namespace PixelChat.Persistence.Repositories;
 
 public class AssistantConversationRepository(AppDbContext db) : IAssistantConversationRepository
 {
-    public Task<AssistantConversation?> GetCurrentAsync(CancellationToken cancellationToken = default) =>
+    public Task<AssistantConversation?> GetCurrentAsync(Guid projectId, CancellationToken cancellationToken = default) =>
         db.AssistantConversations
+            .Where(c => c.ProjectId == projectId)
             .OrderBy(c => c.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
+
+    public Task<AssistantConversation?> GetByIdAsync(Guid conversationId, CancellationToken cancellationToken = default) =>
+        db.AssistantConversations.FirstOrDefaultAsync(c => c.Id == conversationId, cancellationToken);
 
     public async Task AddConversationAsync(AssistantConversation conversation, CancellationToken cancellationToken = default) =>
         await db.AssistantConversations.AddAsync(conversation, cancellationToken);
@@ -21,6 +25,9 @@ public class AssistantConversationRepository(AppDbContext db) : IAssistantConver
             .Where(m => m.ConversationId == conversationId)
             .OrderBy(m => m.Order)
             .ToListAsync(cancellationToken);
+
+    public Task<AssistantMessage?> GetMessageAsync(Guid messageId, CancellationToken cancellationToken = default) =>
+        db.AssistantMessages.FirstOrDefaultAsync(m => m.Id == messageId, cancellationToken);
 
     public async Task<int> GetMaxOrderAsync(Guid conversationId, CancellationToken cancellationToken = default) =>
         await db.AssistantMessages

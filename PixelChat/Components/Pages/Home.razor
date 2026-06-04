@@ -1,81 +1,829 @@
 @page "/"
 @page "/chat"
+@using System.Text.Json
+@using PixelChat.Art
 @using PixelChat.Chat
 @using PixelChat.Llm
 @using PixelChat.Models
 @rendermode InteractiveServer
 @implements IAsyncDisposable
+@inject IArtWorkflowService Workflow
 @inject IAssistantChatService ChatService
 @inject IWorkspaceChatRuntime ChatRuntime
 @inject ILlmProviderService ProviderService
+@inject IJSRuntime JS
 
 <PageTitle>PixelChat</PageTitle>
 
-<div class="chat-workspace">
-    <ChatSurface Title="PixelChat"
-                 Subtitle="@_providerSubtitle"
-                 Loading="@_loading"
-                 Messages="@_messages"
-                 Live="@_live"
-                 Error="@_error"
-                 Input="@_input"
-                 InputChanged="OnInputChanged"
-                 Placeholder="Ask about sprite prompts, style direction, or asset planning..."
-                 Running="@_running"
-                 ComposerDisabled="@(_loading || !_hasWorkingProvider)"
-                 SendDisabled="@(_loading || _running || !_hasWorkingProvider || string.IsNullOrWhiteSpace(_input))"
-                 CssClass="chat-workspace-surface"
-                 ForceScrollKey="@_forceScrollKey"
-                 ScrollKey="@_scrollKey"
-                 ResetComposerKey="@_resetComposerKey"
-                 OnSend="SendAsync"
-                 OnStop="StopAsync"
-                 OnClearError="ClearError">
-        <HeaderActions>
+@if (_workbench is null)
+{
+    <div class="workbench-loading">Loading PixelChat...</div>
+}
+else
+{
+    <div class="art-workbench">
+        <header class="workbench-topbar">
+            <div class="brand-block">
+                <span class="brand-title">PixelChat</span>
+                <span class="provider-pill @(_workbench.ImageProviderStatus.Connected ? "provider-pill-ok" : "provider-pill-warn")">
+                    @_workbench.ImageProviderStatus.Message
+                </span>
+            </div>
+
+            <div class="project-controls">
+                <select class="form-select form-select-sm" value="@_projectIdText" @onchange="ChangeProjectAsync">
+                    @foreach (var project in _workbench.Projects)
+                    {
+                        <option value="@project.Id">@project.Name</option>
+                    }
+                </select>
+                <input class="form-control form-control-sm" placeholder="New project" @bind="_newProjectName" />
+                <button type="button" class="btn btn-sm btn-outline-primary" @onclick="CreateProjectAsync">New</button>
+            </div>
+
+            <nav class="mode-tabs" aria-label="Workspace mode">
+                <button type="button" class="@ModeButtonClass(WorkspaceMode.Generate)" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">Generate</button>
+                <button type="button" class="@ModeButtonClass(WorkspaceMode.Compare)" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Compare</button>
+                <button type="button" class="@ModeButtonClass(WorkspaceMode.Edit)" @onclick="() => SetModeAsync(WorkspaceMode.Edit)">Edit</button>
+            </nav>
+
             <a class="btn btn-sm btn-outline-secondary" href="settings/providers">Providers</a>
-            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_running" @onclick="ResetAsync">Reset</button>
-        </HeaderActions>
-    </ChatSurface>
-</div>
+        </header>
+
+        <section class="workbench-main">
+            <aside class="chat-pane">
+                <ChatSurface Title="Assistant"
+                             Subtitle="@_providerSubtitle"
+                             Loading="@_loadingChat"
+                             Messages="@_messages"
+                             Live="@_live"
+                             Error="@_error"
+                             Input="@_input"
+                             InputChanged="OnInputChanged"
+                             Placeholder="Ask for art direction, prompt iteration, or a proposed generation..."
+                             Running="@_running"
+                             ComposerDisabled="@(_loadingChat || !_hasWorkingProvider)"
+                             SendDisabled="@(_loadingChat || _running || !_hasWorkingProvider || string.IsNullOrWhiteSpace(_input))"
+                             CssClass="workbench-chat"
+                             ForceScrollKey="@_forceScrollKey"
+                             ScrollKey="@_scrollKey"
+                             ResetComposerKey="@_resetComposerKey"
+                             OnSend="SendAsync"
+                             OnStop="StopAsync"
+                             OnClearError="ClearError"
+                             OnConfirmToolCall="ConfirmToolCallAsync"
+                             OnRejectToolCall="RejectToolCallAsync">
+                    <HeaderActions>
+                        <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_running" @onclick="ResetChatAsync">Reset</button>
+                    </HeaderActions>
+                </ChatSurface>
+            </aside>
+
+            <main class="workspace-center">
+                @if (!string.IsNullOrWhiteSpace(_busyText))
+                {
+                    <div class="busy-strip">@_busyText</div>
+                }
+
+                @switch (_workbench.Project.ActiveWorkspaceMode)
+                {
+                    case WorkspaceMode.Generate:
+                        @RenderGenerateWorkspace()
+                        break;
+                    case WorkspaceMode.Compare:
+                        @RenderCompareWorkspace()
+                        break;
+                    case WorkspaceMode.Edit:
+                        @RenderEditWorkspace()
+                        break;
+                }
+            </main>
+
+            <aside class="context-pane">
+                @RenderContextPanel()
+            </aside>
+        </section>
+
+        <section class="asset-tray">
+            @RenderAssetTray()
+        </section>
+    </div>
+}
 
 @code {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly List<ChatRenderableMessage> _messages = [];
+
+    private WorkbenchView? _workbench;
     private ChatLiveTurn? _live;
+    private IJSObjectReference? _editorModule;
+    private ElementReference _editorCanvas;
+    private Guid? _loadedEditorAssetId;
+
+    private string _projectIdText = string.Empty;
+    private string _newProjectName = string.Empty;
     private string _input = string.Empty;
     private string? _error;
     private string _providerSubtitle = "Checking provider status...";
-    private bool _loading = true;
+    private bool _loadingChat = true;
     private bool _running;
     private bool _hasWorkingProvider;
+    private bool _awaitingTurnCompletion;
     private int _forceScrollKey;
     private int _scrollKey;
     private int _resetComposerKey;
+    private int _seenWorkspaceVersion;
+
+    private string _busyText = string.Empty;
+    private string _generatePrompt = string.Empty;
+    private string _negativePrompt = string.Empty;
+    private string _generateSize = "auto";
+    private int _generateCount = 1;
+    private string _selectedRecipeText = string.Empty;
+    private string _recipeName = string.Empty;
+    private string _recipeAssetType = "sprite";
+    private string _recipeStyleRules = string.Empty;
+    private string _recipeAvoidRules = string.Empty;
+    private string _recipeNotes = string.Empty;
+    private string _editPrompt = string.Empty;
+    private string _editSize = "auto";
+    private int _editCount = 1;
+    private int _brushSize = 36;
+    private string _editorTool = "mask";
+    private string _assetFilter = "all";
 
     protected override async Task OnInitializedAsync()
     {
         ChatRuntime.StateChanged += OnChatRuntimeStateChanged;
-        await ReloadAsync();
+        await ReloadAllAsync();
         ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
     }
 
-    private async Task ReloadAsync()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        _loading = true;
+        if (firstRender)
+            _editorModule = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Home.razor.js");
+
+        await LoadEditorAssetIfNeededAsync();
+    }
+
+    private async Task ReloadAllAsync()
+    {
+        await ReloadWorkbenchAsync();
+        await ReloadChatAsync();
+    }
+
+    private async Task ReloadWorkbenchAsync()
+    {
+        _workbench = await Workflow.GetWorkbenchAsync(ParseProjectIdOrNull(_projectIdText));
+        _projectIdText = _workbench.Project.Id.ToString();
+        _loadedEditorAssetId = _workbench.Project.ActiveWorkspaceMode == WorkspaceMode.Edit ? _loadedEditorAssetId : null;
+        StateHasChanged();
+    }
+
+    private async Task ReloadChatAsync()
+    {
+        if (_workbench is null)
+            return;
+
+        _loadingChat = true;
         _messages.Clear();
 
-        var conversation = await ChatService.GetOrCreateAsync();
+        var conversation = await ChatService.GetOrCreateAsync(_workbench.Project.Id);
         var persistedMessages = await ChatService.LoadMessagesAsync(conversation.Id);
         _messages.AddRange(ToRenderable(persistedMessages));
 
         var availability = await ProviderService.GetDefaultChatProviderAvailabilityAsync();
         _hasWorkingProvider = availability.IsAvailable && availability.Provider is not null;
         _providerSubtitle = _hasWorkingProvider
-            ? $"Default provider: {availability.Provider!.DisplayName ?? availability.Provider.Name} / {availability.Provider.ModelId}"
+            ? $"{availability.Provider!.DisplayName ?? availability.Provider.Name} / {availability.Provider.ModelId}"
             : availability.Message;
 
-        _loading = false;
+        _loadingChat = false;
         _forceScrollKey++;
-        ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
+    }
+
+    private async Task ChangeProjectAsync(ChangeEventArgs args)
+    {
+        _projectIdText = args.Value?.ToString() ?? string.Empty;
+        _input = string.Empty;
+        _loadedEditorAssetId = null;
+        await ReloadAllAsync();
+    }
+
+    private async Task CreateProjectAsync()
+    {
+        var project = await Workflow.CreateProjectAsync(_newProjectName);
+        _newProjectName = string.Empty;
+        _projectIdText = project.Id.ToString();
+        await ReloadAllAsync();
+    }
+
+    private async Task SetModeAsync(WorkspaceMode mode)
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, mode);
+        await ReloadWorkbenchAsync();
+    }
+
+    private RenderFragment RenderGenerateWorkspace() => __builder =>
+    {
+        <div class="workspace-panel generate-panel">
+            <div class="panel-head">
+                <div>
+                    <h1>Generate</h1>
+                    <span>@ReferenceSummary()</span>
+                </div>
+                <button type="button" class="btn btn-primary"
+                        disabled="@(!_workbench!.ImageProviderStatus.Connected || !CanGenerate)"
+                        @onclick="GenerateAsync">
+                    Generate
+                </button>
+            </div>
+
+            @if (!_workbench.ImageProviderStatus.Connected)
+            {
+                <div class="provider-warning">@_workbench.ImageProviderStatus.Message</div>
+            }
+
+            <div class="form-stack">
+                <label>
+                    <span>Prompt</span>
+                    <textarea class="form-control prompt-box" rows="8" @bind="_generatePrompt"></textarea>
+                </label>
+
+                <div class="form-grid">
+                    <label>
+                        <span>Recipe</span>
+                        <select class="form-select" @bind="_selectedRecipeText">
+                            <option value="">None</option>
+                            @foreach (var recipe in _workbench.Recipes)
+                            {
+                                <option value="@recipe.Id">@recipe.Name</option>
+                            }
+                        </select>
+                    </label>
+                    <button type="button" class="btn btn-outline-secondary align-end" disabled="@SelectedRecipeId().Equals(Guid.Empty)" @onclick="ApplyRecipeAsync">
+                        Apply
+                    </button>
+                    <label>
+                        <span>Size</span>
+                        <select class="form-select" @bind="_generateSize">
+                            <option value="auto">Auto</option>
+                            <option value="1024x1024">1024 x 1024</option>
+                            <option value="1024x1536">1024 x 1536</option>
+                            <option value="1536x1024">1536 x 1024</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>Count</span>
+                        <input class="form-control" type="number" min="1" max="4" @bind="_generateCount" />
+                    </label>
+                </div>
+
+                <label>
+                    <span>Avoid</span>
+                    <textarea class="form-control" rows="3" @bind="_negativePrompt"></textarea>
+                </label>
+            </div>
+
+            <div class="recipe-editor">
+                <div class="section-title">Prompt Recipe</div>
+                <div class="form-grid recipe-grid">
+                    <input class="form-control" placeholder="Recipe name" @bind="_recipeName" />
+                    <input class="form-control" placeholder="Asset type" @bind="_recipeAssetType" />
+                    <textarea class="form-control" rows="3" placeholder="Style rules, one per line" @bind="_recipeStyleRules"></textarea>
+                    <textarea class="form-control" rows="3" placeholder="Avoid rules, one per line" @bind="_recipeAvoidRules"></textarea>
+                    <textarea class="form-control recipe-notes" rows="3" placeholder="Notes" @bind="_recipeNotes"></textarea>
+                    <button type="button" class="btn btn-outline-primary align-end" disabled="@string.IsNullOrWhiteSpace(_recipeName)" @onclick="SaveRecipeAsync">
+                        Save Recipe
+                    </button>
+                </div>
+            </div>
+        </div>
+    };
+
+    private RenderFragment RenderCompareWorkspace() => __builder =>
+    {
+        var activeBatch = _workbench!.ActiveBatch;
+        var outputAssets = activeBatch is null
+            ? []
+            : _workbench.Assets.Where(asset => activeBatch.OutputAssetIds.Contains(asset.Id)).ToList();
+
+        <div class="workspace-panel compare-panel">
+            <div class="panel-head">
+                <div>
+                    <h1>Compare</h1>
+                    <span>@(activeBatch?.Label ?? "No active batch")</span>
+                </div>
+                @if (activeBatch is not null)
+                {
+                    <button type="button" class="btn btn-outline-secondary" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">New Batch</button>
+                }
+            </div>
+
+            @if (activeBatch is null)
+            {
+                <div class="empty-state">Generate or edit images to create a batch.</div>
+            }
+            else
+            {
+                <div class="batch-summary">
+                    <span>@activeBatch.Status</span>
+                    <span>@activeBatch.ImageModel</span>
+                    <span>@activeBatch.Size</span>
+                    <span>@activeBatch.Count image(s)</span>
+                </div>
+                <p class="batch-prompt">@activeBatch.Prompt</p>
+                @if (!string.IsNullOrWhiteSpace(activeBatch.Error))
+                {
+                    <div class="provider-warning">@activeBatch.Error</div>
+                }
+
+                <div class="compare-grid">
+                    @foreach (var asset in outputAssets)
+                    {
+                        @RenderAssetCard(asset, compact: false)
+                    }
+                </div>
+            }
+
+            <div class="section-title">Recent Batches</div>
+            <div class="batch-list">
+                @foreach (var batch in _workbench.Batches.Take(8))
+                {
+                    <button type="button" class="batch-row @(batch.Id == _workbench.Project.ActiveBatchId ? "is-active" : "")"
+                            @onclick="() => SelectBatchAsync(batch.Id)">
+                        <span>@batch.Label</span>
+                        <span>@batch.Status</span>
+                    </button>
+                }
+            </div>
+        </div>
+    };
+
+    private RenderFragment RenderEditWorkspace() => __builder =>
+    {
+        var asset = _workbench!.ActiveAsset;
+
+        <div class="workspace-panel edit-panel">
+            <div class="panel-head">
+                <div>
+                    <h1>Edit</h1>
+                    <span>@(asset?.Label ?? "Select or import an asset")</span>
+                </div>
+                <InputFile OnChange="ImportAssetAsync" accept="image/png,image/jpeg" />
+            </div>
+
+            @if (asset is null)
+            {
+                <div class="empty-state">Import an image or select an asset from the tray.</div>
+            }
+            else
+            {
+                <div class="editor-layout">
+                    <div class="editor-stage">
+                        <canvas class="editor-canvas" @ref="_editorCanvas"></canvas>
+                    </div>
+                    <div class="editor-tools">
+                        <div class="segmented">
+                            <button type="button" class="@EditorToolClass("mask")" @onclick='() => SetEditorToolAsync("mask")'>Mask</button>
+                            <button type="button" class="@EditorToolClass("erase")" @onclick='() => SetEditorToolAsync("erase")'>Erase</button>
+                            <button type="button" class="@EditorToolClass("crop")" @onclick='() => SetEditorToolAsync("crop")'>Crop</button>
+                        </div>
+                        <label>
+                            <span>Brush</span>
+                            <input type="range" min="6" max="120" @bind="_brushSize" @bind:after="UpdateBrushAsync" />
+                        </label>
+                        <div class="tool-button-row">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ClearMaskAsync">Clear Mask</button>
+                            <button type="button" class="btn btn-sm btn-outline-primary" @onclick="SaveMaskAsync">Save Mask</button>
+                            <button type="button" class="btn btn-sm btn-outline-primary" @onclick="CropAsync">Crop</button>
+                        </div>
+                        <label>
+                            <span>Edit prompt</span>
+                            <textarea class="form-control" rows="5" @bind="_editPrompt"></textarea>
+                        </label>
+                        <div class="form-grid">
+                            <label>
+                                <span>Size</span>
+                                <select class="form-select" @bind="_editSize">
+                                    <option value="auto">Auto</option>
+                                    <option value="1024x1024">1024 x 1024</option>
+                                    <option value="1024x1536">1024 x 1536</option>
+                                    <option value="1536x1024">1536 x 1024</option>
+                                </select>
+                            </label>
+                            <label>
+                                <span>Count</span>
+                                <input class="form-control" type="number" min="1" max="4" @bind="_editCount" />
+                            </label>
+                        </div>
+                        <button type="button" class="btn btn-primary"
+                                disabled="@(!_workbench.ImageProviderStatus.Connected || string.IsNullOrWhiteSpace(_editPrompt))"
+                                @onclick="EditImageAsync">
+                            Send Masked Edit
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    };
+
+    private RenderFragment RenderContextPanel() => __builder =>
+    {
+        <div class="context-panel">
+            <div class="section-title">Chat Context</div>
+            @if (_workbench!.Attachments.Count == 0)
+            {
+                <div class="empty-context">No context chips attached.</div>
+            }
+            else
+            {
+                <div class="context-chip-list">
+                    @foreach (var attachment in _workbench.Attachments)
+                    {
+                        <span class="context-chip">
+                            <span>@attachment.Type</span>
+                            <strong>@attachment.Label</strong>
+                            <button type="button" title="Remove" @onclick="() => RemoveContextAsync(attachment.Id)">x</button>
+                        </span>
+                    }
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ClearContextAsync">Clear Context</button>
+            }
+
+            <div class="section-title">Active Asset</div>
+            @if (_workbench.ActiveAsset is null)
+            {
+                <div class="empty-context">No active asset.</div>
+            }
+            else
+            {
+                var asset = _workbench.ActiveAsset;
+                <div class="active-asset-card">
+                    <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
+                    <div>
+                        <strong>@asset.Label</strong>
+                        <span>@asset.Kind</span>
+                        <span>@FormatDimensions(asset)</span>
+                    </div>
+                    <div class="tool-button-row">
+                        <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => AttachAssetAsync(asset)">Attach</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => UseAsReferenceAsync(asset.Id)">Use Ref</button>
+                    </div>
+                </div>
+            }
+
+            <div class="section-title">Masks</div>
+            <div class="mini-list">
+                @foreach (var mask in _workbench.Masks.Take(8))
+                {
+                    <button type="button" @onclick="() => AttachMaskAsync(mask)">
+                        <span>@mask.Label</span>
+                        <small>@mask.Width x @mask.Height</small>
+                    </button>
+                }
+            </div>
+
+            <div class="section-title">Recipes</div>
+            <div class="mini-list">
+                @foreach (var recipe in _workbench.Recipes.Take(8))
+                {
+                    <button type="button" @onclick="() => AttachRecipeAsync(recipe)">
+                        <span>@recipe.Name</span>
+                        <small>@recipe.AssetType</small>
+                    </button>
+                }
+            </div>
+        </div>
+    };
+
+    private RenderFragment RenderAssetTray() => __builder =>
+    {
+        var assets = FilteredAssets().ToList();
+        <div class="asset-tray-head">
+            <div>
+                <strong>Assets</strong>
+                <span>@assets.Count shown</span>
+            </div>
+            <div class="asset-filters">
+                <button type="button" class="@FilterClass("all")" @onclick='() => SetFilter("all")'>All</button>
+                <button type="button" class="@FilterClass("favorites")" @onclick='() => SetFilter("favorites")'>Favorites</button>
+                <button type="button" class="@FilterClass("references")" @onclick='() => SetFilter("references")'>References</button>
+                <button type="button" class="@FilterClass("rejected")" @onclick='() => SetFilter("rejected")'>Rejected</button>
+            </div>
+        </div>
+        <div class="asset-strip">
+            @foreach (var asset in assets)
+            {
+                @RenderAssetCard(asset, compact: true)
+            }
+        </div>
+    };
+
+    private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact) => __builder =>
+    {
+        <article class="asset-card @(compact ? "asset-card-compact" : "") @(asset.Id == _workbench!.Project.ActiveAssetId ? "is-active" : "")">
+            <button type="button" class="asset-thumb" @onclick="() => SelectAssetAsync(asset.Id)">
+                <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
+            </button>
+            <div class="asset-card-body">
+                <div class="asset-title-row">
+                    <strong>@asset.Label</strong>
+                    <span>@asset.Kind</span>
+                </div>
+                @if (!compact)
+                {
+                    <p>@asset.Prompt</p>
+                }
+                <div class="asset-actions">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AttachAssetAsync(asset)">Attach</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => UseAsReferenceAsync(asset.Id)">Ref</button>
+                    <button type="button" class="btn btn-sm @(asset.IsFavorite ? "btn-warning" : "btn-outline-secondary")" @onclick="() => MarkAssetAsync(asset.Id, !asset.IsFavorite, null)">Fav</button>
+                    <button type="button" class="btn btn-sm @(asset.IsRejected ? "btn-danger" : "btn-outline-secondary")" @onclick="() => MarkAssetAsync(asset.Id, null, !asset.IsRejected)">Reject</button>
+                    <a class="btn btn-sm btn-outline-primary" href="@asset.PreviewDataUrl" download="@asset.FileName">Export</a>
+                </div>
+            </div>
+        </article>
+    };
+
+    private async Task GenerateAsync()
+    {
+        if (_workbench is null || string.IsNullOrWhiteSpace(_generatePrompt))
+            return;
+
+        await RunWorkflowAsync("Generating images...", async () =>
+        {
+            var batch = await Workflow.GenerateImagesAsync(_workbench.Project.Id, new GenerateImagesRequest(
+                _generatePrompt,
+                _negativePrompt,
+                _generateSize,
+                _generateCount,
+                SelectedRecipeIdOrNull(),
+                CurrentReferenceAssetIds(),
+                _workbench.Project.ActiveBatchId));
+            await Workflow.SelectBatchAsync(_workbench.Project.Id, batch.Id);
+            await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Compare);
+        });
+    }
+
+    private Task ApplyRecipeAsync()
+    {
+        if (_workbench is null)
+            return Task.CompletedTask;
+
+        var recipe = _workbench.Recipes.FirstOrDefault(item => item.Id == SelectedRecipeIdOrNull());
+        if (recipe is null)
+            return Task.CompletedTask;
+
+        _generatePrompt = MergePrompt(recipe.PromptTemplate, recipe.StyleRules);
+        _negativePrompt = MergeLines(_negativePrompt, recipe.AvoidRules);
+        if (!string.IsNullOrWhiteSpace(recipe.PreferredSize))
+            _generateSize = recipe.PreferredSize;
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveRecipeAsync()
+    {
+        if (_workbench is null || string.IsNullOrWhiteSpace(_recipeName))
+            return;
+
+        await RunWorkflowAsync("Saving recipe...", async () =>
+        {
+            await Workflow.SavePromptRecipeAsync(_workbench.Project.Id, new SavePromptRecipeRequest(
+                _recipeName,
+                _recipeAssetType,
+                string.IsNullOrWhiteSpace(_generatePrompt) ? "Describe the asset to generate." : _generatePrompt,
+                SplitLines(_recipeStyleRules),
+                SplitLines(_recipeAvoidRules),
+                CurrentReferenceAssetIds(),
+                "openai-account",
+                string.Empty,
+                _generateSize,
+                _recipeNotes));
+            _recipeName = string.Empty;
+        });
+    }
+
+    private async Task SelectBatchAsync(Guid batchId)
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.SelectBatchAsync(_workbench.Project.Id, batchId);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task ImportAssetAsync(InputFileChangeEventArgs args)
+    {
+        if (_workbench is null || args.File is null)
+            return;
+
+        await RunWorkflowAsync("Importing asset...", async () =>
+        {
+            await using var stream = args.File.OpenReadStream(50 * 1024 * 1024);
+            using var memory = new MemoryStream();
+            await stream.CopyToAsync(memory);
+            await Workflow.ImportAssetAsync(_workbench.Project.Id, new ImportAssetRequest(
+                args.File.Name,
+                args.File.ContentType,
+                memory.ToArray(),
+                Path.GetFileNameWithoutExtension(args.File.Name)));
+        });
+    }
+
+    private async Task SetEditorToolAsync(string tool)
+    {
+        _editorTool = tool;
+        if (_editorModule is not null)
+            await _editorModule.InvokeVoidAsync("setTool", _editorCanvas, tool);
+    }
+
+    private async Task UpdateBrushAsync()
+    {
+        if (_editorModule is not null)
+            await _editorModule.InvokeVoidAsync("setBrushSize", _editorCanvas, _brushSize);
+    }
+
+    private async Task ClearMaskAsync()
+    {
+        if (_editorModule is not null)
+            await _editorModule.InvokeVoidAsync("clearMask", _editorCanvas);
+    }
+
+    private async Task SaveMaskAsync()
+    {
+        if (_workbench?.ActiveAsset is null || _editorModule is null)
+            return;
+
+        await RunWorkflowAsync("Saving mask...", async () =>
+        {
+            var maskDataUrl = await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas);
+            await Workflow.SaveMaskAsync(_workbench.Project.Id, new SaveMaskRequest(
+                _workbench.ActiveAsset.Id,
+                maskDataUrl,
+                $"{_workbench.ActiveAsset.Label} mask"));
+        });
+    }
+
+    private async Task CropAsync()
+    {
+        if (_workbench?.ActiveAsset is null || _editorModule is null)
+            return;
+
+        await RunWorkflowAsync("Cropping asset...", async () =>
+        {
+            var cropDataUrl = await _editorModule.InvokeAsync<string?>("exportCropPng", _editorCanvas);
+            if (string.IsNullOrWhiteSpace(cropDataUrl))
+                throw new InvalidOperationException("Select a crop area first.");
+
+            await Workflow.CreateCropAssetAsync(_workbench.Project.Id, new CropAssetRequest(
+                _workbench.ActiveAsset.Id,
+                cropDataUrl,
+                $"{_workbench.ActiveAsset.Label} crop"));
+        });
+    }
+
+    private async Task EditImageAsync()
+    {
+        if (_workbench?.ActiveAsset is null || _editorModule is null || string.IsNullOrWhiteSpace(_editPrompt))
+            return;
+
+        await RunWorkflowAsync("Sending masked edit...", async () =>
+        {
+            var hasPaint = await _editorModule.InvokeAsync<bool>("hasMaskPaint", _editorCanvas);
+            if (!hasPaint)
+                throw new InvalidOperationException("Paint the editable mask area first.");
+
+            var sourceDataUrl = await _editorModule.InvokeAsync<string>("exportSourcePng", _editorCanvas);
+            var maskDataUrl = await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas);
+            await Workflow.EditImageAsync(_workbench.Project.Id, new EditImageRequest(
+                _workbench.ActiveAsset.Id,
+                _editPrompt,
+                _editSize,
+                _editCount,
+                MaskId: null,
+                sourceDataUrl,
+                maskDataUrl,
+                CurrentReferenceAssetIds().Where(id => id != _workbench.ActiveAsset.Id).ToList()));
+        });
+    }
+
+    private async Task SelectAssetAsync(Guid assetId)
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.SelectAssetAsync(_workbench.Project.Id, assetId);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task AttachAssetAsync(ArtAssetView asset)
+    {
+        if (_workbench is null)
+            return;
+
+        var type = asset.Kind == ArtAssetKind.Cropped ? ChatContextAttachmentType.Crop : ChatContextAttachmentType.Asset;
+        await Workflow.AttachContextAsync(_workbench.Project.Id, type, asset.Id, asset.Label);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task AttachMaskAsync(ImageMaskView mask)
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.AttachContextAsync(_workbench.Project.Id, ChatContextAttachmentType.Mask, mask.Id, mask.Label);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task AttachRecipeAsync(PromptRecipeView recipe)
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.AttachContextAsync(_workbench.Project.Id, ChatContextAttachmentType.PromptRecipe, recipe.Id, recipe.Name);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task RemoveContextAsync(Guid attachmentId)
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.RemoveContextAsync(_workbench.Project.Id, attachmentId);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task ClearContextAsync()
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.ClearContextAsync(_workbench.Project.Id);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task UseAsReferenceAsync(Guid assetId)
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.UseAssetAsReferenceAsync(_workbench.Project.Id, assetId);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task MarkAssetAsync(Guid assetId, bool? favorite, bool? rejected)
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.MarkAssetAsync(_workbench.Project.Id, assetId, favorite, rejected, notes: null);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task RunWorkflowAsync(string busyText, Func<Task> action)
+    {
+        _busyText = busyText;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            await action();
+            await ReloadWorkbenchAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busyText = string.Empty;
+            _loadedEditorAssetId = null;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadEditorAssetIfNeededAsync()
+    {
+        if (_editorModule is null || _workbench?.Project.ActiveWorkspaceMode != WorkspaceMode.Edit || _workbench.ActiveAsset is null)
+            return;
+
+        if (_loadedEditorAssetId == _workbench.ActiveAsset.Id)
+            return;
+
+        _loadedEditorAssetId = _workbench.ActiveAsset.Id;
+        try
+        {
+            await _editorModule.InvokeVoidAsync("loadEditor", _editorCanvas, _workbench.ActiveAsset.PreviewDataUrl, _brushSize, _editorTool);
+        }
+        catch
+        {
+            _loadedEditorAssetId = null;
+        }
     }
 
     private void OnChatRuntimeStateChanged()
@@ -84,10 +832,18 @@
         {
             var wasRunning = _running;
             var snapshot = ChatRuntime.GetSnapshot();
+            var shouldReloadAfterTurn = _awaitingTurnCompletion && !snapshot.Running;
             ApplyChatRuntimeSnapshot(snapshot);
-            if (wasRunning && !snapshot.Running)
+            if (snapshot.WorkspaceVersion != _seenWorkspaceVersion)
             {
-                await ReloadAsync();
+                _seenWorkspaceVersion = snapshot.WorkspaceVersion;
+                await ReloadWorkbenchAsync();
+            }
+
+            if (shouldReloadAfterTurn || (wasRunning && !snapshot.Running))
+            {
+                _awaitingTurnCompletion = false;
+                await ReloadAllAsync();
                 return;
             }
 
@@ -101,6 +857,7 @@
         _running = snapshot.Running;
         _live = snapshot.Live;
         _error = snapshot.Error;
+        _seenWorkspaceVersion = snapshot.WorkspaceVersion;
     }
 
     private Task OnInputChanged(string value)
@@ -111,7 +868,7 @@
 
     private async Task SendAsync()
     {
-        if (_running || string.IsNullOrWhiteSpace(_input))
+        if (_workbench is null || _running || string.IsNullOrWhiteSpace(_input))
             return;
 
         var text = _input.Trim();
@@ -125,35 +882,66 @@
             ChatMessageStatus.Completed,
             text));
         _scrollKey++;
+        _awaitingTurnCompletion = true;
 
         try
         {
-            await ChatRuntime.StartTurnAsync(text);
+            await ChatRuntime.StartTurnAsync(_workbench.Project.Id, text);
             ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
         }
         catch (Exception ex)
         {
+            _awaitingTurnCompletion = false;
             _error = ex.Message;
             _running = false;
         }
     }
 
-    private Task StopAsync()
-    {
-        return ChatRuntime.StopTurnAsync();
-    }
+    private Task StopAsync() => ChatRuntime.StopTurnAsync();
 
-    private async Task ResetAsync()
+    private async Task ResetChatAsync()
     {
-        if (_running)
+        if (_workbench is null || _running)
             return;
 
-        await ChatRuntime.ResetConversationAsync();
+        await ChatRuntime.ResetConversationAsync(_workbench.Project.Id);
         _error = null;
         _input = string.Empty;
         _live = null;
         _resetComposerKey++;
-        await ReloadAsync();
+        await ReloadChatAsync();
+    }
+
+    private async Task ConfirmToolCallAsync(ChatToolCallAction action)
+    {
+        if (_workbench is null)
+            return;
+
+        try
+        {
+            await ChatRuntime.ConfirmToolCallAsync(_workbench.Project.Id, action.AssistantMessageId, action.CallId);
+            await ReloadAllAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task RejectToolCallAsync(ChatToolCallAction action)
+    {
+        if (_workbench is null)
+            return;
+
+        try
+        {
+            await ChatRuntime.RejectToolCallAsync(_workbench.Project.Id, action.AssistantMessageId, action.CallId);
+            await ReloadChatAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
     }
 
     private void ClearError()
@@ -174,14 +962,58 @@
                 message.Id,
                 ToChatRole(message.Role),
                 ToChatStatus(message.Status),
-                message.Content));
+                message.Content,
+                ToToolCalls(message),
+                message.ToolName,
+                message.ToolCallId));
         }
 
         return renderable;
     }
 
-    private static ChatMessageRole ToChatRole(AssistantMessageRole role) =>
-        role == AssistantMessageRole.User ? ChatMessageRole.User : ChatMessageRole.Assistant;
+    private static IReadOnlyList<ChatToolCallView> ToToolCalls(AssistantMessage message)
+    {
+        if (message.Role != AssistantMessageRole.Assistant || string.IsNullOrWhiteSpace(message.ToolCallsJson) || message.ToolCallsJson == "[]")
+            return [];
+
+        try
+        {
+            using var document = JsonDocument.Parse(message.ToolCallsJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return [];
+
+            var calls = new List<ChatToolCallView>();
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                var callId = ReadString(item, "callId");
+                var name = ReadString(item, "name");
+                if (string.IsNullOrWhiteSpace(callId) || string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                calls.Add(new ChatToolCallView(
+                    message.Id,
+                    callId,
+                    name,
+                    ReadString(item, "argumentsJson"),
+                    ParseChatToolStatus(ReadString(item, "status")),
+                    ReadNullableString(item, "result"),
+                    ReadNullableString(item, "error")));
+            }
+
+            return calls;
+        }
+        catch (Exception)
+        {
+            return [];
+        }
+    }
+
+    private static ChatMessageRole ToChatRole(AssistantMessageRole role) => role switch
+    {
+        AssistantMessageRole.User => ChatMessageRole.User,
+        AssistantMessageRole.Tool => ChatMessageRole.Tool,
+        _ => ChatMessageRole.Assistant,
+    };
 
     private static ChatMessageStatus ToChatStatus(AssistantMessageStatus status) => status switch
     {
@@ -191,9 +1023,112 @@
         _ => ChatMessageStatus.Completed
     };
 
-    public ValueTask DisposeAsync()
+    private static ChatToolCallStatus ToChatToolStatus(PersistedToolCallStatus status) => status switch
+    {
+        PersistedToolCallStatus.Completed => ChatToolCallStatus.Completed,
+        PersistedToolCallStatus.Rejected => ChatToolCallStatus.Rejected,
+        PersistedToolCallStatus.Failed => ChatToolCallStatus.Failed,
+        _ => ChatToolCallStatus.Pending,
+    };
+
+    private static ChatToolCallStatus ParseChatToolStatus(string value) =>
+        value.Trim().ToLowerInvariant() switch
+        {
+            "completed" => ChatToolCallStatus.Completed,
+            "rejected" => ChatToolCallStatus.Rejected,
+            "failed" => ChatToolCallStatus.Failed,
+            _ => ChatToolCallStatus.Pending,
+        };
+
+    private static string ReadString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString() ?? string.Empty
+            : string.Empty;
+
+    private static string? ReadNullableString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private IReadOnlyList<Guid> CurrentReferenceAssetIds() =>
+        _workbench?.Attachments
+            .Where(attachment => attachment.Type is ChatContextAttachmentType.Asset or ChatContextAttachmentType.Crop)
+            .Select(attachment => attachment.RefId)
+            .Distinct()
+            .Take(4)
+            .ToList() ?? [];
+
+    private IEnumerable<ArtAssetView> FilteredAssets()
+    {
+        var assets = _workbench?.Assets ?? [];
+        return _assetFilter switch
+        {
+            "favorites" => assets.Where(asset => asset.IsFavorite),
+            "references" => assets.Where(asset => asset.IsReference),
+            "rejected" => assets.Where(asset => asset.IsRejected),
+            _ => assets.Where(asset => !asset.IsRejected),
+        };
+    }
+
+    private void SetFilter(string filter) => _assetFilter = filter;
+
+    private string ReferenceSummary()
+    {
+        var count = CurrentReferenceAssetIds().Count;
+        return count == 0 ? "No reference chips attached" : $"{count} reference chip(s) attached";
+    }
+
+    private bool CanGenerate => !string.IsNullOrWhiteSpace(_generatePrompt) && string.IsNullOrWhiteSpace(_busyText);
+
+    private string ModeButtonClass(WorkspaceMode mode) =>
+        _workbench?.Project.ActiveWorkspaceMode == mode ? "mode-tab is-active" : "mode-tab";
+
+    private string EditorToolClass(string tool) =>
+        _editorTool == tool ? "segmented-button is-active" : "segmented-button";
+
+    private string FilterClass(string filter) =>
+        _assetFilter == filter ? "filter-button is-active" : "filter-button";
+
+    private Guid SelectedRecipeId()
+    {
+        return Guid.TryParse(_selectedRecipeText, out var recipeId) ? recipeId : Guid.Empty;
+    }
+
+    private Guid? SelectedRecipeIdOrNull()
+    {
+        var id = SelectedRecipeId();
+        return id == Guid.Empty ? null : id;
+    }
+
+    private static Guid? ParseProjectIdOrNull(string value) =>
+        Guid.TryParse(value, out var id) ? id : null;
+
+    private static string FormatDimensions(ArtAssetView asset) =>
+        asset.Width is int width && asset.Height is int height ? $"{width} x {height}" : "Unknown size";
+
+    private static IReadOnlyList<string> SplitLines(string value) =>
+        value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string MergePrompt(string template, IReadOnlyList<string> styleRules)
+    {
+        if (styleRules.Count == 0)
+            return template;
+
+        return template.Trim() + "\n\nStyle rules:\n" + string.Join('\n', styleRules.Select(rule => "- " + rule));
+    }
+
+    private static string MergeLines(string existing, IReadOnlyList<string> additions)
+    {
+        var lines = SplitLines(existing).Concat(additions).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return string.Join('\n', lines);
+    }
+
+    public async ValueTask DisposeAsync()
     {
         ChatRuntime.StateChanged -= OnChatRuntimeStateChanged;
-        return ValueTask.CompletedTask;
+        if (_editorModule is not null)
+        {
+            try { await _editorModule.DisposeAsync(); } catch { }
+        }
     }
 }

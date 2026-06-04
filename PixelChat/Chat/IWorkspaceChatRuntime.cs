@@ -7,9 +7,11 @@ public interface IWorkspaceChatRuntime
     event Action? StateChanged;
     bool IsRunning { get; }
     WorkspaceChatRuntimeSnapshot GetSnapshot();
-    Task StartTurnAsync(string userText, CancellationToken cancellationToken = default);
+    Task StartTurnAsync(Guid projectId, string userText, CancellationToken cancellationToken = default);
     Task StopTurnAsync();
-    Task ResetConversationAsync(CancellationToken cancellationToken = default);
+    Task ResetConversationAsync(Guid projectId, CancellationToken cancellationToken = default);
+    Task<AssistantToolExecutionResult> ConfirmToolCallAsync(Guid projectId, Guid assistantMessageId, string callId, CancellationToken cancellationToken = default);
+    Task<AssistantToolExecutionResult> RejectToolCallAsync(Guid projectId, Guid assistantMessageId, string callId, CancellationToken cancellationToken = default);
     void ClearError();
 }
 
@@ -17,4 +19,5 @@ public sealed record WorkspaceChatRuntimeSnapshot(
     bool Running,
     ChatLiveTurn? Live,
     string? PendingUserText,
-    string? Error);
+    string? Error,
+    int WorkspaceVersion);

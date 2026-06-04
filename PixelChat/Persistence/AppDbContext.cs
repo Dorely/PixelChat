@@ -11,6 +11,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<LlmProvider> LlmProviders => Set<LlmProvider>();
     public DbSet<OAuthToken> OAuthTokens => Set<OAuthToken>();
     public DbSet<StoredSecret> StoredSecrets => Set<StoredSecret>();
+    public DbSet<Project> Projects => Set<Project>();
+    public DbSet<ArtAsset> ArtAssets => Set<ArtAsset>();
+    public DbSet<GenerationBatch> GenerationBatches => Set<GenerationBatch>();
+    public DbSet<PromptRecipe> PromptRecipes => Set<PromptRecipe>();
+    public DbSet<ImageMask> ImageMasks => Set<ImageMask>();
+    public DbSet<ChatContextAttachment> ChatContextAttachments => Set<ChatContextAttachment>();
     public DbSet<AssistantConversation> AssistantConversations => Set<AssistantConversation>();
     public DbSet<AssistantMessage> AssistantMessages => Set<AssistantMessage>();
 
@@ -84,8 +90,107 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => e.Name).IsUnique();
         });
 
+        modelBuilder.Entity<Project>(entity =>
+        {
+            entity.HasIndex(e => e.Name);
+            entity.Property(e => e.ActiveWorkspaceMode).HasConversion<string>();
+        });
+
+        modelBuilder.Entity<ArtAsset>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
+            entity.HasIndex(e => e.ParentAssetId);
+            entity.HasIndex(e => e.SourceBatchId);
+            entity.Property(e => e.Kind).HasConversion<string>();
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.Assets)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.ParentAsset)
+                .WithMany(e => e.ChildAssets)
+                .HasForeignKey(e => e.ParentAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.SourceBatch)
+                .WithMany(b => b.OutputAssets)
+                .HasForeignKey(e => e.SourceBatchId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.SourcePromptRecipe)
+                .WithMany()
+                .HasForeignKey(e => e.SourcePromptRecipeId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<GenerationBatch>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
+            entity.Property(e => e.Status).HasConversion<string>();
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.GenerationBatches)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.ParentBatch)
+                .WithMany(e => e.ChildBatches)
+                .HasForeignKey(e => e.ParentBatchId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.PromptRecipe)
+                .WithMany()
+                .HasForeignKey(e => e.PromptRecipeId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<PromptRecipe>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.Name });
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.PromptRecipes)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ImageMask>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
+            entity.HasIndex(e => e.AssetId);
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.Masks)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Asset)
+                .WithMany()
+                .HasForeignKey(e => e.AssetId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ChatContextAttachment>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.SortOrder });
+            entity.Property(e => e.Type).HasConversion<string>();
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.ChatContextAttachments)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<AssistantConversation>(entity =>
         {
+            entity.HasIndex(e => e.ProjectId);
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.AssistantConversations)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
             entity.HasMany(e => e.Messages)
                 .WithOne(e => e.Conversation)
                 .HasForeignKey(e => e.ConversationId)

@@ -73,10 +73,119 @@
 }
 
 .chat-msg-asst .chat-msg-text,
+.chat-msg-tool .chat-msg-text,
 .chat-thinking {
     background: #ffffff;
     color: #1f2937;
     border: 1px solid #dde3ea;
+}
+
+.chat-msg-tool {
+    max-width: 96%;
+}
+
+.chat-msg-tool .chat-msg-text {
+    font-size: 0.8rem;
+    color: #475467;
+    max-height: 9rem;
+    overflow: auto;
+}
+
+.chat-tool-result-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.25rem;
+    font-size: 0.72rem;
+    color: #667085;
+}
+
+.chat-tool-list {
+    display: grid;
+    gap: 0.55rem;
+    margin-top: 0.45rem;
+}
+
+.chat-tool-card {
+    background: #ffffff;
+    border: 1px solid #d7dee8;
+    border-left: 3px solid #667085;
+    border-radius: 8px;
+    padding: 0.65rem;
+    color: #1f2937;
+}
+
+.chat-tool-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.45rem;
+}
+
+.chat-tool-name {
+    font-weight: 650;
+    font-size: 0.86rem;
+    text-transform: capitalize;
+}
+
+.chat-tool-state {
+    font-size: 0.72rem;
+    color: #667085;
+}
+
+.chat-tool-card pre {
+    margin: 0;
+    max-height: 9rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 0.76rem;
+    color: #344054;
+    background: #f8fafc;
+    border: 1px solid #e6ebf2;
+    border-radius: 6px;
+    padding: 0.5rem;
+}
+
+.chat-tool-card-pending {
+    border-left-color: #1f6feb;
+}
+
+.chat-tool-card-completed {
+    border-left-color: #248a3d;
+}
+
+.chat-tool-card-rejected {
+    border-left-color: #667085;
+}
+
+.chat-tool-card-failed {
+    border-left-color: #b42318;
+}
+
+.chat-tool-card-live {
+    border-left-color: #725ac1;
+}
+
+.chat-tool-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+}
+
+.chat-tool-error {
+    margin-top: 0.5rem;
+    color: #b42318;
+    font-size: 0.8rem;
+}
+
+.chat-tool-result {
+    margin-top: 0.5rem;
+    color: #475467;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 .chat-msg-status {

@@ -1,6 +1,10 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Options;
+using PixelChat.Art;
 using PixelChat.Llm;
 using PixelChat.Models;
 using PixelChat.Persistence.Repositories;
@@ -11,18 +15,29 @@ public sealed class AssistantChatService(
     IAssistantConversationRepository conversations,
     ILlmProviderService providerService,
     IChatClientFactory chatClientFactory,
+    AssistantToolRegistry toolRegistry,
+    IArtWorkflowService workflow,
+    IOptions<AgentOptions> agentOptions,
     ILogger<AssistantChatService> logger) : IAssistantChatService
 {
     private const string InitialAssistantGreeting =
-        "Tell me what kind of 2D game art you are working on. I can help shape style direction, asset prompts, iteration plans, and production-ready art specs.";
+        "Tell me what kind of 2D game art you are working on. I can help shape style direction, generate and compare images, save prompt recipes, and prepare targeted edits from visible context.";
 
-    public async Task<AssistantConversation> GetOrCreateAsync(CancellationToken cancellationToken = default)
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        var existing = await conversations.GetCurrentAsync(cancellationToken);
+        WriteIndented = false,
+    };
+
+    public async Task<AssistantConversation> GetOrCreateAsync(Guid projectId, CancellationToken cancellationToken = default)
+    {
+        var existing = await conversations.GetCurrentAsync(projectId, cancellationToken);
         if (existing is not null)
             return existing;
 
-        var conversation = new AssistantConversation();
+        var conversation = new AssistantConversation
+        {
+            ProjectId = projectId,
+        };
         await conversations.AddConversationAsync(conversation, cancellationToken);
 
         var greeting = new AssistantMessage
@@ -41,9 +56,9 @@ public sealed class AssistantChatService(
     public async Task<IReadOnlyList<AssistantMessage>> LoadMessagesAsync(Guid conversationId, CancellationToken cancellationToken = default) =>
         await conversations.LoadMessagesAsync(conversationId, cancellationToken);
 
-    public async Task ResetAsync(CancellationToken cancellationToken = default)
+    public async Task ResetAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
-        var existing = await conversations.GetCurrentAsync(cancellationToken);
+        var existing = await conversations.GetCurrentAsync(projectId, cancellationToken);
         if (existing is null)
             return;
 
@@ -52,13 +67,14 @@ public sealed class AssistantChatService(
     }
 
     public async IAsyncEnumerable<AssistantTurnUpdate> SendAsync(
+        Guid projectId,
         string userText,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(userText))
             throw new ArgumentException("Message cannot be empty.", nameof(userText));
 
-        var conversation = await GetOrCreateAsync(cancellationToken);
+        var conversation = await GetOrCreateAsync(projectId, cancellationToken);
         var providerAvailability = await providerService.GetDefaultChatProviderAvailabilityAsync(cancellationToken);
         if (!providerAvailability.IsAvailable || providerAvailability.Provider is null)
         {
@@ -100,120 +116,616 @@ public sealed class AssistantChatService(
             yield break;
         }
 
+        var aiTools = toolRegistry.Build(projectId);
+        var chatOptions = new ChatOptions
+        {
+            Tools = aiTools,
+            ToolMode = ChatToolMode.Auto,
+        };
+
         var history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
         var messages = new List<ChatMessage> { new(ChatRole.System, AssistantPromptBuilder.Build()) };
-        messages.AddRange(history.Select(ToChatMessage));
+        messages.AddRange(await BuildModelHistoryAsync(history, userMessage.Id, projectId, cancellationToken));
 
-        var activeAssistant = new AssistantMessage
+        var maxIterations = Math.Max(1, agentOptions.Value.MaxToolIterations);
+        for (var iteration = 0; iteration < maxIterations; iteration++)
         {
-            ConversationId = conversation.Id,
-            Order = nextOrder++,
-            Role = AssistantMessageRole.Assistant,
-            Content = string.Empty,
-            Status = AssistantMessageStatus.Pending,
-        };
-        await conversations.AddMessageAsync(activeAssistant, cancellationToken);
-        await conversations.SaveChangesAsync(cancellationToken);
-
-        var textBuilder = new StringBuilder();
-        var streamFailed = false;
-        string? streamError = null;
-        var cancelled = false;
-
-        var enumerator = chat.GetStreamingResponseAsync(messages, cancellationToken: cancellationToken)
-            .GetAsyncEnumerator(cancellationToken);
-        try
-        {
-            while (true)
+            var activeAssistant = new AssistantMessage
             {
-                bool hasNext;
+                ConversationId = conversation.Id,
+                Order = nextOrder++,
+                Role = AssistantMessageRole.Assistant,
+                Content = string.Empty,
+                Status = AssistantMessageStatus.Pending,
+            };
+            await conversations.AddMessageAsync(activeAssistant, cancellationToken);
+            await conversations.SaveChangesAsync(cancellationToken);
+
+            var textBuilder = new StringBuilder();
+            var pendingCalls = new List<PendingToolCall>();
+            var toolCallTracker = new StreamingToolCallTracker();
+            var streamFailed = false;
+            string? streamError = null;
+            var cancelled = false;
+
+            var enumerator = chat.GetStreamingResponseAsync(messages, chatOptions, cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+            try
+            {
+                while (true)
+                {
+                    bool hasNext;
+                    try
+                    {
+                        hasNext = await enumerator.MoveNextAsync();
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        cancelled = true;
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Assistant streaming round failed.");
+                        streamFailed = true;
+                        streamError = ex.Message;
+                        break;
+                    }
+
+                    if (!hasNext)
+                        break;
+
+                    var updatesToYield = new List<AssistantTurnUpdate>();
+                    try
+                    {
+                        var contents = enumerator.Current?.Contents;
+                        if (contents is null)
+                            continue;
+
+                        foreach (var content in contents)
+                        {
+                            if (content is TextContent textContent && !string.IsNullOrEmpty(textContent.Text))
+                            {
+                                textBuilder.Append(textContent.Text);
+                                updatesToYield.Add(new AssistantTextDelta(textContent.Text));
+                                continue;
+                            }
+
+                            foreach (var toolUpdate in toolCallTracker.Process(content, textBuilder.Length))
+                            {
+                                switch (toolUpdate)
+                                {
+                                    case StreamingToolCallStartedUpdate started:
+                                        updatesToYield.Add(new AssistantToolCallStarted(
+                                            started.CallId,
+                                            started.ToolName,
+                                            started.ArgumentsJson,
+                                            started.ArgumentsComplete));
+                                        break;
+
+                                    case StreamingToolCallArgumentsDeltaUpdate delta:
+                                        updatesToYield.Add(new AssistantToolCallArgumentsDelta(
+                                            delta.CallId,
+                                            delta.ArgumentsDelta,
+                                            delta.ArgumentsComplete));
+                                        break;
+
+                                    case StreamingToolCallReadyUpdate ready:
+                                        pendingCalls.Add(new PendingToolCall(
+                                            ready.Content,
+                                            ready.CallId,
+                                            ready.ToolName,
+                                            ready.ArgumentsJson,
+                                            ready.TextOffset));
+                                        break;
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Assistant streaming update processing failed.");
+                        streamFailed = true;
+                        streamError = ex.Message;
+                        break;
+                    }
+
+                    foreach (var updateToYield in updatesToYield)
+                        yield return updateToYield;
+                }
+            }
+            finally
+            {
                 try
                 {
-                    hasNext = await enumerator.MoveNextAsync();
+                    await enumerator.DisposeAsync();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     cancelled = true;
-                    break;
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Assistant streaming round failed.");
+                    logger.LogError(ex, "Assistant streaming enumerator disposal failed.");
                     streamFailed = true;
-                    streamError = ex.Message;
-                    break;
+                    streamError ??= ex.Message;
                 }
+            }
 
-                if (!hasNext)
-                    break;
+            if (cancelled)
+            {
+                activeAssistant.Content = textBuilder.ToString();
+                activeAssistant.Status = AssistantMessageStatus.Cancelled;
+                activeAssistant.ErrorMessage = "Cancelled by user.";
+                await SafePersistAsync(activeAssistant);
+                yield return new AssistantTurnError("Cancelled.", Cancelled: true);
+                yield break;
+            }
 
-                var contents = enumerator.Current?.Contents;
-                if (contents is null)
-                    continue;
+            if (streamFailed)
+            {
+                activeAssistant.Content = textBuilder.ToString();
+                activeAssistant.Status = AssistantMessageStatus.Failed;
+                activeAssistant.ErrorMessage = streamError;
+                await SafePersistAsync(activeAssistant);
+                yield return new AssistantTurnError(streamError ?? "Assistant streaming failed.", Cancelled: false);
+                yield break;
+            }
 
-                foreach (var content in contents)
+            if (pendingCalls.Count == 0)
+            {
+                activeAssistant.Content = textBuilder.ToString();
+                activeAssistant.Status = AssistantMessageStatus.Completed;
+                await SafePersistAsync(activeAssistant);
+                conversation.UpdatedAt = DateTime.UtcNow;
+                await conversations.SaveChangesAsync(CancellationToken.None);
+                yield return new AssistantMessageCompleted(activeAssistant.Id);
+                yield break;
+            }
+
+            var manifest = pendingCalls
+                .Select(pendingCall => new PersistedToolCall(
+                    pendingCall.CallId,
+                    pendingCall.Name,
+                    pendingCall.ArgumentsJson,
+                    pendingCall.TextOffset,
+                    PersistedToolCallStatus.Pending))
+                .ToList();
+
+            var mutatingCalls = pendingCalls.Where(call => !toolRegistry.IsReadOnly(call.Name)).ToList();
+            var autoCalls = pendingCalls.Where(call => toolRegistry.IsReadOnly(call.Name)).ToList();
+            var resultContents = new List<AIContent>();
+
+            foreach (var pendingCall in autoCalls)
+            {
+                var outcome = await InvokeToolAsync(aiTools, pendingCall, cancellationToken);
+                if (outcome.Cancelled)
                 {
-                    if (content is TextContent textContent && !string.IsNullOrEmpty(textContent.Text))
-                    {
-                        textBuilder.Append(textContent.Text);
-                        yield return new AssistantTextDelta(textContent.Text);
-                    }
+                    yield return new AssistantTurnError("Cancelled.", Cancelled: true);
+                    yield break;
                 }
-            }
-        }
-        finally
-        {
-            try
-            {
-                await enumerator.DisposeAsync();
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                cancelled = true;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Assistant streaming enumerator disposal failed.");
-                streamFailed = true;
-                streamError ??= ex.Message;
-            }
-        }
 
-        if (cancelled)
-        {
+                UpdateManifest(manifest, pendingCall.CallId, outcome.Error is null
+                    ? PersistedToolCallStatus.Completed
+                    : PersistedToolCallStatus.Failed, outcome.Result, outcome.Error);
+
+                await PersistToolResultAsync(
+                    conversation.Id,
+                    nextOrder++,
+                    pendingCall.CallId,
+                    pendingCall.Name,
+                    outcome.Result,
+                    outcome.Error);
+
+                resultContents.Add(new FunctionResultContent(
+                    pendingCall.CallId,
+                    BuildToolResultForModel(pendingCall.Name, outcome.Result, EffectiveMaxToolResultCharsForModel())));
+                yield return new AssistantToolCallCompleted(
+                    pendingCall.CallId,
+                    pendingCall.Name,
+                    outcome.Error is null ? outcome.Result : null,
+                    outcome.Error,
+                    outcome.DurationMs);
+            }
+
             activeAssistant.Content = textBuilder.ToString();
-            activeAssistant.Status = AssistantMessageStatus.Cancelled;
-            activeAssistant.ErrorMessage = "Cancelled by user.";
+            activeAssistant.ToolCallsJson = JsonSerializer.Serialize(manifest, JsonOptions);
+            activeAssistant.Status = AssistantMessageStatus.Completed;
             await SafePersistAsync(activeAssistant);
-            yield return new AssistantTurnError("Cancelled.", Cancelled: true);
-            yield break;
-        }
+            conversation.UpdatedAt = DateTime.UtcNow;
+            await conversations.SaveChangesAsync(CancellationToken.None);
 
-        if (streamFailed)
-        {
-            activeAssistant.Content = textBuilder.ToString();
-            activeAssistant.Status = AssistantMessageStatus.Failed;
-            activeAssistant.ErrorMessage = streamError;
-            await SafePersistAsync(activeAssistant);
-            yield return new AssistantTurnError(streamError ?? "Assistant streaming failed.", Cancelled: false);
-            yield break;
-        }
+            if (mutatingCalls.Count > 0)
+            {
+                foreach (var pendingCall in mutatingCalls)
+                {
+                    yield return new AssistantToolCallPendingConfirmation(
+                        activeAssistant.Id,
+                        pendingCall.CallId,
+                        pendingCall.Name,
+                        pendingCall.ArgumentsJson);
+                }
 
-        activeAssistant.Content = textBuilder.ToString();
-        activeAssistant.Status = AssistantMessageStatus.Completed;
-        await SafePersistAsync(activeAssistant);
-        conversation.UpdatedAt = DateTime.UtcNow;
-        await conversations.SaveChangesAsync(CancellationToken.None);
-        yield return new AssistantMessageCompleted(activeAssistant.Id);
+                yield return new AssistantMessageCompleted(activeAssistant.Id);
+                yield break;
+            }
+
+            messages.Add(new ChatMessage(ChatRole.Assistant, BuildAssistantContents(textBuilder.ToString(), manifest)));
+            messages.Add(new ChatMessage(ChatRole.Tool, resultContents));
+
+            if (iteration == maxIterations - 1)
+            {
+                yield return new AssistantTurnError(
+                    $"Assistant tool-call loop hit cap of {maxIterations} iterations without producing a final response.",
+                    Cancelled: false);
+                yield break;
+            }
+        }
     }
 
-    private static ChatMessage ToChatMessage(AssistantMessage message) => message.Role switch
+    public async Task<AssistantToolExecutionResult> ConfirmToolCallAsync(
+        Guid projectId,
+        Guid assistantMessageId,
+        string callId,
+        CancellationToken cancellationToken = default)
     {
-        AssistantMessageRole.System => new ChatMessage(ChatRole.System, message.Content),
+        var message = await GetProjectAssistantMessageAsync(projectId, assistantMessageId, cancellationToken);
+        var calls = ReadPersistedToolCalls(message.ToolCallsJson);
+        var callIndex = calls.FindIndex(call => call.CallId == callId);
+        if (callIndex < 0)
+            throw new InvalidOperationException("Tool call was not found.");
+
+        var call = calls[callIndex];
+        if (call.Status != PersistedToolCallStatus.Pending)
+            return new AssistantToolExecutionResult(call.CallId, call.Name, call.Status, call.Result, call.Error);
+
+        var aiTools = toolRegistry.Build(projectId);
+        var aiFunction = aiTools.OfType<AIFunction>().FirstOrDefault(function => function.Name == call.Name)
+            ?? throw new InvalidOperationException($"Unknown tool '{call.Name}'.");
+
+        var pending = new PendingToolCall(
+            new FunctionCallContent(call.CallId, call.Name, ToolCallArguments.ParseObjectOrNull(call.ArgumentsJson)),
+            call.CallId,
+            call.Name,
+            call.ArgumentsJson,
+            call.TextOffset ?? 0);
+
+        var outcome = await InvokeToolAsync(aiFunction, pending, cancellationToken);
+        if (outcome.Cancelled)
+            throw new OperationCanceledException(cancellationToken);
+
+        var status = outcome.Error is null ? PersistedToolCallStatus.Completed : PersistedToolCallStatus.Failed;
+        calls[callIndex] = call with { Status = status, Result = outcome.Result, Error = outcome.Error };
+        message.ToolCallsJson = JsonSerializer.Serialize(calls, JsonOptions);
+        conversations.UpdateMessage(message);
+
+        var nextOrder = await conversations.GetMaxOrderAsync(message.ConversationId, cancellationToken) + 1;
+        await PersistToolResultAsync(
+            message.ConversationId,
+            nextOrder,
+            call.CallId,
+            call.Name,
+            outcome.Result,
+            outcome.Error,
+            cancellationToken);
+
+        return new AssistantToolExecutionResult(call.CallId, call.Name, status, outcome.Result, outcome.Error);
+    }
+
+    public async Task<AssistantToolExecutionResult> RejectToolCallAsync(
+        Guid projectId,
+        Guid assistantMessageId,
+        string callId,
+        CancellationToken cancellationToken = default)
+    {
+        var message = await GetProjectAssistantMessageAsync(projectId, assistantMessageId, cancellationToken);
+        var calls = ReadPersistedToolCalls(message.ToolCallsJson);
+        var callIndex = calls.FindIndex(call => call.CallId == callId);
+        if (callIndex < 0)
+            throw new InvalidOperationException("Tool call was not found.");
+
+        var call = calls[callIndex];
+        if (call.Status != PersistedToolCallStatus.Pending)
+            return new AssistantToolExecutionResult(call.CallId, call.Name, call.Status, call.Result, call.Error);
+
+        const string rejected = "Rejected by user.";
+        calls[callIndex] = call with
+        {
+            Status = PersistedToolCallStatus.Rejected,
+            Result = rejected,
+            Error = null,
+        };
+        message.ToolCallsJson = JsonSerializer.Serialize(calls, JsonOptions);
+        conversations.UpdateMessage(message);
+
+        var nextOrder = await conversations.GetMaxOrderAsync(message.ConversationId, cancellationToken) + 1;
+        await PersistToolResultAsync(
+            message.ConversationId,
+            nextOrder,
+            call.CallId,
+            call.Name,
+            rejected,
+            error: null,
+            cancellationToken);
+
+        return new AssistantToolExecutionResult(call.CallId, call.Name, PersistedToolCallStatus.Rejected, rejected, null);
+    }
+
+    private async Task<List<ChatMessage>> BuildModelHistoryAsync(
+        IReadOnlyList<AssistantMessage> history,
+        Guid currentUserMessageId,
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        var messages = new List<ChatMessage>();
+        WorkbenchView? workbench = null;
+        foreach (var message in history)
+        {
+            if (message.Role == AssistantMessageRole.System)
+                continue;
+
+            if (message.Id == currentUserMessageId)
+            {
+                workbench ??= await workflow.GetWorkbenchAsync(projectId, cancellationToken);
+                messages.Add(BuildCurrentUserMessage(message.Content, workbench));
+                continue;
+            }
+
+            var chatMessage = ToChatMessage(message);
+            if (chatMessage is not null)
+                messages.Add(chatMessage);
+        }
+
+        return messages;
+    }
+
+    private static ChatMessage BuildCurrentUserMessage(string text, WorkbenchView workbench)
+    {
+        var contents = new List<AIContent>();
+        var contextSummary = BuildVisibleContextSummary(workbench);
+        contents.Add(new TextContent(string.IsNullOrWhiteSpace(contextSummary)
+            ? text
+            : $"{text}\n\nVisible PixelChat context chips:\n{contextSummary}"));
+
+        foreach (var attachment in workbench.Attachments)
+        {
+            switch (attachment.Type)
+            {
+                case ChatContextAttachmentType.Asset:
+                case ChatContextAttachmentType.Crop:
+                    var asset = workbench.Assets.FirstOrDefault(item => item.Id == attachment.RefId);
+                    if (asset is not null)
+                    {
+                        contents.Add(new DataContent(asset.PreviewDataUrl, asset.ContentType)
+                        {
+                            Name = asset.FileName,
+                        });
+                    }
+                    break;
+
+                case ChatContextAttachmentType.Mask:
+                    var mask = workbench.Masks.FirstOrDefault(item => item.Id == attachment.RefId);
+                    if (mask is not null)
+                    {
+                        contents.Add(new DataContent(mask.PreviewDataUrl, mask.ContentType)
+                        {
+                            Name = $"{mask.Label}.png",
+                        });
+                    }
+                    break;
+            }
+        }
+
+        return new ChatMessage(ChatRole.User, contents);
+    }
+
+    private static string BuildVisibleContextSummary(WorkbenchView workbench)
+    {
+        if (workbench.Attachments.Count == 0)
+            return string.Empty;
+
+        var lines = new List<string>();
+        foreach (var attachment in workbench.Attachments)
+        {
+            lines.Add($"- {attachment.Type}: {attachment.Label} ({attachment.RefId})");
+        }
+
+        return string.Join('\n', lines);
+    }
+
+    private static ChatMessage? ToChatMessage(AssistantMessage message) => message.Role switch
+    {
         AssistantMessageRole.User => new ChatMessage(ChatRole.User, message.Content),
-        AssistantMessageRole.Assistant => new ChatMessage(ChatRole.Assistant, message.Content),
-        _ => new ChatMessage(ChatRole.User, message.Content)
+        AssistantMessageRole.Assistant => BuildAssistantReplay(message),
+        AssistantMessageRole.Tool => new ChatMessage(ChatRole.Tool, [new FunctionResultContent(message.ToolCallId ?? string.Empty, message.Content)]),
+        _ => null
     };
+
+    private static ChatMessage BuildAssistantReplay(AssistantMessage message)
+    {
+        var calls = ReadPersistedToolCalls(message.ToolCallsJson)
+            .Where(call => call.Status != PersistedToolCallStatus.Pending)
+            .ToList();
+        return new ChatMessage(ChatRole.Assistant, BuildAssistantContents(message.Content, calls));
+    }
+
+    private static List<AIContent> BuildAssistantContents(string text, IReadOnlyList<PersistedToolCall> calls)
+    {
+        if (calls.Count == 0)
+            return BuildTextOnlyAssistantContents(text);
+
+        if (calls.Any(call => call.TextOffset is null))
+        {
+            var fallbackContents = BuildTextOnlyAssistantContents(text);
+            foreach (var call in calls)
+                fallbackContents.Add(ToFunctionCallContent(call));
+            return fallbackContents;
+        }
+
+        var contents = new List<AIContent>();
+        var cursor = 0;
+        foreach (var item in calls
+            .Select((call, index) => new { Call = call, Index = index })
+            .OrderBy(item => item.Call.TextOffset!.Value)
+            .ThenBy(item => item.Index))
+        {
+            var offset = Math.Clamp(item.Call.TextOffset!.Value, 0, text.Length);
+            if (offset > cursor)
+            {
+                contents.Add(new TextContent(text[cursor..offset]));
+                cursor = offset;
+            }
+            contents.Add(ToFunctionCallContent(item.Call));
+        }
+
+        if (cursor < text.Length)
+            contents.Add(new TextContent(text[cursor..]));
+
+        if (contents.Count == 0)
+            contents.Add(new TextContent(string.Empty));
+        return contents;
+    }
+
+    private static List<AIContent> BuildTextOnlyAssistantContents(string text)
+    {
+        var contents = new List<AIContent>();
+        if (!string.IsNullOrEmpty(text))
+            contents.Add(new TextContent(text));
+        if (contents.Count == 0)
+            contents.Add(new TextContent(string.Empty));
+        return contents;
+    }
+
+    private static FunctionCallContent ToFunctionCallContent(PersistedToolCall call)
+    {
+        var args = ToolCallArguments.ParseObjectOrNull(call.ArgumentsJson);
+        return new FunctionCallContent(call.CallId, call.Name, args);
+    }
+
+    private async Task<ToolInvocationOutcome> InvokeToolAsync(
+        IList<AITool> aiTools,
+        PendingToolCall pendingCall,
+        CancellationToken cancellationToken)
+    {
+        var aiFunction = aiTools.OfType<AIFunction>().FirstOrDefault(function => function.Name == pendingCall.Name)
+            ?? throw new InvalidOperationException($"Unknown tool '{pendingCall.Name}'.");
+        return await InvokeToolAsync(aiFunction, pendingCall, cancellationToken);
+    }
+
+    private async Task<ToolInvocationOutcome> InvokeToolAsync(
+        AIFunction aiFunction,
+        PendingToolCall pendingCall,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var invokeResult = await aiFunction.InvokeAsync(
+                ToolCallArguments.Create(pendingCall.Content.Arguments, pendingCall.ArgumentsJson),
+                cancellationToken);
+            stopwatch.Stop();
+            return new ToolInvocationOutcome(invokeResult?.ToString() ?? string.Empty, Error: null, Cancelled: false, stopwatch.Elapsed.TotalMilliseconds);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            stopwatch.Stop();
+            return new ToolInvocationOutcome(string.Empty, Error: null, Cancelled: true, stopwatch.Elapsed.TotalMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            logger.LogWarning(ex, "Assistant tool '{Tool}' failed.", pendingCall.Name);
+            return new ToolInvocationOutcome($"Error: {ex.Message}", ex.Message, Cancelled: false, stopwatch.Elapsed.TotalMilliseconds);
+        }
+    }
+
+    private async Task PersistToolResultAsync(
+        Guid conversationId,
+        int order,
+        string callId,
+        string toolName,
+        string result,
+        string? error,
+        CancellationToken cancellationToken = default)
+    {
+        var toolMessage = new AssistantMessage
+        {
+            ConversationId = conversationId,
+            Order = order,
+            Role = AssistantMessageRole.Tool,
+            Content = result,
+            ToolCallId = callId,
+            ToolName = toolName,
+            Status = error is null ? AssistantMessageStatus.Completed : AssistantMessageStatus.Failed,
+            ErrorMessage = error,
+        };
+        await conversations.AddMessageAsync(toolMessage, cancellationToken);
+        await conversations.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task<AssistantMessage> GetProjectAssistantMessageAsync(
+        Guid projectId,
+        Guid assistantMessageId,
+        CancellationToken cancellationToken)
+    {
+        var message = await conversations.GetMessageAsync(assistantMessageId, cancellationToken)
+            ?? throw new InvalidOperationException("Assistant message was not found.");
+        if (message.Role != AssistantMessageRole.Assistant)
+            throw new InvalidOperationException("Message is not an assistant tool-call message.");
+
+        var conversation = await conversations.GetByIdAsync(message.ConversationId, cancellationToken)
+            ?? throw new InvalidOperationException("Conversation was not found.");
+        if (conversation.ProjectId != projectId)
+            throw new InvalidOperationException("Tool call does not belong to this project.");
+
+        return message;
+    }
+
+    private static void UpdateManifest(
+        List<PersistedToolCall> calls,
+        string callId,
+        PersistedToolCallStatus status,
+        string result,
+        string? error)
+    {
+        var index = calls.FindIndex(call => call.CallId == callId);
+        if (index < 0)
+            return;
+
+        calls[index] = calls[index] with
+        {
+            Status = status,
+            Result = result,
+            Error = error,
+        };
+    }
+
+    private static List<PersistedToolCall> ReadPersistedToolCalls(string toolCallsJson)
+    {
+        if (string.IsNullOrWhiteSpace(toolCallsJson) || toolCallsJson == "[]")
+            return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<PersistedToolCall>>(toolCallsJson, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private int EffectiveMaxToolResultCharsForModel() =>
+        Math.Max(1000, agentOptions.Value.MaxToolResultCharsForModel);
+
+    private static string BuildToolResultForModel(string toolName, string result, int maxToolResultCharsForModel)
+    {
+        if (result.Length <= maxToolResultCharsForModel)
+            return result;
+
+        return result[..maxToolResultCharsForModel]
+            + $"\n\n[Tool result for {toolName} truncated before returning it to the model.]";
+    }
 
     private async Task PersistFailedAssistantAsync(Guid conversationId, int order, string error)
     {
@@ -245,7 +757,20 @@ public sealed class AssistantChatService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to persist assistant message {MessageId}", message.Id);
+            logger.LogError(ex, "Failed to persist assistant message {MessageId}.", message.Id);
         }
     }
+
+    private sealed record PendingToolCall(
+        FunctionCallContent Content,
+        string CallId,
+        string Name,
+        string ArgumentsJson,
+        int TextOffset);
+
+    private sealed record ToolInvocationOutcome(
+        string Result,
+        string? Error,
+        bool Cancelled,
+        double DurationMs);
 }

@@ -82,6 +82,8 @@
     [Parameter] public EventCallback OnSend { get; set; }
     [Parameter] public EventCallback OnStop { get; set; }
     [Parameter] public EventCallback OnClearError { get; set; }
+    [Parameter] public EventCallback<ChatToolCallAction> OnConfirmToolCall { get; set; }
+    [Parameter] public EventCallback<ChatToolCallAction> OnRejectToolCall { get; set; }
     [Parameter] public RenderFragment? HeaderActions { get; set; }
 
     private ElementReference _scrollEl;
@@ -147,13 +149,35 @@
 
     private RenderFragment RenderMessage(ChatRenderableMessage message) => __builder =>
     {
-        var bubbleClass = message.Role == ChatMessageRole.User
-            ? "chat-msg chat-msg-user"
-            : "chat-msg chat-msg-asst";
+        var bubbleClass = message.Role switch
+        {
+            ChatMessageRole.User => "chat-msg chat-msg-user",
+            ChatMessageRole.Tool => "chat-msg chat-msg-tool",
+            _ => "chat-msg chat-msg-asst"
+        };
         <div class="@bubbleClass">
             @if (!string.IsNullOrEmpty(message.Content))
             {
                 <div class="chat-msg-text">@message.Content</div>
+            }
+            @if (message.ToolCalls is { Count: > 0 })
+            {
+                <div class="chat-tool-list">
+                    @foreach (var call in message.ToolCalls)
+                    {
+                        @RenderToolCall(call)
+                    }
+                </div>
+            }
+            @if (message.Role == ChatMessageRole.Tool)
+            {
+                <div class="chat-tool-result-meta">
+                    <span>@(message.ToolName ?? "tool")</span>
+                    @if (!string.IsNullOrWhiteSpace(message.ToolCallId))
+                    {
+                        <span>@message.ToolCallId</span>
+                    }
+                </div>
             }
             @if (message.Status == ChatMessageStatus.Failed)
             {
@@ -178,10 +202,77 @@
             <div class="chat-msg-text">@live.Text<span class="chat-cursor">|</span></div>
         </div>
 
+        @if (live.ToolCalls.Count > 0)
+        {
+            <div class="chat-msg chat-msg-asst chat-msg-streaming">
+                <div class="chat-tool-list">
+                    @foreach (var call in live.ToolCalls)
+                    {
+                        <div class="chat-tool-card chat-tool-card-live">
+                            <div class="chat-tool-card-head">
+                                <span class="chat-tool-name">@call.Name</span>
+                                <span class="chat-tool-state">Preparing</span>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(call.ArgumentsJson))
+                            {
+                                <pre>@call.ArgumentsJson</pre>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
         if (live.IsThinking)
         {
             @RenderThinkingIndicator()
         }
+    };
+
+    private RenderFragment RenderToolCall(ChatToolCallView call) => __builder =>
+    {
+        var statusClass = call.Status switch
+        {
+            ChatToolCallStatus.Pending => "chat-tool-card-pending",
+            ChatToolCallStatus.Completed => "chat-tool-card-completed",
+            ChatToolCallStatus.Rejected => "chat-tool-card-rejected",
+            ChatToolCallStatus.Failed => "chat-tool-card-failed",
+            _ => string.Empty
+        };
+
+        <div class="chat-tool-card @statusClass">
+            <div class="chat-tool-card-head">
+                <span class="chat-tool-name">@FormatToolName(call.Name)</span>
+                <span class="chat-tool-state">@call.Status</span>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(call.ArgumentsJson))
+            {
+                <pre>@call.ArgumentsJson</pre>
+            }
+            @if (!string.IsNullOrWhiteSpace(call.Error))
+            {
+                <div class="chat-tool-error">@call.Error</div>
+            }
+            else if (!string.IsNullOrWhiteSpace(call.Result) && call.Status != ChatToolCallStatus.Pending)
+            {
+                <div class="chat-tool-result">@Truncate(call.Result, 360)</div>
+            }
+            @if (call.Status == ChatToolCallStatus.Pending)
+            {
+                <div class="chat-tool-actions">
+                    <button type="button" class="btn btn-sm btn-primary"
+                            disabled="@Running"
+                            @onclick="() => OnConfirmToolCall.InvokeAsync(new ChatToolCallAction(call.AssistantMessageId, call.CallId))">
+                        Confirm
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                            disabled="@Running"
+                            @onclick="() => OnRejectToolCall.InvokeAsync(new ChatToolCallAction(call.AssistantMessageId, call.CallId))">
+                        Reject
+                    </button>
+                </div>
+            }
+        </div>
     };
 
     private RenderFragment RenderThinkingIndicator() => __builder =>
@@ -191,6 +282,12 @@
             <span class="chat-thinking-label">Thinking...</span>
         </div>
     };
+
+    private static string FormatToolName(string value) =>
+        value.Replace('_', ' ');
+
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..max] + "...";
 
     public async ValueTask DisposeAsync()
     {
