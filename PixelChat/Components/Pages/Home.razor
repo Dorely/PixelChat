@@ -153,7 +153,7 @@ else
     private string _generatePrompt = string.Empty;
     private string _negativePrompt = string.Empty;
     private string _generateSize = "auto";
-    private string _generateBackground = "transparent";
+    private string _generateBackground = "auto";
     private int _generateCount = 1;
     private string _selectedRecipeText = string.Empty;
     private Guid? _editingRecipeId;
@@ -166,7 +166,7 @@ else
     private string _recipePreferredSize = "auto";
     private string _editPrompt = string.Empty;
     private string _editSize = "auto";
-    private string _editBackground = "transparent";
+    private string _editBackground = "auto";
     private int _editCount = 1;
     private int _brushSize = 36;
     private string _editorTool = "mask";
@@ -336,7 +336,6 @@ else
                     <label>
                         <span>Background</span>
                         <select class="form-select" @bind="_generateBackground">
-                            <option value="transparent">Transparent</option>
                             <option value="auto">Auto</option>
                             <option value="opaque">Opaque</option>
                         </select>
@@ -537,7 +536,6 @@ else
                             <label>
                                 <span>Background</span>
                                 <select class="form-select" @bind="_editBackground">
-                                    <option value="transparent">Transparent</option>
                                     <option value="auto">Auto</option>
                                     <option value="opaque">Opaque</option>
                                 </select>
@@ -2623,7 +2621,7 @@ else
     private static string NormalizeDraftBackground(string? background, string current) =>
         background?.Trim().ToLowerInvariant() switch
         {
-            "transparent" => "transparent",
+            "transparent" => "auto",
             "opaque" => "opaque",
             "auto" => "auto",
             _ => current,
@@ -2664,7 +2662,6 @@ else
     private static string BackgroundLabel(string background) =>
         background.Trim().ToLowerInvariant() switch
         {
-            "transparent" => "Transparent background",
             "opaque" => "Opaque background",
             _ => "Auto background",
         };

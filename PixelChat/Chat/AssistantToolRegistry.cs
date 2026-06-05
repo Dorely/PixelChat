@@ -47,7 +47,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 int? count = null,
                 Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, background, recipeId, count, referenceAssetIds),
             name: "draft_generate_form",
-            description: "Draft values for the Generate form. Use background as transparent, auto, or opaque instead of adding background instructions to the prompt. Use recipeId to select a saved style recipe; keep prompt focused on the asset-specific request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
+            description: "Draft values for the Generate form. Use background as auto or opaque instead of adding background instructions to the prompt; transparent generation is not supported by the current image model, so use auto for isolated assets and rely on Export background removal for real-alpha PNG output. Use recipeId to select a saved style recipe; keep prompt focused on the asset-specific request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -56,7 +56,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 string? background = null,
                 int count = 1) => DraftEditFormAsync(prompt, size, background, count),
             name: "draft_edit_form",
-            description: "Draft values for the current Edit form. Use background as transparent, auto, or opaque instead of adding background instructions to the prompt. This does not choose an asset or run an image edit; the user selects an asset, may paint/review a mask for targeted edits, and clicks Send Edit manually."),
+            description: "Draft values for the current Edit form. Use background as auto or opaque instead of adding background instructions to the prompt; transparent generation is not supported by the current image model, so use auto for isolated assets and rely on Export background removal for real-alpha PNG output. This does not choose an asset or run an image edit; the user selects an asset, may paint/review a mask for targeted edits, and clicks Send Edit manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -206,7 +206,6 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
     private static string? NormalizeBackground(string? value) =>
         value?.Trim().ToLowerInvariant() switch
         {
-            "transparent" => "transparent",
             "opaque" => "opaque",
             "auto" => "auto",
             null or "" => null,

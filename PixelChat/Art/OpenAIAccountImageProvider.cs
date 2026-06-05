@@ -27,6 +27,7 @@ public sealed class OpenAIAccountImageProvider(
         var connection = await ResolveConnectionAsync(cancellationToken);
         var mainlineModel = CleanModel(request.MainlineModel, options.Value.DefaultMainlineModel);
         var imageModel = CleanModel(request.ImageModel, options.Value.DefaultImageModel);
+        var background = NormalizeBackground(request.Background);
         var images = new List<ImageProviderImage>();
         var metadata = new List<object?>();
 
@@ -43,7 +44,7 @@ public sealed class OpenAIAccountImageProvider(
                     request.Size,
                     request.Quality,
                     request.OutputFormat,
-                    request.Background,
+                    background,
                     includedReferenceCount,
                     includedReferenceCount,
                     HasMask: false),
@@ -66,6 +67,7 @@ public sealed class OpenAIAccountImageProvider(
         var connection = await ResolveConnectionAsync(cancellationToken);
         var mainlineModel = CleanModel(request.MainlineModel, options.Value.DefaultMainlineModel);
         var imageModel = CleanModel(request.ImageModel, options.Value.DefaultImageModel);
+        var background = NormalizeBackground(request.Background);
         var images = new List<ImageProviderImage>();
         var metadata = new List<object?>();
 
@@ -83,7 +85,7 @@ public sealed class OpenAIAccountImageProvider(
                     request.Size,
                     request.Quality,
                     request.OutputFormat,
-                    request.Background,
+                    background,
                     includedReferenceCount,
                     InputImageCount: 1 + includedReferenceCount,
                     HasMask: hasMask),
@@ -524,7 +526,6 @@ public sealed class OpenAIAccountImageProvider(
     private static string NormalizeBackground(string? value) =>
         value?.Trim().ToLowerInvariant() switch
         {
-            "transparent" => "transparent",
             "opaque" => "opaque",
             _ => "auto",
         };

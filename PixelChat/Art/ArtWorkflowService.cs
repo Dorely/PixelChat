@@ -1321,7 +1321,6 @@ public sealed class ArtWorkflowService(
     private static string NormalizeBackground(string? value) =>
         value?.Trim().ToLowerInvariant() switch
         {
-            "transparent" => "transparent",
             "opaque" => "opaque",
             _ => "auto",
         };
