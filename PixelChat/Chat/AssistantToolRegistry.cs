@@ -7,12 +7,14 @@ namespace PixelChat.Chat;
 
 public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
 {
-    private static readonly HashSet<string> AutoRunTools = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> WorkspaceMutationTools = new(StringComparer.Ordinal)
     {
-        "list_workspace_state",
-        "draft_generate_form",
-        "draft_edit_form",
-        "draft_prompt_recipe_form"
+        "attach_context",
+        "clear_context",
+        "switch_workspace_mode",
+        "select_asset",
+        "mark_asset",
+        "use_as_reference"
     };
 
     public IList<AITool> Build(Guid projectId) =>
@@ -35,7 +37,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         AIFunctionFactory.Create(
             method: (string mode) => SwitchWorkspaceModeAsync(projectId, mode),
             name: "switch_workspace_mode",
-            description: "Switch the visible workspace mode. Allowed values: generate, compare, edit."),
+            description: "Switch the visible workspace mode. Allowed values: generate, compare, edit, recipes."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId) => SelectAssetAsync(projectId, assetId),
@@ -91,7 +93,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             description: "Prepare an existing asset for export by returning its export file metadata. The user still controls the actual browser download."),
     ];
 
-    public bool IsAutoRun(string toolName) => AutoRunTools.Contains(toolName);
+    public bool IsWorkspaceMutation(string toolName) => WorkspaceMutationTools.Contains(toolName);
 
     private async Task<string> AttachContextAsync(Guid projectId, string type, Guid refId, string? label)
     {

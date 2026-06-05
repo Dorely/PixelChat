@@ -12,11 +12,10 @@ public sealed class WorkspaceChatRuntime(
     private string? _pendingUserText;
     private string? _error;
     private bool _running;
-    private int _workspaceVersion;
-    private AssistantFormDraft? _formDraft;
-    private int _formDraftVersion;
 
     public event Action? StateChanged;
+    public event Action? WorkspaceChanged;
+    public event Action<AssistantFormDraft>? FormDraftProposed;
 
     public bool IsRunning
     {
@@ -35,10 +34,7 @@ public sealed class WorkspaceChatRuntime(
                 _running,
                 _live?.Clone(),
                 _pendingUserText,
-                _error,
-                _workspaceVersion,
-                _formDraft,
-                _formDraftVersion);
+                _error);
         }
     }
 
@@ -94,80 +90,13 @@ public sealed class WorkspaceChatRuntime(
         using var scope = scopeFactory.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IAssistantChatService>();
         await chat.ResetAsync(projectId, cancellationToken);
-        BumpWorkspaceVersion();
         NotifyStateChanged();
-    }
-
-    public async Task<AssistantToolExecutionResult> ConfirmToolCallAsync(
-        Guid projectId,
-        Guid assistantMessageId,
-        string callId,
-        CancellationToken cancellationToken = default)
-    {
-        if (!TryStartBlockingOperation())
-            throw new InvalidOperationException("A chat turn is already running.");
-
-        try
-        {
-            using var scope = scopeFactory.CreateScope();
-            var chat = scope.ServiceProvider.GetRequiredService<IAssistantChatService>();
-            var result = await chat.ConfirmToolCallAsync(projectId, assistantMessageId, callId, cancellationToken);
-            if (result.Status == PersistedToolCallStatus.Completed)
-                BumpWorkspaceVersion();
-            return result;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            SetError(ex.Message);
-            throw;
-        }
-        finally
-        {
-            FinishBlockingOperation();
-        }
-    }
-
-    public async Task<AssistantToolExecutionResult> RejectToolCallAsync(
-        Guid projectId,
-        Guid assistantMessageId,
-        string callId,
-        CancellationToken cancellationToken = default)
-    {
-        if (!TryStartBlockingOperation())
-            throw new InvalidOperationException("A chat turn is already running.");
-
-        try
-        {
-            using var scope = scopeFactory.CreateScope();
-            var chat = scope.ServiceProvider.GetRequiredService<IAssistantChatService>();
-            return await chat.RejectToolCallAsync(projectId, assistantMessageId, callId, cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            SetError(ex.Message);
-            throw;
-        }
-        finally
-        {
-            FinishBlockingOperation();
-        }
     }
 
     public void ClearError()
     {
         lock (_gate)
             _error = null;
-
-        NotifyStateChanged();
-    }
-
-    public void AcknowledgeFormDraft(int draftVersion)
-    {
-        lock (_gate)
-        {
-            if (_formDraftVersion == draftVersion)
-                _formDraft = null;
-        }
 
         NotifyStateChanged();
     }
@@ -227,6 +156,8 @@ public sealed class WorkspaceChatRuntime(
 
     private void ApplyUpdate(AssistantTurnUpdate update)
     {
+        var notifyWorkspaceChanged = false;
+        AssistantFormDraft? formDraft = null;
         lock (_gate)
         {
             switch (update)
@@ -236,19 +167,18 @@ public sealed class WorkspaceChatRuntime(
                     break;
 
                 case AssistantToolCallStarted started:
-                    _live?.StartToolCall(started.CallId, started.ToolName, started.ArgumentsJson, started.ArgumentsComplete);
+                    _live?.StartToolCall(
+                        started.CallId,
+                        started.ToolName,
+                        started.ArgumentsJson,
+                        started.ArgumentsComplete);
                     break;
 
                 case AssistantToolCallArgumentsDelta delta:
-                    _live?.AppendToolCallArguments(delta.CallId, delta.ArgumentsDelta, delta.ArgumentsComplete);
-                    break;
-
-                case AssistantToolCallPendingConfirmation pending:
-                    _live?.MarkToolCallPendingConfirmation(
-                        pending.AssistantMessageId,
-                        pending.CallId,
-                        pending.ToolName,
-                        pending.ArgumentsJson);
+                    _live?.AppendToolArguments(
+                        delta.CallId,
+                        delta.ArgumentsDelta,
+                        delta.ArgumentsComplete);
                     break;
 
                 case AssistantToolCallCompleted completed:
@@ -260,12 +190,11 @@ public sealed class WorkspaceChatRuntime(
                     break;
 
                 case AssistantFormDraftProposed draft:
-                    _formDraft = draft.Draft;
-                    _formDraftVersion++;
+                    formDraft = draft.Draft;
                     break;
 
                 case AssistantWorkspaceMutated:
-                    _workspaceVersion++;
+                    notifyWorkspaceChanged = true;
                     break;
 
                 case AssistantTurnError error:
@@ -273,35 +202,12 @@ public sealed class WorkspaceChatRuntime(
                     break;
             }
         }
-    }
 
-    private bool TryStartBlockingOperation()
-    {
-        lock (_gate)
-        {
-            if (_running)
-                return false;
+        if (formDraft is not null)
+            NotifyFormDraftProposed(formDraft);
 
-            _running = true;
-            _live = null;
-            _pendingUserText = null;
-            _error = null;
-            return true;
-        }
-    }
-
-    private void FinishBlockingOperation()
-    {
-        lock (_gate)
-            _running = false;
-
-        NotifyStateChanged();
-    }
-
-    private void BumpWorkspaceVersion()
-    {
-        lock (_gate)
-            _workspaceVersion++;
+        if (notifyWorkspaceChanged)
+            NotifyWorkspaceChanged();
     }
 
     private void SetError(string message)
@@ -312,12 +218,34 @@ public sealed class WorkspaceChatRuntime(
         NotifyStateChanged();
     }
 
-    private void NotifyStateChanged()
+    private void NotifyStateChanged() => Notify(StateChanged, "Workspace chat state subscriber failed.");
+
+    private void NotifyWorkspaceChanged() => Notify(WorkspaceChanged, "Workspace chat workspace subscriber failed.");
+
+    private void NotifyFormDraftProposed(AssistantFormDraft draft)
     {
-        if (StateChanged is null)
+        if (FormDraftProposed is null)
             return;
 
-        foreach (Action handler in StateChanged.GetInvocationList())
+        foreach (Action<AssistantFormDraft> handler in FormDraftProposed.GetInvocationList())
+        {
+            try
+            {
+                handler(draft);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Workspace chat form draft subscriber failed.");
+            }
+        }
+    }
+
+    private void Notify(Action? handlers, string failureMessage)
+    {
+        if (handlers is null)
+            return;
+
+        foreach (Action handler in handlers.GetInvocationList())
         {
             try
             {
@@ -325,7 +253,7 @@ public sealed class WorkspaceChatRuntime(
             }
             catch (Exception ex)
             {
-                logger.LogDebug(ex, "Workspace chat state subscriber failed.");
+                logger.LogDebug(ex, failureMessage);
             }
         }
     }

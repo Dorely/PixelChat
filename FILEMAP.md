@@ -40,12 +40,12 @@
 
 | File | Description |
 |------|-------------|
-| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with visible/active image context, tool-call streaming, form-draft updates, confirmation persistence, and transcript replay. |
-| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive, exposes confirmation/rejection, carries form drafts, and signals workspace mutations across renderer reloads. |
-| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, form drafting, and confirmation-gated tool use. |
-| `AssistantToolModels.cs` | Persisted tool-call manifest records, form-draft payloads, and confirmation result models used by chat/runtime/UI. |
+| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with visible/active image context, Shellmate-style tool-call streaming/execution, form-draft updates, and transcript replay. |
+| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, exposes live chat snapshots, and signals workspace/form side effects. |
+| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, form drafting, and immediate visible tool use. |
+| `AssistantToolModels.cs` | Persisted tool-call manifest records and form-draft payloads used by chat/runtime/UI. |
 | `AssistantToolRegistry.cs` | Tool registry for workspace state, form drafting, context chips, mode/asset selection, marking, reference, and export actions. |
-| `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text deltas, tool-call deltas, pending confirmations, completions, and errors. |
+| `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
 
@@ -71,9 +71,9 @@
 
 | File | Description |
 |------|-------------|
-| `ChatModels.cs` | UI-only ordered chat parts, compact tool chip state, live-turn state, and persisted tool-call helpers used by chat components. |
+| `ChatModels.cs` | UI-only ordered chat parts, Shellmate-style compact tool chip state, live-turn state, and persisted tool-call helpers used by chat components. |
 | `ChatSurface.razor` / `.razor.css` / `.razor.js` | Reusable chat shell for ordered text/tool transcript rendering, streaming state, composer autosize, enter-to-send, and scroll-follow behavior. |
-| `ChatToolChipView.razor` / `.razor.css` | Expandable compact tool-call chip used for live and persisted assistant tool activity with confirmation actions. |
+| `ChatToolChipView.razor` / `.razor.css` | Expandable compact tool-call chip used for live and persisted assistant tool activity. |
 
 ### Components/Layout/
 

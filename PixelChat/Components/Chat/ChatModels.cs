@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace PixelChat.Components.Chat;
 
@@ -44,34 +43,23 @@ public sealed class ChatToolChip
 {
     private readonly StringBuilder _arguments = new();
 
-    public ChatToolChip(
-        string callId,
-        string name,
-        string argumentsJson,
-        bool argumentsComplete = true,
-        ChatToolCallStatus status = ChatToolCallStatus.Completed,
-        Guid? assistantMessageId = null)
+    public ChatToolChip(string callId, string name, string argumentsJson, bool argumentsComplete = true)
     {
         CallId = callId;
         Name = name;
         SetArguments(argumentsJson);
         ArgumentsComplete = argumentsComplete;
-        Status = status;
-        AssistantMessageId = assistantMessageId;
     }
 
-    public Guid? AssistantMessageId { get; private set; }
     public string CallId { get; }
     public string Name { get; private set; }
     public string ArgumentsJson => _arguments.ToString();
     public string? Result { get; set; }
     public string? Error { get; set; }
     public double? DurationMs { get; set; }
-    public ChatToolCallStatus Status { get; private set; }
+    public bool Completed { get; set; }
     public bool ArgumentsComplete { get; private set; }
     public bool HasArguments => !string.IsNullOrWhiteSpace(ArgumentsJson) && ArgumentsJson != "{}";
-    public bool IsFinished => Status is ChatToolCallStatus.Completed or ChatToolCallStatus.Rejected or ChatToolCallStatus.Failed;
-    public bool CanConfirm => Status == ChatToolCallStatus.Pending && AssistantMessageId.HasValue;
 
     public void Rename(string name) => Name = name;
 
@@ -96,56 +84,18 @@ public sealed class ChatToolChip
         ArgumentsComplete = true;
     }
 
-    public void MarkPendingConfirmation(Guid assistantMessageId, string name, string argumentsJson)
-    {
-        AssistantMessageId = assistantMessageId;
-        Rename(name);
-        MarkArgumentsComplete(argumentsJson);
-        Status = ChatToolCallStatus.Pending;
-    }
-
-    public void MarkCompleted(string? result, string? error, double? durationMs = null)
-    {
-        Result = result;
-        Error = error;
-        DurationMs = durationMs;
-        Status = error is null ? ChatToolCallStatus.Completed : ChatToolCallStatus.Failed;
-        MarkArgumentsComplete();
-    }
-
-    public void SetPersistedStatus(ChatToolCallStatus status, string? result, string? error)
-    {
-        Status = status;
-        Result = result;
-        Error = error;
-        MarkArgumentsComplete();
-    }
-
     public ChatToolChip Clone()
     {
-        var clone = new ChatToolChip(CallId, Name, ArgumentsJson, ArgumentsComplete, Status, AssistantMessageId)
+        var clone = new ChatToolChip(CallId, Name, ArgumentsJson, ArgumentsComplete)
         {
             Result = Result,
             Error = Error,
-            DurationMs = DurationMs
+            DurationMs = DurationMs,
+            Completed = Completed
         };
         return clone;
     }
 }
-
-[JsonConverter(typeof(JsonStringEnumConverter<ChatToolCallStatus>))]
-public enum ChatToolCallStatus
-{
-    Pending,
-    Running,
-    Completed,
-    Rejected,
-    Failed
-}
-
-public sealed record ChatToolCallAction(
-    Guid AssistantMessageId,
-    string CallId);
 
 public sealed class ChatLiveTurn
 {
@@ -170,7 +120,7 @@ public sealed class ChatLiveTurn
         var chip = FindToolChip(callId);
         if (chip is null)
         {
-            chip = new ChatToolChip(callId, name, argumentsJson, argumentsComplete, ChatToolCallStatus.Running);
+            chip = new ChatToolChip(callId, name, argumentsJson, argumentsComplete);
             ToolMessage().Parts.Add(new ChatToolPart(chip));
             return;
         }
@@ -182,49 +132,30 @@ public sealed class ChatLiveTurn
             chip.MarkArgumentsComplete();
     }
 
-    public void AppendToolCallArguments(string callId, string argumentsDelta, bool argumentsComplete)
+    public void AppendToolArguments(string callId, string argumentsDelta, bool argumentsComplete)
     {
         IsThinking = false;
         var chip = FindToolChip(callId);
         if (chip is null)
         {
-            chip = new ChatToolChip(
-                callId,
-                callId,
-                string.Empty,
-                argumentsComplete: false,
-                status: ChatToolCallStatus.Running);
+            chip = new ChatToolChip(callId, callId, string.Empty, argumentsComplete: false);
             ToolMessage().Parts.Add(new ChatToolPart(chip));
         }
 
         chip.AppendArguments(argumentsDelta, argumentsComplete);
     }
 
-    public void MarkToolCallPendingConfirmation(Guid assistantMessageId, string callId, string name, string argumentsJson)
-    {
-        IsThinking = false;
-        var chip = FindToolChip(callId);
-        if (chip is null)
-        {
-            chip = new ChatToolChip(
-                callId,
-                name,
-                argumentsJson,
-                argumentsComplete: true,
-                ChatToolCallStatus.Pending,
-                assistantMessageId);
-            ToolMessage().Parts.Add(new ChatToolPart(chip));
-            return;
-        }
-
-        chip.MarkPendingConfirmation(assistantMessageId, name, argumentsJson);
-    }
-
     public void CompleteToolCall(string callId, string? result, string? error, double? durationMs = null)
     {
         var chip = FindToolChip(callId);
         if (chip is not null)
-            chip.MarkCompleted(result, error, durationMs);
+        {
+            chip.Result = result;
+            chip.Error = error;
+            chip.DurationMs = durationMs;
+            chip.Completed = true;
+            chip.MarkArgumentsComplete();
+        }
 
         IsThinking = true;
         _startNewMessageOnNextPart = true;
@@ -313,10 +244,7 @@ public sealed record ChatPersistedToolCall(
     string CallId,
     string Name,
     string ArgumentsJson,
-    int? TextOffset,
-    ChatToolCallStatus Status = ChatToolCallStatus.Pending,
-    string? Result = null,
-    string? Error = null);
+    int? TextOffset = null);
 
 public static class ChatTranscriptHelpers
 {

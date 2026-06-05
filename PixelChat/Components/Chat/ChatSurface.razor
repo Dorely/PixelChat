@@ -82,8 +82,6 @@
     [Parameter] public EventCallback OnSend { get; set; }
     [Parameter] public EventCallback OnStop { get; set; }
     [Parameter] public EventCallback OnClearError { get; set; }
-    [Parameter] public EventCallback<ChatToolCallAction> OnConfirmToolCall { get; set; }
-    [Parameter] public EventCallback<ChatToolCallAction> OnRejectToolCall { get; set; }
     [Parameter] public RenderFragment? HeaderActions { get; set; }
 
     private ElementReference _scrollEl;
@@ -209,10 +207,7 @@
 
             if (toolParts.Count == 1)
             {
-                <ChatToolChipView Chip="toolParts[0]"
-                                  Running="@Running"
-                                  OnConfirmToolCall="@OnConfirmToolCall"
-                                  OnRejectToolCall="@OnRejectToolCall" />
+                <ChatToolChipView Chip="toolParts[0]" />
             }
             else
             {
@@ -233,10 +228,7 @@
         }
         else if (part is ChatToolPart toolPart)
         {
-            <ChatToolChipView Chip="toolPart.Chip"
-                              Running="@Running"
-                              OnConfirmToolCall="@OnConfirmToolCall"
-                              OnRejectToolCall="@OnRejectToolCall" />
+            <ChatToolChipView Chip="toolPart.Chip" />
         }
     };
 
@@ -246,11 +238,9 @@
             .Where(chip => chip.DurationMs.HasValue)
             .Sum(chip => chip.DurationMs!.Value);
         var hasDuration = duration > 0;
-        var stateClass = chips.Any(chip => chip.Status == ChatToolCallStatus.Failed || chip.Error is not null)
+        var stateClass = chips.Any(chip => chip.Error is not null)
             ? "chat-tool-group-error"
-            : chips.Any(chip => chip.Status == ChatToolCallStatus.Pending)
-                ? "chat-tool-group-pending"
-                : chips.All(chip => chip.IsFinished)
+            : chips.All(chip => chip.Completed)
                     ? "chat-tool-group-ok"
                     : "chat-tool-group-running";
 
@@ -263,7 +253,7 @@
                 {
                     <span class="chat-tool-group-duration">@FormatDuration(duration)</span>
                 }
-                else if (chips.Any(chip => !chip.IsFinished))
+                else if (chips.Any(chip => !chip.Completed))
                 {
                     <span class="chat-tool-group-duration">running</span>
                 }
@@ -271,10 +261,7 @@
             <div class="chat-tool-group-body">
                 @foreach (var chip in chips)
                 {
-                    <ChatToolChipView Chip="chip"
-                                      Running="@Running"
-                                      OnConfirmToolCall="@OnConfirmToolCall"
-                                      OnRejectToolCall="@OnRejectToolCall" />
+                    <ChatToolChipView Chip="chip" />
                 }
             </div>
         </details>
@@ -282,14 +269,13 @@
 
     private static string ToolGroupIcon(IReadOnlyList<ChatToolChip> chips)
     {
-        if (chips.Any(chip => chip.Status == ChatToolCallStatus.Failed || chip.Error is not null)) return "x";
-        if (chips.Any(chip => chip.Status == ChatToolCallStatus.Pending)) return "ask";
-        if (chips.All(chip => chip.IsFinished)) return "ok";
+        if (chips.Any(chip => chip.Error is not null)) return "x";
+        if (chips.All(chip => chip.Completed)) return "ok";
         return "run";
     }
 
     private static bool ToolGroupOpen(IReadOnlyList<ChatToolChip> chips) =>
-        chips.Any(chip => chip.Status is ChatToolCallStatus.Pending or ChatToolCallStatus.Failed or ChatToolCallStatus.Running);
+        chips.Any(chip => !chip.Completed);
 
     private static string ToolGroupNames(IReadOnlyList<ChatToolChip> chips)
     {

@@ -14,7 +14,7 @@ public static class AssistantPromptBuilder
 
         You must not run image generation, run image editing, or save prompt recipes through chat tools. When the user wants those actions prepared, use draft tools to fill the relevant form, then tell the user to review the form and click the visible button.
 
-        Mutating actions such as marking, selecting, switching, attaching context, clearing context, and export preparation are proposed through tools and must wait for the user's visible confirmation card in PixelChat. Form draft tools and workspace inspection are safe auto-run tools. Do not say mutating actions have happened until a tool result confirms completion.
+        Workspace tools apply visible changes immediately when called. Only call mutating tools such as marking, selecting, switching, attaching context, and clearing context when the user has clearly asked for that visible change or it is directly necessary to satisfy the current request. Do not say a tool action has happened until a tool result confirms completion.
 
         Prompt recipes are visible-state helpers only. Applying or saving a recipe must use explicit visible fields and tool arguments; do not smuggle hidden recipe instructions into normal chat responses.
 

@@ -288,26 +288,33 @@ public sealed class AssistantChatService(
                     pendingCall.CallId,
                     pendingCall.Name,
                     pendingCall.ArgumentsJson,
-                    pendingCall.TextOffset,
-                    PersistedToolCallStatus.Pending))
+                    pendingCall.TextOffset))
                 .ToList();
 
-            var mutatingCalls = pendingCalls.Where(call => !toolRegistry.IsAutoRun(call.Name)).ToList();
-            var autoCalls = pendingCalls.Where(call => toolRegistry.IsAutoRun(call.Name)).ToList();
-            var resultContents = new List<AIContent>();
+            activeAssistant.Content = textBuilder.ToString();
+            activeAssistant.ToolCallsJson = JsonSerializer.Serialize(manifest, JsonOptions);
+            activeAssistant.Status = AssistantMessageStatus.Completed;
+            await SafePersistAsync(activeAssistant);
+            conversation.UpdatedAt = DateTime.UtcNow;
+            await conversations.SaveChangesAsync(CancellationToken.None);
 
-            foreach (var pendingCall in autoCalls)
+            messages.Add(new ChatMessage(ChatRole.Assistant, BuildAssistantContents(textBuilder.ToString(), manifest)));
+
+            var resultContents = new List<AIContent>();
+            foreach (var pendingCall in pendingCalls)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    yield return new AssistantTurnError("Cancelled.", Cancelled: true);
+                    yield break;
+                }
+
                 var outcome = await InvokeToolAsync(aiTools, pendingCall, cancellationToken);
                 if (outcome.Cancelled)
                 {
                     yield return new AssistantTurnError("Cancelled.", Cancelled: true);
                     yield break;
                 }
-
-                UpdateManifest(manifest, pendingCall.CallId, outcome.Error is null
-                    ? PersistedToolCallStatus.Completed
-                    : PersistedToolCallStatus.Failed, outcome.Result, outcome.Error);
 
                 await PersistToolResultAsync(
                     conversation.Id,
@@ -323,37 +330,17 @@ public sealed class AssistantChatService(
                 yield return new AssistantToolCallCompleted(
                     pendingCall.CallId,
                     pendingCall.Name,
-                    outcome.Error is null ? outcome.Result : null,
+                    outcome.Result,
                     outcome.Error,
                     outcome.DurationMs);
 
                 if (outcome.Error is null && TryReadFormDraft(pendingCall.Name, outcome.Result, out var draft))
                     yield return new AssistantFormDraftProposed(draft);
+
+                if (outcome.Error is null && toolRegistry.IsWorkspaceMutation(pendingCall.Name))
+                    yield return new AssistantWorkspaceMutated();
             }
 
-            activeAssistant.Content = textBuilder.ToString();
-            activeAssistant.ToolCallsJson = JsonSerializer.Serialize(manifest, JsonOptions);
-            activeAssistant.Status = AssistantMessageStatus.Completed;
-            await SafePersistAsync(activeAssistant);
-            conversation.UpdatedAt = DateTime.UtcNow;
-            await conversations.SaveChangesAsync(CancellationToken.None);
-
-            if (mutatingCalls.Count > 0)
-            {
-                foreach (var pendingCall in mutatingCalls)
-                {
-                    yield return new AssistantToolCallPendingConfirmation(
-                        activeAssistant.Id,
-                        pendingCall.CallId,
-                        pendingCall.Name,
-                        pendingCall.ArgumentsJson);
-                }
-
-                yield return new AssistantMessageCompleted(activeAssistant.Id);
-                yield break;
-            }
-
-            messages.Add(new ChatMessage(ChatRole.Assistant, BuildAssistantContents(textBuilder.ToString(), manifest)));
             messages.Add(new ChatMessage(ChatRole.Tool, resultContents));
 
             if (iteration == maxIterations - 1)
@@ -364,94 +351,6 @@ public sealed class AssistantChatService(
                 yield break;
             }
         }
-    }
-
-    public async Task<AssistantToolExecutionResult> ConfirmToolCallAsync(
-        Guid projectId,
-        Guid assistantMessageId,
-        string callId,
-        CancellationToken cancellationToken = default)
-    {
-        var message = await GetProjectAssistantMessageAsync(projectId, assistantMessageId, cancellationToken);
-        var calls = ReadPersistedToolCalls(message.ToolCallsJson);
-        var callIndex = calls.FindIndex(call => call.CallId == callId);
-        if (callIndex < 0)
-            throw new InvalidOperationException("Tool call was not found.");
-
-        var call = calls[callIndex];
-        if (call.Status != PersistedToolCallStatus.Pending)
-            return new AssistantToolExecutionResult(call.CallId, call.Name, call.Status, call.Result, call.Error);
-
-        var aiTools = toolRegistry.Build(projectId);
-        var aiFunction = aiTools.OfType<AIFunction>().FirstOrDefault(function => function.Name == call.Name)
-            ?? throw new InvalidOperationException($"Unknown tool '{call.Name}'.");
-
-        var pending = new PendingToolCall(
-            new FunctionCallContent(call.CallId, call.Name, ToolCallArguments.ParseObjectOrNull(call.ArgumentsJson)),
-            call.CallId,
-            call.Name,
-            call.ArgumentsJson,
-            call.TextOffset ?? 0);
-
-        var outcome = await InvokeToolAsync(aiFunction, pending, cancellationToken);
-        if (outcome.Cancelled)
-            throw new OperationCanceledException(cancellationToken);
-
-        var status = outcome.Error is null ? PersistedToolCallStatus.Completed : PersistedToolCallStatus.Failed;
-        calls[callIndex] = call with { Status = status, Result = outcome.Result, Error = outcome.Error };
-        message.ToolCallsJson = JsonSerializer.Serialize(calls, JsonOptions);
-        conversations.UpdateMessage(message);
-
-        var nextOrder = await conversations.GetMaxOrderAsync(message.ConversationId, cancellationToken) + 1;
-        await PersistToolResultAsync(
-            message.ConversationId,
-            nextOrder,
-            call.CallId,
-            call.Name,
-            outcome.Result,
-            outcome.Error,
-            cancellationToken);
-
-        return new AssistantToolExecutionResult(call.CallId, call.Name, status, outcome.Result, outcome.Error);
-    }
-
-    public async Task<AssistantToolExecutionResult> RejectToolCallAsync(
-        Guid projectId,
-        Guid assistantMessageId,
-        string callId,
-        CancellationToken cancellationToken = default)
-    {
-        var message = await GetProjectAssistantMessageAsync(projectId, assistantMessageId, cancellationToken);
-        var calls = ReadPersistedToolCalls(message.ToolCallsJson);
-        var callIndex = calls.FindIndex(call => call.CallId == callId);
-        if (callIndex < 0)
-            throw new InvalidOperationException("Tool call was not found.");
-
-        var call = calls[callIndex];
-        if (call.Status != PersistedToolCallStatus.Pending)
-            return new AssistantToolExecutionResult(call.CallId, call.Name, call.Status, call.Result, call.Error);
-
-        const string rejected = "Rejected by user.";
-        calls[callIndex] = call with
-        {
-            Status = PersistedToolCallStatus.Rejected,
-            Result = rejected,
-            Error = null,
-        };
-        message.ToolCallsJson = JsonSerializer.Serialize(calls, JsonOptions);
-        conversations.UpdateMessage(message);
-
-        var nextOrder = await conversations.GetMaxOrderAsync(message.ConversationId, cancellationToken) + 1;
-        await PersistToolResultAsync(
-            message.ConversationId,
-            nextOrder,
-            call.CallId,
-            call.Name,
-            rejected,
-            error: null,
-            cancellationToken);
-
-        return new AssistantToolExecutionResult(call.CallId, call.Name, PersistedToolCallStatus.Rejected, rejected, null);
     }
 
     private async Task<List<ChatMessage>> BuildModelHistoryAsync(
@@ -559,10 +458,12 @@ public sealed class AssistantChatService(
 
     private static ChatMessage BuildAssistantReplay(AssistantMessage message)
     {
-        var calls = ReadPersistedToolCalls(message.ToolCallsJson)
-            .Where(call => call.Status != PersistedToolCallStatus.Pending)
-            .ToList();
-        return new ChatMessage(ChatRole.Assistant, BuildAssistantContents(message.Content, calls));
+        var calls = ReadPersistedToolCalls(message.ToolCallsJson);
+        var contents = calls.Count == 0
+            ? BuildTextOnlyAssistantContents(message.Content)
+            : BuildAssistantContents(message.Content, calls);
+
+        return new ChatMessage(ChatRole.Assistant, contents);
     }
 
     private static List<AIContent> BuildAssistantContents(string text, IReadOnlyList<PersistedToolCall> calls)
@@ -677,43 +578,6 @@ public sealed class AssistantChatService(
         };
         await conversations.AddMessageAsync(toolMessage, cancellationToken);
         await conversations.SaveChangesAsync(cancellationToken);
-    }
-
-    private async Task<AssistantMessage> GetProjectAssistantMessageAsync(
-        Guid projectId,
-        Guid assistantMessageId,
-        CancellationToken cancellationToken)
-    {
-        var message = await conversations.GetMessageAsync(assistantMessageId, cancellationToken)
-            ?? throw new InvalidOperationException("Assistant message was not found.");
-        if (message.Role != AssistantMessageRole.Assistant)
-            throw new InvalidOperationException("Message is not an assistant tool-call message.");
-
-        var conversation = await conversations.GetByIdAsync(message.ConversationId, cancellationToken)
-            ?? throw new InvalidOperationException("Conversation was not found.");
-        if (conversation.ProjectId != projectId)
-            throw new InvalidOperationException("Tool call does not belong to this project.");
-
-        return message;
-    }
-
-    private static void UpdateManifest(
-        List<PersistedToolCall> calls,
-        string callId,
-        PersistedToolCallStatus status,
-        string result,
-        string? error)
-    {
-        var index = calls.FindIndex(call => call.CallId == callId);
-        if (index < 0)
-            return;
-
-        calls[index] = calls[index] with
-        {
-            Status = status,
-            Result = result,
-            Error = error,
-        };
     }
 
     private static List<PersistedToolCall> ReadPersistedToolCalls(string toolCallsJson)

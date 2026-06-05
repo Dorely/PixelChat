@@ -70,9 +70,7 @@ else
                              ResetComposerKey="@_resetComposerKey"
                              OnSend="SendAsync"
                              OnStop="StopAsync"
-                             OnClearError="ClearError"
-                             OnConfirmToolCall="ConfirmToolCallAsync"
-                             OnRejectToolCall="RejectToolCallAsync">
+                             OnClearError="ClearError">
                     <HeaderActions>
                         <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_running" @onclick="ResetChatAsync">Reset</button>
                     </HeaderActions>
@@ -136,8 +134,6 @@ else
     private int _forceScrollKey;
     private int _scrollKey;
     private int _resetComposerKey;
-    private int _seenWorkspaceVersion;
-    private int _seenFormDraftVersion;
 
     private string _busyText = string.Empty;
     private string _generatePrompt = string.Empty;
@@ -163,10 +159,10 @@ else
     protected override async Task OnInitializedAsync()
     {
         ChatRuntime.StateChanged += OnChatRuntimeStateChanged;
+        ChatRuntime.WorkspaceChanged += OnChatRuntimeWorkspaceChanged;
+        ChatRuntime.FormDraftProposed += OnChatRuntimeFormDraftProposed;
         await ReloadAllAsync();
-        var snapshot = ChatRuntime.GetSnapshot();
-        ApplyChatRuntimeSnapshot(snapshot);
-        await ApplyPendingFormDraftAsync(snapshot);
+        ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -1131,13 +1127,6 @@ else
             var wasRunning = _running;
             var snapshot = ChatRuntime.GetSnapshot();
             ApplyChatRuntimeSnapshot(snapshot);
-            await ApplyPendingFormDraftAsync(snapshot);
-            if (snapshot.WorkspaceVersion != _seenWorkspaceVersion)
-            {
-                _seenWorkspaceVersion = snapshot.WorkspaceVersion;
-                await ReloadWorkbenchAsync();
-            }
-
             if (wasRunning && !snapshot.Running)
             {
                 await ReloadAllAsync();
@@ -1149,28 +1138,26 @@ else
         });
     }
 
+    private void OnChatRuntimeWorkspaceChanged()
+    {
+        _ = InvokeAsync(ReloadWorkbenchAsync);
+    }
+
+    private void OnChatRuntimeFormDraftProposed(AssistantFormDraft draft)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await ApplyFormDraftAsync(draft);
+            StateHasChanged();
+        });
+    }
+
     private void ApplyChatRuntimeSnapshot(WorkspaceChatRuntimeSnapshot snapshot)
     {
         _running = snapshot.Running;
         _live = snapshot.Live;
         _pendingUserText = snapshot.PendingUserText;
-        EnsurePendingUserMessageVisible();
         _error = snapshot.Error;
-        _seenWorkspaceVersion = snapshot.WorkspaceVersion;
-    }
-
-    private async Task ApplyPendingFormDraftAsync(WorkspaceChatRuntimeSnapshot snapshot)
-    {
-        if (_workbench is null
-            || snapshot.FormDraft is null
-            || snapshot.FormDraftVersion == _seenFormDraftVersion)
-        {
-            return;
-        }
-
-        _seenFormDraftVersion = snapshot.FormDraftVersion;
-        await ApplyFormDraftAsync(snapshot.FormDraft);
-        ChatRuntime.AcknowledgeFormDraft(snapshot.FormDraftVersion);
     }
 
     private async Task ApplyFormDraftAsync(AssistantFormDraft draft)
@@ -1211,27 +1198,6 @@ else
                 break;
         }
     }
-
-    private void EnsurePendingUserMessageVisible()
-    {
-        if (!_running || string.IsNullOrWhiteSpace(_pendingUserText))
-            return;
-
-        if (_messages.LastOrDefault() is { Role: ChatMessageRole.User } lastUser
-            && MessageText(lastUser) == _pendingUserText)
-        {
-            return;
-        }
-
-        _messages.Add(new ChatRenderableMessage(
-            Guid.NewGuid(),
-            ChatMessageRole.User,
-            ChatMessageStatus.Completed,
-            [new ChatTextPart(_pendingUserText)]));
-    }
-
-    private static string MessageText(ChatRenderableMessage message) =>
-        string.Concat(message.Parts.OfType<ChatTextPart>().Select(part => part.Text.ToString()));
 
     private Task OnInputChanged(string value)
     {
@@ -1286,38 +1252,6 @@ else
         await ReloadChatAsync();
     }
 
-    private async Task ConfirmToolCallAsync(ChatToolCallAction action)
-    {
-        if (_workbench is null)
-            return;
-
-        try
-        {
-            await ChatRuntime.ConfirmToolCallAsync(_workbench.Project.Id, action.AssistantMessageId, action.CallId);
-            await ReloadAllAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-        }
-    }
-
-    private async Task RejectToolCallAsync(ChatToolCallAction action)
-    {
-        if (_workbench is null)
-            return;
-
-        try
-        {
-            await ChatRuntime.RejectToolCallAsync(_workbench.Project.Id, action.AssistantMessageId, action.CallId);
-            await ReloadChatAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-        }
-    }
-
     private void ClearError()
     {
         _error = null;
@@ -1370,7 +1304,7 @@ else
             if (offset > cursor)
                 parts.Add(new ChatTextPart(text[cursor..offset]));
 
-            parts.Add(new ChatToolPart(BuildToolChip(message.Id, item.Call, toolRowsByCallId)));
+            parts.Add(new ChatToolPart(BuildToolChip(item.Call, toolRowsByCallId)));
             cursor = Math.Max(cursor, offset);
         }
 
@@ -1381,37 +1315,22 @@ else
     }
 
     private static ChatToolChip BuildToolChip(
-        Guid assistantMessageId,
         ChatPersistedToolCall call,
         IReadOnlyDictionary<string, AssistantMessage> toolRowsByCallId)
     {
-        var chip = new ChatToolChip(
-            call.CallId,
-            call.Name,
-            call.ArgumentsJson,
-            argumentsComplete: true,
-            status: call.Status,
-            assistantMessageId: call.Status == ChatToolCallStatus.Pending ? assistantMessageId : null);
-
-        chip.SetPersistedStatus(call.Status, call.Result, call.Error);
+        var chip = new ChatToolChip(call.CallId, call.Name, call.ArgumentsJson, argumentsComplete: true);
         if (!toolRowsByCallId.TryGetValue(call.CallId, out var toolRow))
             return chip;
 
-        var error = call.Error;
+        chip.Completed = toolRow.Status != AssistantMessageStatus.Pending;
+        chip.Result = toolRow.Content;
         if (toolRow.Status == AssistantMessageStatus.Failed)
         {
-            error = string.IsNullOrWhiteSpace(toolRow.ErrorMessage)
+            chip.Error = string.IsNullOrWhiteSpace(toolRow.ErrorMessage)
                 ? "Tool call failed."
                 : toolRow.ErrorMessage;
         }
 
-        var status = call.Status == ChatToolCallStatus.Pending
-            ? ChatToolCallStatus.Pending
-            : toolRow.Status == AssistantMessageStatus.Failed
-                ? ChatToolCallStatus.Failed
-                : call.Status;
-
-        chip.SetPersistedStatus(status, toolRow.Content, error);
         return chip;
     }
 
@@ -1585,6 +1504,8 @@ else
     public async ValueTask DisposeAsync()
     {
         ChatRuntime.StateChanged -= OnChatRuntimeStateChanged;
+        ChatRuntime.WorkspaceChanged -= OnChatRuntimeWorkspaceChanged;
+        ChatRuntime.FormDraftProposed -= OnChatRuntimeFormDraftProposed;
         if (_editorModule is not null)
         {
             try { await _editorModule.DisposeAsync(); } catch { }

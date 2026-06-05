@@ -20,7 +20,7 @@
 - Bootstrap is vendored by the Blazor template for first-slice UI styling.
 
 ## Architectural Overview
-- PixelChat is desktop-first: normal user operation is through Electron, while browser-hosted development remains available for fast Codex and Playwright verification.
+- PixelChat is desktop-first: normal user operation is through Electron, while browser-hosted development remains available for local startup and debugging when needed.
 - The app runs a local-only ASP.NET Core host and stores local state in SQLite.
 
 ## Code Style
@@ -39,9 +39,10 @@ dotnet run --project PixelChat -- --electron
 ## Verification
 - Do not add test projects or automated tests unless the user explicitly requests them.
 - Verify normal changes with `dotnet build PixelChat.sln`.
+- After a successful build, run `dotnet run --project PixelChat`, confirm the app host starts without startup exceptions, and terminate it.
 - VS Code F5 is configured to build and debug the Electron desktop shell by default.
-- When UI behavior changes, run the browser-hosted app and verify it with Playwright.
-- When Electron behavior changes, start `dotnet run --project PixelChat -- --electron`, verify the window, and terminate the app. Never leave the app running.
+- Do not run Playwright, screenshots, browser UI checks, Electron window checks, or manual UI validation unless the user explicitly requests them.
+- When Electron startup itself must be smoke-checked, start `dotnet run --project PixelChat -- --electron`, confirm startup, and terminate the app. Never leave the app running.
 
 ## Conventions
 - When you need to understand current wiring, start with `FILEMAP.md`, then the relevant feature area.

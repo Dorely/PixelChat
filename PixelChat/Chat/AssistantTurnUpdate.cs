@@ -10,8 +10,6 @@ public sealed record AssistantToolCallStarted(string CallId, string ToolName, st
 
 public sealed record AssistantToolCallArgumentsDelta(string CallId, string ArgumentsDelta, bool ArgumentsComplete) : AssistantTurnUpdate;
 
-public sealed record AssistantToolCallPendingConfirmation(Guid AssistantMessageId, string CallId, string ToolName, string ArgumentsJson) : AssistantTurnUpdate;
-
 public sealed record AssistantToolCallCompleted(string CallId, string ToolName, string? Result, string? Error, double DurationMs) : AssistantTurnUpdate;
 
 public sealed record AssistantFormDraftProposed(AssistantFormDraft Draft) : AssistantTurnUpdate;
