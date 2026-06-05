@@ -14,6 +14,7 @@
 @inject ILlmProviderService ProviderService
 @inject IServiceScopeFactory ScopeFactory
 @inject IOptions<ImageGenerationOptions> ImageOptions
+@inject ILogger<Home> Logger
 @inject IJSRuntime JS
 
 <PageTitle>PixelChat</PageTitle>
@@ -359,6 +360,15 @@ else
                 .GroupBy(error => error.OutputIndex)
                 .ToDictionary(group => group.Key, group => group.Last());
         }
+        var occupiedOutputIndexes = outputAssetsByIndex.Keys.Concat(outputErrorsByIndex.Keys).ToHashSet();
+        var pendingOutputIndexes = activeBatch is null
+            ? new List<int>()
+            : Enumerable.Range(0, activeBatch.Count)
+                .Where(index => !occupiedOutputIndexes.Contains(index))
+                .ToList();
+        var currentGeneratingIndex = activeBatch?.Status == GenerationBatchStatus.Running && pendingOutputIndexes.Count > 0
+            ? pendingOutputIndexes[0]
+            : -1;
 
         <div class="workspace-panel compare-panel">
             <div class="panel-head">
@@ -403,7 +413,14 @@ else
                         }
                         else
                         {
-                            @RenderGenerationPlaceholderCard(index)
+                            @if (IsTerminalGenerationStatus(activeBatch.Status))
+                            {
+                                @RenderGenerationErrorCard(new GenerationOutputErrorView(index, MissingOutputError(activeBatch.Status)))
+                            }
+                            else
+                            {
+                                @RenderGenerationPlaceholderCard(index, index == currentGeneratingIndex)
+                            }
                         }
                     }
                 </div>
@@ -782,16 +799,27 @@ else
         </article>
     };
 
-    private RenderFragment RenderGenerationPlaceholderCard(int index) => __builder =>
+    private RenderFragment RenderGenerationPlaceholderCard(int index, bool isGenerating) => __builder =>
     {
+        var status = isGenerating ? "Generating" : "Queued";
+        var message = isGenerating
+            ? "Waiting for the image request to complete."
+            : "Waiting for earlier image requests.";
         <article class="asset-card generation-placeholder-card">
-            <div class="generation-spinner" aria-hidden="true"></div>
+            @if (isGenerating)
+            {
+                <div class="generation-spinner" aria-hidden="true"></div>
+            }
+            else
+            {
+                <div class="generation-queued-mark" aria-hidden="true">...</div>
+            }
             <div class="asset-card-body">
                 <div class="asset-title-row">
                     <strong>Image @LabelForIndex(index)</strong>
-                    <span>Generating</span>
+                    <span>@status</span>
                 </div>
-                <p>Waiting for the image request to complete.</p>
+                <p>@message</p>
             </div>
         </article>
     };
@@ -848,6 +876,14 @@ else
                 CurrentReferenceAssetIds(),
                 _workbench.Project.ActiveBatchId));
             await ReloadWorkbenchAsync();
+            Logger.LogDebug(
+                "Image generation background batch scheduled: projectId={ProjectId}, batchId={BatchId}, count={Count}, size={Size}, promptChars={PromptChars}, referenceImages={ReferenceImageCount}",
+                projectId,
+                batch.Id,
+                batch.Count,
+                batch.Size,
+                _generatePrompt.Trim().Length,
+                CurrentReferenceAssetIds().Count);
             _runningGenerationBatchId = batch.Id;
             _generationCts?.Cancel();
             _generationCts?.Dispose();
@@ -856,6 +892,7 @@ else
         }
         catch (Exception ex)
         {
+            Logger.LogWarning(ex, "Image generation batch setup failed.");
             _error = ex.Message;
         }
         finally
@@ -868,6 +905,12 @@ else
     private async Task RunGenerationBatchAsync(Guid projectId, Guid batchId, int count, CancellationToken cancellationToken)
     {
         var parallelLimit = Math.Clamp(ImageOptions.Value.MaxParallelRequests, 1, Math.Max(1, ImageOptions.Value.MaxOutputs));
+        Logger.LogDebug(
+            "Image generation background batch starting: projectId={ProjectId}, batchId={BatchId}, count={Count}, parallelLimit={ParallelLimit}",
+            projectId,
+            batchId,
+            count,
+            parallelLimit);
         using var throttler = new SemaphoreSlim(parallelLimit, parallelLimit);
         var tasks = Enumerable.Range(0, count).Select(outputIndex => RunGenerationOutputAsync(
             projectId,
@@ -883,9 +926,18 @@ else
         }
         catch (OperationCanceledException)
         {
+            Logger.LogDebug(
+                "Image generation background batch cancelled: projectId={ProjectId}, batchId={BatchId}",
+                projectId,
+                batchId);
         }
         catch (Exception ex)
         {
+            Logger.LogError(
+                ex,
+                "Image generation background batch failed unexpectedly: projectId={ProjectId}, batchId={BatchId}",
+                projectId,
+                batchId);
             await InvokeAsync(() =>
             {
                 _error = ex.Message;
@@ -896,6 +948,10 @@ else
         {
             if (_runningGenerationBatchId == batchId)
                 _runningGenerationBatchId = null;
+            Logger.LogDebug(
+                "Image generation background batch finished: projectId={ProjectId}, batchId={BatchId}",
+                projectId,
+                batchId);
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -910,12 +966,38 @@ else
         await throttler.WaitAsync(cancellationToken);
         try
         {
+            Logger.LogDebug(
+                "Image generation output worker starting: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
+                projectId,
+                batchId,
+                outputIndex);
             var finalError = await GenerateBatchOutputWithRetriesAsync(projectId, batchId, outputIndex, cancellationToken);
             if (finalError is not null)
+            {
+                Logger.LogWarning(
+                    finalError,
+                    "Image generation output worker failed after retries: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
+                    projectId,
+                    batchId,
+                    outputIndex);
                 await PersistGenerationFailureAsync(projectId, batchId, outputIndex, finalError.Message, cancellationToken);
+            }
+            else
+            {
+                Logger.LogDebug(
+                    "Image generation output worker succeeded: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
+                    projectId,
+                    batchId,
+                    outputIndex);
+            }
         }
         catch (OperationCanceledException)
         {
+            Logger.LogDebug(
+                "Image generation output worker cancelled: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
+                projectId,
+                batchId,
+                outputIndex);
             throw;
         }
         finally
@@ -943,6 +1025,13 @@ else
         {
             try
             {
+                Logger.LogDebug(
+                    "Image generation output attempt starting: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, attempt={Attempt}, maxAttempts={MaxAttempts}",
+                    projectId,
+                    batchId,
+                    outputIndex,
+                    attempt,
+                    maxAttempts);
                 await using var scope = ScopeFactory.CreateAsyncScope();
                 var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
                 await workflow.GenerateBatchOutputAsync(projectId, batchId, outputIndex, cancellationToken);
@@ -956,9 +1045,30 @@ else
             {
                 finalError = ex;
                 if (attempt >= maxAttempts || !IsTransientImageGenerationError(ex))
+                {
+                    Logger.LogWarning(
+                        ex,
+                        "Image generation output attempt failed without retry: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, attempt={Attempt}, maxAttempts={MaxAttempts}, transient={Transient}",
+                        projectId,
+                        batchId,
+                        outputIndex,
+                        attempt,
+                        maxAttempts,
+                        IsTransientImageGenerationError(ex));
                     break;
+                }
 
-                await Task.Delay(ImageGenerationRetryDelay(ex, attempt), cancellationToken);
+                var delay = ImageGenerationRetryDelay(ex, attempt);
+                Logger.LogWarning(
+                    ex,
+                    "Image generation output attempt failed; retrying: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, attempt={Attempt}, maxAttempts={MaxAttempts}, retryDelayMs={RetryDelayMs}",
+                    projectId,
+                    batchId,
+                    outputIndex,
+                    attempt,
+                    maxAttempts,
+                    delay.TotalMilliseconds);
+                await Task.Delay(delay, cancellationToken);
             }
         }
 
@@ -973,6 +1083,11 @@ else
             await using var scope = ScopeFactory.CreateAsyncScope();
             var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
             await workflow.MarkGenerationBatchOutputFailedAsync(projectId, batchId, outputIndex, error, cancellationToken);
+            Logger.LogDebug(
+                "Image generation output failure persisted from UI runner: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
+                projectId,
+                batchId,
+                outputIndex);
         }
         finally
         {
@@ -1003,8 +1118,16 @@ else
         {
             var providerDelay = TryReadProviderRetryDelay(current.Message);
             if (providerDelay is { } delay && delay > TimeSpan.Zero)
-                return delay;
+            {
+                var minimumDelay = IsImagePerMinuteRateLimit(current.Message)
+                    ? TimeSpan.FromSeconds(10)
+                    : TimeSpan.FromMilliseconds(500);
+                return delay < minimumDelay ? minimumDelay : delay;
+            }
         }
+
+        if (ContainsImagePerMinuteRateLimit(exception))
+            return TimeSpan.FromSeconds(Math.Min(30, 10 * failedAttempt));
 
         var backoffMilliseconds = Math.Min(5000, 250 * Math.Pow(2, Math.Max(0, failedAttempt - 1)));
         return TimeSpan.FromMilliseconds(backoffMilliseconds);
@@ -1046,6 +1169,23 @@ else
 
         return null;
     }
+
+    private static bool ContainsImagePerMinuteRateLimit(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (IsImagePerMinuteRateLimit(current.Message))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsImagePerMinuteRateLimit(string message) =>
+        message.Contains("per min", StringComparison.OrdinalIgnoreCase)
+        && (message.Contains("gpt-image", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("input-images", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("image", StringComparison.OrdinalIgnoreCase));
 
     private async Task CompleteRunningGenerationAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken)
     {
@@ -1980,6 +2120,14 @@ else
             ? alphabet[index].ToString()
             : (index + 1).ToString();
     }
+
+    private static bool IsTerminalGenerationStatus(GenerationBatchStatus status) =>
+        status is GenerationBatchStatus.Succeeded or GenerationBatchStatus.CompletedWithErrors or GenerationBatchStatus.Failed;
+
+    private static string MissingOutputError(GenerationBatchStatus status) =>
+        status == GenerationBatchStatus.Failed
+            ? "Image request failed before an output was saved."
+            : "Image request did not return an output before the batch completed.";
 
     private static IReadOnlyList<string> SplitLines(string value) =>
         value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

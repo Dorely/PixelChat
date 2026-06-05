@@ -800,6 +800,18 @@
     animation: spin 0.9s linear infinite;
 }
 
+.generation-queued-mark {
+    display: grid;
+    place-items: center;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 999px;
+    color: #475467;
+    font-size: 1.15rem;
+    font-weight: 700;
+    background: #eef2f6;
+}
+
 .generation-error-card {
     background: #fff7f7;
     border-color: #fecdca;

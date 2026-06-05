@@ -11,7 +11,8 @@ public sealed class ArtWorkflowService(
     AppDbContext db,
     IImageProvider imageProvider,
     ILlmProviderService providerService,
-    IOptions<ImageGenerationOptions> imageOptions) : IArtWorkflowService
+    IOptions<ImageGenerationOptions> imageOptions,
+    ILogger<ArtWorkflowService> logger) : IArtWorkflowService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -150,6 +151,17 @@ public sealed class ArtWorkflowService(
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
 
+        logger.LogDebug(
+            "Image generation batch created: projectId={ProjectId}, batchId={BatchId}, count={Count}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, promptChars={PromptChars}",
+            projectId,
+            batch.Id,
+            batch.Count,
+            batch.Size,
+            batch.MainlineModel,
+            batch.ImageModel,
+            references.Count,
+            prompt.Length);
+
         var batchAssets = await db.ArtAssets.Where(a => a.ProjectId == projectId).ToListAsync(cancellationToken);
         return BatchView(batch, batchAssets);
     }
@@ -167,17 +179,44 @@ public sealed class ArtWorkflowService(
             ? await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
             : null;
 
-        var providerResult = await imageProvider.GenerateAsync(new ImageProviderGenerateRequest(
-            BuildPrompt(batch.Prompt, batch.NegativePrompt, recipe),
-            Clean(batch.NegativePrompt),
+        logger.LogDebug(
+            "Image generation output starting: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, promptChars={PromptChars}",
+            projectId,
+            batchId,
+            outputIndex,
             batch.Size,
-            1,
             batch.MainlineModel,
             batch.ImageModel,
-            references.Select(ToProviderReference).ToList(),
-            imageOptions.Value.DefaultOutputFormat,
-            imageOptions.Value.DefaultQuality,
-            imageOptions.Value.DefaultBackground), cancellationToken);
+            references.Count,
+            batch.Prompt.Length);
+
+        ImageProviderResult providerResult;
+        try
+        {
+            providerResult = await imageProvider.GenerateAsync(new ImageProviderGenerateRequest(
+                BuildPrompt(batch.Prompt, batch.NegativePrompt, recipe),
+                Clean(batch.NegativePrompt),
+                batch.Size,
+                1,
+                batch.MainlineModel,
+                batch.ImageModel,
+                references.Select(ToProviderReference).ToList(),
+                imageOptions.Value.DefaultOutputFormat,
+                imageOptions.Value.DefaultQuality,
+                imageOptions.Value.DefaultBackground), cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(
+                ex,
+                "Image generation output failed before asset creation: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, mainlineModel={MainlineModel}, imageModel={ImageModel}",
+                projectId,
+                batchId,
+                outputIndex,
+                batch.MainlineModel,
+                batch.ImageModel);
+            throw;
+        }
 
         batch.Provider = providerResult.Provider;
         batch.MainlineModel = providerResult.MainlineModel;
@@ -209,6 +248,17 @@ public sealed class ArtWorkflowService(
             });
         await db.ArtAssets.AddAsync(asset, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
+
+        logger.LogDebug(
+            "Image generation output succeeded: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, assetId={AssetId}, contentType={ContentType}, width={Width}, height={Height}, imageBytes={ImageBytes}",
+            projectId,
+            batchId,
+            outputIndex,
+            asset.Id,
+            asset.ContentType,
+            asset.Width,
+            asset.Height,
+            asset.Data.Length);
         return AssetView(asset);
     }
 
@@ -234,6 +284,13 @@ public sealed class ArtWorkflowService(
         batch.OutputErrorsJson = SerializeOutputErrors(errors);
         batch.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
+
+        logger.LogWarning(
+            "Image generation output failure persisted: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, error={Error}",
+            projectId,
+            batchId,
+            outputIndex,
+            TruncateForLog(cleanedError, 1000));
     }
 
     public async Task<GenerationBatchView> CompleteGenerationBatchAsync(
@@ -254,6 +311,18 @@ public sealed class ArtWorkflowService(
         var unindexedOutputCount = outputAssets.Count(a => ReadBatchOutputIndex(a) is null);
         var outputCount = outputIndexes.Count + unindexedOutputCount;
         var errors = NormalizeOutputErrors(batch.OutputErrorsJson, batch.Count, outputIndexes);
+        var missingErrorSlots = Math.Max(0, batch.Count - outputCount - errors.Count);
+        if (missingErrorSlots > 0)
+        {
+            var errorIndexes = errors.Select(error => error.OutputIndex).ToHashSet();
+            errors.AddRange(Enumerable.Range(0, batch.Count)
+                .Where(index => !outputIndexes.Contains(index) && !errorIndexes.Contains(index))
+                .Take(missingErrorSlots)
+                .Select(index => new GenerationOutputErrorView(index, "Image request did not return an output before the batch completed.")));
+            errors = errors
+                .OrderBy(error => error.OutputIndex)
+                .ToList();
+        }
 
         batch.Status = errors.Count switch
         {
@@ -267,6 +336,15 @@ public sealed class ArtWorkflowService(
         batch.OutputErrorsJson = SerializeOutputErrors(errors);
         batch.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
+
+        logger.LogDebug(
+            "Image generation batch completed: projectId={ProjectId}, batchId={BatchId}, status={Status}, requestedCount={RequestedCount}, outputCount={OutputCount}, errorCount={ErrorCount}",
+            projectId,
+            batchId,
+            batch.Status,
+            batch.Count,
+            outputCount,
+            errors.Count);
         var batchAssets = await db.ArtAssets.Where(a => a.ProjectId == projectId).ToListAsync(cancellationToken);
         return BatchView(batch, batchAssets);
     }
@@ -993,6 +1071,11 @@ public sealed class ArtWorkflowService(
 
     private static string OutputErrorSummary(int errorCount, int requestedCount) =>
         $"{errorCount} of {requestedCount} image request(s) failed.";
+
+    private static string TruncateForLog(string value, int maxChars) =>
+        string.IsNullOrEmpty(value) || value.Length <= maxChars
+            ? value
+            : value[..maxChars] + "...";
 
     private static int? ReadBatchOutputIndex(ArtAsset asset) =>
         ReadBatchOutputIndex(asset.SourceMetadataJson) ?? ReadBatchOutputIndexFromLabel(asset.Label);
