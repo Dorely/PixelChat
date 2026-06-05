@@ -46,14 +46,14 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
 
         AIFunctionFactory.Create(
             method: (
-                string prompt,
+                string? prompt = null,
                 string? negativePrompt = null,
                 string? size = null,
                 Guid? recipeId = null,
-                int count = 1,
+                int? count = null,
                 Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, recipeId, count, referenceAssetIds),
             name: "draft_generate_form",
-            description: "Draft values for the Generate form. This does not run image generation; the user reviews the form and clicks Generate manually."),
+            description: "Draft values for the Generate form. Use recipeId to select a saved style recipe; keep prompt focused on the asset-specific request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -120,21 +120,21 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
     }
 
     private static Task<string> DraftGenerateFormAsync(
-        string prompt,
+        string? prompt,
         string? negativePrompt,
         string? size,
         Guid? recipeId,
-        int count,
+        int? count,
         Guid[]? referenceAssetIds)
     {
         var draft = new AssistantFormDraft(
             AssistantFormDraftTarget.Generate,
-            Prompt: prompt,
-            NegativePrompt: negativePrompt ?? string.Empty,
-            Size: size ?? "auto",
-            Count: ClampCount(count),
+            Prompt: string.IsNullOrWhiteSpace(prompt) ? null : prompt,
+            NegativePrompt: negativePrompt,
+            Size: size,
+            Count: count is int countValue ? ClampCount(countValue) : null,
             PromptRecipeId: recipeId,
-            ReferenceAssetIds: referenceAssetIds ?? []);
+            ReferenceAssetIds: referenceAssetIds);
         return Task.FromResult(JsonSerializer.Serialize(draft));
     }
 

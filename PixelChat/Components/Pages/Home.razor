@@ -267,7 +267,7 @@ else
                 <div class="form-grid">
                     <label>
                         <span>Recipe</span>
-                        <select class="form-select" @bind="_selectedRecipeText">
+                        <select class="form-select" value="@_selectedRecipeText" @onchange="OnGenerateRecipeChanged">
                             <option value="">None</option>
                             @foreach (var recipe in _workbench.Recipes)
                             {
@@ -275,9 +275,6 @@ else
                             }
                         </select>
                     </label>
-                    <button type="button" class="btn btn-outline-secondary align-end" disabled="@SelectedRecipeId().Equals(Guid.Empty)" @onclick="ApplyRecipeAsync">
-                        Apply
-                    </button>
                     <label>
                         <span>Size</span>
                         <select class="form-select" @bind="_generateSize">
@@ -527,7 +524,7 @@ else
                             <button type="button" class="btn btn-outline-danger" disabled="@(_editingRecipeId is null)" @onclick="DeleteRecipeAsync">Delete</button>
                             @if (selectedRecipe is not null)
                             {
-                                <button type="button" class="btn btn-outline-secondary" @onclick="() => ApplyRecipeToGenerate(selectedRecipe)">Use in Generate</button>
+                                <button type="button" class="btn btn-outline-secondary" @onclick="() => UseRecipeInGenerate(selectedRecipe)">Use in Generate</button>
                                 <button type="button" class="btn btn-outline-secondary" @onclick="() => AttachRecipeAsync(selectedRecipe)">Attach</button>
                             }
                         </div>
@@ -754,20 +751,10 @@ else
         });
     }
 
-    private Task ApplyRecipeAsync()
+    private void OnGenerateRecipeChanged(ChangeEventArgs args)
     {
-        if (_workbench is null)
-            return Task.CompletedTask;
-
-        var recipe = _workbench.Recipes.FirstOrDefault(item => item.Id == SelectedRecipeIdOrNull());
-        if (recipe is null)
-            return Task.CompletedTask;
-
-        _generatePrompt = MergePrompt(recipe.PromptTemplate, recipe.StyleRules);
-        _negativePrompt = MergeLines(_negativePrompt, recipe.AvoidRules);
-        if (!string.IsNullOrWhiteSpace(recipe.PreferredSize))
-            _generateSize = recipe.PreferredSize;
-        return Task.CompletedTask;
+        _selectedRecipeText = args.Value?.ToString() ?? string.Empty;
+        ApplySelectedRecipeDefaults();
     }
 
     private async Task SaveRecipeAsync()
@@ -875,11 +862,11 @@ else
         });
     }
 
-    private async Task ApplyRecipeToGenerate(PromptRecipeView recipe)
+    private async Task UseRecipeInGenerate(PromptRecipeView recipe)
     {
         LoadRecipeEditor(recipe);
         _selectedRecipeText = recipe.Id.ToString();
-        await ApplyRecipeAsync();
+        ApplySelectedRecipeDefaults();
         await SetModeAsync(WorkspaceMode.Generate);
     }
 
@@ -1259,7 +1246,9 @@ else
                 _generateSize = NormalizeDraftSize(draft.Size, _generateSize);
                 _generateCount = NormalizeDraftCount(draft.Count, _generateCount);
                 _selectedRecipeText = ValidRecipeId(draft.PromptRecipeId)?.ToString() ?? _selectedRecipeText;
-                SetDraftReferences(draft.ReferenceAssetIds);
+                ApplySelectedRecipeDefaults();
+                if (draft.ReferenceAssetIds is not null)
+                    SetDraftReferences(draft.ReferenceAssetIds);
                 await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Generate);
                 await ReloadWorkbenchAsync();
                 break;
@@ -1484,6 +1473,24 @@ else
         return _workbench.Recipes.Any(recipe => recipe.Id == id) ? id : null;
     }
 
+    private void ApplySelectedRecipeDefaults()
+    {
+        var recipe = SelectedRecipeForGenerate();
+        if (recipe is null || string.IsNullOrWhiteSpace(recipe.PreferredSize))
+            return;
+
+        if (string.IsNullOrWhiteSpace(_generateSize) || string.Equals(_generateSize, "auto", StringComparison.OrdinalIgnoreCase))
+            _generateSize = recipe.PreferredSize;
+    }
+
+    private PromptRecipeView? SelectedRecipeForGenerate()
+    {
+        if (_workbench is null || SelectedRecipeIdOrNull() is not Guid recipeId)
+            return null;
+
+        return _workbench.Recipes.FirstOrDefault(recipe => recipe.Id == recipeId);
+    }
+
     private IEnumerable<ArtAssetView> FilteredAssets()
     {
         var assets = _workbench?.Assets ?? [];
@@ -1578,20 +1585,6 @@ else
 
     private static IReadOnlyList<string> SplitLines(string value) =>
         value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-    private static string MergePrompt(string template, IReadOnlyList<string> styleRules)
-    {
-        if (styleRules.Count == 0)
-            return template;
-
-        return template.Trim() + "\n\nStyle rules:\n" + string.Join('\n', styleRules.Select(rule => "- " + rule));
-    }
-
-    private static string MergeLines(string existing, IReadOnlyList<string> additions)
-    {
-        var lines = SplitLines(existing).Concat(additions).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        return string.Join('\n', lines);
-    }
 
     public async ValueTask DisposeAsync()
     {

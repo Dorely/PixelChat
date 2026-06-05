@@ -714,7 +714,17 @@ public sealed class ArtWorkflowService(
 
     private static string BuildPrompt(string prompt, string negativePrompt, PromptRecipe? recipe)
     {
-        var parts = new List<string> { prompt.Trim() };
+        var parts = new List<string>();
+        if (recipe is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(recipe.PromptTemplate))
+                parts.Add("Recipe style template:\n" + recipe.PromptTemplate.Trim());
+        }
+
+        parts.Add(recipe is null
+            ? prompt.Trim()
+            : "Asset-specific request:\n" + prompt.Trim());
+
         if (recipe is not null)
         {
             if (!string.IsNullOrWhiteSpace(recipe.StyleRulesJson))
