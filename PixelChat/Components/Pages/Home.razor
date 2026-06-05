@@ -124,9 +124,14 @@ else
     private WorkbenchView? _workbench;
     private ChatLiveTurn? _live;
     private IJSObjectReference? _editorModule;
+    private DotNetObjectReference<Home>? _dotNetRef;
     private ElementReference _editorCanvas;
     private Guid? _loadedEditorAssetId;
     private CancellationTokenSource? _generationCts;
+    private CancellationTokenSource? _maskAutosaveCts;
+    private readonly SemaphoreSlim _maskAutosaveLock = new(1, 1);
+    private long _maskAutosaveVersion;
+    private bool _maskAutosaveDirty;
 
     private string _projectIdText = string.Empty;
     private string _newProjectName = string.Empty;
@@ -179,7 +184,10 @@ else
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
+        {
+            _dotNetRef = DotNetObjectReference.Create(this);
             _editorModule = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Home.razor.js");
+        }
 
         await LoadEditorAssetIfNeededAsync();
     }
@@ -226,6 +234,7 @@ else
 
     private async Task ChangeProjectAsync(ChangeEventArgs args)
     {
+        await FlushMaskAutosaveAsync();
         _projectIdText = args.Value?.ToString() ?? string.Empty;
         _input = string.Empty;
         _loadedEditorAssetId = null;
@@ -249,6 +258,8 @@ else
         if (_workbench is null)
             return;
 
+        if (_workbench.Project.ActiveWorkspaceMode == WorkspaceMode.Edit && mode != WorkspaceMode.Edit)
+            await FlushMaskAutosaveAsync();
         await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, mode);
         await ReloadWorkbenchAsync();
     }
@@ -475,7 +486,6 @@ else
                         </label>
                         <div class="tool-button-row">
                             <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ClearMaskAsync">Clear Mask</button>
-                            <button type="button" class="btn btn-sm btn-outline-primary" @onclick="SaveMaskAsync">Save Mask</button>
                             <button type="button" class="btn btn-sm btn-outline-primary" @onclick="CropAsync">Crop</button>
                         </div>
                         <label>
@@ -1332,6 +1342,7 @@ else
         if (_workbench is null || args.File is null)
             return;
 
+        await FlushMaskAutosaveAsync();
         await RunWorkflowAsync("Importing asset...", async () =>
         {
             await using var stream = args.File.OpenReadStream(50 * 1024 * 1024);
@@ -1359,26 +1370,136 @@ else
             await _editorModule.InvokeVoidAsync("setBrushSize", _editorCanvas, _brushSize);
     }
 
-    private async Task ClearMaskAsync()
+    [JSInvokable]
+    public Task OnEditorMaskChanged()
     {
-        if (_editorModule is not null)
-            await _editorModule.InvokeVoidAsync("clearMask", _editorCanvas);
+        ScheduleMaskAutosave();
+        return Task.CompletedTask;
     }
 
-    private async Task SaveMaskAsync()
+    private void ScheduleMaskAutosave()
     {
         var asset = CurrentEditAsset();
         if (_workbench is null || asset is null || _editorModule is null)
             return;
 
-        await RunWorkflowAsync("Saving mask...", async () =>
+        _maskAutosaveDirty = true;
+        _maskAutosaveVersion++;
+        _maskAutosaveCts?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _maskAutosaveCts = cancellation;
+        var assetId = asset.Id;
+        var version = _maskAutosaveVersion;
+        _ = InvokeAsync(async () =>
         {
-            var maskDataUrl = await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas);
-            await Workflow.SaveMaskAsync(_workbench.Project.Id, new SaveMaskRequest(
-                asset.Id,
-                maskDataUrl,
-                $"{asset.Label} mask"));
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(650), cancellation.Token);
+                await PersistMaskAutosaveAsync(assetId, version, cancellation.Token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                if (ReferenceEquals(_maskAutosaveCts, cancellation))
+                    _maskAutosaveCts = null;
+                cancellation.Dispose();
+            }
         });
+    }
+
+    private async Task FlushMaskAutosaveAsync()
+    {
+        var asset = CurrentEditAsset();
+        if (!_maskAutosaveDirty || _workbench is null || asset is null || _editorModule is null)
+            return;
+
+        _maskAutosaveCts?.Cancel();
+        _maskAutosaveCts = null;
+        var version = ++_maskAutosaveVersion;
+        await PersistMaskAutosaveAsync(asset.Id, version, CancellationToken.None);
+    }
+
+    private async Task PersistMaskAutosaveAsync(Guid assetId, long version, CancellationToken cancellationToken)
+    {
+        await _maskAutosaveLock.WaitAsync(cancellationToken);
+        try
+        {
+            var asset = CurrentEditAsset();
+            if (!_maskAutosaveDirty
+                || version != _maskAutosaveVersion
+                || _workbench is null
+                || asset is null
+                || asset.Id != assetId
+                || _editorModule is null)
+            {
+                return;
+            }
+
+            var maskDataUrl = await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas);
+            cancellationToken.ThrowIfCancellationRequested();
+            asset = CurrentEditAsset();
+            if (version != _maskAutosaveVersion
+                || _workbench is null
+                || asset is null
+                || asset.Id != assetId)
+            {
+                return;
+            }
+
+            await Workflow.UpsertAssetMaskAsync(
+                _workbench.Project.Id,
+                assetId,
+                maskDataUrl,
+                $"{asset.Label} mask",
+                cancellationToken);
+            if (version == _maskAutosaveVersion)
+                _maskAutosaveDirty = false;
+            await ReloadWorkbenchAsync();
+            StateHasChanged();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            StateHasChanged();
+        }
+        finally
+        {
+            _maskAutosaveLock.Release();
+        }
+    }
+
+    private void CancelMaskAutosave()
+    {
+        _maskAutosaveVersion++;
+        _maskAutosaveDirty = false;
+        _maskAutosaveCts?.Cancel();
+        _maskAutosaveCts = null;
+    }
+
+    private async Task ClearMaskAsync()
+    {
+        var asset = CurrentEditAsset();
+        CancelMaskAutosave();
+        try
+        {
+            if (_editorModule is not null)
+                await _editorModule.InvokeVoidAsync("clearMask", _editorCanvas);
+            if (_workbench is not null && asset is not null)
+            {
+                await Workflow.ClearAssetMaskAsync(_workbench.Project.Id, asset.Id);
+                await ReloadWorkbenchAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        StateHasChanged();
     }
 
     private async Task CropAsync()
@@ -1387,6 +1508,7 @@ else
         if (_workbench is null || asset is null || _editorModule is null)
             return;
 
+        await FlushMaskAutosaveAsync();
         await RunWorkflowAsync("Cropping asset...", async () =>
         {
             var cropDataUrl = await _editorModule.InvokeAsync<string?>("exportCropPng", _editorCanvas);
@@ -1413,6 +1535,7 @@ else
             if (!hasPaint)
                 throw new InvalidOperationException("Paint the editable mask area first.");
 
+            await FlushMaskAutosaveAsync();
             var sourceDataUrl = await _editorModule.InvokeAsync<string>("exportSourcePng", _editorCanvas);
             var maskDataUrl = await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas);
             await Workflow.EditImageAsync(_workbench.Project.Id, new EditImageRequest(
@@ -1420,7 +1543,6 @@ else
                 _editPrompt,
                 _editSize,
                 _editCount,
-                MaskId: null,
                 sourceDataUrl,
                 maskDataUrl,
                 CurrentReferenceAssetIds().Where(id => id != asset.Id).ToList()));
@@ -1488,6 +1610,7 @@ else
         if (_workbench is null)
             return;
 
+        await FlushMaskAutosaveAsync();
         _editAssetId = assetId;
         _loadedEditorAssetId = null;
         await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Edit);
@@ -1557,7 +1680,16 @@ else
         _loadedEditorAssetId = asset.Id;
         try
         {
-            await _editorModule.InvokeVoidAsync("loadEditor", _editorCanvas, asset.PreviewDataUrl, _brushSize, _editorTool);
+            var mask = CurrentEditMask();
+            await _editorModule.InvokeVoidAsync(
+                "loadEditor",
+                _editorCanvas,
+                asset.PreviewDataUrl,
+                _brushSize,
+                _editorTool,
+                mask?.PreviewDataUrl,
+                _dotNetRef);
+            _maskAutosaveDirty = false;
         }
         catch
         {
@@ -1969,6 +2101,14 @@ else
             ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId)
             : null;
 
+    private ImageMaskView? CurrentEditMask() =>
+        _editAssetId is Guid assetId
+            ? _workbench?.Masks
+                .Where(mask => mask.AssetId == assetId)
+                .OrderByDescending(mask => mask.CreatedAt)
+                .FirstOrDefault()
+            : null;
+
     private ArtAssetView? DeleteCandidateAsset() =>
         _assetDeleteCandidateId is Guid assetId
             ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId)
@@ -2146,6 +2286,10 @@ else
         }
         _generationCts?.Cancel();
         _generationCts?.Dispose();
+        _maskAutosaveCts?.Cancel();
+        _maskAutosaveCts?.Dispose();
         _generationFailureLock.Dispose();
+        _maskAutosaveLock.Dispose();
+        _dotNetRef?.Dispose();
     }
 }

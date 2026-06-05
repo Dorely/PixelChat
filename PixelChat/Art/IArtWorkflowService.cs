@@ -17,7 +17,8 @@ public interface IArtWorkflowService
     Task<GenerationBatchView> EditImageAsync(Guid projectId, EditImageRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> ImportAssetAsync(Guid projectId, ImportAssetRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> CreateCropAssetAsync(Guid projectId, CropAssetRequest request, CancellationToken cancellationToken = default);
-    Task<ImageMaskView> SaveMaskAsync(Guid projectId, SaveMaskRequest request, CancellationToken cancellationToken = default);
+    Task<ImageMaskView> UpsertAssetMaskAsync(Guid projectId, Guid assetId, string maskDataUrl, string label, CancellationToken cancellationToken = default);
+    Task ClearAssetMaskAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<PromptRecipeView> SavePromptRecipeAsync(Guid projectId, SavePromptRecipeRequest request, CancellationToken cancellationToken = default);
     Task<PromptRecipeView> UpdatePromptRecipeAsync(Guid projectId, Guid recipeId, UpdatePromptRecipeRequest request, CancellationToken cancellationToken = default);
     Task<PromptRecipeView> DuplicatePromptRecipeAsync(Guid projectId, Guid recipeId, string? name = null, CancellationToken cancellationToken = default);

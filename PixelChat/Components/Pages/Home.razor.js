@@ -1,6 +1,6 @@
 const states = new WeakMap();
 
-export async function loadEditor(canvas, imageUrl, brushSize, tool) {
+export async function loadEditor(canvas, imageUrl, brushSize, tool, maskUrl, dotNetRef) {
     const image = await loadImage(imageUrl);
     const source = document.createElement("canvas");
     source.width = image.naturalWidth || image.width;
@@ -17,14 +17,19 @@ export async function loadEditor(canvas, imageUrl, brushSize, tool) {
         brushSize: Number(brushSize) || 36,
         tool: tool || "mask",
         drawing: false,
+        drawingTool: null,
+        maskStrokeDirty: false,
         cropStart: null,
         cropRect: null,
-        hasPaint: false,
         imageUrl,
+        dotNetRef,
         resizeHandler: null,
     };
 
     detach(canvas);
+    if (maskUrl) {
+        await loadMaskIntoPaint(state, maskUrl);
+    }
     states.set(canvas, state);
     attach(canvas, state);
     resize(canvas, state);
@@ -47,13 +52,13 @@ export function clearMask(canvas) {
     const state = states.get(canvas);
     if (!state) return;
     state.paint.getContext("2d").clearRect(0, 0, state.paint.width, state.paint.height);
-    state.hasPaint = false;
+    state.maskStrokeDirty = false;
     render(canvas, state);
 }
 
 export function hasMaskPaint(canvas) {
     const state = states.get(canvas);
-    return !!state?.hasPaint;
+    return state ? paintHasPixels(state) : false;
 }
 
 export function exportSourcePng(canvas) {
@@ -101,6 +106,33 @@ export function exportCropPng(canvas) {
     return output.toDataURL("image/png");
 }
 
+async function loadMaskIntoPaint(state, maskUrl) {
+    const image = await loadImage(maskUrl);
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    if (width !== state.source.width || height !== state.source.height) return;
+
+    const mask = document.createElement("canvas");
+    mask.width = width;
+    mask.height = height;
+    const maskCtx = mask.getContext("2d");
+    maskCtx.drawImage(image, 0, 0, width, height);
+    const maskPixels = maskCtx.getImageData(0, 0, width, height);
+    const paintCtx = state.paint.getContext("2d");
+    const paintPixels = paintCtx.createImageData(width, height);
+
+    for (let i = 0; i < maskPixels.data.length; i += 4) {
+        const maskAlpha = maskPixels.data[i + 3];
+        if (maskAlpha >= 255) continue;
+        paintPixels.data[i] = 31;
+        paintPixels.data[i + 1] = 111;
+        paintPixels.data[i + 2] = 235;
+        paintPixels.data[i + 3] = 255 - maskAlpha;
+    }
+
+    paintCtx.putImageData(paintPixels, 0, 0);
+}
+
 function attach(canvas, state) {
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
@@ -133,11 +165,14 @@ function onPointerDown(event) {
 
     canvas.setPointerCapture(event.pointerId);
     state.drawing = true;
+    state.drawingTool = state.tool;
+    state.maskStrokeDirty = false;
     if (state.tool === "crop") {
         state.cropStart = point;
         state.cropRect = { x: point.x, y: point.y, w: 0, h: 0 };
     } else {
         paintAt(state, point, state.tool === "erase");
+        state.maskStrokeDirty = true;
     }
     render(canvas, state);
 }
@@ -158,6 +193,7 @@ function onPointerMove(event) {
         };
     } else {
         paintAt(state, point, state.tool === "erase");
+        state.maskStrokeDirty = true;
     }
     render(canvas, state);
 }
@@ -166,9 +202,13 @@ function onPointerUp(event) {
     const canvas = event.currentTarget;
     const state = states.get(canvas);
     if (!state) return;
+    const shouldNotify = state.drawing && state.drawingTool !== "crop" && state.maskStrokeDirty;
     state.drawing = false;
+    state.drawingTool = null;
+    state.maskStrokeDirty = false;
     try { canvas.releasePointerCapture(event.pointerId); } catch { }
     render(canvas, state);
+    if (shouldNotify) notifyMaskChanged(state);
 }
 
 function paintAt(state, point, erase) {
@@ -182,10 +222,14 @@ function paintAt(state, point, erase) {
     } else {
         ctx.globalCompositeOperation = "source-over";
         ctx.fillStyle = "rgba(31,111,235,0.42)";
-        state.hasPaint = true;
     }
     ctx.fill();
     ctx.restore();
+}
+
+function notifyMaskChanged(state) {
+    if (!state.dotNetRef) return;
+    state.dotNetRef.invokeMethodAsync("OnEditorMaskChanged").catch(() => { });
 }
 
 function resize(canvas, state) {
@@ -277,6 +321,14 @@ function normalizeRect(rect) {
         w: Math.abs(rect.w),
         h: Math.abs(rect.h),
     };
+}
+
+function paintHasPixels(state) {
+    const pixels = state.paint.getContext("2d").getImageData(0, 0, state.paint.width, state.paint.height);
+    for (let i = 3; i < pixels.data.length; i += 4) {
+        if (pixels.data[i] > 0) return true;
+    }
+    return false;
 }
 
 function loadImage(src) {

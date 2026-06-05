@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -18,6 +19,8 @@ public sealed class ArtWorkflowService(
     {
         WriteIndented = true,
     };
+
+    private sealed record ImagePayload(string ContentType, byte[] Data, int Width, int Height);
 
     public async Task<ProjectView> EnsureDefaultProjectAsync(CancellationToken cancellationToken = default)
     {
@@ -386,29 +389,18 @@ public sealed class ArtWorkflowService(
         var references = await ResolveAssetsAsync(projectId, request.ReferenceAssetIds, cancellationToken);
         var count = ClampCount(request.Count);
 
-        var (sourceContentType, sourceData) = string.IsNullOrWhiteSpace(request.SourcePngDataUrl)
-            ? (sourceAsset.ContentType, sourceAsset.Data)
-            : DataUrl.Parse(request.SourcePngDataUrl);
-
-        ImageMask? storedMask = null;
-        string maskContentType;
-        byte[] maskData;
-        if (!string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
-        {
-            (maskContentType, maskData) = DataUrl.Parse(request.MaskPngDataUrl);
-            storedMask = await AddMaskAsync(projectId, sourceAsset.Id, maskContentType, maskData, "Mask", cancellationToken);
-        }
-        else if (request.MaskId is Guid maskId)
-        {
-            storedMask = await db.ImageMasks.FirstOrDefaultAsync(m => m.ProjectId == projectId && m.Id == maskId, cancellationToken)
-                ?? throw new InvalidOperationException("Mask was not found.");
-            maskContentType = storedMask.ContentType;
-            maskData = storedMask.Data;
-        }
-        else
-        {
+        var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
+        if (string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
             throw new InvalidOperationException("A painted mask is required for masked edit.");
-        }
+
+        var storedMask = await UpsertAssetMaskEntityAsync(
+            projectId,
+            sourceAsset,
+            request.MaskPngDataUrl,
+            $"{sourceAsset.Label} mask",
+            requireEditableArea: true,
+            cancellationToken);
+        ValidateEditImageAndMask(sourceImage, storedMask);
 
         var batch = new GenerationBatch
         {
@@ -421,7 +413,7 @@ public sealed class ArtWorkflowService(
             Size = NormalizeSize(request.Size),
             Count = count,
             InputAssetIdsJson = SerializeIds(new[] { sourceAsset.Id }.Concat(references.Select(a => a.Id))),
-            InputMaskIdsJson = storedMask is null ? "[]" : SerializeIds([storedMask.Id]),
+            InputMaskIdsJson = SerializeIds([storedMask.Id]),
             ParentBatchId = sourceAsset.SourceBatchId,
             Status = GenerationBatchStatus.Running,
         };
@@ -437,8 +429,8 @@ public sealed class ArtWorkflowService(
                 count,
                 batch.MainlineModel,
                 batch.ImageModel,
-                new ImageProviderReference(sourceAsset.FileName, sourceContentType, sourceData),
-                new ImageProviderReference(storedMask?.Label ?? "mask.png", maskContentType, maskData),
+                new ImageProviderReference(sourceAsset.FileName, sourceImage.ContentType, sourceImage.Data),
+                new ImageProviderReference(storedMask.Label, storedMask.ContentType, storedMask.Data),
                 references.Select(ToProviderReference).ToList(),
                 imageOptions.Value.DefaultOutputFormat,
                 imageOptions.Value.DefaultQuality,
@@ -472,7 +464,7 @@ public sealed class ArtWorkflowService(
                         image.CallId,
                         image.OutputFormat,
                         SourceAssetId = sourceAsset.Id,
-                        MaskId = storedMask?.Id,
+                        MaskId = storedMask.Id,
                     });
                 await db.ArtAssets.AddAsync(asset, cancellationToken);
             }
@@ -544,14 +536,49 @@ public sealed class ArtWorkflowService(
         return AssetView(asset);
     }
 
-    public async Task<ImageMaskView> SaveMaskAsync(Guid projectId, SaveMaskRequest request, CancellationToken cancellationToken = default)
+    public async Task<ImageMaskView> UpsertAssetMaskAsync(
+        Guid projectId,
+        Guid assetId,
+        string maskDataUrl,
+        string label,
+        CancellationToken cancellationToken = default)
     {
-        if (!await db.ArtAssets.AnyAsync(a => a.ProjectId == projectId && a.Id == request.AssetId, cancellationToken))
-            throw new InvalidOperationException("Asset was not found.");
-        var (contentType, data) = DataUrl.Parse(request.MaskDataUrl);
-        var mask = await AddMaskAsync(projectId, request.AssetId, contentType, data, request.Label, cancellationToken);
+        var asset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+        var mask = await UpsertAssetMaskEntityAsync(
+            projectId,
+            asset,
+            maskDataUrl,
+            label,
+            requireEditableArea: false,
+            cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return MaskView(mask);
+    }
+
+    public async Task ClearAssetMaskAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default)
+    {
+        if (!await db.ArtAssets.AnyAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken))
+            throw new InvalidOperationException("Asset was not found.");
+
+        var masks = await db.ImageMasks
+            .Where(m => m.ProjectId == projectId && m.AssetId == assetId)
+            .ToListAsync(cancellationToken);
+        if (masks.Count == 0)
+            return;
+
+        var maskIds = masks.Select(m => m.Id).ToList();
+        var attachments = await db.ChatContextAttachments
+            .Where(a => a.ProjectId == projectId
+                && a.Type == ChatContextAttachmentType.Mask
+                && maskIds.Contains(a.RefId))
+            .ToListAsync(cancellationToken);
+        db.ChatContextAttachments.RemoveRange(attachments);
+        db.ImageMasks.RemoveRange(masks);
+
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<PromptRecipeView> SavePromptRecipeAsync(Guid projectId, SavePromptRecipeRequest request, CancellationToken cancellationToken = default)
@@ -657,8 +684,13 @@ public sealed class ArtWorkflowService(
         if (asset is null)
             return;
 
+        var maskIds = await db.ImageMasks
+            .Where(m => m.ProjectId == projectId && m.AssetId == assetId)
+            .Select(m => m.Id)
+            .ToListAsync(cancellationToken);
         var attachments = await db.ChatContextAttachments
-            .Where(a => a.ProjectId == projectId && a.RefId == assetId)
+            .Where(a => a.ProjectId == projectId
+                && (a.RefId == assetId || (a.Type == ChatContextAttachmentType.Mask && maskIds.Contains(a.RefId))))
             .ToListAsync(cancellationToken);
         db.ChatContextAttachments.RemoveRange(attachments);
 
@@ -744,29 +776,264 @@ public sealed class ArtWorkflowService(
         }, JsonOptions);
     }
 
-    private async Task<ImageMask> AddMaskAsync(
+    private async Task<ImageMask> UpsertAssetMaskEntityAsync(
         Guid projectId,
-        Guid assetId,
-        string contentType,
-        byte[] data,
+        ArtAsset asset,
+        string maskDataUrl,
         string label,
+        bool requireEditableArea,
         CancellationToken cancellationToken)
     {
-        var normalizedType = NormalizeImageContentType(contentType) ?? "image/png";
-        var (width, height) = ImageMetadataReader.TryReadSize(data, normalizedType);
-        var mask = new ImageMask
+        var maskImage = ParsePngDataUrl(maskDataUrl, "Mask must be a PNG data URL.");
+        ValidateMaskFitsAsset(asset, maskImage);
+        EnsurePngMaskHasAlpha(maskImage.Data, requireEditableArea);
+
+        var masks = await db.ImageMasks
+            .Where(m => m.ProjectId == projectId && m.AssetId == asset.Id)
+            .OrderByDescending(m => m.CreatedAt)
+            .ThenByDescending(m => m.Id)
+            .ToListAsync(cancellationToken);
+        var now = DateTime.UtcNow;
+        ImageMask mask;
+        if (masks.Count == 0)
         {
-            ProjectId = projectId,
-            AssetId = assetId,
-            Label = string.IsNullOrWhiteSpace(label) ? "Mask" : label.Trim(),
-            ContentType = normalizedType,
-            Data = data,
-            Width = width ?? 0,
-            Height = height ?? 0,
-        };
-        await db.ImageMasks.AddAsync(mask, cancellationToken);
+            mask = new ImageMask
+            {
+                ProjectId = projectId,
+                AssetId = asset.Id,
+                CreatedAt = now,
+            };
+            await db.ImageMasks.AddAsync(mask, cancellationToken);
+        }
+        else
+        {
+            mask = masks[0];
+        }
+
+        mask.Label = string.IsNullOrWhiteSpace(label) ? $"{asset.Label} mask" : label.Trim();
+        mask.ContentType = maskImage.ContentType;
+        mask.Data = maskImage.Data;
+        mask.Width = maskImage.Width;
+        mask.Height = maskImage.Height;
+        mask.UpdatedAt = now;
+
+        var duplicateMasks = masks.Skip(1).ToList();
+        if (duplicateMasks.Count > 0)
+        {
+            var duplicateMaskIds = duplicateMasks.Select(m => m.Id).ToList();
+            var duplicateAttachments = await db.ChatContextAttachments
+                .Where(a => a.ProjectId == projectId
+                    && a.Type == ChatContextAttachmentType.Mask
+                    && duplicateMaskIds.Contains(a.RefId))
+                .ToListAsync(cancellationToken);
+            db.ChatContextAttachments.RemoveRange(duplicateAttachments);
+            db.ImageMasks.RemoveRange(duplicateMasks);
+        }
+
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.UpdatedAt = now;
         return mask;
     }
+
+    private static ImagePayload ResolveEditSourceImage(ArtAsset sourceAsset, string? sourcePngDataUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(sourcePngDataUrl))
+            return ParsePngDataUrl(sourcePngDataUrl, "Edit source image must be a PNG data URL.");
+
+        var contentType = NormalizeImageContentType(sourceAsset.ContentType)
+            ?? throw new InvalidOperationException("Source asset must be a PNG or JPEG image.");
+        var width = sourceAsset.Width;
+        var height = sourceAsset.Height;
+        if (width is null || height is null || width <= 0 || height <= 0)
+        {
+            var size = ImageMetadataReader.TryReadSize(sourceAsset.Data, contentType);
+            width = size.Width;
+            height = size.Height;
+        }
+
+        if (width is null || height is null || width <= 0 || height <= 0)
+            throw new InvalidOperationException("Source image dimensions could not be read.");
+
+        return new ImagePayload(contentType, sourceAsset.Data, width.Value, height.Value);
+    }
+
+    private static ImagePayload ParsePngDataUrl(string dataUrl, string error)
+    {
+        string contentType;
+        byte[] data;
+        try
+        {
+            (contentType, data) = DataUrl.Parse(dataUrl);
+        }
+        catch (Exception ex) when (ex is ArgumentException or FormatException)
+        {
+            throw new InvalidOperationException(error, ex);
+        }
+
+        contentType = NormalizeImageContentType(contentType)
+            ?? throw new InvalidOperationException(error);
+        if (!contentType.Equals("image/png", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(error);
+
+        var (width, height) = ImageMetadataReader.TryReadSize(data, contentType);
+        if (width is null || height is null || width <= 0 || height <= 0)
+            throw new InvalidOperationException("PNG dimensions could not be read.");
+
+        return new ImagePayload(contentType, data, width.Value, height.Value);
+    }
+
+    private static void ValidateMaskFitsAsset(ArtAsset asset, ImagePayload maskImage)
+    {
+        if (asset.Width is not > 0 || asset.Height is not > 0)
+            return;
+        if (asset.Width != maskImage.Width || asset.Height != maskImage.Height)
+            throw new InvalidOperationException("Mask dimensions must match the source asset dimensions.");
+    }
+
+    private static void ValidateEditImageAndMask(ImagePayload sourceImage, ImageMask mask)
+    {
+        if (!sourceImage.ContentType.Equals(mask.ContentType, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Source image and mask must use the same image format.");
+        if (sourceImage.Width != mask.Width || sourceImage.Height != mask.Height)
+            throw new InvalidOperationException("Source image and mask dimensions must match.");
+    }
+
+    private static void EnsurePngMaskHasAlpha(byte[] data, bool requireEditableArea)
+    {
+        var state = ReadPngAlphaState(data);
+        if (!state.HasAlphaChannel)
+            throw new InvalidOperationException("Mask PNG must contain an alpha channel.");
+        if (requireEditableArea && !state.HasEditableArea)
+            throw new InvalidOperationException("Paint the editable mask area first.");
+    }
+
+    private static (bool HasAlphaChannel, bool HasEditableArea) ReadPngAlphaState(byte[] data)
+    {
+        if (data.Length < 33
+            || data[0] != 0x89
+            || data[1] != 0x50
+            || data[2] != 0x4E
+            || data[3] != 0x47)
+        {
+            return (false, false);
+        }
+
+        var offset = 8;
+        var width = 0;
+        var height = 0;
+        var bitDepth = 0;
+        var colorType = 0;
+        var interlace = 0;
+        using var idat = new MemoryStream();
+
+        while (offset + 8 <= data.Length)
+        {
+            var length = ReadBigEndianInt32(data.AsSpan(offset, 4));
+            if (length < 0 || offset + 12 + length > data.Length)
+                throw new InvalidOperationException("Mask PNG is malformed.");
+
+            var typeOffset = offset + 4;
+            var chunkOffset = offset + 8;
+            if (ChunkTypeEquals(data, typeOffset, (byte)'I', (byte)'H', (byte)'D', (byte)'R'))
+            {
+                if (length < 13)
+                    throw new InvalidOperationException("Mask PNG is malformed.");
+                width = ReadBigEndianInt32(data.AsSpan(chunkOffset, 4));
+                height = ReadBigEndianInt32(data.AsSpan(chunkOffset + 4, 4));
+                bitDepth = data[chunkOffset + 8];
+                colorType = data[chunkOffset + 9];
+                interlace = data[chunkOffset + 12];
+            }
+            else if (ChunkTypeEquals(data, typeOffset, (byte)'I', (byte)'D', (byte)'A', (byte)'T'))
+            {
+                idat.Write(data, chunkOffset, length);
+            }
+            else if (ChunkTypeEquals(data, typeOffset, (byte)'I', (byte)'E', (byte)'N', (byte)'D'))
+            {
+                break;
+            }
+
+            offset = chunkOffset + length + 4;
+        }
+
+        if (width <= 0 || height <= 0)
+            throw new InvalidOperationException("Mask PNG dimensions could not be read.");
+        if (colorType is not (4 or 6))
+            return (false, false);
+        if (bitDepth != 8 || interlace != 0)
+            throw new InvalidOperationException("Mask PNG must be an 8-bit non-interlaced PNG with alpha.");
+        if (idat.Length == 0)
+            throw new InvalidOperationException("Mask PNG is missing image data.");
+
+        idat.Position = 0;
+        using var zlib = new ZLibStream(idat, CompressionMode.Decompress);
+        using var raw = new MemoryStream();
+        zlib.CopyTo(raw);
+        var inflated = raw.ToArray();
+        var bytesPerPixel = colorType == 6 ? 4 : 2;
+        var rowBytes = checked(width * bytesPerPixel);
+        var requiredBytes = checked((rowBytes + 1) * height);
+        if (inflated.Length < requiredBytes)
+            throw new InvalidOperationException("Mask PNG image data is incomplete.");
+
+        var previous = new byte[rowBytes];
+        var current = new byte[rowBytes];
+        var index = 0;
+        var hasEditableArea = false;
+
+        for (var y = 0; y < height; y++)
+        {
+            var filter = inflated[index++];
+            for (var x = 0; x < rowBytes; x++)
+            {
+                var value = inflated[index++];
+                var left = x >= bytesPerPixel ? current[x - bytesPerPixel] : 0;
+                var up = previous[x];
+                var upperLeft = x >= bytesPerPixel ? previous[x - bytesPerPixel] : 0;
+                current[x] = filter switch
+                {
+                    0 => value,
+                    1 => unchecked((byte)(value + left)),
+                    2 => unchecked((byte)(value + up)),
+                    3 => unchecked((byte)(value + ((left + up) / 2))),
+                    4 => unchecked((byte)(value + PaethPredictor(left, up, upperLeft))),
+                    _ => throw new InvalidOperationException("Mask PNG uses an unsupported row filter."),
+                };
+            }
+
+            var alphaOffset = colorType == 6 ? 3 : 1;
+            for (var x = alphaOffset; x < rowBytes; x += bytesPerPixel)
+            {
+                if (current[x] < byte.MaxValue)
+                {
+                    hasEditableArea = true;
+                    break;
+                }
+            }
+
+            (previous, current) = (current, previous);
+            Array.Clear(current);
+        }
+
+        return (true, hasEditableArea);
+    }
+
+    private static bool ChunkTypeEquals(byte[] data, int offset, byte a, byte b, byte c, byte d) =>
+        data[offset] == a && data[offset + 1] == b && data[offset + 2] == c && data[offset + 3] == d;
+
+    private static int PaethPredictor(int left, int up, int upperLeft)
+    {
+        var estimate = left + up - upperLeft;
+        var distanceLeft = Math.Abs(estimate - left);
+        var distanceUp = Math.Abs(estimate - up);
+        var distanceUpperLeft = Math.Abs(estimate - upperLeft);
+        if (distanceLeft <= distanceUp && distanceLeft <= distanceUpperLeft)
+            return left;
+        return distanceUp <= distanceUpperLeft ? up : upperLeft;
+    }
+
+    private static int ReadBigEndianInt32(ReadOnlySpan<byte> bytes) =>
+        (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
 
     private async Task SetWorkspaceModeAfterAssetMutationAsync(Guid projectId, WorkspaceMode mode, CancellationToken cancellationToken)
     {

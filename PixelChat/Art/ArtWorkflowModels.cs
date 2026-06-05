@@ -110,7 +110,6 @@ public sealed record EditImageRequest(
     string Prompt,
     string Size,
     int Count,
-    Guid? MaskId,
     string? SourcePngDataUrl,
     string? MaskPngDataUrl,
     IReadOnlyList<Guid> ReferenceAssetIds);
@@ -124,11 +123,6 @@ public sealed record ImportAssetRequest(
 public sealed record CropAssetRequest(
     Guid ParentAssetId,
     string CropDataUrl,
-    string Label);
-
-public sealed record SaveMaskRequest(
-    Guid AssetId,
-    string MaskDataUrl,
     string Label);
 
 public sealed record SavePromptRecipeRequest(
