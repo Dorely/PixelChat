@@ -311,27 +311,6 @@ else
                     </div>
                 }
             </div>
-
-            <div class="recipe-editor">
-                <div class="section-title">Prompt Recipe</div>
-                <div class="form-grid recipe-grid">
-                    <input class="form-control" placeholder="Recipe name" @bind="_recipeName" />
-                    <input class="form-control" placeholder="Asset type" @bind="_recipeAssetType" />
-                    <textarea class="form-control recipe-template" rows="4" placeholder="Prompt template" @bind="_recipePromptTemplate"></textarea>
-                    <select class="form-select" @bind="_recipePreferredSize">
-                        <option value="auto">Auto</option>
-                        <option value="1024x1024">1024 x 1024</option>
-                        <option value="1024x1536">1024 x 1536</option>
-                        <option value="1536x1024">1536 x 1024</option>
-                    </select>
-                    <textarea class="form-control" rows="3" placeholder="Style rules, one per line" @bind="_recipeStyleRules"></textarea>
-                    <textarea class="form-control" rows="3" placeholder="Avoid rules, one per line" @bind="_recipeAvoidRules"></textarea>
-                    <textarea class="form-control recipe-notes" rows="3" placeholder="Notes" @bind="_recipeNotes"></textarea>
-                    <button type="button" class="btn btn-outline-primary align-end" disabled="@(!CanSaveRecipe)" @onclick="SaveRecipeAsync">
-                        @(_editingRecipeId is null ? "Save Recipe" : "Update Recipe")
-                    </button>
-                </div>
-            </div>
         </div>
     };
 

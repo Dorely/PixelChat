@@ -171,7 +171,6 @@
 }
 
 .form-stack,
-.recipe-editor,
 .context-panel,
 .active-asset-card {
     display: grid;
@@ -195,14 +194,6 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.65rem;
     align-items: stretch;
-}
-
-.recipe-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 0.75fr);
-}
-
-.recipe-template {
-    grid-column: 1 / -1;
 }
 
 .recipe-notes {
