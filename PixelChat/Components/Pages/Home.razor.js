@@ -106,6 +106,53 @@ export function exportCropPng(canvas) {
     return output.toDataURL("image/png");
 }
 
+export async function prepareExportPreview(imageUrl, tolerance, removeBackground, removalMethod) {
+    const image = await loadImage(imageUrl);
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth || image.width;
+    canvas.height = image.naturalHeight || image.height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const analysis = analyzeExportBackground(imageData.data, canvas.width, canvas.height);
+    const method = normalizeRemovalMethod(removalMethod);
+    const shouldRemove = removeBackground === null || removeBackground === undefined
+        ? analysis.shouldRemove || analysis.checkerboard.shouldRemove
+        : Boolean(removeBackground);
+
+    let result = { removedPixels: 0, method: "", detail: "" };
+    if (shouldRemove) {
+        result = removeExportBackground(imageData, analysis, normalizeTolerance(tolerance), method);
+        ctx.putImageData(imageData, 0, 0);
+    }
+
+    const stats = alphaStats(imageData.data);
+    return {
+        RemoveBackground: shouldRemove,
+        DataUrl: canvas.toDataURL("image/png"),
+        Message: exportPreviewMessage(shouldRemove, analysis, result, stats),
+        Method: result.method,
+        TransparentPixels: stats.transparent,
+        SemiTransparentPixels: stats.semiTransparent,
+        OpaquePixels: stats.opaque,
+    };
+}
+
+export function downloadExportPng(dataUrl, fileName) {
+    if (!dataUrl || !dataUrl.startsWith("data:image/png;base64,")) {
+        throw new Error("Export preview is not a PNG.");
+    }
+
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = normalizeExportFileName(fileName);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+}
+
 async function loadMaskIntoPaint(state, maskUrl) {
     const image = await loadImage(maskUrl);
     const width = image.naturalWidth || image.width;
@@ -329,6 +376,759 @@ function paintHasPixels(state) {
         if (pixels.data[i] > 0) return true;
     }
     return false;
+}
+
+function analyzeExportBackground(data, width, height) {
+    const edgeBand = Math.max(2, Math.min(48, Math.floor(Math.min(width, height) * 0.035)));
+    const sampleStep = 1;
+    const clusterTolerance = 24;
+    const clusters = [];
+    const samples = [];
+    let opaqueSamples = 0;
+    let transparentSamples = 0;
+
+    const addSample = (x, y) => {
+        const offset = ((y * width) + x) * 4;
+        const alpha = data[offset + 3];
+        if (alpha < 245) {
+            transparentSamples++;
+            return;
+        }
+
+        opaqueSamples++;
+        const color = {
+            x,
+            y,
+            r: data[offset],
+            g: data[offset + 1],
+            b: data[offset + 2],
+        };
+        color.luma = luma(color.r, color.g, color.b);
+        color.saturation = saturation(color.r, color.g, color.b);
+        samples.push(color);
+        addColorCluster(
+            clusters,
+            color.r,
+            color.g,
+            color.b,
+            clusterTolerance);
+    };
+
+    for (let y = 0; y < edgeBand; y += sampleStep) {
+        for (let x = 0; x < width; x += sampleStep) {
+            addSample(x, y);
+            addSample(x, height - 1 - y);
+        }
+    }
+
+    for (let y = edgeBand; y < height - edgeBand; y += sampleStep) {
+        for (let x = 0; x < edgeBand; x += sampleStep) {
+            addSample(x, y);
+            addSample(width - 1 - x, y);
+        }
+    }
+
+    clusters.sort((left, right) => right.count - left.count);
+    const paletteClusters = clusters.slice(0, 5);
+    const representedSamples = paletteClusters.reduce((sum, cluster) => sum + cluster.count, 0);
+    const opaqueCoverage = opaqueSamples > 0 ? representedSamples / opaqueSamples : 0;
+    const dominantShare = opaqueSamples > 0 && paletteClusters.length > 0
+        ? paletteClusters[0].count / opaqueSamples
+        : 0;
+    const transparentShare = opaqueSamples + transparentSamples > 0
+        ? transparentSamples / (opaqueSamples + transparentSamples)
+        : 0;
+    const hasExistingTransparency = transparentShare > 0.12;
+    const shouldRemove = !hasExistingTransparency
+        && opaqueSamples > 0
+        && dominantShare >= 0.28
+        && opaqueCoverage >= 0.72
+        && paletteClusters.length <= 5;
+
+    const analysis = {
+        shouldRemove,
+        hasExistingTransparency,
+        opaqueCoverage,
+        palette: shouldRemove || opaqueCoverage >= 0.58
+            ? paletteClusters.map(cluster => ({
+                r: Math.round(cluster.r),
+                g: Math.round(cluster.g),
+                b: Math.round(cluster.b),
+            }))
+            : [],
+    };
+    analysis.checkerboard = analyzeCheckerboardBackground(data, samples, width, height, edgeBand);
+    if (analysis.hasExistingTransparency) {
+        analysis.checkerboard.shouldRemove = false;
+    }
+    return analysis;
+}
+
+function analyzeCheckerboardBackground(data, samples, width, height, edgeBand) {
+    const backgroundSamples = samples.filter(sample => sample.saturation <= 42 && sample.luma >= 190);
+    if (backgroundSamples.length < Math.max(80, samples.length * 0.38)) {
+        return emptyCheckerboardAnalysis();
+    }
+
+    const lumaModel = splitLumaFamilies(backgroundSamples);
+    if (!lumaModel || Math.abs(lumaModel.light.luma - lumaModel.dark.luma) < 7) {
+        return emptyCheckerboardAnalysis();
+    }
+
+    const referenceRow = chooseCheckerboardLine(data, width, height, "row", edgeBand, lumaModel.mid);
+    const referenceColumn = chooseCheckerboardLine(data, width, height, "column", edgeBand, lumaModel.mid);
+    if (referenceRow < 0 || referenceColumn < 0) {
+        return emptyCheckerboardAnalysis();
+    }
+
+    const xBits = lineBits(data, width, height, "row", referenceRow, lumaModel.mid);
+    const yBits = lineBits(data, width, height, "column", referenceColumn, lumaModel.mid);
+    smoothBits(xBits);
+    smoothBits(yBits);
+
+    const parityOffset = xBits[referenceColumn] ? 1 : 0;
+    const paritySamples = [[], []];
+    let matches = 0;
+    for (const sample of backgroundSamples) {
+        const parity = checkerboardStripeParity(modelForParity(xBits, yBits, parityOffset), sample.x, sample.y);
+        paritySamples[parity].push(sample);
+        const expectedLight = parity === 1;
+        const actualLight = sample.luma > lumaModel.mid;
+        if (expectedLight === actualLight) matches++;
+    }
+
+    if (paritySamples[0].length === 0 || paritySamples[1].length === 0) {
+        return emptyCheckerboardAnalysis();
+    }
+
+    const colors = [colorMean(paritySamples[0]), colorMean(paritySamples[1])];
+    const rawMatchShare = matches / backgroundSamples.length;
+    const parityScore = Math.max(rawMatchShare, 1 - rawMatchShare);
+    if (luma(colors[0].r, colors[0].g, colors[0].b) > luma(colors[1].r, colors[1].g, colors[1].b)) {
+        invertBits(xBits);
+        colors.reverse();
+    }
+
+    const model = {
+        xBits,
+        yBits,
+        parityOffset,
+        colors,
+    };
+    const runs = stripeRuns(xBits).concat(stripeRuns(yBits)).filter(run => run >= 8 && run <= 64);
+    const tileSize = runs.length > 0 ? Math.round(quantile(runs, 0.5)) : 16;
+    const distances = backgroundSamples.map(sample => {
+        const color = checkerboardColorAt(model, sample.x, sample.y);
+        return Math.sqrt(colorDistanceSquared(sample.r, sample.g, sample.b, color.r, color.g, color.b));
+    });
+    const noiseTolerance = Math.max(12, quantile(distances, 0.86));
+    const confidence = Math.min(1, parityScore * 0.82 + Math.min(1, backgroundSamples.length / Math.max(1, samples.length)) * 0.18);
+
+    return {
+        detected: confidence >= 0.72,
+        shouldRemove: confidence >= 0.72,
+        confidence,
+        tileSize,
+        xBits,
+        yBits,
+        parityOffset,
+        colors,
+        midLuma: lumaModel.mid,
+        noiseTolerance,
+    };
+}
+
+function emptyCheckerboardAnalysis() {
+    return {
+        detected: false,
+        shouldRemove: false,
+        confidence: 0,
+        tileSize: 0,
+        xBits: null,
+        yBits: null,
+        parityOffset: 0,
+        colors: [],
+        midLuma: 0,
+        noiseTolerance: 0,
+    };
+}
+
+function splitLumaFamilies(samples) {
+    if (samples.length === 0) return null;
+
+    let darkCenter = quantile(samples.map(sample => sample.luma), 0.25);
+    let lightCenter = quantile(samples.map(sample => sample.luma), 0.75);
+    if (!Number.isFinite(darkCenter) || !Number.isFinite(lightCenter)) return null;
+
+    for (let iteration = 0; iteration < 8; iteration++) {
+        const dark = [];
+        const light = [];
+        for (const sample of samples) {
+            if (Math.abs(sample.luma - darkCenter) <= Math.abs(sample.luma - lightCenter)) dark.push(sample);
+            else light.push(sample);
+        }
+
+        if (dark.length === 0 || light.length === 0) break;
+        darkCenter = dark.reduce((sum, sample) => sum + sample.luma, 0) / dark.length;
+        lightCenter = light.reduce((sum, sample) => sum + sample.luma, 0) / light.length;
+    }
+
+    const mid = (darkCenter + lightCenter) / 2;
+    const darkSamples = samples.filter(sample => sample.luma <= mid);
+    const lightSamples = samples.filter(sample => sample.luma > mid);
+    if (darkSamples.length === 0 || lightSamples.length === 0) return null;
+
+    return {
+        mid,
+        dark: { luma: darkCenter, samples: darkSamples },
+        light: { luma: lightCenter, samples: lightSamples },
+    };
+}
+
+function chooseCheckerboardLine(data, width, height, axis, edgeBand, midLuma) {
+    const limit = axis === "row" ? height : width;
+    const candidates = [
+        ...Array.from({ length: edgeBand }, (_, index) => index),
+        ...Array.from({ length: edgeBand }, (_, index) => limit - edgeBand + index),
+    ].filter(value => value >= 0 && value < limit);
+    let best = -1;
+    let bestScore = 0;
+
+    for (const coordinate of candidates) {
+        const bits = lineBits(data, width, height, axis, coordinate, midLuma);
+        const quality = checkerLineQuality(data, width, height, axis, coordinate, bits);
+        if (quality > bestScore) {
+            best = coordinate;
+            bestScore = quality;
+        }
+    }
+
+    return bestScore >= 0.58 ? best : -1;
+}
+
+function lineBits(data, width, height, axis, coordinate, midLuma) {
+    const length = axis === "row" ? width : height;
+    const bits = new Uint8Array(length);
+    for (let i = 0; i < length; i++) {
+        const x = axis === "row" ? i : coordinate;
+        const y = axis === "row" ? coordinate : i;
+        const offset = ((y * width) + x) * 4;
+        bits[i] = luma(data[offset], data[offset + 1], data[offset + 2]) > midLuma ? 1 : 0;
+    }
+
+    return bits;
+}
+
+function checkerLineQuality(data, width, height, axis, coordinate, bits) {
+    let clean = 0;
+    let transitions = 0;
+    for (let i = 0; i < bits.length; i++) {
+        const x = axis === "row" ? i : coordinate;
+        const y = axis === "row" ? coordinate : i;
+        const offset = ((y * width) + x) * 4;
+        const lightness = luma(data[offset], data[offset + 1], data[offset + 2]);
+        const chroma = saturation(data[offset], data[offset + 1], data[offset + 2]);
+        if (data[offset + 3] >= 245 && lightness >= 205 && chroma <= 32) clean++;
+        if (i > 0 && bits[i] !== bits[i - 1]) transitions++;
+    }
+
+    const cleanShare = clean / bits.length;
+    const transitionShare = transitions / bits.length;
+    return cleanShare * 0.82 + Math.min(1, transitionShare * 8) * 0.18;
+}
+
+function smoothBits(bits) {
+    const copy = Uint8Array.from(bits);
+    for (let i = 2; i < bits.length - 2; i++) {
+        bits[i] = copy[i - 2] + copy[i - 1] + copy[i] + copy[i + 1] + copy[i + 2] >= 3 ? 1 : 0;
+    }
+}
+
+function invertBits(bits) {
+    for (let i = 0; i < bits.length; i++) bits[i] = bits[i] ? 0 : 1;
+}
+
+function modelForParity(xBits, yBits, parityOffset) {
+    return { xBits, yBits, parityOffset };
+}
+
+function checkerboardStripeParity(model, x, y) {
+    return (model.xBits[x] ^ model.yBits[y] ^ model.parityOffset) & 1;
+}
+
+function stripeRuns(bits) {
+    const runs = [];
+    let start = 0;
+    for (let i = 1; i < bits.length; i++) {
+        if (bits[i] === bits[i - 1]) continue;
+        runs.push(i - start);
+        start = i;
+    }
+    runs.push(bits.length - start);
+    return runs;
+}
+
+function colorMean(samples) {
+    if (samples.length === 0) return { r: 0, g: 0, b: 0 };
+    const sum = samples.reduce((total, sample) => {
+        total.r += sample.r;
+        total.g += sample.g;
+        total.b += sample.b;
+        return total;
+    }, { r: 0, g: 0, b: 0 });
+    return {
+        r: Math.round(sum.r / samples.length),
+        g: Math.round(sum.g / samples.length),
+        b: Math.round(sum.b / samples.length),
+    };
+}
+
+function removeExportBackground(imageData, analysis, tolerance, method) {
+    const checkerboard = analysis.checkerboard ?? emptyCheckerboardAnalysis();
+    const wantsCheckerboard = method === "checkerboard" || (method === "auto" && checkerboard.shouldRemove);
+
+    if (wantsCheckerboard && checkerboard.detected) {
+        const result = checkerboardRemoval(imageData, checkerboard, tolerance);
+        if (result.removedPixels > 0 || method === "checkerboard") {
+            return {
+                removedPixels: result.removedPixels,
+                method: "checkerboard",
+                detail: result.softenedPixels > 0 ? `${result.softenedPixels.toLocaleString()} soft edge px` : "",
+            };
+        }
+    }
+
+    const edgeResult = edgeColorRemoval(imageData, analysis.palette, tolerance);
+    return {
+        removedPixels: edgeResult.removedPixels,
+        method: edgeResult.removedPixels > 0 ? "edge" : "",
+        detail: wantsCheckerboard && !checkerboard.detected ? "checkerboard fallback" : "",
+    };
+}
+
+function addColorCluster(clusters, r, g, b, tolerance) {
+    let closest = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    const threshold = tolerance * tolerance * 3;
+
+    for (const cluster of clusters) {
+        const distance = colorDistanceSquared(r, g, b, cluster.r, cluster.g, cluster.b);
+        if (distance <= threshold && distance < closestDistance) {
+            closest = cluster;
+            closestDistance = distance;
+        }
+    }
+
+    if (!closest) {
+        clusters.push({ r, g, b, count: 1 });
+        return;
+    }
+
+    closest.r = ((closest.r * closest.count) + r) / (closest.count + 1);
+    closest.g = ((closest.g * closest.count) + g) / (closest.count + 1);
+    closest.b = ((closest.b * closest.count) + b) / (closest.count + 1);
+    closest.count++;
+}
+
+function checkerboardRemoval(imageData, model, tolerance) {
+    const { data, width, height } = imageData;
+    const pixelCount = width * height;
+    const strictCandidate = new Uint8Array(pixelCount);
+    const softCandidate = new Uint8Array(pixelCount);
+    const scores = new Float32Array(pixelCount);
+
+    for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex++) {
+        const offset = pixelIndex * 4;
+        const x = pixelIndex % width;
+        const y = Math.floor(pixelIndex / width);
+        const softScore = checkerboardPixelScore(data, offset, x, y, model, tolerance, 26);
+        if (softScore > 0) {
+            softCandidate[pixelIndex] = 1;
+            const strictScore = checkerboardPixelScore(data, offset, x, y, model, tolerance, 0);
+            if (strictScore > 0) {
+                strictCandidate[pixelIndex] = 1;
+                scores[pixelIndex] = strictScore;
+            }
+        }
+    }
+
+    const mask = checkerboardComponentMask(strictCandidate, scores, width, height, model.tileSize);
+    closeConstrainedMask(mask, softCandidate, width, height);
+    removeTinyMaskComponents(mask, width, height, Math.max(8, Math.round(model.tileSize * 1.25)));
+    const removedPixels = applyAlphaMask(imageData, mask);
+    const softenedPixels = softenKnownBackgroundBoundary(imageData, mask, (x, y) => checkerboardColorAt(model, x, y), tolerance);
+    return { removedPixels, softenedPixels };
+}
+
+function checkerboardPixelScore(data, offset, x, y, model, tolerance, extraTolerance) {
+    const alpha = data[offset + 3];
+    if (alpha < 8) return 1;
+
+    const predicted = checkerboardColorAt(model, x, y);
+    const baseTolerance = checkerboardTolerance(model, tolerance) + extraTolerance;
+    const colorThreshold = baseTolerance * baseTolerance * 3;
+    const distance = colorDistanceSquared(data[offset], data[offset + 1], data[offset + 2], predicted.r, predicted.g, predicted.b);
+    if (distance > colorThreshold) return 0;
+
+    const pixelLuma = luma(data[offset], data[offset + 1], data[offset + 2]);
+    const predictedLuma = luma(predicted.r, predicted.g, predicted.b);
+    if (Math.abs(pixelLuma - predictedLuma) > baseTolerance * 1.45) return 0;
+
+    const pixelSaturation = saturation(data[offset], data[offset + 1], data[offset + 2]);
+    const predictedSaturation = saturation(predicted.r, predicted.g, predicted.b);
+    if (pixelSaturation > Math.max(52, predictedSaturation + 42 + extraTolerance)) return 0;
+
+    return Math.max(0.01, 1 - Math.sqrt(distance) / Math.max(1, Math.sqrt(colorThreshold)));
+}
+
+function checkerboardTolerance(model, tolerance) {
+    return Math.max(16, Math.min(96, model.noiseTolerance + tolerance * 0.78));
+}
+
+function checkerboardColorAt(model, x, y) {
+    return model.colors[checkerboardStripeParity(model, x, y)] ?? model.colors[0];
+}
+
+function checkerboardComponentMask(candidate, scores, width, height, tileSize) {
+    const pixelCount = width * height;
+    const mask = new Uint8Array(pixelCount);
+    const visited = new Uint8Array(pixelCount);
+    const queue = new Int32Array(pixelCount);
+    const minimumInteriorArea = Math.max(96, Math.round(tileSize * tileSize * 0.45));
+
+    for (let start = 0; start < pixelCount; start++) {
+        if (!candidate[start] || visited[start]) continue;
+
+        let head = 0;
+        let tail = 0;
+        let touchesEdge = false;
+        let scoreSum = 0;
+        visited[start] = 1;
+        queue[tail++] = start;
+
+        while (head < tail) {
+            const pixelIndex = queue[head++];
+            const x = pixelIndex % width;
+            const y = Math.floor(pixelIndex / width);
+            if (x === 0 || y === 0 || x === width - 1 || y === height - 1) touchesEdge = true;
+            scoreSum += scores[pixelIndex];
+
+            const add = (next) => {
+                if (next < 0 || next >= pixelCount || visited[next] || !candidate[next]) return;
+                const nextX = next % width;
+                if (Math.abs(nextX - x) > 1) return;
+                visited[next] = 1;
+                queue[tail++] = next;
+            };
+
+            if (x > 0) add(pixelIndex - 1);
+            if (x < width - 1) add(pixelIndex + 1);
+            if (pixelIndex >= width) add(pixelIndex - width);
+            if (pixelIndex < pixelCount - width) add(pixelIndex + width);
+        }
+
+        const averageScore = scoreSum / Math.max(1, tail);
+        const remove = touchesEdge || (tail >= minimumInteriorArea && averageScore >= 0.28);
+        if (!remove) continue;
+        for (let i = 0; i < tail; i++) mask[queue[i]] = 1;
+    }
+
+    return mask;
+}
+
+function closeConstrainedMask(mask, constraint, width, height) {
+    const additions = [];
+    for (let y = 1; y < height - 1; y++) {
+        let pixelIndex = y * width + 1;
+        for (let x = 1; x < width - 1; x++, pixelIndex++) {
+            if (mask[pixelIndex] || !constraint[pixelIndex]) continue;
+            const neighbors =
+                mask[pixelIndex - 1] + mask[pixelIndex + 1] +
+                mask[pixelIndex - width] + mask[pixelIndex + width] +
+                mask[pixelIndex - width - 1] + mask[pixelIndex - width + 1] +
+                mask[pixelIndex + width - 1] + mask[pixelIndex + width + 1];
+            if (neighbors >= 5) additions.push(pixelIndex);
+        }
+    }
+
+    for (const pixelIndex of additions) {
+        mask[pixelIndex] = 1;
+    }
+}
+
+function removeTinyMaskComponents(mask, width, height, minimumSize) {
+    const pixelCount = width * height;
+    const visited = new Uint8Array(pixelCount);
+    const queue = new Int32Array(pixelCount);
+
+    for (let start = 0; start < pixelCount; start++) {
+        if (!mask[start] || visited[start]) continue;
+
+        let head = 0;
+        let tail = 0;
+        visited[start] = 1;
+        queue[tail++] = start;
+
+        while (head < tail) {
+            const pixelIndex = queue[head++];
+            const x = pixelIndex % width;
+            const add = (next) => {
+                if (next < 0 || next >= pixelCount || visited[next] || !mask[next]) return;
+                visited[next] = 1;
+                queue[tail++] = next;
+            };
+
+            if (x > 0) add(pixelIndex - 1);
+            if (x < width - 1) add(pixelIndex + 1);
+            if (pixelIndex >= width) add(pixelIndex - width);
+            if (pixelIndex < pixelCount - width) add(pixelIndex + width);
+        }
+
+        if (tail >= minimumSize) continue;
+        for (let i = 0; i < tail; i++) {
+            mask[queue[i]] = 0;
+        }
+    }
+}
+
+function applyAlphaMask(imageData, mask) {
+    const { data } = imageData;
+    let removedPixels = 0;
+    for (let pixelIndex = 0; pixelIndex < mask.length; pixelIndex++) {
+        if (!mask[pixelIndex]) continue;
+        const alphaOffset = pixelIndex * 4 + 3;
+        if (data[alphaOffset] !== 0) {
+            data[alphaOffset] = 0;
+            removedPixels++;
+        }
+    }
+
+    return removedPixels;
+}
+
+function softenKnownBackgroundBoundary(imageData, mask, colorAt, tolerance) {
+    const { data, width, height } = imageData;
+    let softenedPixels = 0;
+    const maxDistance = Math.max(42, tolerance + 36);
+
+    for (let y = 0; y < height; y++) {
+        let pixelIndex = y * width;
+        for (let x = 0; x < width; x++, pixelIndex++) {
+            if (mask[pixelIndex]) continue;
+            const alphaOffset = pixelIndex * 4 + 3;
+            if (data[alphaOffset] <= 0) continue;
+            if (!hasNearbyMask(mask, width, height, x, y, 2)) continue;
+            const offset = pixelIndex * 4;
+            const background = colorAt(x, y);
+            const distance = Math.sqrt(colorDistanceSquared(data[offset], data[offset + 1], data[offset + 2], background.r, background.g, background.b));
+            if (distance > maxDistance || luma(data[offset], data[offset + 1], data[offset + 2]) < 150) continue;
+
+            const targetAlpha = Math.max(48, Math.min(232, Math.round(255 * (distance / maxDistance))));
+            if (data[alphaOffset] > targetAlpha) {
+                decontaminatePixel(data, offset, background, targetAlpha / 255);
+                data[alphaOffset] = targetAlpha;
+                softenedPixels++;
+            }
+        }
+    }
+
+    return softenedPixels;
+}
+
+function decontaminatePixel(data, offset, background, alpha) {
+    const safeAlpha = Math.max(0.08, Math.min(1, alpha));
+    data[offset] = clamp(Math.round((data[offset] - background.r * (1 - safeAlpha)) / safeAlpha), 0, 255);
+    data[offset + 1] = clamp(Math.round((data[offset + 1] - background.g * (1 - safeAlpha)) / safeAlpha), 0, 255);
+    data[offset + 2] = clamp(Math.round((data[offset + 2] - background.b * (1 - safeAlpha)) / safeAlpha), 0, 255);
+}
+
+function hasNearbyMask(mask, width, height, x, y, radius) {
+    const minY = Math.max(0, y - radius);
+    const maxY = Math.min(height - 1, y + radius);
+    const minX = Math.max(0, x - radius);
+    const maxX = Math.min(width - 1, x + radius);
+
+    for (let ny = minY; ny <= maxY; ny++) {
+        let pixelIndex = ny * width + minX;
+        for (let nx = minX; nx <= maxX; nx++, pixelIndex++) {
+            if (mask[pixelIndex]) return true;
+        }
+    }
+
+    return false;
+}
+
+function edgeColorRemoval(imageData, palette, tolerance) {
+    if (!palette.length) return { removedPixels: 0, softenedPixels: 0 };
+
+    const { data, width, height } = imageData;
+    const pixelCount = width * height;
+    const visited = new Uint8Array(pixelCount);
+    const mask = new Uint8Array(pixelCount);
+    const queue = new Int32Array(pixelCount);
+    let head = 0;
+    let tail = 0;
+
+    const enqueue = (pixelIndex) => {
+        if (visited[pixelIndex]) return;
+        const offset = pixelIndex * 4;
+        if (!isEdgeBackgroundPixel(data, offset, palette, tolerance)) return;
+        visited[pixelIndex] = 1;
+        queue[tail++] = pixelIndex;
+    };
+
+    for (let x = 0; x < width; x++) {
+        enqueue(x);
+        enqueue((height - 1) * width + x);
+    }
+    for (let y = 1; y < height - 1; y++) {
+        enqueue(y * width);
+        enqueue(y * width + width - 1);
+    }
+
+    while (head < tail) {
+        const pixelIndex = queue[head++];
+        mask[pixelIndex] = 1;
+
+        const x = pixelIndex % width;
+        if (x > 0) enqueue(pixelIndex - 1);
+        if (x < width - 1) enqueue(pixelIndex + 1);
+        if (pixelIndex >= width) enqueue(pixelIndex - width);
+        if (pixelIndex < pixelCount - width) enqueue(pixelIndex + width);
+    }
+
+    const removedPixels = applyAlphaMask(imageData, mask);
+    const softenedPixels = softenKnownBackgroundBoundary(
+        imageData,
+        mask,
+        (x, y) => nearestPaletteColor(data, ((y * width) + x) * 4, palette),
+        tolerance);
+    return { removedPixels, softenedPixels };
+}
+
+function isEdgeBackgroundPixel(data, offset, palette, tolerance) {
+    const alpha = data[offset + 3];
+    if (alpha < 8) return true;
+
+    const threshold = tolerance * tolerance * 3;
+    const r = data[offset];
+    const g = data[offset + 1];
+    const b = data[offset + 2];
+    return palette.some(color => colorDistanceSquared(r, g, b, color.r, color.g, color.b) <= threshold);
+}
+
+function nearestPaletteColor(data, offset, palette) {
+    let closest = palette[0];
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const color of palette) {
+        const distance = colorDistanceSquared(data[offset], data[offset + 1], data[offset + 2], color.r, color.g, color.b);
+        if (distance < closestDistance) {
+            closest = color;
+            closestDistance = distance;
+        }
+    }
+
+    return closest;
+}
+
+function alphaStats(data) {
+    let transparent = 0;
+    let semiTransparent = 0;
+    let opaque = 0;
+    for (let offset = 3; offset < data.length; offset += 4) {
+        const alpha = data[offset];
+        if (alpha === 0) transparent++;
+        else if (alpha === 255) opaque++;
+        else semiTransparent++;
+    }
+
+    return { transparent, semiTransparent, opaque };
+}
+
+function colorDistanceSquared(r1, g1, b1, r2, g2, b2) {
+    const dr = r1 - r2;
+    const dg = g1 - g2;
+    const db = b1 - b2;
+    return dr * dr + dg * dg + db * db;
+}
+
+function exportPreviewMessage(removeBackground, analysis, result, stats) {
+    if (removeBackground) {
+        if (result.removedPixels > 0) {
+            const transparent = stats.transparent.toLocaleString();
+            const soft = stats.semiTransparent > 0
+                ? `, ${stats.semiTransparent.toLocaleString()} soft edge px`
+                : "";
+            return result.method === "checkerboard"
+                ? `Patterned checkerboard removed: ${transparent} transparent px${soft}.`
+                : `Edge-color background removed: ${transparent} transparent px${soft}.`;
+        }
+
+        if (result.detail === "checkerboard fallback") {
+            return "No stable checkerboard grid found; edge-color cleanup found nothing removable.";
+        }
+
+        return analysis.checkerboard.detected
+            ? "Checkerboard detected, but no removable connected background pixels matched."
+            : "No removable edge background detected.";
+    }
+
+    if (analysis.hasExistingTransparency) {
+        return "Existing transparency preserved.";
+    }
+
+    if (analysis.checkerboard.shouldRemove) {
+        return "Patterned checkerboard background detected.";
+    }
+
+    return analysis.shouldRemove ? "Background detected." : "PNG preview ready.";
+}
+
+function normalizeRemovalMethod(value) {
+    const normalized = String(value ?? "").trim().toLowerCase();
+    if (normalized === "checkerboard" || normalized === "patternedcheckerboard" || normalized === "patterned-checkerboard") {
+        return "checkerboard";
+    }
+
+    if (normalized === "edge" || normalized === "edgecolors" || normalized === "edge-colors") {
+        return "edge";
+    }
+
+    return "auto";
+}
+
+function luma(r, g, b) {
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function saturation(r, g, b) {
+    return Math.max(r, g, b) - Math.min(r, g, b);
+}
+
+function quantile(values, amount) {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((left, right) => left - right);
+    const index = clamp((sorted.length - 1) * amount, 0, sorted.length - 1);
+    const lower = Math.floor(index);
+    const upper = Math.ceil(index);
+    if (lower === upper) return sorted[lower];
+    const ratio = index - lower;
+    return sorted[lower] * (1 - ratio) + sorted[upper] * ratio;
+}
+
+function normalizeTolerance(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 24;
+    return Math.max(0, Math.min(80, Math.round(number)));
+}
+
+function normalizeExportFileName(value) {
+    const fallback = "asset.png";
+    if (!value) return fallback;
+
+    const cleaned = String(value).trim().replace(/[\\/:*?"<>|]+/g, "-");
+    const withoutExtension = cleaned.replace(/\.[^.]*$/, "");
+    return `${withoutExtension || "asset"}.png`;
 }
 
 function loadImage(src) {

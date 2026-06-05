@@ -37,6 +37,16 @@ public sealed record ArtAssetView(
     string Prompt,
     DateTime CreatedAt);
 
+public sealed record ArtAssetExportView(
+    Guid Id,
+    string Label,
+    string FileName,
+    ArtAssetKind Kind,
+    string ContentType,
+    string DataUrl,
+    int? Width,
+    int? Height);
+
 public sealed record GenerationBatchView(
     Guid Id,
     string Label,
@@ -46,6 +56,7 @@ public sealed record GenerationBatchView(
     string Prompt,
     string NegativePrompt,
     string Size,
+    string Background,
     int Count,
     IReadOnlyList<Guid> InputAssetIds,
     IReadOnlyList<Guid> InputMaskIds,
@@ -101,6 +112,7 @@ public sealed record GenerateImagesRequest(
     string NegativePrompt,
     string Size,
     int Count,
+    string Background,
     Guid? PromptRecipeId,
     IReadOnlyList<Guid> ReferenceAssetIds,
     Guid? ParentBatchId);
@@ -110,6 +122,7 @@ public sealed record EditImageRequest(
     string Prompt,
     string Size,
     int Count,
+    string Background,
     string? SourcePngDataUrl,
     string? MaskPngDataUrl,
     IReadOnlyList<Guid> ReferenceAssetIds);

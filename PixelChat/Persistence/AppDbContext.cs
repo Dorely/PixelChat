@@ -128,6 +128,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
         {
             entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
             entity.Property(e => e.Status).HasConversion<string>();
+            entity.Property(e => e.Background).HasDefaultValue("auto");
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.GenerationBatches)

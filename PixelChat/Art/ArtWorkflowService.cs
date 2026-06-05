@@ -96,6 +96,19 @@ public sealed class ArtWorkflowService(
             providerStatus);
     }
 
+    public async Task<ArtAssetExportView> GetAssetForExportAsync(
+        Guid projectId,
+        Guid assetId,
+        CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+
+        return ExportAssetView(asset);
+    }
+
     public async Task SetWorkspaceModeAsync(Guid projectId, WorkspaceMode mode, CancellationToken cancellationToken = default)
     {
         var project = await GetProjectAsync(projectId, cancellationToken);
@@ -142,6 +155,7 @@ public sealed class ArtWorkflowService(
             Prompt = prompt,
             NegativePrompt = Clean(request.NegativePrompt),
             Size = NormalizeSize(request.Size),
+            Background = NormalizeBackground(request.Background),
             Count = count,
             InputAssetIdsJson = SerializeIds(references.Select(a => a.Id)),
             ParentBatchId = request.ParentBatchId,
@@ -206,7 +220,7 @@ public sealed class ArtWorkflowService(
                 references.Select(ToProviderReference).ToList(),
                 imageOptions.Value.DefaultOutputFormat,
                 imageOptions.Value.DefaultQuality,
-                imageOptions.Value.DefaultBackground), cancellationToken);
+                NormalizeBackground(batch.Background)), cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -411,6 +425,7 @@ public sealed class ArtWorkflowService(
             ImageModel = imageOptions.Value.DefaultImageModel,
             Prompt = prompt,
             Size = NormalizeSize(request.Size),
+            Background = NormalizeBackground(request.Background),
             Count = count,
             InputAssetIdsJson = SerializeIds(new[] { sourceAsset.Id }.Concat(references.Select(a => a.Id))),
             InputMaskIdsJson = SerializeIds([storedMask.Id]),
@@ -434,7 +449,7 @@ public sealed class ArtWorkflowService(
                 references.Select(ToProviderReference).ToList(),
                 imageOptions.Value.DefaultOutputFormat,
                 imageOptions.Value.DefaultQuality,
-                imageOptions.Value.DefaultBackground), cancellationToken);
+                NormalizeBackground(batch.Background)), cancellationToken);
 
             batch.Provider = providerResult.Provider;
             batch.MainlineModel = providerResult.MainlineModel;
@@ -1217,6 +1232,17 @@ public sealed class ArtWorkflowService(
             asset.Prompt,
             asset.CreatedAt);
 
+    private static ArtAssetExportView ExportAssetView(ArtAsset asset) =>
+        new(
+            asset.Id,
+            asset.Label,
+            string.IsNullOrWhiteSpace(asset.FileName) ? $"asset-{asset.Id:N}.{ExtensionForContentType(asset.ContentType)}" : asset.FileName,
+            asset.Kind,
+            asset.ContentType,
+            DataUrl.ToDataUrl(asset.ContentType, asset.Data),
+            asset.Width,
+            asset.Height);
+
     private static GenerationBatchView BatchView(GenerationBatch batch, IReadOnlyList<ArtAsset> assets)
     {
         var outputAssets = assets
@@ -1243,6 +1269,7 @@ public sealed class ArtWorkflowService(
             batch.Prompt,
             batch.NegativePrompt,
             batch.Size,
+            NormalizeBackground(batch.Background),
             batch.Count,
             DeserializeIds(batch.InputAssetIdsJson),
             DeserializeIds(batch.InputMaskIdsJson),
@@ -1289,6 +1316,14 @@ public sealed class ArtWorkflowService(
 
     private static string NormalizeSize(string value) =>
         string.IsNullOrWhiteSpace(value) ? "auto" : value.Trim();
+
+    private static string NormalizeBackground(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "transparent" => "transparent",
+            "opaque" => "opaque",
+            _ => "auto",
+        };
 
     private static string Clean(string? value) => value?.Trim() ?? string.Empty;
 

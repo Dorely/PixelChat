@@ -481,7 +481,7 @@ public sealed class OpenAIAccountImageProvider(
             ["model"] = imageModel,
             ["size"] = string.IsNullOrWhiteSpace(size) ? "auto" : size.Trim(),
             ["output_format"] = NormalizeOutputFormat(outputFormat),
-            ["background"] = string.IsNullOrWhiteSpace(background) ? "auto" : background.Trim(),
+            ["background"] = NormalizeBackground(background),
         };
 
         var cleanQuality = quality.Trim();
@@ -515,6 +515,14 @@ public sealed class OpenAIAccountImageProvider(
             "jpeg" => "jpeg",
             "webp" => "webp",
             _ => "png",
+        };
+
+    private static string NormalizeBackground(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "transparent" => "transparent",
+            "opaque" => "opaque",
+            _ => "auto",
         };
 
     private static string? ReadString(JsonElement element, string propertyName) =>

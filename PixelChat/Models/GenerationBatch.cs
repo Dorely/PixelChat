@@ -14,6 +14,7 @@ public class GenerationBatch
     public string Prompt { get; set; } = string.Empty;
     public string NegativePrompt { get; set; } = string.Empty;
     public string Size { get; set; } = string.Empty;
+    public string Background { get; set; } = "auto";
     public int Count { get; set; }
     public string InputAssetIdsJson { get; set; } = "[]";
     public string InputMaskIdsJson { get; set; } = "[]";

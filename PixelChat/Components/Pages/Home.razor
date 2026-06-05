@@ -112,6 +112,8 @@ else
                 }
             </main>
         </section>
+
+        @RenderExportModal()
     </div>
 }
 
@@ -151,6 +153,7 @@ else
     private string _generatePrompt = string.Empty;
     private string _negativePrompt = string.Empty;
     private string _generateSize = "auto";
+    private string _generateBackground = "transparent";
     private int _generateCount = 1;
     private string _selectedRecipeText = string.Empty;
     private Guid? _editingRecipeId;
@@ -163,6 +166,7 @@ else
     private string _recipePreferredSize = "auto";
     private string _editPrompt = string.Empty;
     private string _editSize = "auto";
+    private string _editBackground = "transparent";
     private int _editCount = 1;
     private int _brushSize = 36;
     private string _editorTool = "mask";
@@ -170,6 +174,22 @@ else
     private Guid? _editAssetId;
     private Guid? _assetDeleteCandidateId;
     private Guid? _runningGenerationBatchId;
+    private ArtAssetExportView? _exportAsset;
+    private bool _exportModalOpen;
+    private bool _exportProcessing;
+    private bool _exportRemoveBackground;
+    private int _exportTolerance = 24;
+    private long _exportRequestVersion;
+    private string _exportFileName = string.Empty;
+    private string _exportRemovalMethod = "auto";
+    private string _exportPreviewBackground = "checkerboard";
+    private string _exportAppliedMethod = string.Empty;
+    private string _exportPreviewDataUrl = string.Empty;
+    private string _exportStatus = string.Empty;
+    private string? _exportError;
+    private int _exportTransparentPixels;
+    private int _exportSemiTransparentPixels;
+    private int _exportOpaquePixels;
 
     protected override async Task OnInitializedAsync()
     {
@@ -206,6 +226,8 @@ else
         _loadedEditorAssetId = _workbench.Project.ActiveWorkspaceMode == WorkspaceMode.Edit ? _loadedEditorAssetId : null;
         if (_editAssetId is Guid editAssetId && !_workbench.Assets.Any(asset => asset.Id == editAssetId))
             _editAssetId = null;
+        if (_exportAsset is { } exportAsset && !_workbench.Assets.Any(asset => asset.Id == exportAsset.Id))
+            ResetExportModal();
         _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
         _recipeExampleAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
     }
@@ -241,6 +263,7 @@ else
         _draftReferenceAssetIds.Clear();
         _editAssetId = null;
         _assetDeleteCandidateId = null;
+        ResetExportModal();
         ClearRecipeEditor();
         await ReloadAllAsync();
     }
@@ -308,6 +331,14 @@ else
                             <option value="1024x1024">1024 x 1024</option>
                             <option value="1024x1536">1024 x 1536</option>
                             <option value="1536x1024">1536 x 1024</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>Background</span>
+                        <select class="form-select" @bind="_generateBackground">
+                            <option value="transparent">Transparent</option>
+                            <option value="auto">Auto</option>
+                            <option value="opaque">Opaque</option>
                         </select>
                     </label>
                     <label>
@@ -403,6 +434,7 @@ else
                     <span>@activeBatch.Status</span>
                     <span>@activeBatch.ImageModel</span>
                     <span>@activeBatch.Size</span>
+                    <span>@BackgroundLabel(activeBatch.Background)</span>
                     <span>@activeBatch.Count image(s)</span>
                 </div>
                 <p class="batch-prompt">@activeBatch.Prompt</p>
@@ -500,6 +532,14 @@ else
                                     <option value="1024x1024">1024 x 1024</option>
                                     <option value="1024x1536">1024 x 1536</option>
                                     <option value="1536x1024">1536 x 1024</option>
+                                </select>
+                            </label>
+                            <label>
+                                <span>Background</span>
+                                <select class="form-select" @bind="_editBackground">
+                                    <option value="transparent">Transparent</option>
+                                    <option value="auto">Auto</option>
+                                    <option value="opaque">Opaque</option>
                                 </select>
                             </label>
                             <label>
@@ -803,7 +843,7 @@ else
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
                     <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => AskDeleteAsset(asset.Id)">Delete</button>
-                    <a class="btn btn-sm btn-outline-primary" href="@asset.PreviewDataUrl" download="@asset.FileName">Export</a>
+                    <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => OpenExportAsync(asset)">Export</button>
                 </div>
             </div>
         </article>
@@ -866,6 +906,130 @@ else
         </div>
     };
 
+    private RenderFragment RenderExportModal() => __builder =>
+    {
+        if (!_exportModalOpen)
+            return;
+
+        var asset = _exportAsset;
+        var previewDataUrl = !string.IsNullOrWhiteSpace(_exportPreviewDataUrl)
+            ? _exportPreviewDataUrl
+            : asset?.DataUrl;
+
+        <div class="export-modal-backdrop" @onclick="CloseExportModal">
+            <div class="export-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="export-asset-title" @onclick:stopPropagation="true">
+                <header class="export-modal-head">
+                    <div>
+                        <h2 id="export-asset-title">Export</h2>
+                        <span>@(asset?.Label ?? "Preparing asset")</span>
+                    </div>
+                    <button type="button" class="export-close-button" aria-label="Close export" @onclick="CloseExportModal">x</button>
+                </header>
+
+                @if (asset is null)
+                {
+                    <div class="export-loading">Loading export asset...</div>
+                }
+                else
+                {
+                    <div class="export-modal-grid">
+                        <div class="@ExportPreviewStageClass()">
+                            @if (!string.IsNullOrWhiteSpace(previewDataUrl))
+                            {
+                                <img src="@previewDataUrl" alt="@asset.Label" />
+                            }
+                        </div>
+
+                        <div class="export-controls">
+                            <label>
+                                <span>Filename</span>
+                                <input class="form-control" value="@_exportFileName" @onchange="OnExportFileNameChanged" />
+                            </label>
+
+                            <label class="export-checkbox">
+                                <input type="checkbox"
+                                       checked="@_exportRemoveBackground"
+                                       disabled="@_exportProcessing"
+                                       @onchange="OnExportRemoveBackgroundChanged" />
+                                <span>Remove background</span>
+                            </label>
+
+                            <label>
+                                <span>Removal method</span>
+                                <select class="form-select"
+                                        value="@_exportRemovalMethod"
+                                        disabled="@(!_exportRemoveBackground || _exportProcessing)"
+                                        @onchange="OnExportRemovalMethodChanged">
+                                    <option value="auto">Auto</option>
+                                    <option value="checkerboard">Patterned checkerboard</option>
+                                    <option value="edge">Edge colors</option>
+                                </select>
+                            </label>
+
+                            <label>
+                                <span>Tolerance @_exportTolerance</span>
+                                <input type="range"
+                                       min="0"
+                                       max="80"
+                                       step="1"
+                                       value="@_exportTolerance"
+                                       disabled="@(!_exportRemoveBackground || _exportProcessing)"
+                                       @onchange="OnExportToleranceChanged" />
+                            </label>
+
+                            <div class="export-meta">
+                                <span>@FormatDimensions(asset)</span>
+                                <span>PNG</span>
+                                @if (!string.IsNullOrWhiteSpace(_exportAppliedMethod))
+                                {
+                                    <span>@ExportRemovalMethodLabel(_exportAppliedMethod)</span>
+                                }
+                                @if (_exportTransparentPixels > 0 || _exportSemiTransparentPixels > 0)
+                                {
+                                    <span>@_exportTransparentPixels.ToString("N0", CultureInfo.InvariantCulture) transparent</span>
+                                    @if (_exportSemiTransparentPixels > 0)
+                                    {
+                                        <span>@_exportSemiTransparentPixels.ToString("N0", CultureInfo.InvariantCulture) soft edge</span>
+                                    }
+                                    <span>@_exportOpaquePixels.ToString("N0", CultureInfo.InvariantCulture) opaque</span>
+                                }
+                            </div>
+
+                            <div class="export-preview-controls" aria-label="Preview background">
+                                <span>Preview background</span>
+                                <div class="export-preview-options">
+                                    <button type="button" class="@ExportPreviewBackgroundClass("checkerboard")" @onclick='() => SetExportPreviewBackground("checkerboard")'>Checker</button>
+                                    <button type="button" class="@ExportPreviewBackgroundClass("black")" @onclick='() => SetExportPreviewBackground("black")'>Black</button>
+                                    <button type="button" class="@ExportPreviewBackgroundClass("white")" @onclick='() => SetExportPreviewBackground("white")'>White</button>
+                                    <button type="button" class="@ExportPreviewBackgroundClass("accent")" @onclick='() => SetExportPreviewBackground("accent")'>Accent</button>
+                                </div>
+                            </div>
+
+                            @if (!string.IsNullOrWhiteSpace(_exportStatus))
+                            {
+                                <div class="export-status">@_exportStatus</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(_exportError))
+                            {
+                                <div class="export-error">@_exportError</div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                <footer class="export-modal-actions">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CloseExportModal">Cancel</button>
+                    <button type="button"
+                            class="btn btn-primary"
+                            disabled="@(asset is null || _exportProcessing || string.IsNullOrWhiteSpace(_exportPreviewDataUrl))"
+                            @onclick="DownloadExportAsync">
+                        Download PNG
+                    </button>
+                </footer>
+            </div>
+        </div>
+    };
+
     private async Task GenerateAsync()
     {
         if (_workbench is null || string.IsNullOrWhiteSpace(_generatePrompt))
@@ -882,6 +1046,7 @@ else
                 _negativePrompt,
                 _generateSize,
                 _generateCount,
+                _generateBackground,
                 SelectedRecipeIdOrNull(),
                 CurrentReferenceAssetIds(),
                 _workbench.Project.ActiveBatchId));
@@ -1543,6 +1708,7 @@ else
                 _editPrompt,
                 _editSize,
                 _editCount,
+                _editBackground,
                 sourceDataUrl,
                 maskDataUrl,
                 CurrentReferenceAssetIds().Where(id => id != asset.Id).ToList()));
@@ -1615,6 +1781,231 @@ else
         _loadedEditorAssetId = null;
         await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Edit);
         await ReloadWorkbenchAsync();
+    }
+
+    private async Task OpenExportAsync(ArtAssetView asset)
+    {
+        if (_workbench is null)
+            return;
+
+        var version = ++_exportRequestVersion;
+        _exportModalOpen = true;
+        _exportAsset = null;
+        _exportProcessing = true;
+        _exportRemoveBackground = false;
+        _exportTolerance = 24;
+        _exportRemovalMethod = "auto";
+        _exportPreviewBackground = "checkerboard";
+        _exportAppliedMethod = string.Empty;
+        _exportTransparentPixels = 0;
+        _exportSemiTransparentPixels = 0;
+        _exportOpaquePixels = 0;
+        _exportFileName = DefaultExportFileName(asset.FileName, asset.Label);
+        _exportPreviewDataUrl = asset.PreviewDataUrl;
+        _exportStatus = "Loading export asset...";
+        _exportError = null;
+        StateHasChanged();
+
+        try
+        {
+            var exportAsset = await Workflow.GetAssetForExportAsync(_workbench.Project.Id, asset.Id);
+            if (version != _exportRequestVersion)
+                return;
+
+            _exportAsset = exportAsset;
+            _exportFileName = DefaultExportFileName(exportAsset.FileName, exportAsset.Label);
+            _exportPreviewDataUrl = exportAsset.DataUrl;
+            _exportStatus = "Analyzing background...";
+            StateHasChanged();
+
+            var preview = await PrepareExportPreviewAsync(exportAsset.DataUrl, removeBackground: null);
+            if (version != _exportRequestVersion)
+                return;
+
+            _exportRemoveBackground = preview.RemoveBackground;
+            ApplyExportPreview(preview);
+        }
+        catch (Exception ex)
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportError = ex.Message;
+                _exportStatus = string.Empty;
+            }
+        }
+        finally
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportProcessing = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task OnExportRemoveBackgroundChanged(ChangeEventArgs args)
+    {
+        _exportRemoveBackground = args.Value switch
+        {
+            bool value => value,
+            string value when bool.TryParse(value, out var parsed) => parsed,
+            _ => false,
+        };
+        await RefreshExportPreviewAsync();
+    }
+
+    private async Task OnExportRemovalMethodChanged(ChangeEventArgs args)
+    {
+        _exportRemovalMethod = NormalizeExportRemovalMethod(args.Value?.ToString());
+        if (_exportRemoveBackground)
+            await RefreshExportPreviewAsync();
+    }
+
+    private async Task OnExportToleranceChanged(ChangeEventArgs args)
+    {
+        var value = args.Value?.ToString();
+        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tolerance))
+            _exportTolerance = Math.Clamp(tolerance, 0, 80);
+
+        if (_exportRemoveBackground)
+            await RefreshExportPreviewAsync();
+    }
+
+    private void OnExportFileNameChanged(ChangeEventArgs args)
+    {
+        var value = args.Value?.ToString() ?? string.Empty;
+        _exportFileName = string.IsNullOrWhiteSpace(value) ? _exportFileName : CleanExportFileName(value);
+    }
+
+    private void SetExportPreviewBackground(string background)
+    {
+        _exportPreviewBackground = background is "black" or "white" or "accent" ? background : "checkerboard";
+    }
+
+    private async Task RefreshExportPreviewAsync()
+    {
+        var asset = _exportAsset;
+        if (!_exportModalOpen || asset is null)
+            return;
+
+        var version = ++_exportRequestVersion;
+        _exportProcessing = true;
+        _exportError = null;
+        _exportStatus = _exportRemoveBackground ? "Removing background..." : "Preparing PNG preview...";
+        StateHasChanged();
+
+        try
+        {
+            var preview = await PrepareExportPreviewAsync(asset.DataUrl, _exportRemoveBackground);
+            if (version != _exportRequestVersion)
+                return;
+
+            ApplyExportPreview(preview);
+        }
+        catch (Exception ex)
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportError = ex.Message;
+                _exportStatus = string.Empty;
+            }
+        }
+        finally
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportProcessing = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task<ExportPreviewResult> PrepareExportPreviewAsync(string dataUrl, bool? removeBackground)
+    {
+        var module = await EnsurePageModuleAsync();
+        return await module.InvokeAsync<ExportPreviewResult>(
+            "prepareExportPreview",
+            dataUrl,
+            _exportTolerance,
+            removeBackground,
+            _exportRemovalMethod);
+    }
+
+    private void ApplyExportPreview(ExportPreviewResult preview)
+    {
+        _exportPreviewDataUrl = preview.DataUrl;
+        _exportStatus = preview.Message;
+        _exportAppliedMethod = preview.Method;
+        _exportTransparentPixels = preview.TransparentPixels;
+        _exportSemiTransparentPixels = preview.SemiTransparentPixels;
+        _exportOpaquePixels = preview.OpaquePixels;
+    }
+
+    private async Task DownloadExportAsync()
+    {
+        var asset = _exportAsset;
+        if (asset is null || string.IsNullOrWhiteSpace(_exportPreviewDataUrl))
+            return;
+
+        var version = ++_exportRequestVersion;
+        _exportProcessing = true;
+        _exportError = null;
+        _exportStatus = "Preparing download...";
+        StateHasChanged();
+
+        try
+        {
+            var module = await EnsurePageModuleAsync();
+            var fileName = CleanExportFileName(string.IsNullOrWhiteSpace(_exportFileName)
+                ? DefaultExportFileName(asset.FileName, asset.Label)
+                : _exportFileName);
+            await module.InvokeVoidAsync("downloadExportPng", _exportPreviewDataUrl, fileName);
+            if (version == _exportRequestVersion)
+                _exportStatus = "Download prepared.";
+        }
+        catch (Exception ex)
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportError = ex.Message;
+                _exportStatus = string.Empty;
+            }
+        }
+        finally
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportProcessing = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void CloseExportModal() => ResetExportModal();
+
+    private void ResetExportModal()
+    {
+        _exportRequestVersion++;
+        _exportModalOpen = false;
+        _exportProcessing = false;
+        _exportAsset = null;
+        _exportPreviewDataUrl = string.Empty;
+        _exportFileName = string.Empty;
+        _exportRemovalMethod = "auto";
+        _exportPreviewBackground = "checkerboard";
+        _exportAppliedMethod = string.Empty;
+        _exportStatus = string.Empty;
+        _exportError = null;
+        _exportRemoveBackground = false;
+        _exportTransparentPixels = 0;
+        _exportSemiTransparentPixels = 0;
+        _exportOpaquePixels = 0;
+    }
+
+    private async Task<IJSObjectReference> EnsurePageModuleAsync()
+    {
+        _editorModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Home.razor.js");
+        return _editorModule;
     }
 
     private async Task MarkAssetAsync(Guid assetId, bool? favorite)
@@ -1853,6 +2244,7 @@ else
                 _generatePrompt = draft.Prompt ?? _generatePrompt;
                 _negativePrompt = draft.NegativePrompt ?? _negativePrompt;
                 _generateSize = NormalizeDraftSize(draft.Size, _generateSize);
+                _generateBackground = NormalizeDraftBackground(draft.Background, _generateBackground);
                 _generateCount = NormalizeDraftCount(draft.Count, _generateCount);
                 _selectedRecipeText = ValidRecipeId(draft.PromptRecipeId)?.ToString() ?? _selectedRecipeText;
                 ApplySelectedRecipeDefaults();
@@ -1865,6 +2257,7 @@ else
             case AssistantFormDraftTarget.Edit:
                 _editPrompt = draft.Prompt ?? _editPrompt;
                 _editSize = NormalizeDraftSize(draft.Size, _editSize);
+                _editBackground = NormalizeDraftBackground(draft.Background, _editBackground);
                 _editCount = NormalizeDraftCount(draft.Count, _editCount);
                 await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Edit);
                 await ReloadWorkbenchAsync();
@@ -2224,6 +2617,15 @@ else
     private static string NormalizeDraftSize(string? size, string current) =>
         string.IsNullOrWhiteSpace(size) ? current : size.Trim();
 
+    private static string NormalizeDraftBackground(string? background, string current) =>
+        background?.Trim().ToLowerInvariant() switch
+        {
+            "transparent" => "transparent",
+            "opaque" => "opaque",
+            "auto" => "auto",
+            _ => current,
+        };
+
     private int NormalizeDraftCount(int? count, int current) =>
         count is int value ? Math.Clamp(value <= 0 ? 1 : value, 1, Math.Max(1, ImageOptions.Value.MaxOutputs)) : current;
 
@@ -2253,6 +2655,66 @@ else
     private static string FormatDimensions(ArtAssetView asset) =>
         asset.Width is int width && asset.Height is int height ? $"{width} x {height}" : "Unknown size";
 
+    private static string FormatDimensions(ArtAssetExportView asset) =>
+        asset.Width is int width && asset.Height is int height ? $"{width} x {height}" : "Unknown size";
+
+    private static string BackgroundLabel(string background) =>
+        background.Trim().ToLowerInvariant() switch
+        {
+            "transparent" => "Transparent background",
+            "opaque" => "Opaque background",
+            _ => "Auto background",
+        };
+
+    private string ExportPreviewStageClass() =>
+        $"export-preview-stage export-preview-{_exportPreviewBackground}";
+
+    private string ExportPreviewBackgroundClass(string background) =>
+        _exportPreviewBackground == background ? "filter-button is-active" : "filter-button";
+
+    private static string NormalizeExportRemovalMethod(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "checkerboard" or "patternedcheckerboard" or "patterned-checkerboard" => "checkerboard",
+            "edge" or "edgecolors" or "edge-colors" => "edge",
+            _ => "auto",
+        };
+
+    private static string ExportRemovalMethodLabel(string method) =>
+        NormalizeExportRemovalMethod(method) switch
+        {
+            "checkerboard" => "Patterned checkerboard",
+            "edge" => "Edge colors",
+            _ => "Auto",
+        };
+
+    private static string DefaultExportFileName(string fileName, string label)
+    {
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        if (string.IsNullOrWhiteSpace(stem))
+            stem = string.IsNullOrWhiteSpace(label) ? "asset" : label.Trim();
+
+        return CleanExportFileName(stem + ".png");
+    }
+
+    private static string CleanExportFileName(string value)
+    {
+        var fileName = Path.GetFileName(value.Trim());
+        if (string.IsNullOrWhiteSpace(fileName))
+            fileName = "asset.png";
+
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(fileName
+            .Select(character => invalid.Contains(character) ? '-' : character)
+            .ToArray())
+            .Trim();
+        var stem = Path.GetFileNameWithoutExtension(cleaned);
+        if (string.IsNullOrWhiteSpace(stem))
+            stem = "asset";
+
+        return stem + ".png";
+    }
+
     private static string LabelForIndex(int index)
     {
         const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -2273,6 +2735,15 @@ else
         value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private sealed record AssetGroup(string Label, IReadOnlyList<ArtAssetView> Assets);
+
+    private sealed record ExportPreviewResult(
+        bool RemoveBackground,
+        string DataUrl,
+        string Message,
+        string Method,
+        int TransparentPixels,
+        int SemiTransparentPixels,
+        int OpaquePixels);
 
     public async ValueTask DisposeAsync()
     {

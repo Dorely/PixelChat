@@ -42,19 +42,21 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 string? prompt = null,
                 string? negativePrompt = null,
                 string? size = null,
+                string? background = null,
                 Guid? recipeId = null,
                 int? count = null,
-                Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, recipeId, count, referenceAssetIds),
+                Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, background, recipeId, count, referenceAssetIds),
             name: "draft_generate_form",
-            description: "Draft values for the Generate form. Use recipeId to select a saved style recipe; keep prompt focused on the asset-specific request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
+            description: "Draft values for the Generate form. Use background as transparent, auto, or opaque instead of adding background instructions to the prompt. Use recipeId to select a saved style recipe; keep prompt focused on the asset-specific request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
 
         AIFunctionFactory.Create(
             method: (
                 string prompt,
                 string? size = null,
-                int count = 1) => DraftEditFormAsync(prompt, size, count),
+                string? background = null,
+                int count = 1) => DraftEditFormAsync(prompt, size, background, count),
             name: "draft_edit_form",
-            description: "Draft values for the current Edit form. This does not choose an asset or run an image edit; the user selects an asset, paints/reviews the mask, and clicks Send Masked Edit manually."),
+            description: "Draft values for the current Edit form. Use background as transparent, auto, or opaque instead of adding background instructions to the prompt. This does not choose an asset or run an image edit; the user selects an asset, paints/reviews the mask, and clicks Send Masked Edit manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -78,7 +80,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         AIFunctionFactory.Create(
             method: (Guid assetId) => ExportAssetAsync(projectId, assetId),
             name: "export_asset",
-            description: "Prepare an existing asset for export by returning its export file metadata. The user still controls the actual browser download."),
+            description: "Prepare an existing asset for export by identifying it for the visible export modal. The user still controls export processing and browser download."),
     ];
 
     public bool IsWorkspaceMutation(string toolName) => WorkspaceMutationTools.Contains(toolName);
@@ -105,6 +107,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         string? prompt,
         string? negativePrompt,
         string? size,
+        string? background,
         Guid? recipeId,
         int? count,
         Guid[]? referenceAssetIds)
@@ -114,6 +117,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             Prompt: string.IsNullOrWhiteSpace(prompt) ? null : prompt,
             NegativePrompt: negativePrompt,
             Size: size,
+            Background: NormalizeBackground(background),
             Count: count is int countValue ? ClampCount(countValue) : null,
             PromptRecipeId: recipeId,
             ReferenceAssetIds: referenceAssetIds);
@@ -123,12 +127,14 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
     private static Task<string> DraftEditFormAsync(
         string prompt,
         string? size,
+        string? background,
         int count)
     {
         var draft = new AssistantFormDraft(
             AssistantFormDraftTarget.Edit,
             Prompt: prompt,
             Size: size ?? "auto",
+            Background: NormalizeBackground(background),
             Count: ClampCount(count));
         return Task.FromResult(JsonSerializer.Serialize(draft));
     }
@@ -167,7 +173,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         {
             projectId,
             assetId,
-            message = "Use the visible Export link for this asset in the UI.",
+            message = "Use the visible Export button for this asset to open export processing options.",
         }));
 
     private static ChatContextAttachmentType ParseAttachmentType(string type) =>
@@ -196,4 +202,14 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         value.Trim().Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
 
     private static int ClampCount(int count) => Math.Clamp(count <= 0 ? 1 : count, 1, 4);
+
+    private static string? NormalizeBackground(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "transparent" => "transparent",
+            "opaque" => "opaque",
+            "auto" => "auto",
+            null or "" => null,
+            _ => "auto",
+        };
 }

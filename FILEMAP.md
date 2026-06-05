@@ -87,7 +87,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat with attachments, Generate/Compare/Edit/Recipes/Assets tabs, live compare results, and canvas editor helpers. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat attachments, Generate/Compare/Edit/Recipes/Assets tabs, canvas editor helpers, and pattern-aware export modal processing. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, defaults, API-key updates, and child model rows. |
@@ -140,6 +140,7 @@
 | `20260604212229_InitialSchema.cs` / `.Designer.cs` | EF initial migration for providers, OAuth metadata, stored secrets, and assistant transcripts. |
 | `20260604224321_ArtWorkbenchFirstSlice.cs` / `.Designer.cs` | EF migration adding art projects/assets/batches/recipes/masks/context chips and assistant tool-call columns. |
 | `20260605053624_AssetAttachmentCompareStreaming.cs` / `.Designer.cs` | EF migration removing active-asset/reference/rejected columns and adding generation batch output-error storage. |
+| `20260605194957_GenerationBatchBackground.cs` / `.Designer.cs` | EF migration adding generation batch background mode with `auto` as the existing-row default. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/
