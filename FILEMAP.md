@@ -40,19 +40,19 @@
 
 | File | Description |
 |------|-------------|
-| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with visible context serialization, tool-call streaming, confirmation persistence, and transcript replay. |
-| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive, exposes confirmation/rejection, and signals workspace mutations across renderer reloads. |
-| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, and confirmation-gated tool use. |
-| `AssistantToolModels.cs` | Persisted tool-call manifest records and confirmation result models used by chat/runtime/UI. |
-| `AssistantToolRegistry.cs` | Tool registry for workspace state, context chips, mode/asset selection, generation, edit, recipe, marking, reference, and export actions. |
+| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with visible/active image context, tool-call streaming, form-draft updates, confirmation persistence, and transcript replay. |
+| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive, exposes confirmation/rejection, carries form drafts, and signals workspace mutations across renderer reloads. |
+| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, form drafting, and confirmation-gated tool use. |
+| `AssistantToolModels.cs` | Persisted tool-call manifest records, form-draft payloads, and confirmation result models used by chat/runtime/UI. |
+| `AssistantToolRegistry.cs` | Tool registry for workspace state, form drafting, context chips, mode/asset selection, marking, reference, and export actions. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text deltas, tool-call deltas, pending confirmations, completions, and errors. |
 
 ### Art/
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, batches, masks, recipes, context chips, import, crop, generation, and masked edits. |
-| `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench and assistant tools. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, batches, masks, recipe CRUD, context chips, import, crop, generation, and masked edits. |
+| `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench, recipe management, and assistant tools. |
 | `ImageProviderModels.cs` | Provider abstraction plus generation/edit request and result records. |
 | `OpenAIAccountImageProvider.cs` | OpenAI account Responses image provider using Codex-style auth headers, SSE parsing, references, and masked edit payloads. |
 | `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, timeout, and reference defaults. |
@@ -79,7 +79,7 @@
 
 | File | Description |
 |------|-------------|
-| `MainLayout.razor` / `.razor.css` | Full-height app layout that gives the workbench route the whole viewport. |
+| `MainLayout.razor` / `.razor.css` | Route-aware app layout that gives the workbench route a fixed viewport and lets other pages scroll internally. |
 | `NavMenu.razor` / `.razor.css` | Sidebar navigation for Chat and Providers. |
 | `ReconnectModal.razor` / `.razor.css` / `.razor.js` | Template reconnect UI shown when the SignalR circuit drops. |
 
@@ -87,7 +87,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat, Generate/Compare/Edit tabs, context panel, asset tray, and canvas editor helpers. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat, Generate/Compare/Edit/Recipes tabs, context panel, asset tray, and canvas editor helpers. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, defaults, API-key updates, and child model rows. |
@@ -111,7 +111,7 @@
 
 | File | Description |
 |------|-------------|
-| `Project.cs` | EF entity for art workbench projects, active asset/batch, and active workspace mode. |
+| `Project.cs` | EF entity for art workbench projects, active asset/batch, and active workspace mode including the Recipes tab. |
 | `ArtAsset.cs` | EF entity for imported, generated, edited, and cropped image BLOBs plus lineage, flags, prompt, and metadata. |
 | `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, lineage, and status. |
 | `PromptRecipe.cs` | EF entity for reusable visible prompt templates, style/avoid rules, examples, and preferred defaults. |

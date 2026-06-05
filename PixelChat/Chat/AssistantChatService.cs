@@ -21,7 +21,7 @@ public sealed class AssistantChatService(
     ILogger<AssistantChatService> logger) : IAssistantChatService
 {
     private const string InitialAssistantGreeting =
-        "Tell me what kind of 2D game art you are working on. I can help shape style direction, generate and compare images, save prompt recipes, and prepare targeted edits from visible context.";
+        "Tell me what kind of 2D game art you are working on. I can analyze the active or attached images, shape style direction, draft generation and edit forms, and help build reusable prompt recipes for you to review.";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -292,8 +292,8 @@ public sealed class AssistantChatService(
                     PersistedToolCallStatus.Pending))
                 .ToList();
 
-            var mutatingCalls = pendingCalls.Where(call => !toolRegistry.IsReadOnly(call.Name)).ToList();
-            var autoCalls = pendingCalls.Where(call => toolRegistry.IsReadOnly(call.Name)).ToList();
+            var mutatingCalls = pendingCalls.Where(call => !toolRegistry.IsAutoRun(call.Name)).ToList();
+            var autoCalls = pendingCalls.Where(call => toolRegistry.IsAutoRun(call.Name)).ToList();
             var resultContents = new List<AIContent>();
 
             foreach (var pendingCall in autoCalls)
@@ -326,6 +326,9 @@ public sealed class AssistantChatService(
                     outcome.Error is null ? outcome.Result : null,
                     outcome.Error,
                     outcome.DurationMs);
+
+                if (outcome.Error is null && TryReadFormDraft(pendingCall.Name, outcome.Result, out var draft))
+                    yield return new AssistantFormDraftProposed(draft);
             }
 
             activeAssistant.Content = textBuilder.ToString();
@@ -485,7 +488,17 @@ public sealed class AssistantChatService(
         var contextSummary = BuildVisibleContextSummary(workbench);
         contents.Add(new TextContent(string.IsNullOrWhiteSpace(contextSummary)
             ? text
-            : $"{text}\n\nVisible PixelChat context chips:\n{contextSummary}"));
+            : $"{text}\n\nVisible PixelChat context:\n{contextSummary}"));
+
+        var includedAssetIds = new HashSet<Guid>();
+        if (workbench.ActiveAsset is not null)
+        {
+            contents.Add(new DataContent(workbench.ActiveAsset.PreviewDataUrl, workbench.ActiveAsset.ContentType)
+            {
+                Name = workbench.ActiveAsset.FileName,
+            });
+            includedAssetIds.Add(workbench.ActiveAsset.Id);
+        }
 
         foreach (var attachment in workbench.Attachments)
         {
@@ -494,7 +507,7 @@ public sealed class AssistantChatService(
                 case ChatContextAttachmentType.Asset:
                 case ChatContextAttachmentType.Crop:
                     var asset = workbench.Assets.FirstOrDefault(item => item.Id == attachment.RefId);
-                    if (asset is not null)
+                    if (asset is not null && includedAssetIds.Add(asset.Id))
                     {
                         contents.Add(new DataContent(asset.PreviewDataUrl, asset.ContentType)
                         {
@@ -521,10 +534,13 @@ public sealed class AssistantChatService(
 
     private static string BuildVisibleContextSummary(WorkbenchView workbench)
     {
-        if (workbench.Attachments.Count == 0)
+        if (workbench.Attachments.Count == 0 && workbench.ActiveAsset is null)
             return string.Empty;
 
         var lines = new List<string>();
+        if (workbench.ActiveAsset is not null)
+            lines.Add($"- Active asset: {workbench.ActiveAsset.Label} ({workbench.ActiveAsset.Id})");
+
         foreach (var attachment in workbench.Attachments)
         {
             lines.Add($"- {attachment.Type}: {attachment.Label} ({attachment.RefId})");
@@ -712,6 +728,30 @@ public sealed class AssistantChatService(
         catch (JsonException)
         {
             return [];
+        }
+    }
+
+    private static bool TryReadFormDraft(string toolName, string result, out AssistantFormDraft draft)
+    {
+        draft = null!;
+        if (toolName is not ("draft_generate_form" or "draft_edit_form" or "draft_prompt_recipe_form")
+            || string.IsNullOrWhiteSpace(result))
+        {
+            return false;
+        }
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<AssistantFormDraft>(result, JsonOptions);
+            if (parsed is null)
+                return false;
+
+            draft = parsed;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

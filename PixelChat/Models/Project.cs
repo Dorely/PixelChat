@@ -22,5 +22,6 @@ public enum WorkspaceMode
 {
     Generate,
     Compare,
-    Edit
+    Edit,
+    Recipes
 }

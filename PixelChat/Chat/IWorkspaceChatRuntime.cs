@@ -12,6 +12,7 @@ public interface IWorkspaceChatRuntime
     Task ResetConversationAsync(Guid projectId, CancellationToken cancellationToken = default);
     Task<AssistantToolExecutionResult> ConfirmToolCallAsync(Guid projectId, Guid assistantMessageId, string callId, CancellationToken cancellationToken = default);
     Task<AssistantToolExecutionResult> RejectToolCallAsync(Guid projectId, Guid assistantMessageId, string callId, CancellationToken cancellationToken = default);
+    void AcknowledgeFormDraft(int draftVersion);
     void ClearError();
 }
 
@@ -20,4 +21,6 @@ public sealed record WorkspaceChatRuntimeSnapshot(
     ChatLiveTurn? Live,
     string? PendingUserText,
     string? Error,
-    int WorkspaceVersion);
+    int WorkspaceVersion,
+    AssistantFormDraft? FormDraft,
+    int FormDraftVersion);

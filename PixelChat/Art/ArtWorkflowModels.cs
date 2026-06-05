@@ -140,3 +140,15 @@ public sealed record SavePromptRecipeRequest(
     string PreferredModel,
     string PreferredSize,
     string Notes);
+
+public sealed record UpdatePromptRecipeRequest(
+    string Name,
+    string AssetType,
+    string PromptTemplate,
+    IReadOnlyList<string> StyleRules,
+    IReadOnlyList<string> AvoidRules,
+    IReadOnlyList<Guid> ExampleAssetIds,
+    string PreferredProvider,
+    string PreferredModel,
+    string PreferredSize,
+    string Notes);

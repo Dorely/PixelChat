@@ -1,20 +1,33 @@
 .page {
     position: relative;
-    min-height: 100vh;
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
 }
 
 main {
     min-width: 0;
+    height: 100%;
+    min-height: 0;
 }
 
 article.content {
     padding-top: 0;
+    height: 100%;
+    min-height: 0;
+}
+
+article.workbench-content {
+    overflow: hidden;
+}
+
+article.scroll-content {
+    overflow: auto;
 }
 
 @media (min-width: 641px) {
-    article {
-        height: 100vh;
-        overflow: auto;
+    article.content {
+        height: 100%;
     }
 }
 

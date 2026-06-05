@@ -415,24 +415,86 @@ public sealed class ArtWorkflowService(
     public async Task<PromptRecipeView> SavePromptRecipeAsync(Guid projectId, SavePromptRecipeRequest request, CancellationToken cancellationToken = default)
     {
         _ = await GetProjectAsync(projectId, cancellationToken);
-        var name = CleanRequired(request.Name, "Recipe name is required.");
         var recipe = new PromptRecipe
         {
             ProjectId = projectId,
-            Name = name,
-            AssetType = Clean(request.AssetType),
-            PromptTemplate = CleanRequired(request.PromptTemplate, "Prompt template is required."),
-            StyleRulesJson = SerializeStrings(request.StyleRules),
-            AvoidRulesJson = SerializeStrings(request.AvoidRules),
-            ExampleAssetIdsJson = SerializeIds(request.ExampleAssetIds),
-            PreferredProvider = Clean(request.PreferredProvider),
-            PreferredModel = Clean(request.PreferredModel),
-            PreferredSize = Clean(request.PreferredSize),
-            Notes = Clean(request.Notes),
+            Name = CleanRequired(request.Name, "Recipe name is required."),
         };
+        ApplyRecipeRequest(recipe, request);
         await db.PromptRecipes.AddAsync(recipe, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return RecipeView(recipe);
+    }
+
+    public async Task<PromptRecipeView> UpdatePromptRecipeAsync(
+        Guid projectId,
+        Guid recipeId,
+        UpdatePromptRecipeRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var recipe = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+            ?? throw new InvalidOperationException("Prompt recipe was not found.");
+
+        ApplyRecipeRequest(recipe, request);
+        recipe.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+        return RecipeView(recipe);
+    }
+
+    public async Task<PromptRecipeView> DuplicatePromptRecipeAsync(
+        Guid projectId,
+        Guid recipeId,
+        string? name = null,
+        CancellationToken cancellationToken = default)
+    {
+        var source = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+            ?? throw new InvalidOperationException("Prompt recipe was not found.");
+
+        var duplicate = new PromptRecipe
+        {
+            ProjectId = projectId,
+            Name = string.IsNullOrWhiteSpace(name) ? $"{source.Name} Copy" : name.Trim(),
+            AssetType = source.AssetType,
+            PromptTemplate = source.PromptTemplate,
+            StyleRulesJson = source.StyleRulesJson,
+            AvoidRulesJson = source.AvoidRulesJson,
+            ExampleAssetIdsJson = source.ExampleAssetIdsJson,
+            PreferredProvider = source.PreferredProvider,
+            PreferredModel = source.PreferredModel,
+            PreferredSize = source.PreferredSize,
+            ExportDefaultsJson = source.ExportDefaultsJson,
+            Notes = source.Notes,
+        };
+        await db.PromptRecipes.AddAsync(duplicate, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return RecipeView(duplicate);
+    }
+
+    public async Task DeletePromptRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default)
+    {
+        var recipe = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken);
+        if (recipe is null)
+            return;
+
+        var attachments = await db.ChatContextAttachments
+            .Where(a => a.ProjectId == projectId && a.Type == ChatContextAttachmentType.PromptRecipe && a.RefId == recipeId)
+            .ToListAsync(cancellationToken);
+        db.ChatContextAttachments.RemoveRange(attachments);
+
+        var linkedAssets = await db.ArtAssets
+            .Where(a => a.ProjectId == projectId && a.SourcePromptRecipeId == recipeId)
+            .ToListAsync(cancellationToken);
+        foreach (var asset in linkedAssets)
+            asset.SourcePromptRecipeId = null;
+
+        var linkedBatches = await db.GenerationBatches
+            .Where(b => b.ProjectId == projectId && b.PromptRecipeId == recipeId)
+            .ToListAsync(cancellationToken);
+        foreach (var batch in linkedBatches)
+            batch.PromptRecipeId = null;
+
+        db.PromptRecipes.Remove(recipe);
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, bool? rejected, string? notes, CancellationToken cancellationToken = default)
@@ -671,6 +733,34 @@ public sealed class ArtWorkflowService(
         if (avoidRules.Count > 0)
             parts.Add("Avoid: " + string.Join("; ", avoidRules));
         return string.Join("\n\n", parts);
+    }
+
+    private static void ApplyRecipeRequest(PromptRecipe recipe, SavePromptRecipeRequest request)
+    {
+        recipe.Name = CleanRequired(request.Name, "Recipe name is required.");
+        recipe.AssetType = Clean(request.AssetType);
+        recipe.PromptTemplate = CleanRequired(request.PromptTemplate, "Prompt template is required.");
+        recipe.StyleRulesJson = SerializeStrings(request.StyleRules);
+        recipe.AvoidRulesJson = SerializeStrings(request.AvoidRules);
+        recipe.ExampleAssetIdsJson = SerializeIds(request.ExampleAssetIds);
+        recipe.PreferredProvider = Clean(request.PreferredProvider);
+        recipe.PreferredModel = Clean(request.PreferredModel);
+        recipe.PreferredSize = Clean(request.PreferredSize);
+        recipe.Notes = Clean(request.Notes);
+    }
+
+    private static void ApplyRecipeRequest(PromptRecipe recipe, UpdatePromptRecipeRequest request)
+    {
+        recipe.Name = CleanRequired(request.Name, "Recipe name is required.");
+        recipe.AssetType = Clean(request.AssetType);
+        recipe.PromptTemplate = CleanRequired(request.PromptTemplate, "Prompt template is required.");
+        recipe.StyleRulesJson = SerializeStrings(request.StyleRules);
+        recipe.AvoidRulesJson = SerializeStrings(request.AvoidRules);
+        recipe.ExampleAssetIdsJson = SerializeIds(request.ExampleAssetIds);
+        recipe.PreferredProvider = Clean(request.PreferredProvider);
+        recipe.PreferredModel = Clean(request.PreferredModel);
+        recipe.PreferredSize = Clean(request.PreferredSize);
+        recipe.Notes = Clean(request.Notes);
     }
 
     private static ImageProviderReference ToProviderReference(ArtAsset asset) =>

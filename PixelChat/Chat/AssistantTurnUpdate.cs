@@ -14,6 +14,8 @@ public sealed record AssistantToolCallPendingConfirmation(Guid AssistantMessageI
 
 public sealed record AssistantToolCallCompleted(string CallId, string ToolName, string? Result, string? Error, double DurationMs) : AssistantTurnUpdate;
 
+public sealed record AssistantFormDraftProposed(AssistantFormDraft Draft) : AssistantTurnUpdate;
+
 public sealed record AssistantMessageCompleted(Guid MessageId) : AssistantTurnUpdate;
 
 public sealed record AssistantWorkspaceMutated : AssistantTurnUpdate;

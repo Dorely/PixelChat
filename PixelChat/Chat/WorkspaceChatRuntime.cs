@@ -13,6 +13,8 @@ public sealed class WorkspaceChatRuntime(
     private string? _error;
     private bool _running;
     private int _workspaceVersion;
+    private AssistantFormDraft? _formDraft;
+    private int _formDraftVersion;
 
     public event Action? StateChanged;
 
@@ -34,7 +36,9 @@ public sealed class WorkspaceChatRuntime(
                 _live?.Clone(),
                 _pendingUserText,
                 _error,
-                _workspaceVersion);
+                _workspaceVersion,
+                _formDraft,
+                _formDraftVersion);
         }
     }
 
@@ -157,6 +161,17 @@ public sealed class WorkspaceChatRuntime(
         NotifyStateChanged();
     }
 
+    public void AcknowledgeFormDraft(int draftVersion)
+    {
+        lock (_gate)
+        {
+            if (_formDraftVersion == draftVersion)
+                _formDraft = null;
+        }
+
+        NotifyStateChanged();
+    }
+
     private async Task RunTurnAsync(
         Guid projectId,
         string text,
@@ -242,6 +257,11 @@ public sealed class WorkspaceChatRuntime(
                         completed.Result,
                         completed.Error,
                         completed.DurationMs);
+                    break;
+
+                case AssistantFormDraftProposed draft:
+                    _formDraft = draft.Draft;
+                    _formDraftVersion++;
                     break;
 
                 case AssistantWorkspaceMutated:

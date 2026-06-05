@@ -7,9 +7,12 @@ namespace PixelChat.Chat;
 
 public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
 {
-    private static readonly HashSet<string> ReadOnlyTools = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> AutoRunTools = new(StringComparer.Ordinal)
     {
-        "list_workspace_state"
+        "list_workspace_state",
+        "draft_generate_form",
+        "draft_edit_form",
+        "draft_prompt_recipe_form"
     };
 
     public IList<AITool> Build(Guid projectId) =>
@@ -42,25 +45,21 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         AIFunctionFactory.Create(
             method: (
                 string prompt,
-                int count = 1,
                 string? negativePrompt = null,
                 string? size = null,
                 Guid? recipeId = null,
-                Guid[]? referenceAssetIds = null,
-                Guid? parentBatchId = null) => GenerateImagesAsync(projectId, prompt, count, negativePrompt, size, recipeId, referenceAssetIds, parentBatchId),
-            name: "generate_images",
-            description: "Generate a batch of game-art images from the prompt. This is a paid/mutating action and requires user confirmation in PixelChat."),
+                int count = 1,
+                Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, recipeId, count, referenceAssetIds),
+            name: "draft_generate_form",
+            description: "Draft values for the Generate form. This does not run image generation; the user reviews the form and clicks Generate manually."),
 
         AIFunctionFactory.Create(
             method: (
-                Guid assetId,
                 string prompt,
-                int count = 1,
-                Guid? maskId = null,
                 string? size = null,
-                Guid[]? referenceAssetIds = null) => EditImageAsync(projectId, assetId, prompt, count, maskId, size, referenceAssetIds),
-            name: "edit_image",
-            description: "Run a masked edit on an existing asset using an existing saved mask. This is a paid/mutating action and requires user confirmation in PixelChat."),
+                int count = 1) => DraftEditFormAsync(prompt, size, count),
+            name: "draft_edit_form",
+            description: "Draft values for the active asset Edit form. This does not run an image edit; the user paints/reviews the mask and clicks Send Masked Edit manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -71,9 +70,9 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 string[]? avoidRules = null,
                 Guid[]? exampleAssetIds = null,
                 string? preferredSize = null,
-                string? notes = null) => SavePromptRecipeAsync(projectId, name, promptTemplate, assetType, styleRules, avoidRules, exampleAssetIds, preferredSize, notes),
-            name: "save_prompt_recipe",
-            description: "Save a visible prompt recipe for later reuse."),
+                string? notes = null) => DraftPromptRecipeFormAsync(name, promptTemplate, assetType, styleRules, avoidRules, exampleAssetIds, preferredSize, notes),
+            name: "draft_prompt_recipe_form",
+            description: "Draft values for the prompt recipe editor. This does not save a recipe; the user reviews the form and clicks Save manually."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId, bool? favorite = null, bool? rejected = null, string? notes = null) =>
@@ -92,7 +91,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             description: "Prepare an existing asset for export by returning its export file metadata. The user still controls the actual browser download."),
     ];
 
-    public bool IsReadOnly(string toolName) => ReadOnlyTools.Contains(toolName);
+    public bool IsAutoRun(string toolName) => AutoRunTools.Contains(toolName);
 
     private async Task<string> AttachContextAsync(Guid projectId, string type, Guid refId, string? label)
     {
@@ -118,50 +117,39 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         return $"Selected asset {assetId}.";
     }
 
-    private async Task<string> GenerateImagesAsync(
-        Guid projectId,
+    private static Task<string> DraftGenerateFormAsync(
         string prompt,
-        int count,
         string? negativePrompt,
         string? size,
         Guid? recipeId,
-        Guid[]? referenceAssetIds,
-        Guid? parentBatchId)
-    {
-        var batch = await workflow.GenerateImagesAsync(projectId, new GenerateImagesRequest(
-            prompt,
-            negativePrompt ?? string.Empty,
-            size ?? "auto",
-            count,
-            recipeId,
-            referenceAssetIds ?? [],
-            parentBatchId));
-        return JsonSerializer.Serialize(batch);
-    }
-
-    private async Task<string> EditImageAsync(
-        Guid projectId,
-        Guid assetId,
-        string prompt,
         int count,
-        Guid? maskId,
-        string? size,
         Guid[]? referenceAssetIds)
     {
-        var batch = await workflow.EditImageAsync(projectId, new EditImageRequest(
-            assetId,
-            prompt,
-            size ?? "auto",
-            count,
-            maskId,
-            SourcePngDataUrl: null,
-            MaskPngDataUrl: null,
-            referenceAssetIds ?? []));
-        return JsonSerializer.Serialize(batch);
+        var draft = new AssistantFormDraft(
+            AssistantFormDraftTarget.Generate,
+            Prompt: prompt,
+            NegativePrompt: negativePrompt ?? string.Empty,
+            Size: size ?? "auto",
+            Count: ClampCount(count),
+            PromptRecipeId: recipeId,
+            ReferenceAssetIds: referenceAssetIds ?? []);
+        return Task.FromResult(JsonSerializer.Serialize(draft));
     }
 
-    private async Task<string> SavePromptRecipeAsync(
-        Guid projectId,
+    private static Task<string> DraftEditFormAsync(
+        string prompt,
+        string? size,
+        int count)
+    {
+        var draft = new AssistantFormDraft(
+            AssistantFormDraftTarget.Edit,
+            Prompt: prompt,
+            Size: size ?? "auto",
+            Count: ClampCount(count));
+        return Task.FromResult(JsonSerializer.Serialize(draft));
+    }
+
+    private static Task<string> DraftPromptRecipeFormAsync(
         string name,
         string promptTemplate,
         string? assetType,
@@ -171,18 +159,17 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         string? preferredSize,
         string? notes)
     {
-        var recipe = await workflow.SavePromptRecipeAsync(projectId, new SavePromptRecipeRequest(
-            name,
-            assetType ?? string.Empty,
-            promptTemplate,
-            styleRules ?? [],
-            avoidRules ?? [],
-            exampleAssetIds ?? [],
-            PreferredProvider: "openai-account",
-            PreferredModel: string.Empty,
-            PreferredSize: preferredSize ?? string.Empty,
-            Notes: notes ?? string.Empty));
-        return JsonSerializer.Serialize(recipe);
+        var draft = new AssistantFormDraft(
+            AssistantFormDraftTarget.Recipe,
+            ReferenceAssetIds: exampleAssetIds ?? [],
+            RecipeName: name,
+            AssetType: assetType ?? string.Empty,
+            PromptTemplate: promptTemplate,
+            StyleRules: styleRules ?? [],
+            AvoidRules: avoidRules ?? [],
+            Notes: notes ?? string.Empty,
+            PreferredSize: preferredSize ?? "auto");
+        return Task.FromResult(JsonSerializer.Serialize(draft));
     }
 
     private async Task<string> MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, bool? rejected, string? notes)
@@ -222,9 +209,12 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             "generate" => WorkspaceMode.Generate,
             "compare" => WorkspaceMode.Compare,
             "edit" => WorkspaceMode.Edit,
+            "recipes" or "recipe" => WorkspaceMode.Recipes,
             _ => throw new InvalidOperationException($"Unknown workspace mode '{mode}'.")
         };
 
     private static string NormalizeToken(string value) =>
         value.Trim().Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+
+    private static int ClampCount(int count) => Math.Clamp(count <= 0 ? 1 : count, 1, 4);
 }

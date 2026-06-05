@@ -44,6 +44,7 @@ else
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Generate)" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">Generate</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Compare)" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Compare</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Edit)" @onclick="() => SetModeAsync(WorkspaceMode.Edit)">Edit</button>
+                <button type="button" class="@ModeButtonClass(WorkspaceMode.Recipes)" @onclick="() => SetModeAsync(WorkspaceMode.Recipes)">Recipes</button>
             </nav>
 
             <a class="btn btn-sm btn-outline-secondary" href="settings/providers">Providers</a>
@@ -59,7 +60,7 @@ else
                              Error="@_error"
                              Input="@_input"
                              InputChanged="OnInputChanged"
-                             Placeholder="Ask for art direction, prompt iteration, or a proposed generation..."
+                             Placeholder="Ask for image analysis, recipe design, or a form draft..."
                              Running="@_running"
                              ComposerDisabled="@(_loadingChat || !_hasWorkingProvider)"
                              SendDisabled="@(_loadingChat || _running || !_hasWorkingProvider || string.IsNullOrWhiteSpace(_input))"
@@ -95,6 +96,9 @@ else
                     case WorkspaceMode.Edit:
                         @RenderEditWorkspace()
                         break;
+                    case WorkspaceMode.Recipes:
+                        @RenderRecipesWorkspace()
+                        break;
                 }
             </main>
 
@@ -111,6 +115,8 @@ else
 
 @code {
     private readonly List<ChatRenderableMessage> _messages = [];
+    private readonly HashSet<Guid> _draftReferenceAssetIds = [];
+    private readonly HashSet<Guid> _recipeExampleAssetIds = [];
 
     private WorkbenchView? _workbench;
     private ChatLiveTurn? _live;
@@ -131,6 +137,7 @@ else
     private int _scrollKey;
     private int _resetComposerKey;
     private int _seenWorkspaceVersion;
+    private int _seenFormDraftVersion;
 
     private string _busyText = string.Empty;
     private string _generatePrompt = string.Empty;
@@ -138,11 +145,14 @@ else
     private string _generateSize = "auto";
     private int _generateCount = 1;
     private string _selectedRecipeText = string.Empty;
+    private Guid? _editingRecipeId;
     private string _recipeName = string.Empty;
     private string _recipeAssetType = "sprite";
+    private string _recipePromptTemplate = string.Empty;
     private string _recipeStyleRules = string.Empty;
     private string _recipeAvoidRules = string.Empty;
     private string _recipeNotes = string.Empty;
+    private string _recipePreferredSize = "auto";
     private string _editPrompt = string.Empty;
     private string _editSize = "auto";
     private int _editCount = 1;
@@ -154,7 +164,9 @@ else
     {
         ChatRuntime.StateChanged += OnChatRuntimeStateChanged;
         await ReloadAllAsync();
-        ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
+        var snapshot = ChatRuntime.GetSnapshot();
+        ApplyChatRuntimeSnapshot(snapshot);
+        await ApplyPendingFormDraftAsync(snapshot);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -206,6 +218,8 @@ else
         _projectIdText = args.Value?.ToString() ?? string.Empty;
         _input = string.Empty;
         _loadedEditorAssetId = null;
+        _draftReferenceAssetIds.Clear();
+        ClearRecipeEditor();
         await ReloadAllAsync();
     }
 
@@ -285,6 +299,21 @@ else
                     <span>Avoid</span>
                     <textarea class="form-control" rows="3" @bind="_negativePrompt"></textarea>
                 </label>
+
+                @if (DraftReferenceAssets().Count > 0)
+                {
+                    <div class="draft-reference-list">
+                        <span>Draft references</span>
+                        @foreach (var asset in DraftReferenceAssets())
+                        {
+                            <button type="button" class="context-chip" @onclick="() => RemoveDraftReference(asset.Id)">
+                                <span>Ref</span>
+                                <strong>@asset.Label</strong>
+                                <span>x</span>
+                            </button>
+                        }
+                    </div>
+                }
             </div>
 
             <div class="recipe-editor">
@@ -292,11 +321,18 @@ else
                 <div class="form-grid recipe-grid">
                     <input class="form-control" placeholder="Recipe name" @bind="_recipeName" />
                     <input class="form-control" placeholder="Asset type" @bind="_recipeAssetType" />
+                    <textarea class="form-control recipe-template" rows="4" placeholder="Prompt template" @bind="_recipePromptTemplate"></textarea>
+                    <select class="form-select" @bind="_recipePreferredSize">
+                        <option value="auto">Auto</option>
+                        <option value="1024x1024">1024 x 1024</option>
+                        <option value="1024x1536">1024 x 1536</option>
+                        <option value="1536x1024">1536 x 1024</option>
+                    </select>
                     <textarea class="form-control" rows="3" placeholder="Style rules, one per line" @bind="_recipeStyleRules"></textarea>
                     <textarea class="form-control" rows="3" placeholder="Avoid rules, one per line" @bind="_recipeAvoidRules"></textarea>
                     <textarea class="form-control recipe-notes" rows="3" placeholder="Notes" @bind="_recipeNotes"></textarea>
-                    <button type="button" class="btn btn-outline-primary align-end" disabled="@string.IsNullOrWhiteSpace(_recipeName)" @onclick="SaveRecipeAsync">
-                        Save Recipe
+                    <button type="button" class="btn btn-outline-primary align-end" disabled="@(!CanSaveRecipe)" @onclick="SaveRecipeAsync">
+                        @(_editingRecipeId is null ? "Save Recipe" : "Update Recipe")
                     </button>
                 </div>
             </div>
@@ -427,6 +463,179 @@ else
                     </div>
                 </div>
             }
+        </div>
+    };
+
+    private RenderFragment RenderRecipesWorkspace() => __builder =>
+    {
+        var selectedRecipe = SelectedRecipeForEditor();
+        var exampleAssets = RecipeExampleAssets().ToList();
+        var outputAssets = RecipeOutputAssets(selectedRecipe?.Id ?? _editingRecipeId).ToList();
+        var relatedBatches = RecipeBatches(selectedRecipe?.Id ?? _editingRecipeId).ToList();
+
+        <div class="workspace-panel recipes-panel">
+            <div class="panel-head">
+                <div>
+                    <h1>Recipes</h1>
+                    <span>@_workbench!.Recipes.Count saved recipe(s)</span>
+                </div>
+                <button type="button" class="btn btn-outline-primary" @onclick="NewRecipeDraft">New Recipe</button>
+            </div>
+
+            <div class="recipes-layout">
+                <section class="recipe-list-panel">
+                    @if (_workbench.Recipes.Count == 0)
+                    {
+                        <div class="empty-state">No prompt recipes saved yet.</div>
+                    }
+                    else
+                    {
+                        <div class="recipe-list">
+                            @foreach (var recipe in _workbench.Recipes)
+                            {
+                                <button type="button"
+                                        class="recipe-row @(recipe.Id == _editingRecipeId ? "is-active" : "")"
+                                        @onclick="() => LoadRecipeEditor(recipe)">
+                                    <span>@recipe.Name</span>
+                                    <small>@(string.IsNullOrWhiteSpace(recipe.AssetType) ? "Unspecified" : recipe.AssetType)</small>
+                                </button>
+                            }
+                        </div>
+                    }
+                </section>
+
+                <section class="recipe-detail-panel">
+                    <div class="form-stack">
+                        <div class="form-grid recipe-management-grid">
+                            <label>
+                                <span>Name</span>
+                                <input class="form-control" @bind="_recipeName" />
+                            </label>
+                            <label>
+                                <span>Asset Type</span>
+                                <input class="form-control" @bind="_recipeAssetType" />
+                            </label>
+                            <label>
+                                <span>Preferred Size</span>
+                                <select class="form-select" @bind="_recipePreferredSize">
+                                    <option value="auto">Auto</option>
+                                    <option value="1024x1024">1024 x 1024</option>
+                                    <option value="1024x1536">1024 x 1536</option>
+                                    <option value="1536x1024">1536 x 1024</option>
+                                </select>
+                            </label>
+                            <label class="recipe-template-field">
+                                <span>Prompt Template</span>
+                                <textarea class="form-control" rows="6" @bind="_recipePromptTemplate"></textarea>
+                            </label>
+                            <label>
+                                <span>Style Rules</span>
+                                <textarea class="form-control" rows="5" @bind="_recipeStyleRules"></textarea>
+                            </label>
+                            <label>
+                                <span>Avoid Rules</span>
+                                <textarea class="form-control" rows="5" @bind="_recipeAvoidRules"></textarea>
+                            </label>
+                            <label class="recipe-notes">
+                                <span>Notes</span>
+                                <textarea class="form-control" rows="4" @bind="_recipeNotes"></textarea>
+                            </label>
+                        </div>
+
+                        <div class="recipe-action-row">
+                            <button type="button" class="btn btn-primary" disabled="@(!CanSaveRecipe)" @onclick="SaveRecipeAsync">
+                                @(_editingRecipeId is null ? "Save Recipe" : "Update Recipe")
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" disabled="@(_editingRecipeId is null)" @onclick="DuplicateRecipeAsync">Duplicate</button>
+                            <button type="button" class="btn btn-outline-danger" disabled="@(_editingRecipeId is null)" @onclick="DeleteRecipeAsync">Delete</button>
+                            @if (selectedRecipe is not null)
+                            {
+                                <button type="button" class="btn btn-outline-secondary" @onclick="() => ApplyRecipeToGenerate(selectedRecipe)">Use in Generate</button>
+                                <button type="button" class="btn btn-outline-secondary" @onclick="() => AttachRecipeAsync(selectedRecipe)">Attach</button>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="recipe-related-layout">
+                        <section>
+                            <div class="section-title">Example Images</div>
+                            @if (_workbench.Assets.Count == 0)
+                            {
+                                <div class="empty-context">No assets available.</div>
+                            }
+                            else
+                            {
+                                <div class="recipe-example-picker">
+                                    @foreach (var asset in _workbench.Assets.Take(24))
+                                    {
+                                        <label class="recipe-example-option @(IsRecipeExample(asset.Id) ? "is-selected" : "")">
+                                            <input type="checkbox"
+                                                   checked="@IsRecipeExample(asset.Id)"
+                                                   @onchange="args => ToggleRecipeExample(asset.Id, args)" />
+                                            <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
+                                            <span>@asset.Label</span>
+                                        </label>
+                                    }
+                                </div>
+                            }
+                        </section>
+
+                        <section>
+                            <div class="section-title">Images Used By Recipe</div>
+                            @if (exampleAssets.Count == 0)
+                            {
+                                <div class="empty-context">No example images selected.</div>
+                            }
+                            else
+                            {
+                                <div class="recipe-image-grid">
+                                    @foreach (var asset in exampleAssets)
+                                    {
+                                        @RenderAssetCard(asset, compact: true)
+                                    }
+                                </div>
+                            }
+                        </section>
+
+                        <section>
+                            <div class="section-title">Generated Outputs</div>
+                            @if (outputAssets.Count == 0)
+                            {
+                                <div class="empty-context">No generated or edited outputs linked to this recipe.</div>
+                            }
+                            else
+                            {
+                                <div class="recipe-image-grid">
+                                    @foreach (var asset in outputAssets)
+                                    {
+                                        @RenderAssetCard(asset, compact: true)
+                                    }
+                                </div>
+                            }
+                        </section>
+
+                        <section>
+                            <div class="section-title">Recipe Batches</div>
+                            @if (relatedBatches.Count == 0)
+                            {
+                                <div class="empty-context">No batches linked to this recipe.</div>
+                            }
+                            else
+                            {
+                                <div class="batch-list">
+                                    @foreach (var batch in relatedBatches)
+                                    {
+                                        <button type="button" class="batch-row" @onclick="() => SelectBatchAsync(batch.Id)">
+                                            <span>@batch.Label</span>
+                                            <span>@batch.Status</span>
+                                        </button>
+                                    }
+                                </div>
+                            }
+                        </section>
+                    </div>
+                </section>
+            </div>
         </div>
     };
 
@@ -586,24 +795,115 @@ else
 
     private async Task SaveRecipeAsync()
     {
-        if (_workbench is null || string.IsNullOrWhiteSpace(_recipeName))
+        if (_workbench is null || !CanSaveRecipe)
             return;
 
-        await RunWorkflowAsync("Saving recipe...", async () =>
+        var request = new SavePromptRecipeRequest(
+            _recipeName,
+            _recipeAssetType,
+            RecipePromptTemplateForSave(),
+            SplitLines(_recipeStyleRules),
+            SplitLines(_recipeAvoidRules),
+            _recipeExampleAssetIds.ToList(),
+            "openai-account",
+            string.Empty,
+            _recipePreferredSize,
+            _recipeNotes);
+
+        await RunWorkflowAsync(_editingRecipeId is null ? "Saving recipe..." : "Updating recipe...", async () =>
         {
-            await Workflow.SavePromptRecipeAsync(_workbench.Project.Id, new SavePromptRecipeRequest(
-                _recipeName,
-                _recipeAssetType,
-                string.IsNullOrWhiteSpace(_generatePrompt) ? "Describe the asset to generate." : _generatePrompt,
-                SplitLines(_recipeStyleRules),
-                SplitLines(_recipeAvoidRules),
-                CurrentReferenceAssetIds(),
-                "openai-account",
-                string.Empty,
-                _generateSize,
-                _recipeNotes));
-            _recipeName = string.Empty;
+            if (_editingRecipeId is Guid recipeId)
+            {
+                var updated = await Workflow.UpdatePromptRecipeAsync(_workbench.Project.Id, recipeId, new UpdatePromptRecipeRequest(
+                    request.Name,
+                    request.AssetType,
+                    request.PromptTemplate,
+                    request.StyleRules,
+                    request.AvoidRules,
+                    request.ExampleAssetIds,
+                    request.PreferredProvider,
+                    request.PreferredModel,
+                    request.PreferredSize,
+                    request.Notes));
+                LoadRecipeEditor(updated);
+            }
+            else
+            {
+                var created = await Workflow.SavePromptRecipeAsync(_workbench.Project.Id, request);
+                LoadRecipeEditor(created);
+            }
         });
+    }
+
+    private void NewRecipeDraft()
+    {
+        ClearRecipeEditor();
+        _recipePromptTemplate = string.IsNullOrWhiteSpace(_generatePrompt) ? string.Empty : _generatePrompt;
+        _recipeAvoidRules = _negativePrompt;
+        _recipePreferredSize = string.IsNullOrWhiteSpace(_generateSize) ? "auto" : _generateSize;
+        foreach (var assetId in CurrentReferenceAssetIds())
+            _recipeExampleAssetIds.Add(assetId);
+    }
+
+    private void ClearRecipeEditor()
+    {
+        _editingRecipeId = null;
+        _recipeName = string.Empty;
+        _recipeAssetType = "sprite";
+        _recipePromptTemplate = string.Empty;
+        _recipeStyleRules = string.Empty;
+        _recipeAvoidRules = string.Empty;
+        _recipeNotes = string.Empty;
+        _recipePreferredSize = "auto";
+        _recipeExampleAssetIds.Clear();
+    }
+
+    private void LoadRecipeEditor(PromptRecipeView recipe)
+    {
+        _editingRecipeId = recipe.Id;
+        _recipeName = recipe.Name;
+        _recipeAssetType = recipe.AssetType;
+        _recipePromptTemplate = recipe.PromptTemplate;
+        _recipeStyleRules = string.Join('\n', recipe.StyleRules);
+        _recipeAvoidRules = string.Join('\n', recipe.AvoidRules);
+        _recipeNotes = recipe.Notes;
+        _recipePreferredSize = string.IsNullOrWhiteSpace(recipe.PreferredSize) ? "auto" : recipe.PreferredSize;
+        _recipeExampleAssetIds.Clear();
+        foreach (var assetId in recipe.ExampleAssetIds)
+            _recipeExampleAssetIds.Add(assetId);
+    }
+
+    private async Task DuplicateRecipeAsync()
+    {
+        if (_workbench is null || _editingRecipeId is not Guid recipeId)
+            return;
+
+        var duplicateName = string.IsNullOrWhiteSpace(_recipeName) ? null : $"{_recipeName} Copy";
+        await RunWorkflowAsync("Duplicating recipe...", async () =>
+        {
+            var duplicate = await Workflow.DuplicatePromptRecipeAsync(_workbench.Project.Id, recipeId, duplicateName);
+            LoadRecipeEditor(duplicate);
+        });
+    }
+
+    private async Task DeleteRecipeAsync()
+    {
+        if (_workbench is null || _editingRecipeId is not Guid recipeId)
+            return;
+
+        await RunWorkflowAsync("Deleting recipe...", async () =>
+        {
+            await Workflow.DeletePromptRecipeAsync(_workbench.Project.Id, recipeId);
+            ClearRecipeEditor();
+        });
+    }
+
+    private async Task ApplyRecipeToGenerate(PromptRecipeView recipe)
+    {
+        LoadRecipeEditor(recipe);
+        _selectedRecipeText = recipe.Id.ToString();
+        await ApplyRecipeAsync();
+        await SetModeAsync(WorkspaceMode.Generate);
     }
 
     private async Task SelectBatchAsync(Guid batchId)
@@ -831,6 +1131,7 @@ else
             var wasRunning = _running;
             var snapshot = ChatRuntime.GetSnapshot();
             ApplyChatRuntimeSnapshot(snapshot);
+            await ApplyPendingFormDraftAsync(snapshot);
             if (snapshot.WorkspaceVersion != _seenWorkspaceVersion)
             {
                 _seenWorkspaceVersion = snapshot.WorkspaceVersion;
@@ -856,6 +1157,59 @@ else
         EnsurePendingUserMessageVisible();
         _error = snapshot.Error;
         _seenWorkspaceVersion = snapshot.WorkspaceVersion;
+    }
+
+    private async Task ApplyPendingFormDraftAsync(WorkspaceChatRuntimeSnapshot snapshot)
+    {
+        if (_workbench is null
+            || snapshot.FormDraft is null
+            || snapshot.FormDraftVersion == _seenFormDraftVersion)
+        {
+            return;
+        }
+
+        _seenFormDraftVersion = snapshot.FormDraftVersion;
+        await ApplyFormDraftAsync(snapshot.FormDraft);
+        ChatRuntime.AcknowledgeFormDraft(snapshot.FormDraftVersion);
+    }
+
+    private async Task ApplyFormDraftAsync(AssistantFormDraft draft)
+    {
+        switch (draft.Target)
+        {
+            case AssistantFormDraftTarget.Generate:
+                _generatePrompt = draft.Prompt ?? _generatePrompt;
+                _negativePrompt = draft.NegativePrompt ?? _negativePrompt;
+                _generateSize = NormalizeDraftSize(draft.Size, _generateSize);
+                _generateCount = NormalizeDraftCount(draft.Count, _generateCount);
+                _selectedRecipeText = ValidRecipeId(draft.PromptRecipeId)?.ToString() ?? _selectedRecipeText;
+                SetDraftReferences(draft.ReferenceAssetIds);
+                await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Generate);
+                await ReloadWorkbenchAsync();
+                break;
+
+            case AssistantFormDraftTarget.Edit:
+                _editPrompt = draft.Prompt ?? _editPrompt;
+                _editSize = NormalizeDraftSize(draft.Size, _editSize);
+                _editCount = NormalizeDraftCount(draft.Count, _editCount);
+                await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Edit);
+                await ReloadWorkbenchAsync();
+                break;
+
+            case AssistantFormDraftTarget.Recipe:
+                ClearRecipeEditor();
+                _recipeName = draft.RecipeName ?? string.Empty;
+                _recipeAssetType = draft.AssetType ?? "sprite";
+                _recipePromptTemplate = draft.PromptTemplate ?? draft.Prompt ?? string.Empty;
+                _recipeStyleRules = string.Join('\n', draft.StyleRules ?? Array.Empty<string>());
+                _recipeAvoidRules = string.Join('\n', draft.AvoidRules ?? Array.Empty<string>());
+                _recipeNotes = draft.Notes ?? string.Empty;
+                _recipePreferredSize = NormalizeDraftSize(draft.PreferredSize ?? draft.Size, _recipePreferredSize);
+                SetRecipeExamples(draft.ReferenceAssetIds);
+                await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Recipes);
+                await ReloadWorkbenchAsync();
+                break;
+        }
     }
 
     private void EnsurePendingUserMessageVisible()
@@ -1076,9 +1430,48 @@ else
         _workbench?.Attachments
             .Where(attachment => attachment.Type is ChatContextAttachmentType.Asset or ChatContextAttachmentType.Crop)
             .Select(attachment => attachment.RefId)
+            .Concat(_draftReferenceAssetIds)
             .Distinct()
             .Take(4)
+            .ToList() ?? _draftReferenceAssetIds.Take(4).ToList();
+
+    private IReadOnlyList<ArtAssetView> DraftReferenceAssets() =>
+        _workbench?.Assets
+            .Where(asset => _draftReferenceAssetIds.Contains(asset.Id))
+            .Take(4)
             .ToList() ?? [];
+
+    private void RemoveDraftReference(Guid assetId) => _draftReferenceAssetIds.Remove(assetId);
+
+    private void SetDraftReferences(IReadOnlyList<Guid>? assetIds)
+    {
+        _draftReferenceAssetIds.Clear();
+        if (_workbench is null || assetIds is null)
+            return;
+
+        var validIds = _workbench.Assets.Select(asset => asset.Id).ToHashSet();
+        foreach (var assetId in assetIds.Where(validIds.Contains).Take(4))
+            _draftReferenceAssetIds.Add(assetId);
+    }
+
+    private void SetRecipeExamples(IReadOnlyList<Guid>? assetIds)
+    {
+        _recipeExampleAssetIds.Clear();
+        if (_workbench is null || assetIds is null)
+            return;
+
+        var validIds = _workbench.Assets.Select(asset => asset.Id).ToHashSet();
+        foreach (var assetId in assetIds.Where(validIds.Contains))
+            _recipeExampleAssetIds.Add(assetId);
+    }
+
+    private Guid? ValidRecipeId(Guid? recipeId)
+    {
+        if (recipeId is not Guid id || _workbench is null)
+            return null;
+
+        return _workbench.Recipes.Any(recipe => recipe.Id == id) ? id : null;
+    }
 
     private IEnumerable<ArtAssetView> FilteredAssets()
     {
@@ -1097,10 +1490,54 @@ else
     private string ReferenceSummary()
     {
         var count = CurrentReferenceAssetIds().Count;
-        return count == 0 ? "No reference chips attached" : $"{count} reference chip(s) attached";
+        return count == 0 ? "No references selected" : $"{count} reference(s) selected";
     }
 
     private bool CanGenerate => !string.IsNullOrWhiteSpace(_generatePrompt) && string.IsNullOrWhiteSpace(_busyText);
+
+    private bool CanSaveRecipe =>
+        !string.IsNullOrWhiteSpace(_recipeName)
+        && !string.IsNullOrWhiteSpace(RecipePromptTemplateForSave());
+
+    private PromptRecipeView? SelectedRecipeForEditor() =>
+        _editingRecipeId is Guid recipeId
+            ? _workbench?.Recipes.FirstOrDefault(recipe => recipe.Id == recipeId)
+            : null;
+
+    private IEnumerable<ArtAssetView> RecipeExampleAssets() =>
+        _workbench?.Assets.Where(asset => _recipeExampleAssetIds.Contains(asset.Id)) ?? Enumerable.Empty<ArtAssetView>();
+
+    private IEnumerable<ArtAssetView> RecipeOutputAssets(Guid? recipeId) =>
+        recipeId is Guid id
+            ? _workbench?.Assets.Where(asset => asset.SourcePromptRecipeId == id) ?? Enumerable.Empty<ArtAssetView>()
+            : Enumerable.Empty<ArtAssetView>();
+
+    private IEnumerable<GenerationBatchView> RecipeBatches(Guid? recipeId) =>
+        recipeId is Guid id
+            ? _workbench?.Batches.Where(batch => batch.PromptRecipeId == id) ?? Enumerable.Empty<GenerationBatchView>()
+            : Enumerable.Empty<GenerationBatchView>();
+
+    private bool IsRecipeExample(Guid assetId) => _recipeExampleAssetIds.Contains(assetId);
+
+    private void ToggleRecipeExample(Guid assetId, ChangeEventArgs args)
+    {
+        var enabled = args.Value is bool value && value;
+        if (enabled)
+            _recipeExampleAssetIds.Add(assetId);
+        else
+            _recipeExampleAssetIds.Remove(assetId);
+    }
+
+    private string RecipePromptTemplateForSave()
+    {
+        return _recipePromptTemplate;
+    }
+
+    private static string NormalizeDraftSize(string? size, string current) =>
+        string.IsNullOrWhiteSpace(size) ? current : size.Trim();
+
+    private static int NormalizeDraftCount(int? count, int current) =>
+        count is int value ? Math.Clamp(value <= 0 ? 1 : value, 1, 4) : current;
 
     private string ModeButtonClass(WorkspaceMode mode) =>
         _workbench?.Project.ActiveWorkspaceMode == mode ? "mode-tab is-active" : "mode-tab";
