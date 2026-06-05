@@ -270,16 +270,58 @@
 }
 
 .draft-reference-list {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
+    display: grid;
     gap: 0.45rem;
     font-size: 0.82rem;
     color: #475467;
 }
 
-.draft-reference-list > span {
+.draft-reference-title {
     font-weight: 650;
+}
+
+.draft-reference-card {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.55rem;
+    width: min(100%, 360px);
+    padding: 0.45rem;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.draft-reference-card img {
+    width: 56px;
+    height: 56px;
+    object-fit: contain;
+    border-radius: 6px;
+    background: #e9eef4;
+}
+
+.draft-reference-card span {
+    display: grid;
+    min-width: 0;
+}
+
+.draft-reference-card small {
+    color: #667085;
+    font-size: 0.72rem;
+}
+
+.draft-reference-card strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #344054;
+}
+
+.draft-reference-card button {
+    border: 0;
+    background: transparent;
+    color: #667085;
 }
 
 .align-end {

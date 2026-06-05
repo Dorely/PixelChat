@@ -311,14 +311,17 @@ else
                 @if (DraftReferenceAssets().Count > 0)
                 {
                     <div class="draft-reference-list">
-                        <span>Draft references</span>
+                        <span class="draft-reference-title">Generation references</span>
                         @foreach (var asset in DraftReferenceAssets())
                         {
-                            <button type="button" class="context-chip" @onclick="() => RemoveDraftReference(asset.Id)">
-                                <span>Ref</span>
-                                <strong>@asset.Label</strong>
-                                <span>x</span>
-                            </button>
+                            <span class="draft-reference-card">
+                                <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
+                                <span>
+                                    <small>Reference</small>
+                                    <strong>@asset.Label</strong>
+                                </span>
+                                <button type="button" title="Remove" @onclick="() => RemoveDraftReference(asset.Id)">x</button>
+                            </span>
                         }
                     </div>
                 }
