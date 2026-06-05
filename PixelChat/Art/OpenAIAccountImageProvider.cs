@@ -72,6 +72,7 @@ public sealed class OpenAIAccountImageProvider(
         for (var i = 0; i < request.Count; i++)
         {
             var includedReferenceCount = Math.Min(request.ReferenceImages.Count, Math.Max(0, options.Value.MaxReferenceImages));
+            var hasMask = request.Mask is not null;
             var result = await SendImageRequestAsync(
                 connection,
                 mainlineModel,
@@ -85,7 +86,7 @@ public sealed class OpenAIAccountImageProvider(
                     request.Background,
                     includedReferenceCount,
                     InputImageCount: 1 + includedReferenceCount,
-                    HasMask: true),
+                    HasMask: hasMask),
                 request.OutputFormat,
                 cancellationToken);
             images.Add(result.Image);
@@ -437,12 +438,15 @@ public sealed class OpenAIAccountImageProvider(
             content.Add(InputImage(reference));
 
         var tool = BaseImageTool(request.Size, request.Quality, request.OutputFormat, request.Background, imageModel);
-        tool["input_image_mask"] = new Dictionary<string, object?>
+        if (request.Mask is not null)
         {
-            ["image_url"] = ToDataUrl(request.Mask),
-        };
+            tool["input_image_mask"] = new Dictionary<string, object?>
+            {
+                ["image_url"] = ToDataUrl(request.Mask),
+            };
+        }
 
-        return BasePayload(mainlineModel, content, tool, "Use the image_generation tool to edit the first supplied image. Apply the supplied mask to guide the targeted edit.");
+        return BasePayload(mainlineModel, content, tool, "Use the image_generation tool to edit the first supplied image. If a mask is supplied, apply it to guide the targeted edit.");
     }
 
     private static Dictionary<string, object?> BasePayload(

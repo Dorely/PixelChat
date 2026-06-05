@@ -26,7 +26,7 @@ public sealed record ImageProviderEditRequest(
     string? MainlineModel,
     string? ImageModel,
     ImageProviderReference SourceImage,
-    ImageProviderReference Mask,
+    ImageProviderReference? Mask,
     IReadOnlyList<ImageProviderReference> ReferenceImages,
     string OutputFormat,
     string Quality,

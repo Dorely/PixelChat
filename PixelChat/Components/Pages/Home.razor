@@ -550,7 +550,7 @@ else
                         <button type="button" class="btn btn-primary"
                                 disabled="@(!_workbench!.ImageProviderStatus.Connected || string.IsNullOrWhiteSpace(_editPrompt))"
                                 @onclick="EditImageAsync">
-                            Send Masked Edit
+                            Send Edit
                         </button>
                     </div>
                 </div>
@@ -1694,15 +1694,18 @@ else
         if (_workbench is null || asset is null || _editorModule is null || string.IsNullOrWhiteSpace(_editPrompt))
             return;
 
-        await RunWorkflowAsync("Sending masked edit...", async () =>
+        await RunWorkflowAsync("Sending edit...", async () =>
         {
             var hasPaint = await _editorModule.InvokeAsync<bool>("hasMaskPaint", _editorCanvas);
-            if (!hasPaint)
-                throw new InvalidOperationException("Paint the editable mask area first.");
+            if (hasPaint)
+                await FlushMaskAutosaveAsync();
+            else
+                CancelMaskAutosave();
 
-            await FlushMaskAutosaveAsync();
             var sourceDataUrl = await _editorModule.InvokeAsync<string>("exportSourcePng", _editorCanvas);
-            var maskDataUrl = await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas);
+            var maskDataUrl = hasPaint
+                ? await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas)
+                : null;
             await Workflow.EditImageAsync(_workbench.Project.Id, new EditImageRequest(
                 asset.Id,
                 _editPrompt,

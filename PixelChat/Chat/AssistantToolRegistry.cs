@@ -56,7 +56,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 string? background = null,
                 int count = 1) => DraftEditFormAsync(prompt, size, background, count),
             name: "draft_edit_form",
-            description: "Draft values for the current Edit form. Use background as transparent, auto, or opaque instead of adding background instructions to the prompt. This does not choose an asset or run an image edit; the user selects an asset, paints/reviews the mask, and clicks Send Masked Edit manually."),
+            description: "Draft values for the current Edit form. Use background as transparent, auto, or opaque instead of adding background instructions to the prompt. This does not choose an asset or run an image edit; the user selects an asset, may paint/review a mask for targeted edits, and clicks Send Edit manually."),
 
         AIFunctionFactory.Create(
             method: (

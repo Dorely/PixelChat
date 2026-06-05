@@ -404,17 +404,18 @@ public sealed class ArtWorkflowService(
         var count = ClampCount(request.Count);
 
         var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
-        if (string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
-            throw new InvalidOperationException("A painted mask is required for masked edit.");
-
-        var storedMask = await UpsertAssetMaskEntityAsync(
-            projectId,
-            sourceAsset,
-            request.MaskPngDataUrl,
-            $"{sourceAsset.Label} mask",
-            requireEditableArea: true,
-            cancellationToken);
-        ValidateEditImageAndMask(sourceImage, storedMask);
+        ImageMask? storedMask = null;
+        if (!string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
+        {
+            storedMask = await UpsertAssetMaskEntityAsync(
+                projectId,
+                sourceAsset,
+                request.MaskPngDataUrl,
+                $"{sourceAsset.Label} mask",
+                requireEditableArea: true,
+                cancellationToken);
+            ValidateEditImageAndMask(sourceImage, storedMask);
+        }
 
         var batch = new GenerationBatch
         {
@@ -428,7 +429,7 @@ public sealed class ArtWorkflowService(
             Background = NormalizeBackground(request.Background),
             Count = count,
             InputAssetIdsJson = SerializeIds(new[] { sourceAsset.Id }.Concat(references.Select(a => a.Id))),
-            InputMaskIdsJson = SerializeIds([storedMask.Id]),
+            InputMaskIdsJson = SerializeIds(storedMask is null ? Enumerable.Empty<Guid>() : new[] { storedMask.Id }),
             ParentBatchId = sourceAsset.SourceBatchId,
             Status = GenerationBatchStatus.Running,
         };
@@ -445,7 +446,7 @@ public sealed class ArtWorkflowService(
                 batch.MainlineModel,
                 batch.ImageModel,
                 new ImageProviderReference(sourceAsset.FileName, sourceImage.ContentType, sourceImage.Data),
-                new ImageProviderReference(storedMask.Label, storedMask.ContentType, storedMask.Data),
+                storedMask is null ? null : new ImageProviderReference(storedMask.Label, storedMask.ContentType, storedMask.Data),
                 references.Select(ToProviderReference).ToList(),
                 imageOptions.Value.DefaultOutputFormat,
                 imageOptions.Value.DefaultQuality,
@@ -479,7 +480,7 @@ public sealed class ArtWorkflowService(
                         image.CallId,
                         image.OutputFormat,
                         SourceAssetId = sourceAsset.Id,
-                        MaskId = storedMask.Id,
+                        MaskId = storedMask?.Id,
                     });
                 await db.ArtAssets.AddAsync(asset, cancellationToken);
             }
