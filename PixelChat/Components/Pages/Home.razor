@@ -4,12 +4,15 @@
 @using PixelChat.Chat
 @using PixelChat.Llm
 @using PixelChat.Models
+@using Microsoft.Extensions.Options
 @rendermode InteractiveServer
 @implements IAsyncDisposable
 @inject IArtWorkflowService Workflow
 @inject IAssistantChatService ChatService
 @inject IWorkspaceChatRuntime ChatRuntime
 @inject ILlmProviderService ProviderService
+@inject IServiceScopeFactory ScopeFactory
+@inject IOptions<ImageGenerationOptions> ImageOptions
 @inject IJSRuntime JS
 
 <PageTitle>PixelChat</PageTitle>
@@ -45,6 +48,7 @@ else
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Compare)" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Compare</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Edit)" @onclick="() => SetModeAsync(WorkspaceMode.Edit)">Edit</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Recipes)" @onclick="() => SetModeAsync(WorkspaceMode.Recipes)">Recipes</button>
+                <button type="button" class="@ModeButtonClass(WorkspaceMode.Assets)" @onclick="() => SetModeAsync(WorkspaceMode.Assets)">Assets</button>
             </nav>
 
             <a class="btn btn-sm btn-outline-secondary" href="settings/providers">Providers</a>
@@ -74,6 +78,9 @@ else
                     <HeaderActions>
                         <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_running" @onclick="ResetChatAsync">Reset</button>
                     </HeaderActions>
+                    <BeforeComposer>
+                        @RenderChatAttachments()
+                    </BeforeComposer>
                 </ChatSurface>
             </aside>
 
@@ -97,16 +104,11 @@ else
                     case WorkspaceMode.Recipes:
                         @RenderRecipesWorkspace()
                         break;
+                    case WorkspaceMode.Assets:
+                        @RenderAssetsWorkspace()
+                        break;
                 }
             </main>
-
-            <aside class="context-pane">
-                @RenderContextPanel()
-            </aside>
-        </section>
-
-        <section class="asset-tray">
-            @RenderAssetTray()
         </section>
     </div>
 }
@@ -115,12 +117,14 @@ else
     private readonly List<ChatRenderableMessage> _messages = [];
     private readonly HashSet<Guid> _draftReferenceAssetIds = [];
     private readonly HashSet<Guid> _recipeExampleAssetIds = [];
+    private readonly SemaphoreSlim _generationFailureLock = new(1, 1);
 
     private WorkbenchView? _workbench;
     private ChatLiveTurn? _live;
     private IJSObjectReference? _editorModule;
     private ElementReference _editorCanvas;
     private Guid? _loadedEditorAssetId;
+    private CancellationTokenSource? _generationCts;
 
     private string _projectIdText = string.Empty;
     private string _newProjectName = string.Empty;
@@ -155,7 +159,10 @@ else
     private int _editCount = 1;
     private int _brushSize = 36;
     private string _editorTool = "mask";
-    private string _assetFilter = "all";
+    private string _assetOrganization = "latest";
+    private Guid? _editAssetId;
+    private Guid? _assetDeleteCandidateId;
+    private Guid? _runningGenerationBatchId;
 
     protected override async Task OnInitializedAsync()
     {
@@ -187,6 +194,10 @@ else
         _workbench = await Workflow.GetWorkbenchAsync(ParseProjectIdOrNull(_projectIdText));
         _projectIdText = _workbench.Project.Id.ToString();
         _loadedEditorAssetId = _workbench.Project.ActiveWorkspaceMode == WorkspaceMode.Edit ? _loadedEditorAssetId : null;
+        if (_editAssetId is Guid editAssetId && !_workbench.Assets.Any(asset => asset.Id == editAssetId))
+            _editAssetId = null;
+        _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
+        _recipeExampleAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
     }
 
     private async Task ReloadChatAsync()
@@ -217,6 +228,8 @@ else
         _input = string.Empty;
         _loadedEditorAssetId = null;
         _draftReferenceAssetIds.Clear();
+        _editAssetId = null;
+        _assetDeleteCandidateId = null;
         ClearRecipeEditor();
         await ReloadAllAsync();
     }
@@ -286,7 +299,7 @@ else
                     </label>
                     <label>
                         <span>Count</span>
-                        <input class="form-control" type="number" min="1" max="4" @bind="_generateCount" />
+                        <input class="form-control" type="number" min="1" max="@ImageOptions.Value.MaxOutputs" @bind="_generateCount" />
                     </label>
                 </div>
 
@@ -318,7 +331,12 @@ else
         var activeBatch = _workbench!.ActiveBatch;
         var outputAssets = activeBatch is null
             ? []
-            : _workbench.Assets.Where(asset => activeBatch.OutputAssetIds.Contains(asset.Id)).ToList();
+            : activeBatch.OutputAssetIds
+                .Select(assetId => _workbench.Assets.FirstOrDefault(asset => asset.Id == assetId))
+                .OfType<ArtAssetView>()
+                .ToList();
+        var outputErrors = activeBatch?.OutputErrors ?? [];
+        var pendingCount = activeBatch is null ? 0 : Math.Max(0, activeBatch.Count - outputAssets.Count - outputErrors.Count);
 
         <div class="workspace-panel compare-panel">
             <div class="panel-head">
@@ -355,6 +373,14 @@ else
                     {
                         @RenderAssetCard(asset, compact: false)
                     }
+                    @foreach (var outputError in outputErrors)
+                    {
+                        @RenderGenerationErrorCard(outputError)
+                    }
+                    @for (var index = 0; index < pendingCount; index++)
+                    {
+                        @RenderGenerationPlaceholderCard(outputAssets.Count + outputErrors.Count + index)
+                    }
                 </div>
             }
 
@@ -374,7 +400,7 @@ else
 
     private RenderFragment RenderEditWorkspace() => __builder =>
     {
-        var asset = _workbench!.ActiveAsset;
+        var asset = CurrentEditAsset();
 
         <div class="workspace-panel edit-panel">
             <div class="panel-head">
@@ -387,7 +413,7 @@ else
 
             @if (asset is null)
             {
-                <div class="empty-state">Import an image or select an asset from the tray.</div>
+                <div class="empty-state">Import an image or choose Edit from an asset card.</div>
             }
             else
             {
@@ -426,11 +452,11 @@ else
                             </label>
                             <label>
                                 <span>Count</span>
-                                <input class="form-control" type="number" min="1" max="4" @bind="_editCount" />
+                                <input class="form-control" type="number" min="1" max="@ImageOptions.Value.MaxOutputs" @bind="_editCount" />
                             </label>
                         </div>
                         <button type="button" class="btn btn-primary"
-                                disabled="@(!_workbench.ImageProviderStatus.Connected || string.IsNullOrWhiteSpace(_editPrompt))"
+                                disabled="@(!_workbench!.ImageProviderStatus.Connected || string.IsNullOrWhiteSpace(_editPrompt))"
                                 @onclick="EditImageAsync">
                             Send Masked Edit
                         </button>
@@ -525,7 +551,7 @@ else
                             @if (selectedRecipe is not null)
                             {
                                 <button type="button" class="btn btn-outline-secondary" @onclick="() => UseRecipeInGenerate(selectedRecipe)">Use in Generate</button>
-                                <button type="button" class="btn btn-outline-secondary" @onclick="() => AttachRecipeAsync(selectedRecipe)">Attach</button>
+                                <button type="button" class="btn btn-outline-secondary" @onclick="() => AttachRecipeAsync(selectedRecipe)">Attach To Chat</button>
                             }
                         </div>
                     </div>
@@ -613,104 +639,104 @@ else
         </div>
     };
 
-    private RenderFragment RenderContextPanel() => __builder =>
+    private RenderFragment RenderChatAttachments() => __builder =>
     {
-        <div class="context-panel">
-            <div class="section-title">Chat Context</div>
-            @if (_workbench!.Attachments.Count == 0)
-            {
-                <div class="empty-context">No context chips attached.</div>
-            }
-            else
-            {
-                <div class="context-chip-list">
-                    @foreach (var attachment in _workbench.Attachments)
-                    {
-                        <span class="context-chip">
-                            <span>@attachment.Type</span>
-                            <strong>@attachment.Label</strong>
-                            <button type="button" title="Remove" @onclick="() => RemoveContextAsync(attachment.Id)">x</button>
-                        </span>
-                    }
-                </div>
-                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ClearContextAsync">Clear Context</button>
-            }
+        if (_workbench!.Attachments.Count == 0)
+            return;
 
-            <div class="section-title">Active Asset</div>
-            @if (_workbench.ActiveAsset is null)
-            {
-                <div class="empty-context">No active asset.</div>
-            }
-            else
-            {
-                var asset = _workbench.ActiveAsset;
-                <div class="active-asset-card">
-                    <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
-                    <div>
-                        <strong>@asset.Label</strong>
-                        <span>@asset.Kind</span>
-                        <span>@FormatDimensions(asset)</span>
-                    </div>
-                    <div class="tool-button-row">
-                        <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => AttachAssetAsync(asset)">Attach</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => UseAsReferenceAsync(asset.Id)">Use Ref</button>
-                    </div>
-                </div>
-            }
-
-            <div class="section-title">Masks</div>
-            <div class="mini-list">
-                @foreach (var mask in _workbench.Masks.Take(8))
-                {
-                    <button type="button" @onclick="() => AttachMaskAsync(mask)">
-                        <span>@mask.Label</span>
-                        <small>@mask.Width x @mask.Height</small>
-                    </button>
-                }
+        <div class="chat-attachment-bar">
+            <div class="chat-attachment-head">
+                <span>Attached to chat</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ClearContextAsync">Clear</button>
             </div>
-
-            <div class="section-title">Recipes</div>
-            <div class="mini-list">
-                @foreach (var recipe in _workbench.Recipes.Take(8))
+            <div class="chat-attachment-list">
+                @foreach (var attachment in _workbench.Attachments)
                 {
-                    <button type="button" @onclick="() => AttachRecipeAsync(recipe)">
-                        <span>@recipe.Name</span>
-                        <small>@recipe.AssetType</small>
-                    </button>
+                    var asset = AttachmentAsset(attachment);
+                    var mask = AttachmentMask(attachment);
+                    <span class="chat-attachment-chip">
+                        @if (asset is not null)
+                        {
+                            <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
+                        }
+                        else if (mask is not null)
+                        {
+                            <img src="@mask.PreviewDataUrl" alt="@mask.Label" />
+                        }
+                        <span>
+                            <small>@AttachmentKindLabel(attachment)</small>
+                            <strong>@attachment.Label</strong>
+                        </span>
+                        <button type="button" title="Remove" @onclick="() => RemoveContextAsync(attachment.Id)">x</button>
+                    </span>
                 }
             </div>
         </div>
     };
 
-    private RenderFragment RenderAssetTray() => __builder =>
+    private RenderFragment RenderAssetsWorkspace() => __builder =>
     {
-        var assets = FilteredAssets().ToList();
-        <div class="asset-tray-head">
-            <div>
-                <strong>Assets</strong>
-                <span>@assets.Count shown</span>
+        var latestAssets = AssetsByLatest().ToList();
+        <div class="workspace-panel assets-panel">
+            <div class="panel-head">
+                <div>
+                    <h1>Assets</h1>
+                    <span>@_workbench!.Assets.Count asset(s)</span>
+                </div>
+                <div class="asset-filters">
+                    <button type="button" class="@AssetOrganizationClass("latest")" @onclick='() => SetAssetOrganization("latest")'>Latest</button>
+                    <button type="button" class="@AssetOrganizationClass("recipe")" @onclick='() => SetAssetOrganization("recipe")'>Recipe</button>
+                </div>
             </div>
-            <div class="asset-filters">
-                <button type="button" class="@FilterClass("all")" @onclick='() => SetFilter("all")'>All</button>
-                <button type="button" class="@FilterClass("favorites")" @onclick='() => SetFilter("favorites")'>Favorites</button>
-                <button type="button" class="@FilterClass("references")" @onclick='() => SetFilter("references")'>References</button>
-                <button type="button" class="@FilterClass("rejected")" @onclick='() => SetFilter("rejected")'>Rejected</button>
-            </div>
-        </div>
-        <div class="asset-strip">
-            @foreach (var asset in assets)
+
+            @if (_workbench.Assets.Count == 0)
             {
-                @RenderAssetCard(asset, compact: true)
+                <div class="empty-state">No assets yet. Generate or import images to build the library.</div>
             }
+            else if (_assetOrganization == "recipe")
+            {
+                <div class="asset-group-stack">
+                    @foreach (var group in AssetRecipeGroups())
+                    {
+                        <section class="asset-group">
+                            <div class="section-title">@group.Label</div>
+                            <div class="asset-grid">
+                                @foreach (var asset in group.Assets)
+                                {
+                                    @RenderAssetCard(asset, compact: false)
+                                }
+                            </div>
+                        </section>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="asset-grid">
+                    @foreach (var asset in latestAssets)
+                    {
+                        @RenderAssetCard(asset, compact: false)
+                    }
+                </div>
+            }
+
+            @RenderDeleteConfirmation()
         </div>
     };
 
     private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact) => __builder =>
     {
-        <article class="asset-card @(compact ? "asset-card-compact" : "") @(asset.Id == _workbench!.Project.ActiveAssetId ? "is-active" : "")">
-            <button type="button" class="asset-thumb" @onclick="() => SelectAssetAsync(asset.Id)">
-                <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
+        <article class="asset-card @(compact ? "asset-card-compact" : "")">
+            <button type="button"
+                    class="asset-favorite @(asset.IsFavorite ? "is-on" : "")"
+                    title="Favorite"
+                    aria-label="Favorite"
+                    @onclick="() => MarkAssetAsync(asset.Id, !asset.IsFavorite)">
+                &#9829;
             </button>
+            <div class="asset-thumb">
+                <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
+            </div>
             <div class="asset-card-body">
                 <div class="asset-title-row">
                     <strong>@asset.Label</strong>
@@ -718,17 +744,63 @@ else
                 </div>
                 @if (!compact)
                 {
-                    <p>@asset.Prompt</p>
+                    <p>@(string.IsNullOrWhiteSpace(asset.Prompt) ? FormatDimensions(asset) : asset.Prompt)</p>
                 }
                 <div class="asset-actions">
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AttachAssetAsync(asset)">Attach</button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => UseAsReferenceAsync(asset.Id)">Ref</button>
-                    <button type="button" class="btn btn-sm @(asset.IsFavorite ? "btn-warning" : "btn-outline-secondary")" @onclick="() => MarkAssetAsync(asset.Id, !asset.IsFavorite, null)">Fav</button>
-                    <button type="button" class="btn btn-sm @(asset.IsRejected ? "btn-danger" : "btn-outline-secondary")" @onclick="() => MarkAssetAsync(asset.Id, null, !asset.IsRejected)">Reject</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => AskDeleteAsset(asset.Id)">Delete</button>
                     <a class="btn btn-sm btn-outline-primary" href="@asset.PreviewDataUrl" download="@asset.FileName">Export</a>
                 </div>
             </div>
         </article>
+    };
+
+    private RenderFragment RenderGenerationPlaceholderCard(int index) => __builder =>
+    {
+        <article class="asset-card generation-placeholder-card">
+            <div class="generation-spinner" aria-hidden="true"></div>
+            <div class="asset-card-body">
+                <div class="asset-title-row">
+                    <strong>Image @LabelForIndex(index)</strong>
+                    <span>Generating</span>
+                </div>
+                <p>Waiting for the image request to complete.</p>
+            </div>
+        </article>
+    };
+
+    private RenderFragment RenderGenerationErrorCard(GenerationOutputErrorView outputError) => __builder =>
+    {
+        <article class="asset-card generation-error-card">
+            <div class="generation-error-mark">!</div>
+            <div class="asset-card-body">
+                <div class="asset-title-row">
+                    <strong>Image @LabelForIndex(outputError.OutputIndex)</strong>
+                    <span>Failed</span>
+                </div>
+                <p>@outputError.Error</p>
+            </div>
+        </article>
+    };
+
+    private RenderFragment RenderDeleteConfirmation() => __builder =>
+    {
+        var asset = DeleteCandidateAsset();
+        if (asset is null)
+            return;
+
+        <div class="delete-confirm-backdrop">
+            <div class="delete-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-asset-title">
+                <h2 id="delete-asset-title">Delete asset?</h2>
+                <p>This permanently removes @asset.Label and any saved masks attached to it.</p>
+                <div class="delete-confirm-actions">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CancelDeleteAsset">Cancel</button>
+                    <button type="button" class="btn btn-danger" @onclick="ConfirmDeleteAssetAsync">Delete</button>
+                </div>
+            </div>
+        </div>
     };
 
     private async Task GenerateAsync()
@@ -736,9 +808,13 @@ else
         if (_workbench is null || string.IsNullOrWhiteSpace(_generatePrompt))
             return;
 
-        await RunWorkflowAsync("Generating images...", async () =>
+        _busyText = "Starting generation...";
+        _error = null;
+        StateHasChanged();
+        try
         {
-            var batch = await Workflow.GenerateImagesAsync(_workbench.Project.Id, new GenerateImagesRequest(
+            var projectId = _workbench.Project.Id;
+            var batch = await Workflow.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
                 _generatePrompt,
                 _negativePrompt,
                 _generateSize,
@@ -746,8 +822,117 @@ else
                 SelectedRecipeIdOrNull(),
                 CurrentReferenceAssetIds(),
                 _workbench.Project.ActiveBatchId));
-            await Workflow.SelectBatchAsync(_workbench.Project.Id, batch.Id);
-            await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Compare);
+            await ReloadWorkbenchAsync();
+            _runningGenerationBatchId = batch.Id;
+            _generationCts?.Cancel();
+            _generationCts?.Dispose();
+            _generationCts = new CancellationTokenSource();
+            _ = RunGenerationBatchAsync(projectId, batch.Id, batch.Count, _generationCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busyText = string.Empty;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RunGenerationBatchAsync(Guid projectId, Guid batchId, int count, CancellationToken cancellationToken)
+    {
+        var parallelLimit = Math.Clamp(ImageOptions.Value.MaxParallelRequests, 1, Math.Max(1, ImageOptions.Value.MaxOutputs));
+        using var throttler = new SemaphoreSlim(parallelLimit, parallelLimit);
+        var tasks = Enumerable.Range(0, count).Select(outputIndex => RunGenerationOutputAsync(
+            projectId,
+            batchId,
+            outputIndex,
+            throttler,
+            cancellationToken));
+
+        try
+        {
+            await Task.WhenAll(tasks);
+            await CompleteRunningGenerationAsync(projectId, batchId, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            await InvokeAsync(() =>
+            {
+                _error = ex.Message;
+                StateHasChanged();
+            });
+        }
+        finally
+        {
+            if (_runningGenerationBatchId == batchId)
+                _runningGenerationBatchId = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task RunGenerationOutputAsync(
+        Guid projectId,
+        Guid batchId,
+        int outputIndex,
+        SemaphoreSlim throttler,
+        CancellationToken cancellationToken)
+    {
+        await throttler.WaitAsync(cancellationToken);
+        try
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
+            await workflow.GenerateBatchOutputAsync(projectId, batchId, outputIndex, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await PersistGenerationFailureAsync(projectId, batchId, outputIndex, ex.Message, cancellationToken);
+        }
+        finally
+        {
+            throttler.Release();
+        }
+
+        await InvokeAsync(async () =>
+        {
+            await ReloadWorkbenchAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task PersistGenerationFailureAsync(Guid projectId, Guid batchId, int outputIndex, string error, CancellationToken cancellationToken)
+    {
+        await _generationFailureLock.WaitAsync(cancellationToken);
+        try
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
+            await workflow.MarkGenerationBatchOutputFailedAsync(projectId, batchId, outputIndex, error, cancellationToken);
+        }
+        finally
+        {
+            _generationFailureLock.Release();
+        }
+    }
+
+    private async Task CompleteRunningGenerationAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken)
+    {
+        await using var scope = ScopeFactory.CreateAsyncScope();
+        var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
+        await workflow.CompleteGenerationBatchAsync(projectId, batchId, cancellationToken);
+        await InvokeAsync(async () =>
+        {
+            await ReloadWorkbenchAsync();
+            StateHasChanged();
         });
     }
 
@@ -889,11 +1074,12 @@ else
             await using var stream = args.File.OpenReadStream(50 * 1024 * 1024);
             using var memory = new MemoryStream();
             await stream.CopyToAsync(memory);
-            await Workflow.ImportAssetAsync(_workbench.Project.Id, new ImportAssetRequest(
+            var asset = await Workflow.ImportAssetAsync(_workbench.Project.Id, new ImportAssetRequest(
                 args.File.Name,
                 args.File.ContentType,
                 memory.ToArray(),
                 Path.GetFileNameWithoutExtension(args.File.Name)));
+            _editAssetId = asset.Id;
         });
     }
 
@@ -918,22 +1104,24 @@ else
 
     private async Task SaveMaskAsync()
     {
-        if (_workbench?.ActiveAsset is null || _editorModule is null)
+        var asset = CurrentEditAsset();
+        if (_workbench is null || asset is null || _editorModule is null)
             return;
 
         await RunWorkflowAsync("Saving mask...", async () =>
         {
             var maskDataUrl = await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas);
             await Workflow.SaveMaskAsync(_workbench.Project.Id, new SaveMaskRequest(
-                _workbench.ActiveAsset.Id,
+                asset.Id,
                 maskDataUrl,
-                $"{_workbench.ActiveAsset.Label} mask"));
+                $"{asset.Label} mask"));
         });
     }
 
     private async Task CropAsync()
     {
-        if (_workbench?.ActiveAsset is null || _editorModule is null)
+        var asset = CurrentEditAsset();
+        if (_workbench is null || asset is null || _editorModule is null)
             return;
 
         await RunWorkflowAsync("Cropping asset...", async () =>
@@ -942,16 +1130,18 @@ else
             if (string.IsNullOrWhiteSpace(cropDataUrl))
                 throw new InvalidOperationException("Select a crop area first.");
 
-            await Workflow.CreateCropAssetAsync(_workbench.Project.Id, new CropAssetRequest(
-                _workbench.ActiveAsset.Id,
+            var crop = await Workflow.CreateCropAssetAsync(_workbench.Project.Id, new CropAssetRequest(
+                asset.Id,
                 cropDataUrl,
-                $"{_workbench.ActiveAsset.Label} crop"));
+                $"{asset.Label} crop"));
+            _editAssetId = crop.Id;
         });
     }
 
     private async Task EditImageAsync()
     {
-        if (_workbench?.ActiveAsset is null || _editorModule is null || string.IsNullOrWhiteSpace(_editPrompt))
+        var asset = CurrentEditAsset();
+        if (_workbench is null || asset is null || _editorModule is null || string.IsNullOrWhiteSpace(_editPrompt))
             return;
 
         await RunWorkflowAsync("Sending masked edit...", async () =>
@@ -963,24 +1153,15 @@ else
             var sourceDataUrl = await _editorModule.InvokeAsync<string>("exportSourcePng", _editorCanvas);
             var maskDataUrl = await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas);
             await Workflow.EditImageAsync(_workbench.Project.Id, new EditImageRequest(
-                _workbench.ActiveAsset.Id,
+                asset.Id,
                 _editPrompt,
                 _editSize,
                 _editCount,
                 MaskId: null,
                 sourceDataUrl,
                 maskDataUrl,
-                CurrentReferenceAssetIds().Where(id => id != _workbench.ActiveAsset.Id).ToList()));
+                CurrentReferenceAssetIds().Where(id => id != asset.Id).ToList()));
         });
-    }
-
-    private async Task SelectAssetAsync(Guid assetId)
-    {
-        if (_workbench is null)
-            return;
-
-        await Workflow.SelectAssetAsync(_workbench.Project.Id, assetId);
-        await ReloadWorkbenchAsync();
     }
 
     private async Task AttachAssetAsync(ArtAssetView asset)
@@ -1029,22 +1210,54 @@ else
         await ReloadWorkbenchAsync();
     }
 
-    private async Task UseAsReferenceAsync(Guid assetId)
+    private async Task AddGenerationReferenceAsync(Guid assetId)
     {
         if (_workbench is null)
             return;
 
-        await Workflow.UseAssetAsReferenceAsync(_workbench.Project.Id, assetId);
+        SetDraftReferences(CurrentReferenceAssetIds().Append(assetId).ToList());
+        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Generate);
         await ReloadWorkbenchAsync();
     }
 
-    private async Task MarkAssetAsync(Guid assetId, bool? favorite, bool? rejected)
+    private async Task EditAssetAsync(Guid assetId)
     {
         if (_workbench is null)
             return;
 
-        await Workflow.MarkAssetAsync(_workbench.Project.Id, assetId, favorite, rejected, notes: null);
+        _editAssetId = assetId;
+        _loadedEditorAssetId = null;
+        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Edit);
         await ReloadWorkbenchAsync();
+    }
+
+    private async Task MarkAssetAsync(Guid assetId, bool? favorite)
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.MarkAssetAsync(_workbench.Project.Id, assetId, favorite, notes: null);
+        await ReloadWorkbenchAsync();
+    }
+
+    private void AskDeleteAsset(Guid assetId) => _assetDeleteCandidateId = assetId;
+
+    private void CancelDeleteAsset() => _assetDeleteCandidateId = null;
+
+    private async Task ConfirmDeleteAssetAsync()
+    {
+        if (_workbench is null || _assetDeleteCandidateId is not Guid assetId)
+            return;
+
+        await RunWorkflowAsync("Deleting asset...", async () =>
+        {
+            await Workflow.DeleteAssetAsync(_workbench.Project.Id, assetId);
+            _draftReferenceAssetIds.Remove(assetId);
+            _recipeExampleAssetIds.Remove(assetId);
+            if (_editAssetId == assetId)
+                _editAssetId = null;
+            _assetDeleteCandidateId = null;
+        });
     }
 
     private async Task RunWorkflowAsync(string busyText, Func<Task> action)
@@ -1071,16 +1284,17 @@ else
 
     private async Task LoadEditorAssetIfNeededAsync()
     {
-        if (_editorModule is null || _workbench?.Project.ActiveWorkspaceMode != WorkspaceMode.Edit || _workbench.ActiveAsset is null)
+        var asset = CurrentEditAsset();
+        if (_editorModule is null || _workbench?.Project.ActiveWorkspaceMode != WorkspaceMode.Edit || asset is null)
             return;
 
-        if (_loadedEditorAssetId == _workbench.ActiveAsset.Id)
+        if (_loadedEditorAssetId == asset.Id)
             return;
 
-        _loadedEditorAssetId = _workbench.ActiveAsset.Id;
+        _loadedEditorAssetId = asset.Id;
         try
         {
-            await _editorModule.InvokeVoidAsync("loadEditor", _editorCanvas, _workbench.ActiveAsset.PreviewDataUrl, _brushSize, _editorTool);
+            await _editorModule.InvokeVoidAsync("loadEditor", _editorCanvas, asset.PreviewDataUrl, _brushSize, _editorTool);
         }
         catch
         {
@@ -1427,18 +1641,14 @@ else
     };
 
     private IReadOnlyList<Guid> CurrentReferenceAssetIds() =>
-        _workbench?.Attachments
-            .Where(attachment => attachment.Type is ChatContextAttachmentType.Asset or ChatContextAttachmentType.Crop)
-            .Select(attachment => attachment.RefId)
-            .Concat(_draftReferenceAssetIds)
-            .Distinct()
-            .Take(4)
-            .ToList() ?? _draftReferenceAssetIds.Take(4).ToList();
+        _draftReferenceAssetIds
+            .Take(Math.Max(1, ImageOptions.Value.MaxReferenceImages))
+            .ToList();
 
     private IReadOnlyList<ArtAssetView> DraftReferenceAssets() =>
         _workbench?.Assets
             .Where(asset => _draftReferenceAssetIds.Contains(asset.Id))
-            .Take(4)
+            .Take(Math.Max(1, ImageOptions.Value.MaxReferenceImages))
             .ToList() ?? [];
 
     private void RemoveDraftReference(Guid assetId) => _draftReferenceAssetIds.Remove(assetId);
@@ -1450,7 +1660,7 @@ else
             return;
 
         var validIds = _workbench.Assets.Select(asset => asset.Id).ToHashSet();
-        foreach (var assetId in assetIds.Where(validIds.Contains).Take(4))
+        foreach (var assetId in assetIds.Where(validIds.Contains).Take(Math.Max(1, ImageOptions.Value.MaxReferenceImages)))
             _draftReferenceAssetIds.Add(assetId);
     }
 
@@ -1491,19 +1701,73 @@ else
         return _workbench.Recipes.FirstOrDefault(recipe => recipe.Id == recipeId);
     }
 
-    private IEnumerable<ArtAssetView> FilteredAssets()
+    private ArtAssetView? CurrentEditAsset() =>
+        _editAssetId is Guid assetId
+            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId)
+            : null;
+
+    private ArtAssetView? DeleteCandidateAsset() =>
+        _assetDeleteCandidateId is Guid assetId
+            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId)
+            : null;
+
+    private ArtAssetView? AttachmentAsset(ChatContextAttachmentView attachment) =>
+        attachment.Type is ChatContextAttachmentType.Asset or ChatContextAttachmentType.Crop
+            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == attachment.RefId)
+            : null;
+
+    private ImageMaskView? AttachmentMask(ChatContextAttachmentView attachment) =>
+        attachment.Type == ChatContextAttachmentType.Mask
+            ? _workbench?.Masks.FirstOrDefault(mask => mask.Id == attachment.RefId)
+            : null;
+
+    private static string AttachmentKindLabel(ChatContextAttachmentView attachment) => attachment.Type switch
     {
-        var assets = _workbench?.Assets ?? [];
-        return _assetFilter switch
+        ChatContextAttachmentType.PromptRecipe => "Recipe",
+        ChatContextAttachmentType.GenerationBatch => "Batch",
+        _ => attachment.Type.ToString()
+    };
+
+    private IEnumerable<ArtAssetView> AssetsByLatest() =>
+        (_workbench?.Assets ?? [])
+            .OrderByDescending(asset => asset.IsFavorite)
+            .ThenByDescending(asset => asset.CreatedAt);
+
+    private IReadOnlyList<AssetGroup> AssetRecipeGroups()
+    {
+        if (_workbench is null)
+            return [];
+
+        var groups = new List<AssetGroup>();
+        var favorites = _workbench.Assets
+            .Where(asset => asset.IsFavorite)
+            .OrderByDescending(asset => asset.CreatedAt)
+            .ToList();
+        if (favorites.Count > 0)
+            groups.Add(new AssetGroup("Favorites", favorites));
+
+        var remaining = _workbench.Assets.Where(asset => !asset.IsFavorite).ToList();
+        foreach (var recipe in _workbench.Recipes)
         {
-            "favorites" => assets.Where(asset => asset.IsFavorite),
-            "references" => assets.Where(asset => asset.IsReference),
-            "rejected" => assets.Where(asset => asset.IsRejected),
-            _ => assets.Where(asset => !asset.IsRejected),
-        };
+            var assets = remaining
+                .Where(asset => asset.SourcePromptRecipeId == recipe.Id)
+                .OrderByDescending(asset => asset.CreatedAt)
+                .ToList();
+            if (assets.Count > 0)
+                groups.Add(new AssetGroup(recipe.Name, assets));
+        }
+
+        var uncategorized = remaining
+            .Where(asset => asset.SourcePromptRecipeId is null || !_workbench.Recipes.Any(recipe => recipe.Id == asset.SourcePromptRecipeId))
+            .OrderByDescending(asset => asset.CreatedAt)
+            .ToList();
+        if (uncategorized.Count > 0)
+            groups.Add(new AssetGroup("Uncategorized", uncategorized));
+
+        return groups;
     }
 
-    private void SetFilter(string filter) => _assetFilter = filter;
+    private void SetAssetOrganization(string organization) => _assetOrganization = organization == "recipe" ? "recipe" : "latest";
 
     private string ReferenceSummary()
     {
@@ -1511,7 +1775,10 @@ else
         return count == 0 ? "No references selected" : $"{count} reference(s) selected";
     }
 
-    private bool CanGenerate => !string.IsNullOrWhiteSpace(_generatePrompt) && string.IsNullOrWhiteSpace(_busyText);
+    private bool CanGenerate =>
+        !string.IsNullOrWhiteSpace(_generatePrompt)
+        && string.IsNullOrWhiteSpace(_busyText)
+        && _runningGenerationBatchId is null;
 
     private bool CanSaveRecipe =>
         !string.IsNullOrWhiteSpace(_recipeName)
@@ -1554,8 +1821,8 @@ else
     private static string NormalizeDraftSize(string? size, string current) =>
         string.IsNullOrWhiteSpace(size) ? current : size.Trim();
 
-    private static int NormalizeDraftCount(int? count, int current) =>
-        count is int value ? Math.Clamp(value <= 0 ? 1 : value, 1, 4) : current;
+    private int NormalizeDraftCount(int? count, int current) =>
+        count is int value ? Math.Clamp(value <= 0 ? 1 : value, 1, Math.Max(1, ImageOptions.Value.MaxOutputs)) : current;
 
     private string ModeButtonClass(WorkspaceMode mode) =>
         _workbench?.Project.ActiveWorkspaceMode == mode ? "mode-tab is-active" : "mode-tab";
@@ -1563,8 +1830,8 @@ else
     private string EditorToolClass(string tool) =>
         _editorTool == tool ? "segmented-button is-active" : "segmented-button";
 
-    private string FilterClass(string filter) =>
-        _assetFilter == filter ? "filter-button is-active" : "filter-button";
+    private string AssetOrganizationClass(string organization) =>
+        _assetOrganization == organization ? "filter-button is-active" : "filter-button";
 
     private Guid SelectedRecipeId()
     {
@@ -1583,8 +1850,18 @@ else
     private static string FormatDimensions(ArtAssetView asset) =>
         asset.Width is int width && asset.Height is int height ? $"{width} x {height}" : "Unknown size";
 
+    private static string LabelForIndex(int index)
+    {
+        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        return index >= 0 && index < alphabet.Length
+            ? alphabet[index].ToString()
+            : (index + 1).ToString();
+    }
+
     private static IReadOnlyList<string> SplitLines(string value) =>
         value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private sealed record AssetGroup(string Label, IReadOnlyList<ArtAssetView> Assets);
 
     public async ValueTask DisposeAsync()
     {
@@ -1596,5 +1873,8 @@ else
         {
             try { await _editorModule.DisposeAsync(); } catch { }
         }
+        _generationCts?.Cancel();
+        _generationCts?.Dispose();
+        _generationFailureLock.Dispose();
     }
 }

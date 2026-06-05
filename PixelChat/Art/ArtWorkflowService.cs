@@ -88,7 +88,6 @@ public sealed class ArtWorkflowService(
             recipeViews,
             maskViews,
             attachmentViews,
-            assetViews.FirstOrDefault(a => a.Id == selected.ActiveAssetId),
             batchViews.FirstOrDefault(b => b.Id == selected.ActiveBatchId),
             providerStatus);
     }
@@ -97,17 +96,6 @@ public sealed class ArtWorkflowService(
     {
         var project = await GetProjectAsync(projectId, cancellationToken);
         project.ActiveWorkspaceMode = mode;
-        project.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
-    }
-
-    public async Task SelectAssetAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default)
-    {
-        var project = await GetProjectAsync(projectId, cancellationToken);
-        if (!await db.ArtAssets.AnyAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken))
-            throw new InvalidOperationException("Asset was not found.");
-
-        project.ActiveAssetId = assetId;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
     }
@@ -123,7 +111,7 @@ public sealed class ArtWorkflowService(
         await db.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<GenerationBatchView> GenerateImagesAsync(
+    public async Task<GenerationBatchView> StartGenerateImagesAsync(
         Guid projectId,
         GenerateImagesRequest request,
         CancellationToken cancellationToken = default)
@@ -158,16 +146,34 @@ public sealed class ArtWorkflowService(
         };
         await db.GenerationBatches.AddAsync(batch, cancellationToken);
         project.ActiveBatchId = batch.Id;
+        project.ActiveWorkspaceMode = WorkspaceMode.Compare;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
+
+        var batchAssets = await db.ArtAssets.Where(a => a.ProjectId == projectId).ToListAsync(cancellationToken);
+        return BatchView(batch, batchAssets);
+    }
+
+    public async Task<ArtAssetView> GenerateBatchOutputAsync(
+        Guid projectId,
+        Guid batchId,
+        int outputIndex,
+        CancellationToken cancellationToken = default)
+    {
+        var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken)
+            ?? throw new InvalidOperationException("Generation batch was not found.");
+        var references = await ResolveAssetsAsync(projectId, DeserializeIds(batch.InputAssetIdsJson), cancellationToken);
+        var recipe = batch.PromptRecipeId is Guid recipeId
+            ? await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+            : null;
 
         try
         {
             var providerResult = await imageProvider.GenerateAsync(new ImageProviderGenerateRequest(
-                BuildPrompt(prompt, request.NegativePrompt, recipe),
-                Clean(request.NegativePrompt),
+                BuildPrompt(batch.Prompt, batch.NegativePrompt, recipe),
+                Clean(batch.NegativePrompt),
                 batch.Size,
-                count,
+                1,
                 batch.MainlineModel,
                 batch.ImageModel,
                 references.Select(ToProviderReference).ToList(),
@@ -179,53 +185,108 @@ public sealed class ArtWorkflowService(
             batch.MainlineModel = providerResult.MainlineModel;
             batch.ImageModel = providerResult.ImageModel;
             batch.RawProviderResponseJson = providerResult.RawMetadataJson;
-            batch.Status = GenerationBatchStatus.Succeeded;
             batch.UpdatedAt = DateTime.UtcNow;
 
-            var ordinal = 0;
-            ArtAsset? firstAsset = null;
-            foreach (var image in providerResult.Images)
-            {
-                var label = $"Image {LabelForIndex(ordinal++)}";
-                var asset = CreateAsset(
-                    projectId,
-                    label,
-                    $"generated-{DateTime.UtcNow:yyyyMMddHHmmss}-{ordinal}.{ExtensionForContentType(image.ContentType)}",
-                    ArtAssetKind.Generated,
-                    image.ContentType,
-                    image.Data,
-                    parentAssetId: null,
-                    sourceBatchId: batch.Id,
-                    promptRecipeId: recipe?.Id,
-                    prompt: prompt,
-                    metadata: new
-                    {
-                        image.RevisedPrompt,
-                        image.ResponseId,
-                        image.CallId,
-                        image.OutputFormat,
-                        References = references.Select(a => new { a.Id, a.Label, a.ContentType }),
-                    });
-                await db.ArtAssets.AddAsync(asset, cancellationToken);
-                firstAsset ??= asset;
-            }
-
-            if (firstAsset is not null)
-                project.ActiveAssetId = firstAsset.Id;
-            project.UpdatedAt = DateTime.UtcNow;
+            var image = providerResult.Images.FirstOrDefault()
+                ?? throw new InvalidOperationException("Image provider completed without returning an image.");
+            var asset = CreateAsset(
+                projectId,
+                $"Image {LabelForIndex(outputIndex)}",
+                $"generated-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(image.ContentType)}",
+                ArtAssetKind.Generated,
+                image.ContentType,
+                image.Data,
+                parentAssetId: null,
+                sourceBatchId: batch.Id,
+                promptRecipeId: recipe?.Id,
+                prompt: batch.Prompt,
+                metadata: new
+                {
+                    OutputIndex = outputIndex,
+                    image.RevisedPrompt,
+                    image.ResponseId,
+                    image.CallId,
+                    image.OutputFormat,
+                    References = references.Select(a => new { a.Id, a.Label, a.ContentType }),
+                });
+            await db.ArtAssets.AddAsync(asset, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
+            return AssetView(asset);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            batch.Status = GenerationBatchStatus.Failed;
-            batch.Error = ex.Message;
-            batch.UpdatedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync(CancellationToken.None);
+            await MarkGenerationBatchOutputFailedAsync(projectId, batchId, outputIndex, ex.Message, CancellationToken.None);
             throw;
         }
+    }
 
+    public async Task MarkGenerationBatchOutputFailedAsync(
+        Guid projectId,
+        Guid batchId,
+        int outputIndex,
+        string error,
+        CancellationToken cancellationToken = default)
+    {
+        var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken);
+        if (batch is null)
+            return;
+        var errors = DeserializeOutputErrors(batch.OutputErrorsJson)
+            .Where(item => item.OutputIndex != outputIndex)
+            .Append(new GenerationOutputErrorView(outputIndex, Clean(error)))
+            .OrderBy(item => item.OutputIndex)
+            .ToList();
+        batch.OutputErrorsJson = SerializeOutputErrors(errors);
+        batch.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<GenerationBatchView> CompleteGenerationBatchAsync(
+        Guid projectId,
+        Guid batchId,
+        CancellationToken cancellationToken = default)
+    {
+        var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken)
+            ?? throw new InvalidOperationException("Generation batch was not found.");
+        var outputCount = await db.ArtAssets.CountAsync(a => a.ProjectId == projectId && a.SourceBatchId == batchId, cancellationToken);
+        var errors = DeserializeOutputErrors(batch.OutputErrorsJson);
+
+        batch.Status = errors.Count switch
+        {
+            0 when outputCount >= batch.Count => GenerationBatchStatus.Succeeded,
+            _ when outputCount == 0 => GenerationBatchStatus.Failed,
+            _ => GenerationBatchStatus.CompletedWithErrors,
+        };
+        batch.Error = errors.Count == 0
+            ? string.Empty
+            : $"{errors.Count} of {batch.Count} image request(s) failed.";
+        batch.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
         var batchAssets = await db.ArtAssets.Where(a => a.ProjectId == projectId).ToListAsync(cancellationToken);
         return BatchView(batch, batchAssets);
+    }
+
+    public async Task<GenerationBatchView> GenerateImagesAsync(
+        Guid projectId,
+        GenerateImagesRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var batch = await StartGenerateImagesAsync(projectId, request, cancellationToken);
+        for (var outputIndex = 0; outputIndex < batch.Count; outputIndex++)
+        {
+            try
+            {
+                await GenerateBatchOutputAsync(projectId, batch.Id, outputIndex, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+            }
+        }
+
+        return await CompleteGenerationBatchAsync(projectId, batch.Id, cancellationToken);
     }
 
     public async Task<GenerationBatchView> EditImageAsync(
@@ -306,7 +367,6 @@ public sealed class ArtWorkflowService(
             batch.UpdatedAt = DateTime.UtcNow;
 
             var ordinal = 0;
-            ArtAsset? firstAsset = null;
             foreach (var image in providerResult.Images)
             {
                 var asset = CreateAsset(
@@ -330,11 +390,8 @@ public sealed class ArtWorkflowService(
                         MaskId = storedMask?.Id,
                     });
                 await db.ArtAssets.AddAsync(asset, cancellationToken);
-                firstAsset ??= asset;
             }
 
-            if (firstAsset is not null)
-                project.ActiveAssetId = firstAsset.Id;
             project.ActiveWorkspaceMode = WorkspaceMode.Compare;
             project.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
@@ -373,7 +430,7 @@ public sealed class ArtWorkflowService(
             prompt: string.Empty,
             metadata: new { Source = "import" });
         await db.ArtAssets.AddAsync(asset, cancellationToken);
-        await SelectAfterAssetMutationAsync(projectId, asset.Id, WorkspaceMode.Edit, cancellationToken);
+        await SetWorkspaceModeAfterAssetMutationAsync(projectId, WorkspaceMode.Edit, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return AssetView(asset);
     }
@@ -397,7 +454,7 @@ public sealed class ArtWorkflowService(
             parent.Prompt,
             new { ParentAssetId = parent.Id });
         await db.ArtAssets.AddAsync(asset, cancellationToken);
-        await SelectAfterAssetMutationAsync(projectId, asset.Id, WorkspaceMode.Edit, cancellationToken);
+        await SetWorkspaceModeAfterAssetMutationAsync(projectId, WorkspaceMode.Edit, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return AssetView(asset);
     }
@@ -497,27 +554,15 @@ public sealed class ArtWorkflowService(
         await db.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, bool? rejected, string? notes, CancellationToken cancellationToken = default)
+    public async Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default)
     {
         var asset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
             ?? throw new InvalidOperationException("Asset was not found.");
         if (favorite is not null)
             asset.IsFavorite = favorite.Value;
-        if (rejected is not null)
-            asset.IsRejected = rejected.Value;
         if (notes is not null)
             asset.Notes = notes.Trim();
         asset.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
-    }
-
-    public async Task UseAssetAsReferenceAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default)
-    {
-        var asset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
-            ?? throw new InvalidOperationException("Asset was not found.");
-        asset.IsReference = true;
-        asset.UpdatedAt = DateTime.UtcNow;
-        await AttachContextAsync(projectId, ChatContextAttachmentType.Asset, assetId, asset.Label, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
     }
 
@@ -531,10 +576,21 @@ public sealed class ArtWorkflowService(
             .Where(a => a.ProjectId == projectId && a.RefId == assetId)
             .ToListAsync(cancellationToken);
         db.ChatContextAttachments.RemoveRange(attachments);
+
+        var recipes = await db.PromptRecipes
+            .Where(r => r.ProjectId == projectId)
+            .ToListAsync(cancellationToken);
+        foreach (var recipe in recipes)
+        {
+            var exampleIds = DeserializeIds(recipe.ExampleAssetIdsJson);
+            if (!exampleIds.Remove(assetId))
+                continue;
+            recipe.ExampleAssetIdsJson = SerializeIds(exampleIds);
+            recipe.UpdatedAt = DateTime.UtcNow;
+        }
+
         db.ArtAssets.Remove(asset);
         var project = await GetProjectAsync(projectId, cancellationToken);
-        if (project.ActiveAssetId == assetId)
-            project.ActiveAssetId = null;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
     }
@@ -594,9 +650,8 @@ public sealed class ArtWorkflowService(
         return JsonSerializer.Serialize(new
         {
             project = view.Project,
-            activeAsset = view.ActiveAsset is null ? null : CompactAsset(view.ActiveAsset),
             activeBatch = view.ActiveBatch,
-            attachedContext = view.Attachments,
+            chatAttachments = view.Attachments,
             recentAssets = view.Assets.Take(12).Select(CompactAsset),
             recentBatches = view.Batches.Take(6),
             recipes = view.Recipes.Take(12),
@@ -628,10 +683,9 @@ public sealed class ArtWorkflowService(
         return mask;
     }
 
-    private async Task SelectAfterAssetMutationAsync(Guid projectId, Guid assetId, WorkspaceMode mode, CancellationToken cancellationToken)
+    private async Task SetWorkspaceModeAfterAssetMutationAsync(Guid projectId, WorkspaceMode mode, CancellationToken cancellationToken)
     {
         var project = await GetProjectAsync(projectId, cancellationToken);
-        project.ActiveAssetId = assetId;
         project.ActiveWorkspaceMode = mode;
         project.UpdatedAt = DateTime.UtcNow;
     }
@@ -786,13 +840,11 @@ public sealed class ArtWorkflowService(
         asset.ParentAssetId,
         asset.SourceBatchId,
         asset.IsFavorite,
-        asset.IsRejected,
-        asset.IsReference,
         asset.Notes,
     };
 
     private static ProjectView ProjectView(Project project) =>
-        new(project.Id, project.Name, project.ActiveWorkspaceMode, project.ActiveAssetId, project.ActiveBatchId);
+        new(project.Id, project.Name, project.ActiveWorkspaceMode, project.ActiveBatchId);
 
     private static ArtAssetView AssetView(ArtAsset asset) =>
         new(
@@ -808,8 +860,6 @@ public sealed class ArtWorkflowService(
             asset.SourceBatchId,
             asset.SourcePromptRecipeId,
             asset.IsFavorite,
-            asset.IsRejected,
-            asset.IsReference,
             asset.Notes,
             asset.Prompt,
             asset.CreatedAt);
@@ -832,6 +882,7 @@ public sealed class ArtWorkflowService(
             batch.PromptRecipeId,
             batch.Status,
             batch.Error,
+            DeserializeOutputErrors(batch.OutputErrorsJson),
             batch.CreatedAt);
 
     private static PromptRecipeView RecipeView(PromptRecipe recipe) =>
@@ -905,6 +956,9 @@ public sealed class ArtWorkflowService(
     private static string SerializeStrings(IEnumerable<string> values) =>
         JsonSerializer.Serialize(values.Select(v => v.Trim()).Where(v => v.Length > 0).ToList(), JsonOptions);
 
+    private static string SerializeOutputErrors(IEnumerable<GenerationOutputErrorView> errors) =>
+        JsonSerializer.Serialize(errors.ToList(), JsonOptions);
+
     private static List<Guid> DeserializeIds(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -926,6 +980,20 @@ public sealed class ArtWorkflowService(
         try
         {
             return JsonSerializer.Deserialize<List<string>>(value) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static List<GenerationOutputErrorView> DeserializeOutputErrors(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<GenerationOutputErrorView>>(value) ?? [];
         }
         catch (JsonException)
         {

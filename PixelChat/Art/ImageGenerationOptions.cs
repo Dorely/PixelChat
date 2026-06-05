@@ -11,6 +11,7 @@ public sealed class ImageGenerationOptions
     public string DefaultOutputFormat { get; set; } = "png";
     public string DefaultBackground { get; set; } = "auto";
     public int MaxOutputs { get; set; } = 4;
+    public int MaxParallelRequests { get; set; } = 4;
     public int RequestTimeoutSeconds { get; set; } = 600;
     public int MaxReferenceImages { get; set; } = 4;
 }

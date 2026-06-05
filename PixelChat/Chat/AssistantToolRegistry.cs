@@ -9,12 +9,10 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
 {
     private static readonly HashSet<string> WorkspaceMutationTools = new(StringComparer.Ordinal)
     {
-        "attach_context",
-        "clear_context",
+        "attach_chat_attachment",
+        "clear_chat_attachments",
         "switch_workspace_mode",
-        "select_asset",
         "mark_asset",
-        "use_as_reference"
     };
 
     public IList<AITool> Build(Guid projectId) =>
@@ -22,27 +20,22 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         AIFunctionFactory.Create(
             method: () => workflow.GetWorkspaceStateJsonAsync(projectId),
             name: "list_workspace_state",
-            description: "Read the current PixelChat workspace state, including active asset, visible chat context chips, recent batches, recipes, and provider status. This is read-only."),
+            description: "Read the current PixelChat workspace state, including visible chat attachments, recent assets, batches, recipes, and provider status. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (string type, Guid refId, string? label = null) => AttachContextAsync(projectId, type, refId, label),
-            name: "attach_context",
-            description: "Attach an existing asset, mask, crop, prompt recipe, or generation batch to the visible chat context chips."),
+            name: "attach_chat_attachment",
+            description: "Attach an existing asset, mask, crop, prompt recipe, or generation batch to the visible chat attachments."),
 
         AIFunctionFactory.Create(
             method: () => ClearContextAsync(projectId),
-            name: "clear_context",
-            description: "Clear all visible chat context chips for the current project."),
+            name: "clear_chat_attachments",
+            description: "Clear all visible chat attachments for the current project."),
 
         AIFunctionFactory.Create(
             method: (string mode) => SwitchWorkspaceModeAsync(projectId, mode),
             name: "switch_workspace_mode",
-            description: "Switch the visible workspace mode. Allowed values: generate, compare, edit, recipes."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetId) => SelectAssetAsync(projectId, assetId),
-            name: "select_asset",
-            description: "Select an existing asset as the active asset in the visible workspace."),
+            description: "Switch the visible workspace mode. Allowed values: generate, compare, edit, recipes, assets."),
 
         AIFunctionFactory.Create(
             method: (
@@ -61,7 +54,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 string? size = null,
                 int count = 1) => DraftEditFormAsync(prompt, size, count),
             name: "draft_edit_form",
-            description: "Draft values for the active asset Edit form. This does not run an image edit; the user paints/reviews the mask and clicks Send Masked Edit manually."),
+            description: "Draft values for the current Edit form. This does not choose an asset or run an image edit; the user selects an asset, paints/reviews the mask, and clicks Send Masked Edit manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -77,15 +70,10 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             description: "Draft values for the prompt recipe editor. This does not save a recipe; the user reviews the form and clicks Save manually."),
 
         AIFunctionFactory.Create(
-            method: (Guid assetId, bool? favorite = null, bool? rejected = null, string? notes = null) =>
-                MarkAssetAsync(projectId, assetId, favorite, rejected, notes),
+            method: (Guid assetId, bool? favorite = null, string? notes = null) =>
+                MarkAssetAsync(projectId, assetId, favorite, notes),
             name: "mark_asset",
-            description: "Mark an asset as favorite/rejected and optionally update notes."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetId) => UseAsReferenceAsync(projectId, assetId),
-            name: "use_as_reference",
-            description: "Mark an asset as a reusable reference and attach it to the visible chat context."),
+            description: "Mark an asset as favorite/unfavorite and optionally update notes."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId) => ExportAssetAsync(projectId, assetId),
@@ -104,19 +92,13 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
     private async Task<string> ClearContextAsync(Guid projectId)
     {
         await workflow.ClearContextAsync(projectId);
-        return "Context cleared.";
+        return "Chat attachments cleared.";
     }
 
     private async Task<string> SwitchWorkspaceModeAsync(Guid projectId, string mode)
     {
         await workflow.SetWorkspaceModeAsync(projectId, ParseWorkspaceMode(mode));
         return $"Workspace mode switched to {mode}.";
-    }
-
-    private async Task<string> SelectAssetAsync(Guid projectId, Guid assetId)
-    {
-        await workflow.SelectAssetAsync(projectId, assetId);
-        return $"Selected asset {assetId}.";
     }
 
     private static Task<string> DraftGenerateFormAsync(
@@ -174,16 +156,10 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         return Task.FromResult(JsonSerializer.Serialize(draft));
     }
 
-    private async Task<string> MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, bool? rejected, string? notes)
+    private async Task<string> MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes)
     {
-        await workflow.MarkAssetAsync(projectId, assetId, favorite, rejected, notes);
+        await workflow.MarkAssetAsync(projectId, assetId, favorite, notes);
         return $"Asset {assetId} updated.";
-    }
-
-    private async Task<string> UseAsReferenceAsync(Guid projectId, Guid assetId)
-    {
-        await workflow.UseAssetAsReferenceAsync(projectId, assetId);
-        return $"Asset {assetId} marked as reference and attached to chat context.";
     }
 
     private static Task<string> ExportAssetAsync(Guid projectId, Guid assetId) =>
@@ -212,6 +188,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             "compare" => WorkspaceMode.Compare,
             "edit" => WorkspaceMode.Edit,
             "recipes" or "recipe" => WorkspaceMode.Recipes,
+            "assets" or "asset" => WorkspaceMode.Assets,
             _ => throw new InvalidOperationException($"Unknown workspace mode '{mode}'.")
         };
 

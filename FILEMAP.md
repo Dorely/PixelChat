@@ -40,22 +40,22 @@
 
 | File | Description |
 |------|-------------|
-| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with visible/active image context, Shellmate-style tool-call streaming/execution, form-draft updates, and transcript replay. |
+| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit chat attachment image context, Shellmate-style tool-call streaming/execution, form-draft updates, and transcript replay. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, exposes live snapshots, finished-turn commits, and workspace/form side effects. |
 | `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, form drafting, and immediate visible tool use. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records and form-draft payloads used by chat/runtime/UI. |
-| `AssistantToolRegistry.cs` | Tool registry for workspace state, form drafting, context chips, mode/asset selection, marking, reference, and export actions. |
+| `AssistantToolRegistry.cs` | Tool registry for workspace state, form drafting, chat attachments, workspace mode switching, asset favorites/notes, and export actions. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, batches, masks, recipe CRUD, context chips, import, crop, generation, and masked edits. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, streaming compare batches, masks, recipe CRUD, chat attachments, import, crop, generation, and masked edits. |
 | `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench, recipe management, and assistant tools. |
 | `ImageProviderModels.cs` | Provider abstraction plus generation/edit request and result records. |
 | `OpenAIAccountImageProvider.cs` | OpenAI account Responses image provider using Codex-style auth headers, SSE parsing, references, and masked edit payloads. |
-| `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, timeout, and reference defaults. |
+| `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, parallelism, timeout, and reference defaults. |
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 
@@ -87,7 +87,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat, Generate/Compare/Edit/Recipes tabs, context panel, asset tray, and canvas editor helpers. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat with attachments, Generate/Compare/Edit/Recipes/Assets tabs, live compare results, and canvas editor helpers. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, defaults, API-key updates, and child model rows. |
@@ -111,12 +111,12 @@
 
 | File | Description |
 |------|-------------|
-| `Project.cs` | EF entity for art workbench projects, active asset/batch, and active workspace mode including the Recipes tab. |
-| `ArtAsset.cs` | EF entity for imported, generated, edited, and cropped image BLOBs plus lineage, flags, prompt, and metadata. |
-| `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, lineage, and status. |
+| `Project.cs` | EF entity for art workbench projects, active batch, and active workspace mode including the Assets tab. |
+| `ArtAsset.cs` | EF entity for imported, generated, edited, and cropped image BLOBs plus lineage, favorite flag, prompt, and metadata. |
+| `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, output errors, lineage, and status. |
 | `PromptRecipe.cs` | EF entity for reusable visible prompt templates, style/avoid rules, examples, and preferred defaults. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets. |
-| `ChatContextAttachment.cs` | EF entity for visible chat context chips referencing assets, masks, crops, recipes, or batches. |
+| `ChatContextAttachment.cs` | EF entity for persistent visible chat attachments referencing assets, masks, crops, recipes, or batches. |
 | `AssistantConversation.cs` | EF entity for project-scoped persistent assistant conversations. |
 | `AssistantMessage.cs` | EF entity and enums for transcript messages, tool roles, tool-call manifests, roles, statuses, and errors. |
 | `AuthType.cs` | Enum for provider authentication modes: none, API key, or OAuth. |
@@ -139,6 +139,7 @@
 |------|-------------|
 | `20260604212229_InitialSchema.cs` / `.Designer.cs` | EF initial migration for providers, OAuth metadata, stored secrets, and assistant transcripts. |
 | `20260604224321_ArtWorkbenchFirstSlice.cs` / `.Designer.cs` | EF migration adding art projects/assets/batches/recipes/masks/context chips and assistant tool-call columns. |
+| `20260605053624_AssetAttachmentCompareStreaming.cs` / `.Designer.cs` | EF migration removing active-asset/reference/rejected columns and adding generation batch output-error storage. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

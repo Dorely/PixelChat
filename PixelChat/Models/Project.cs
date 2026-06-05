@@ -5,7 +5,6 @@ public class Project
     public Guid Id { get; set; } = Guid.NewGuid();
     public required string Name { get; set; }
     public WorkspaceMode ActiveWorkspaceMode { get; set; } = WorkspaceMode.Generate;
-    public Guid? ActiveAssetId { get; set; }
     public Guid? ActiveBatchId { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
@@ -23,5 +22,6 @@ public enum WorkspaceMode
     Generate,
     Compare,
     Edit,
-    Recipes
+    Recipes,
+    Assets
 }

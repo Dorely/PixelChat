@@ -27,8 +27,6 @@ public class ArtAsset
     public PromptRecipe? SourcePromptRecipe { get; set; }
 
     public bool IsFavorite { get; set; }
-    public bool IsRejected { get; set; }
-    public bool IsReference { get; set; }
     public string Notes { get; set; } = string.Empty;
     public string Prompt { get; set; } = string.Empty;
     public string SourceMetadataJson { get; set; } = string.Empty;

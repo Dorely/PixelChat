@@ -44,6 +44,11 @@
         </div>
     }
 
+    @if (BeforeComposer is not null)
+    {
+        <div class="chat-before-composer">@BeforeComposer</div>
+    }
+
     <div class="chat-composer">
         <textarea class="form-control chat-input" rows="1" placeholder="@Placeholder"
                   @ref="_composerEl"
@@ -83,6 +88,7 @@
     [Parameter] public EventCallback OnStop { get; set; }
     [Parameter] public EventCallback OnClearError { get; set; }
     [Parameter] public RenderFragment? HeaderActions { get; set; }
+    [Parameter] public RenderFragment? BeforeComposer { get; set; }
 
     private ElementReference _scrollEl;
     private ElementReference _composerEl;

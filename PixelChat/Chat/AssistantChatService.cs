@@ -394,17 +394,9 @@ public sealed class AssistantChatService(
         var contextSummary = BuildVisibleContextSummary(workbench);
         contents.Add(new TextContent(string.IsNullOrWhiteSpace(contextSummary)
             ? text
-            : $"{text}\n\nVisible PixelChat context:\n{contextSummary}"));
+            : $"{text}\n\nVisible PixelChat chat attachments:\n{contextSummary}"));
 
         var includedAssetIds = new HashSet<Guid>();
-        if (workbench.ActiveAsset is not null)
-        {
-            contents.Add(new DataContent(workbench.ActiveAsset.PreviewDataUrl, workbench.ActiveAsset.ContentType)
-            {
-                Name = workbench.ActiveAsset.FileName,
-            });
-            includedAssetIds.Add(workbench.ActiveAsset.Id);
-        }
 
         foreach (var attachment in workbench.Attachments)
         {
@@ -440,13 +432,10 @@ public sealed class AssistantChatService(
 
     private static string BuildVisibleContextSummary(WorkbenchView workbench)
     {
-        if (workbench.Attachments.Count == 0 && workbench.ActiveAsset is null)
+        if (workbench.Attachments.Count == 0)
             return string.Empty;
 
         var lines = new List<string>();
-        if (workbench.ActiveAsset is not null)
-            lines.Add($"- Active asset: {workbench.ActiveAsset.Label} ({workbench.ActiveAsset.Id})");
-
         foreach (var attachment in workbench.Attachments)
         {
             lines.Add($"- {attachment.Type}: {attachment.Label} ({attachment.RefId})");

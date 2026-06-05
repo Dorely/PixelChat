@@ -103,6 +103,11 @@
     color: #842029;
 }
 
+.chat-before-composer {
+    border-top: 1px solid #d9dee7;
+    background: #ffffff;
+}
+
 .chat-composer {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;

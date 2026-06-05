@@ -10,7 +10,6 @@ public sealed record WorkbenchView(
     IReadOnlyList<PromptRecipeView> Recipes,
     IReadOnlyList<ImageMaskView> Masks,
     IReadOnlyList<ChatContextAttachmentView> Attachments,
-    ArtAssetView? ActiveAsset,
     GenerationBatchView? ActiveBatch,
     ProviderStatusView ImageProviderStatus);
 
@@ -18,7 +17,6 @@ public sealed record ProjectView(
     Guid Id,
     string Name,
     WorkspaceMode ActiveWorkspaceMode,
-    Guid? ActiveAssetId,
     Guid? ActiveBatchId);
 
 public sealed record ArtAssetView(
@@ -34,8 +32,6 @@ public sealed record ArtAssetView(
     Guid? SourceBatchId,
     Guid? SourcePromptRecipeId,
     bool IsFavorite,
-    bool IsRejected,
-    bool IsReference,
     string Notes,
     string Prompt,
     DateTime CreatedAt);
@@ -57,7 +53,12 @@ public sealed record GenerationBatchView(
     Guid? PromptRecipeId,
     GenerationBatchStatus Status,
     string Error,
+    IReadOnlyList<GenerationOutputErrorView> OutputErrors,
     DateTime CreatedAt);
+
+public sealed record GenerationOutputErrorView(
+    int OutputIndex,
+    string Error);
 
 public sealed record PromptRecipeView(
     Guid Id,
