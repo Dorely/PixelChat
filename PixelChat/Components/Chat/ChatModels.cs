@@ -1,12 +1,13 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace PixelChat.Components.Chat;
 
 public enum ChatMessageRole
 {
     User,
-    Assistant,
-    Tool
+    Assistant
 }
 
 public enum ChatMessageStatus
@@ -21,23 +22,122 @@ public sealed record ChatRenderableMessage(
     Guid Id,
     ChatMessageRole Role,
     ChatMessageStatus Status,
-    string Content,
-    IReadOnlyList<ChatToolCallView>? ToolCalls = null,
-    string? ToolName = null,
-    string? ToolCallId = null);
+    List<ChatMessagePart> Parts);
 
-public sealed record ChatToolCallView(
-    Guid AssistantMessageId,
-    string CallId,
-    string Name,
-    string ArgumentsJson,
-    ChatToolCallStatus Status,
-    string? Result,
-    string? Error);
+public abstract class ChatMessagePart;
 
+public sealed class ChatTextPart : ChatMessagePart
+{
+    public ChatTextPart(string text) => Text.Append(text);
+
+    public StringBuilder Text { get; } = new();
+
+    public void Append(string text) => Text.Append(text);
+}
+
+public sealed class ChatToolPart(ChatToolChip chip) : ChatMessagePart
+{
+    public ChatToolChip Chip { get; } = chip;
+}
+
+public sealed class ChatToolChip
+{
+    private readonly StringBuilder _arguments = new();
+
+    public ChatToolChip(
+        string callId,
+        string name,
+        string argumentsJson,
+        bool argumentsComplete = true,
+        ChatToolCallStatus status = ChatToolCallStatus.Completed,
+        Guid? assistantMessageId = null)
+    {
+        CallId = callId;
+        Name = name;
+        SetArguments(argumentsJson);
+        ArgumentsComplete = argumentsComplete;
+        Status = status;
+        AssistantMessageId = assistantMessageId;
+    }
+
+    public Guid? AssistantMessageId { get; private set; }
+    public string CallId { get; }
+    public string Name { get; private set; }
+    public string ArgumentsJson => _arguments.ToString();
+    public string? Result { get; set; }
+    public string? Error { get; set; }
+    public double? DurationMs { get; set; }
+    public ChatToolCallStatus Status { get; private set; }
+    public bool ArgumentsComplete { get; private set; }
+    public bool HasArguments => !string.IsNullOrWhiteSpace(ArgumentsJson) && ArgumentsJson != "{}";
+    public bool IsFinished => Status is ChatToolCallStatus.Completed or ChatToolCallStatus.Rejected or ChatToolCallStatus.Failed;
+    public bool CanConfirm => Status == ChatToolCallStatus.Pending && AssistantMessageId.HasValue;
+
+    public void Rename(string name) => Name = name;
+
+    public void SetArguments(string argumentsJson)
+    {
+        _arguments.Clear();
+        if (!string.IsNullOrEmpty(argumentsJson))
+            _arguments.Append(argumentsJson);
+    }
+
+    public void AppendArguments(string argumentsDelta, bool argumentsComplete)
+    {
+        if (!string.IsNullOrEmpty(argumentsDelta))
+            _arguments.Append(argumentsDelta);
+        ArgumentsComplete = argumentsComplete || ArgumentsComplete;
+    }
+
+    public void MarkArgumentsComplete(string? argumentsJson = null)
+    {
+        if (argumentsJson is not null)
+            SetArguments(argumentsJson);
+        ArgumentsComplete = true;
+    }
+
+    public void MarkPendingConfirmation(Guid assistantMessageId, string name, string argumentsJson)
+    {
+        AssistantMessageId = assistantMessageId;
+        Rename(name);
+        MarkArgumentsComplete(argumentsJson);
+        Status = ChatToolCallStatus.Pending;
+    }
+
+    public void MarkCompleted(string? result, string? error, double? durationMs = null)
+    {
+        Result = result;
+        Error = error;
+        DurationMs = durationMs;
+        Status = error is null ? ChatToolCallStatus.Completed : ChatToolCallStatus.Failed;
+        MarkArgumentsComplete();
+    }
+
+    public void SetPersistedStatus(ChatToolCallStatus status, string? result, string? error)
+    {
+        Status = status;
+        Result = result;
+        Error = error;
+        MarkArgumentsComplete();
+    }
+
+    public ChatToolChip Clone()
+    {
+        var clone = new ChatToolChip(CallId, Name, ArgumentsJson, ArgumentsComplete, Status, AssistantMessageId)
+        {
+            Result = Result,
+            Error = Error,
+            DurationMs = DurationMs
+        };
+        return clone;
+    }
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<ChatToolCallStatus>))]
 public enum ChatToolCallStatus
 {
     Pending,
+    Running,
     Completed,
     Rejected,
     Failed
@@ -47,23 +147,13 @@ public sealed record ChatToolCallAction(
     Guid AssistantMessageId,
     string CallId);
 
-public sealed record ChatLiveToolCall(
-    string CallId,
-    string Name,
-    string ArgumentsJson,
-    bool ArgumentsComplete,
-    bool Complete,
-    string? Error);
-
 public sealed class ChatLiveTurn
 {
-    private readonly StringBuilder _text = new();
-    private readonly List<ChatLiveToolCall> _toolCalls = [];
+    private bool _startNewMessageOnNextPart;
 
-    public bool HasContent => _text.Length > 0;
+    public List<ChatLiveMessage> Messages { get; } = [];
+    public bool HasContent => Messages.Any(message => message.Parts.Count > 0);
     public bool IsThinking { get; private set; } = true;
-    public string Text => _text.ToString();
-    public IReadOnlyList<ChatLiveToolCall> ToolCalls => _toolCalls;
 
     public void AppendText(string text)
     {
@@ -71,58 +161,185 @@ public sealed class ChatLiveTurn
             return;
 
         IsThinking = false;
-        _text.Append(text);
+        CurrentMessage().AppendText(text);
     }
 
     public void StartToolCall(string callId, string name, string argumentsJson, bool argumentsComplete)
     {
         IsThinking = false;
-        var index = _toolCalls.FindIndex(call => call.CallId == callId);
-        var call = new ChatLiveToolCall(callId, name, argumentsJson, argumentsComplete, Complete: false, Error: null);
-        if (index < 0)
-            _toolCalls.Add(call);
-        else
-            _toolCalls[index] = call;
-    }
-
-    public void AppendToolCallArguments(string callId, string delta, bool argumentsComplete)
-    {
-        var index = _toolCalls.FindIndex(call => call.CallId == callId);
-        if (index < 0)
+        var chip = FindToolChip(callId);
+        if (chip is null)
         {
-            _toolCalls.Add(new ChatLiveToolCall(callId, "tool", delta, argumentsComplete, Complete: false, Error: null));
+            chip = new ChatToolChip(callId, name, argumentsJson, argumentsComplete, ChatToolCallStatus.Running);
+            ToolMessage().Parts.Add(new ChatToolPart(chip));
             return;
         }
 
-        var current = _toolCalls[index];
-        _toolCalls[index] = current with
-        {
-            ArgumentsJson = current.ArgumentsJson + delta,
-            ArgumentsComplete = argumentsComplete,
-        };
+        chip.Rename(name);
+        if (!string.IsNullOrEmpty(argumentsJson))
+            chip.SetArguments(argumentsJson);
+        if (argumentsComplete)
+            chip.MarkArgumentsComplete();
     }
 
-    public void CompleteToolCall(string callId, string? error)
+    public void AppendToolCallArguments(string callId, string argumentsDelta, bool argumentsComplete)
     {
-        var index = _toolCalls.FindIndex(call => call.CallId == callId);
-        if (index < 0)
-            return;
-
-        _toolCalls[index] = _toolCalls[index] with
+        IsThinking = false;
+        var chip = FindToolChip(callId);
+        if (chip is null)
         {
-            Complete = true,
-            Error = error,
-        };
+            chip = new ChatToolChip(
+                callId,
+                callId,
+                string.Empty,
+                argumentsComplete: false,
+                status: ChatToolCallStatus.Running);
+            ToolMessage().Parts.Add(new ChatToolPart(chip));
+        }
+
+        chip.AppendArguments(argumentsDelta, argumentsComplete);
+    }
+
+    public void MarkToolCallPendingConfirmation(Guid assistantMessageId, string callId, string name, string argumentsJson)
+    {
+        IsThinking = false;
+        var chip = FindToolChip(callId);
+        if (chip is null)
+        {
+            chip = new ChatToolChip(
+                callId,
+                name,
+                argumentsJson,
+                argumentsComplete: true,
+                ChatToolCallStatus.Pending,
+                assistantMessageId);
+            ToolMessage().Parts.Add(new ChatToolPart(chip));
+            return;
+        }
+
+        chip.MarkPendingConfirmation(assistantMessageId, name, argumentsJson);
+    }
+
+    public void CompleteToolCall(string callId, string? result, string? error, double? durationMs = null)
+    {
+        var chip = FindToolChip(callId);
+        if (chip is not null)
+            chip.MarkCompleted(result, error, durationMs);
+
+        IsThinking = true;
+        _startNewMessageOnNextPart = true;
     }
 
     public ChatLiveTurn Clone()
     {
         var clone = new ChatLiveTurn
         {
-            IsThinking = IsThinking
+            IsThinking = IsThinking,
+            _startNewMessageOnNextPart = _startNewMessageOnNextPart
         };
-        clone._text.Append(_text);
-        clone._toolCalls.AddRange(_toolCalls);
+        foreach (var message in Messages)
+            clone.Messages.Add(message.Clone());
+
         return clone;
+    }
+
+    private ChatToolChip? FindToolChip(string callId) => Messages
+        .SelectMany(message => message.Parts)
+        .OfType<ChatToolPart>()
+        .Select(part => part.Chip)
+        .FirstOrDefault(candidate => candidate.CallId == callId);
+
+    private ChatLiveMessage CurrentMessage()
+    {
+        if (_startNewMessageOnNextPart || Messages.Count == 0)
+        {
+            var message = new ChatLiveMessage();
+            Messages.Add(message);
+            _startNewMessageOnNextPart = false;
+            return message;
+        }
+
+        return Messages[^1];
+    }
+
+    private ChatLiveMessage ToolMessage()
+    {
+        if (_startNewMessageOnNextPart
+            && Messages.LastOrDefault() is { } lastMessage
+            && lastMessage.Parts.Count > 0
+            && lastMessage.Parts.All(part => part is ChatToolPart))
+        {
+            _startNewMessageOnNextPart = false;
+            return lastMessage;
+        }
+
+        return CurrentMessage();
+    }
+}
+
+public sealed class ChatLiveMessage
+{
+    public List<ChatMessagePart> Parts { get; } = [];
+
+    public void AppendText(string text)
+    {
+        if (Parts.LastOrDefault() is ChatTextPart textPart)
+            textPart.Append(text);
+        else
+            Parts.Add(new ChatTextPart(text));
+    }
+
+    public ChatLiveMessage Clone()
+    {
+        var clone = new ChatLiveMessage();
+        foreach (var part in Parts)
+        {
+            switch (part)
+            {
+                case ChatTextPart textPart:
+                    clone.Parts.Add(new ChatTextPart(textPart.Text.ToString()));
+                    break;
+                case ChatToolPart toolPart:
+                    clone.Parts.Add(new ChatToolPart(toolPart.Chip.Clone()));
+                    break;
+            }
+        }
+
+        return clone;
+    }
+}
+
+public sealed record ChatPersistedToolCall(
+    string CallId,
+    string Name,
+    string ArgumentsJson,
+    int? TextOffset,
+    ChatToolCallStatus Status = ChatToolCallStatus.Pending,
+    string? Result = null,
+    string? Error = null);
+
+public static class ChatTranscriptHelpers
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public static List<ChatPersistedToolCall> ReadPersistedCalls(string toolCallsJson)
+    {
+        if (string.IsNullOrWhiteSpace(toolCallsJson) || toolCallsJson == "[]")
+            return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<ChatPersistedToolCall>>(toolCallsJson, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    public static string TruncateInline(string value, int max)
+    {
+        value = value.Replace('\n', ' ').Replace('\r', ' ');
+        return value.Length <= max ? value : value[..max] + "...";
     }
 }

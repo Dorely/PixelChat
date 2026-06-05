@@ -149,36 +149,11 @@
 
     private RenderFragment RenderMessage(ChatRenderableMessage message) => __builder =>
     {
-        var bubbleClass = message.Role switch
-        {
-            ChatMessageRole.User => "chat-msg chat-msg-user",
-            ChatMessageRole.Tool => "chat-msg chat-msg-tool",
-            _ => "chat-msg chat-msg-asst"
-        };
+        var bubbleClass = message.Role == ChatMessageRole.User
+            ? "chat-msg chat-msg-user"
+            : "chat-msg chat-msg-asst";
         <div class="@bubbleClass">
-            @if (!string.IsNullOrEmpty(message.Content))
-            {
-                <div class="chat-msg-text">@message.Content</div>
-            }
-            @if (message.ToolCalls is { Count: > 0 })
-            {
-                <div class="chat-tool-list">
-                    @foreach (var call in message.ToolCalls)
-                    {
-                        @RenderToolCall(call)
-                    }
-                </div>
-            }
-            @if (message.Role == ChatMessageRole.Tool)
-            {
-                <div class="chat-tool-result-meta">
-                    <span>@(message.ToolName ?? "tool")</span>
-                    @if (!string.IsNullOrWhiteSpace(message.ToolCallId))
-                    {
-                        <span>@message.ToolCallId</span>
-                    }
-                </div>
-            }
+            @RenderParts(message.Parts)
             @if (message.Status == ChatMessageStatus.Failed)
             {
                 <div class="chat-msg-status chat-msg-failed">Failed</div>
@@ -198,28 +173,11 @@
             return;
         }
 
-        <div class="chat-msg chat-msg-asst chat-msg-streaming">
-            <div class="chat-msg-text">@live.Text<span class="chat-cursor">|</span></div>
-        </div>
-
-        @if (live.ToolCalls.Count > 0)
+        foreach (var liveMessage in live.Messages.Where(message => message.Parts.Count > 0))
         {
+            var trailingText = liveMessage.Parts.LastOrDefault() as ChatTextPart;
             <div class="chat-msg chat-msg-asst chat-msg-streaming">
-                <div class="chat-tool-list">
-                    @foreach (var call in live.ToolCalls)
-                    {
-                        <div class="chat-tool-card chat-tool-card-live">
-                            <div class="chat-tool-card-head">
-                                <span class="chat-tool-name">@call.Name</span>
-                                <span class="chat-tool-state">Preparing</span>
-                            </div>
-                            @if (!string.IsNullOrWhiteSpace(call.ArgumentsJson))
-                            {
-                                <pre>@call.ArgumentsJson</pre>
-                            }
-                        </div>
-                    }
-                </div>
+                @RenderParts(liveMessage.Parts, trailingText)
             </div>
         }
 
@@ -229,51 +187,124 @@
         }
     };
 
-    private RenderFragment RenderToolCall(ChatToolCallView call) => __builder =>
+    private RenderFragment RenderParts(IReadOnlyList<ChatMessagePart> parts, ChatTextPart? trailingText = null) => __builder =>
     {
-        var statusClass = call.Status switch
+        var index = 0;
+        while (index < parts.Count)
         {
-            ChatToolCallStatus.Pending => "chat-tool-card-pending",
-            ChatToolCallStatus.Completed => "chat-tool-card-completed",
-            ChatToolCallStatus.Rejected => "chat-tool-card-rejected",
-            ChatToolCallStatus.Failed => "chat-tool-card-failed",
-            _ => string.Empty
-        };
+            if (parts[index] is not ChatToolPart firstTool)
+            {
+                @RenderPart(parts[index], ReferenceEquals(parts[index], trailingText))
+                index++;
+                continue;
+            }
 
-        <div class="chat-tool-card @statusClass">
-            <div class="chat-tool-card-head">
-                <span class="chat-tool-name">@FormatToolName(call.Name)</span>
-                <span class="chat-tool-state">@call.Status</span>
-            </div>
-            @if (!string.IsNullOrWhiteSpace(call.ArgumentsJson))
+            var toolParts = new List<ChatToolChip> { firstTool.Chip };
+            index++;
+            while (index < parts.Count && parts[index] is ChatToolPart nextTool)
             {
-                <pre>@call.ArgumentsJson</pre>
+                toolParts.Add(nextTool.Chip);
+                index++;
             }
-            @if (!string.IsNullOrWhiteSpace(call.Error))
+
+            if (toolParts.Count == 1)
             {
-                <div class="chat-tool-error">@call.Error</div>
+                <ChatToolChipView Chip="toolParts[0]"
+                                  Running="@Running"
+                                  OnConfirmToolCall="@OnConfirmToolCall"
+                                  OnRejectToolCall="@OnRejectToolCall" />
             }
-            else if (!string.IsNullOrWhiteSpace(call.Result) && call.Status != ChatToolCallStatus.Pending)
+            else
             {
-                <div class="chat-tool-result">@Truncate(call.Result, 360)</div>
+                @RenderToolGroup(toolParts)
             }
-            @if (call.Status == ChatToolCallStatus.Pending)
-            {
-                <div class="chat-tool-actions">
-                    <button type="button" class="btn btn-sm btn-primary"
-                            disabled="@Running"
-                            @onclick="() => OnConfirmToolCall.InvokeAsync(new ChatToolCallAction(call.AssistantMessageId, call.CallId))">
-                        Confirm
-                    </button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary"
-                            disabled="@Running"
-                            @onclick="() => OnRejectToolCall.InvokeAsync(new ChatToolCallAction(call.AssistantMessageId, call.CallId))">
-                        Reject
-                    </button>
-                </div>
-            }
-        </div>
+        }
     };
+
+    private RenderFragment RenderPart(ChatMessagePart part, bool showCursor = false) => __builder =>
+    {
+        if (part is ChatTextPart textPart)
+        {
+            var text = textPart.Text.ToString();
+            if (!string.IsNullOrEmpty(text))
+            {
+                <div class="chat-msg-text">@text@if (showCursor) { <span class="chat-cursor">|</span> }</div>
+            }
+        }
+        else if (part is ChatToolPart toolPart)
+        {
+            <ChatToolChipView Chip="toolPart.Chip"
+                              Running="@Running"
+                              OnConfirmToolCall="@OnConfirmToolCall"
+                              OnRejectToolCall="@OnRejectToolCall" />
+        }
+    };
+
+    private RenderFragment RenderToolGroup(IReadOnlyList<ChatToolChip> chips) => __builder =>
+    {
+        var duration = chips
+            .Where(chip => chip.DurationMs.HasValue)
+            .Sum(chip => chip.DurationMs!.Value);
+        var hasDuration = duration > 0;
+        var stateClass = chips.Any(chip => chip.Status == ChatToolCallStatus.Failed || chip.Error is not null)
+            ? "chat-tool-group-error"
+            : chips.Any(chip => chip.Status == ChatToolCallStatus.Pending)
+                ? "chat-tool-group-pending"
+                : chips.All(chip => chip.IsFinished)
+                    ? "chat-tool-group-ok"
+                    : "chat-tool-group-running";
+
+        <details class="chat-tool-group @stateClass" open="@ToolGroupOpen(chips)">
+            <summary>
+                <span class="chat-tool-group-icon">@ToolGroupIcon(chips)</span>
+                <span class="chat-tool-group-title">@chips.Count tool calls</span>
+                <span class="chat-tool-group-names">@ToolGroupNames(chips)</span>
+                @if (hasDuration)
+                {
+                    <span class="chat-tool-group-duration">@FormatDuration(duration)</span>
+                }
+                else if (chips.Any(chip => !chip.IsFinished))
+                {
+                    <span class="chat-tool-group-duration">running</span>
+                }
+            </summary>
+            <div class="chat-tool-group-body">
+                @foreach (var chip in chips)
+                {
+                    <ChatToolChipView Chip="chip"
+                                      Running="@Running"
+                                      OnConfirmToolCall="@OnConfirmToolCall"
+                                      OnRejectToolCall="@OnRejectToolCall" />
+                }
+            </div>
+        </details>
+    };
+
+    private static string ToolGroupIcon(IReadOnlyList<ChatToolChip> chips)
+    {
+        if (chips.Any(chip => chip.Status == ChatToolCallStatus.Failed || chip.Error is not null)) return "x";
+        if (chips.Any(chip => chip.Status == ChatToolCallStatus.Pending)) return "ask";
+        if (chips.All(chip => chip.IsFinished)) return "ok";
+        return "run";
+    }
+
+    private static bool ToolGroupOpen(IReadOnlyList<ChatToolChip> chips) =>
+        chips.Any(chip => chip.Status is ChatToolCallStatus.Pending or ChatToolCallStatus.Failed or ChatToolCallStatus.Running);
+
+    private static string ToolGroupNames(IReadOnlyList<ChatToolChip> chips)
+    {
+        var names = chips
+            .Select(chip => chip.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal)
+            .Take(3)
+            .ToList();
+        if (names.Count == 0) return "tool calls";
+
+        var label = string.Join(", ", names);
+        var remaining = chips.Select(chip => chip.Name).Distinct(StringComparer.Ordinal).Count() - names.Count;
+        return remaining > 0 ? $"{label} +{remaining}" : label;
+    }
 
     private RenderFragment RenderThinkingIndicator() => __builder =>
     {
@@ -283,11 +314,10 @@
         </div>
     };
 
-    private static string FormatToolName(string value) =>
-        value.Replace('_', ' ');
-
-    private static string Truncate(string value, int max) =>
-        value.Length <= max ? value : value[..max] + "...";
+    private static string FormatDuration(double durationMs) =>
+        durationMs >= 1000
+            ? $"{durationMs / 1000:0.0}s"
+            : $"{durationMs:0}ms";
 
     public async ValueTask DisposeAsync()
     {

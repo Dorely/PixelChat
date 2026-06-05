@@ -1,6 +1,5 @@
 @page "/"
 @page "/chat"
-@using System.Text.Json
 @using PixelChat.Art
 @using PixelChat.Chat
 @using PixelChat.Llm
@@ -111,7 +110,6 @@ else
 }
 
 @code {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly List<ChatRenderableMessage> _messages = [];
 
     private WorkbenchView? _workbench;
@@ -128,7 +126,7 @@ else
     private bool _loadingChat = true;
     private bool _running;
     private bool _hasWorkingProvider;
-    private bool _awaitingTurnCompletion;
+    private string? _pendingUserText;
     private int _forceScrollKey;
     private int _scrollKey;
     private int _resetComposerKey;
@@ -832,7 +830,6 @@ else
         {
             var wasRunning = _running;
             var snapshot = ChatRuntime.GetSnapshot();
-            var shouldReloadAfterTurn = _awaitingTurnCompletion && !snapshot.Running;
             ApplyChatRuntimeSnapshot(snapshot);
             if (snapshot.WorkspaceVersion != _seenWorkspaceVersion)
             {
@@ -840,9 +837,8 @@ else
                 await ReloadWorkbenchAsync();
             }
 
-            if (shouldReloadAfterTurn || (wasRunning && !snapshot.Running))
+            if (wasRunning && !snapshot.Running)
             {
-                _awaitingTurnCompletion = false;
                 await ReloadAllAsync();
                 return;
             }
@@ -856,9 +852,32 @@ else
     {
         _running = snapshot.Running;
         _live = snapshot.Live;
+        _pendingUserText = snapshot.PendingUserText;
+        EnsurePendingUserMessageVisible();
         _error = snapshot.Error;
         _seenWorkspaceVersion = snapshot.WorkspaceVersion;
     }
+
+    private void EnsurePendingUserMessageVisible()
+    {
+        if (!_running || string.IsNullOrWhiteSpace(_pendingUserText))
+            return;
+
+        if (_messages.LastOrDefault() is { Role: ChatMessageRole.User } lastUser
+            && MessageText(lastUser) == _pendingUserText)
+        {
+            return;
+        }
+
+        _messages.Add(new ChatRenderableMessage(
+            Guid.NewGuid(),
+            ChatMessageRole.User,
+            ChatMessageStatus.Completed,
+            [new ChatTextPart(_pendingUserText)]));
+    }
+
+    private static string MessageText(ChatRenderableMessage message) =>
+        string.Concat(message.Parts.OfType<ChatTextPart>().Select(part => part.Text.ToString()));
 
     private Task OnInputChanged(string value)
     {
@@ -875,14 +894,14 @@ else
         _input = string.Empty;
         _resetComposerKey++;
         _error = null;
+        _pendingUserText = text;
 
         _messages.Add(new ChatRenderableMessage(
             Guid.NewGuid(),
             ChatMessageRole.User,
             ChatMessageStatus.Completed,
-            text));
+            [new ChatTextPart(text)]));
         _scrollKey++;
-        _awaitingTurnCompletion = true;
 
         try
         {
@@ -891,9 +910,9 @@ else
         }
         catch (Exception ex)
         {
-            _awaitingTurnCompletion = false;
             _error = ex.Message;
             _running = false;
+            _pendingUserText = null;
         }
     }
 
@@ -907,6 +926,7 @@ else
         await ChatRuntime.ResetConversationAsync(_workbench.Project.Id);
         _error = null;
         _input = string.Empty;
+        _pendingUserText = null;
         _live = null;
         _resetComposerKey++;
         await ReloadChatAsync();
@@ -952,68 +972,97 @@ else
 
     private static List<ChatRenderableMessage> ToRenderable(IReadOnlyList<AssistantMessage> messages)
     {
+        var toolRowsByCallId = messages
+            .Where(message => message.Role == AssistantMessageRole.Tool && !string.IsNullOrWhiteSpace(message.ToolCallId))
+            .GroupBy(message => message.ToolCallId!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
+
         var renderable = new List<ChatRenderableMessage>(messages.Count);
         foreach (var message in messages)
         {
-            if (message.Role == AssistantMessageRole.System)
+            if (message.Role is AssistantMessageRole.System or AssistantMessageRole.Tool)
                 continue;
 
             renderable.Add(new ChatRenderableMessage(
                 message.Id,
                 ToChatRole(message.Role),
                 ToChatStatus(message.Status),
-                message.Content,
-                ToToolCalls(message),
-                message.ToolName,
-                message.ToolCallId));
+                BuildMessageParts(message, toolRowsByCallId)));
         }
 
         return renderable;
     }
 
-    private static IReadOnlyList<ChatToolCallView> ToToolCalls(AssistantMessage message)
+    private static List<ChatMessagePart> BuildMessageParts(
+        AssistantMessage message,
+        IReadOnlyDictionary<string, AssistantMessage> toolRowsByCallId)
     {
-        if (message.Role != AssistantMessageRole.Assistant || string.IsNullOrWhiteSpace(message.ToolCallsJson) || message.ToolCallsJson == "[]")
-            return [];
+        if (message.Role != AssistantMessageRole.Assistant)
+            return string.IsNullOrEmpty(message.Content) ? [] : [new ChatTextPart(message.Content)];
 
-        try
+        var calls = ChatTranscriptHelpers.ReadPersistedCalls(message.ToolCallsJson);
+        if (calls.Count == 0)
+            return string.IsNullOrEmpty(message.Content) ? [] : [new ChatTextPart(message.Content)];
+
+        var parts = new List<ChatMessagePart>();
+        var text = message.Content ?? string.Empty;
+        var cursor = 0;
+        foreach (var item in calls
+            .Select((call, index) => new { Call = call, Index = index })
+            .OrderBy(item => item.Call.TextOffset ?? int.MaxValue)
+            .ThenBy(item => item.Index))
         {
-            using var document = JsonDocument.Parse(message.ToolCallsJson);
-            if (document.RootElement.ValueKind != JsonValueKind.Array)
-                return [];
+            var offset = Math.Clamp(item.Call.TextOffset ?? text.Length, 0, text.Length);
+            if (offset > cursor)
+                parts.Add(new ChatTextPart(text[cursor..offset]));
 
-            var calls = new List<ChatToolCallView>();
-            foreach (var item in document.RootElement.EnumerateArray())
-            {
-                var callId = ReadString(item, "callId");
-                var name = ReadString(item, "name");
-                if (string.IsNullOrWhiteSpace(callId) || string.IsNullOrWhiteSpace(name))
-                    continue;
-
-                calls.Add(new ChatToolCallView(
-                    message.Id,
-                    callId,
-                    name,
-                    ReadString(item, "argumentsJson"),
-                    ParseChatToolStatus(ReadString(item, "status")),
-                    ReadNullableString(item, "result"),
-                    ReadNullableString(item, "error")));
-            }
-
-            return calls;
+            parts.Add(new ChatToolPart(BuildToolChip(message.Id, item.Call, toolRowsByCallId)));
+            cursor = Math.Max(cursor, offset);
         }
-        catch (Exception)
-        {
-            return [];
-        }
+
+        if (cursor < text.Length)
+            parts.Add(new ChatTextPart(text[cursor..]));
+
+        return parts;
     }
 
-    private static ChatMessageRole ToChatRole(AssistantMessageRole role) => role switch
+    private static ChatToolChip BuildToolChip(
+        Guid assistantMessageId,
+        ChatPersistedToolCall call,
+        IReadOnlyDictionary<string, AssistantMessage> toolRowsByCallId)
     {
-        AssistantMessageRole.User => ChatMessageRole.User,
-        AssistantMessageRole.Tool => ChatMessageRole.Tool,
-        _ => ChatMessageRole.Assistant,
-    };
+        var chip = new ChatToolChip(
+            call.CallId,
+            call.Name,
+            call.ArgumentsJson,
+            argumentsComplete: true,
+            status: call.Status,
+            assistantMessageId: call.Status == ChatToolCallStatus.Pending ? assistantMessageId : null);
+
+        chip.SetPersistedStatus(call.Status, call.Result, call.Error);
+        if (!toolRowsByCallId.TryGetValue(call.CallId, out var toolRow))
+            return chip;
+
+        var error = call.Error;
+        if (toolRow.Status == AssistantMessageStatus.Failed)
+        {
+            error = string.IsNullOrWhiteSpace(toolRow.ErrorMessage)
+                ? "Tool call failed."
+                : toolRow.ErrorMessage;
+        }
+
+        var status = call.Status == ChatToolCallStatus.Pending
+            ? ChatToolCallStatus.Pending
+            : toolRow.Status == AssistantMessageStatus.Failed
+                ? ChatToolCallStatus.Failed
+                : call.Status;
+
+        chip.SetPersistedStatus(status, toolRow.Content, error);
+        return chip;
+    }
+
+    private static ChatMessageRole ToChatRole(AssistantMessageRole role) =>
+        role == AssistantMessageRole.User ? ChatMessageRole.User : ChatMessageRole.Assistant;
 
     private static ChatMessageStatus ToChatStatus(AssistantMessageStatus status) => status switch
     {
@@ -1022,33 +1071,6 @@ else
         AssistantMessageStatus.Pending => ChatMessageStatus.Pending,
         _ => ChatMessageStatus.Completed
     };
-
-    private static ChatToolCallStatus ToChatToolStatus(PersistedToolCallStatus status) => status switch
-    {
-        PersistedToolCallStatus.Completed => ChatToolCallStatus.Completed,
-        PersistedToolCallStatus.Rejected => ChatToolCallStatus.Rejected,
-        PersistedToolCallStatus.Failed => ChatToolCallStatus.Failed,
-        _ => ChatToolCallStatus.Pending,
-    };
-
-    private static ChatToolCallStatus ParseChatToolStatus(string value) =>
-        value.Trim().ToLowerInvariant() switch
-        {
-            "completed" => ChatToolCallStatus.Completed,
-            "rejected" => ChatToolCallStatus.Rejected,
-            "failed" => ChatToolCallStatus.Failed,
-            _ => ChatToolCallStatus.Pending,
-        };
-
-    private static string ReadString(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
-            ? property.GetString() ?? string.Empty
-            : string.Empty;
-
-    private static string? ReadNullableString(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
-            ? property.GetString()
-            : null;
 
     private IReadOnlyList<Guid> CurrentReferenceAssetIds() =>
         _workbench?.Attachments

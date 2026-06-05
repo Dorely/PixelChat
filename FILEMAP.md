@@ -71,8 +71,9 @@
 
 | File | Description |
 |------|-------------|
-| `ChatModels.cs` | UI-only chat transcript, live-turn, and tool confirmation models used by `ChatSurface`. |
-| `ChatSurface.razor` / `.razor.css` / `.razor.js` | Reusable chat shell for transcript rendering, tool cards, streaming state, composer autosize, enter-to-send, and scroll-follow behavior. |
+| `ChatModels.cs` | UI-only ordered chat parts, compact tool chip state, live-turn state, and persisted tool-call helpers used by chat components. |
+| `ChatSurface.razor` / `.razor.css` / `.razor.js` | Reusable chat shell for ordered text/tool transcript rendering, streaming state, composer autosize, enter-to-send, and scroll-follow behavior. |
+| `ChatToolChipView.razor` / `.razor.css` | Expandable compact tool-call chip used for live and persisted assistant tool activity with confirmation actions. |
 
 ### Components/Layout/
 

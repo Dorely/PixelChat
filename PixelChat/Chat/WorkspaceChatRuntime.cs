@@ -228,8 +228,20 @@ public sealed class WorkspaceChatRuntime(
                     _live?.AppendToolCallArguments(delta.CallId, delta.ArgumentsDelta, delta.ArgumentsComplete);
                     break;
 
+                case AssistantToolCallPendingConfirmation pending:
+                    _live?.MarkToolCallPendingConfirmation(
+                        pending.AssistantMessageId,
+                        pending.CallId,
+                        pending.ToolName,
+                        pending.ArgumentsJson);
+                    break;
+
                 case AssistantToolCallCompleted completed:
-                    _live?.CompleteToolCall(completed.CallId, completed.Error);
+                    _live?.CompleteToolCall(
+                        completed.CallId,
+                        completed.Result,
+                        completed.Error,
+                        completed.DurationMs);
                     break;
 
                 case AssistantWorkspaceMutated:

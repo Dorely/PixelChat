@@ -100,7 +100,7 @@
 
 .workbench-main {
     display: grid;
-    grid-template-columns: minmax(300px, 380px) minmax(0, 1fr) minmax(250px, 320px);
+    grid-template-columns: clamp(360px, 33vw, 640px) minmax(0, 1fr) minmax(250px, 320px);
     min-height: 0;
 }
 
@@ -479,7 +479,7 @@
 
 @media (max-width: 1200px) {
     .workbench-main {
-        grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(230px, 280px);
+        grid-template-columns: clamp(320px, 34vw, 440px) minmax(0, 1fr) minmax(230px, 280px);
     }
 
     .form-grid {

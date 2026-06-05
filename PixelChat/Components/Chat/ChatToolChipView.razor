@@ -1,0 +1,126 @@
+@namespace PixelChat.Components.Chat
+
+@{
+    var summaryText = SummaryText;
+}
+
+<details class="chat-chip @StateClass" open="@OpenByDefault">
+    <summary>
+        <span class="chat-chip-icon">@IconText</span>
+        <span class="chat-chip-name">@FormatToolName(Chip.Name)</span>
+        @if (!string.IsNullOrWhiteSpace(summaryText))
+        {
+            <span class="chat-chip-args">@summaryText</span>
+        }
+        @if (Chip.DurationMs is { } duration)
+        {
+            <span class="chat-chip-duration">@FormatDuration(duration)</span>
+        }
+        else if (!Chip.IsFinished)
+        {
+            <span class="chat-chip-duration">@StatusText</span>
+        }
+    </summary>
+    <div class="chat-chip-body">
+        @if (Chip.HasArguments || !Chip.ArgumentsComplete)
+        {
+            <div class="chat-chip-section">args</div>
+            <pre class="chat-chip-pre">@Chip.ArgumentsJson@if (!Chip.ArgumentsComplete) { <span class="chat-cursor">|</span> }</pre>
+        }
+        @if (Chip.Error is not null)
+        {
+            <div class="chat-chip-section">error</div>
+            <pre class="chat-chip-pre chat-chip-pre-error">@Chip.Error</pre>
+        }
+        @if (Chip.Result is not null)
+        {
+            <div class="chat-chip-section">result</div>
+            <pre class="chat-chip-pre">@Chip.Result</pre>
+        }
+        @if (Chip.Result is null && Chip.Error is null)
+        {
+            <div class="chat-chip-section text-muted"><em>@PendingText</em></div>
+        }
+        @if (Chip.CanConfirm)
+        {
+            <div class="chat-chip-actions">
+                <button type="button"
+                        class="btn btn-sm btn-primary"
+                        disabled="@Running"
+                        @onclick="ConfirmAsync">
+                    Confirm
+                </button>
+                <button type="button"
+                        class="btn btn-sm btn-outline-secondary"
+                        disabled="@Running"
+                        @onclick="RejectAsync">
+                    Reject
+                </button>
+            </div>
+        }
+    </div>
+</details>
+
+@code {
+    [Parameter, EditorRequired] public ChatToolChip Chip { get; set; } = null!;
+    [Parameter] public bool Running { get; set; }
+    [Parameter] public EventCallback<ChatToolCallAction> OnConfirmToolCall { get; set; }
+    [Parameter] public EventCallback<ChatToolCallAction> OnRejectToolCall { get; set; }
+
+    private string? SummaryText => Chip.HasArguments
+        ? ChatTranscriptHelpers.TruncateInline(Chip.ArgumentsJson, 96)
+        : null;
+
+    private bool OpenByDefault => Chip.Status is ChatToolCallStatus.Pending or ChatToolCallStatus.Running or ChatToolCallStatus.Failed;
+
+    private string StateClass => Chip.Status switch
+    {
+        ChatToolCallStatus.Failed => "chat-chip-error",
+        ChatToolCallStatus.Completed => "chat-chip-ok",
+        ChatToolCallStatus.Rejected => "chat-chip-rejected",
+        ChatToolCallStatus.Pending => "chat-chip-pending",
+        _ => Chip.ArgumentsComplete ? "chat-chip-running" : "chat-chip-receiving"
+    };
+
+    private string IconText => Chip.Status switch
+    {
+        ChatToolCallStatus.Failed => "x",
+        ChatToolCallStatus.Completed => "ok",
+        ChatToolCallStatus.Rejected => "no",
+        ChatToolCallStatus.Pending => "ask",
+        ChatToolCallStatus.Running when Chip.ArgumentsComplete => "run",
+        _ => "..."
+    };
+
+    private string StatusText => Chip.Status switch
+    {
+        ChatToolCallStatus.Pending => "confirmation",
+        ChatToolCallStatus.Running when Chip.ArgumentsComplete => "running",
+        _ => "receiving"
+    };
+
+    private string PendingText => Chip.Status switch
+    {
+        ChatToolCallStatus.Pending => "waiting for confirmation...",
+        ChatToolCallStatus.Running when Chip.ArgumentsComplete => "running...",
+        _ => "receiving args..."
+    };
+
+    private Task ConfirmAsync() =>
+        Chip.AssistantMessageId is Guid messageId
+            ? OnConfirmToolCall.InvokeAsync(new ChatToolCallAction(messageId, Chip.CallId))
+            : Task.CompletedTask;
+
+    private Task RejectAsync() =>
+        Chip.AssistantMessageId is Guid messageId
+            ? OnRejectToolCall.InvokeAsync(new ChatToolCallAction(messageId, Chip.CallId))
+            : Task.CompletedTask;
+
+    private static string FormatToolName(string value) =>
+        value.Replace('_', ' ');
+
+    private static string FormatDuration(double durationMs) =>
+        durationMs >= 1000
+            ? $"{durationMs / 1000:0.0}s"
+            : $"{durationMs:0}ms";
+}
