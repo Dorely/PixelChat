@@ -131,6 +131,7 @@ else
     private bool _running;
     private bool _hasWorkingProvider;
     private string? _pendingUserText;
+    private Guid? _optimisticUserMessageId;
     private int _forceScrollKey;
     private int _scrollKey;
     private int _resetComposerKey;
@@ -161,6 +162,7 @@ else
         ChatRuntime.StateChanged += OnChatRuntimeStateChanged;
         ChatRuntime.WorkspaceChanged += OnChatRuntimeWorkspaceChanged;
         ChatRuntime.FormDraftProposed += OnChatRuntimeFormDraftProposed;
+        ChatRuntime.TurnFinished += OnChatRuntimeTurnFinished;
         await ReloadAllAsync();
         ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
     }
@@ -1101,18 +1103,20 @@ else
 
     private void OnChatRuntimeStateChanged()
     {
-        _ = InvokeAsync(async () =>
+        _ = InvokeAsync(() =>
         {
-            var wasRunning = _running;
             var snapshot = ChatRuntime.GetSnapshot();
             ApplyChatRuntimeSnapshot(snapshot);
-            if (wasRunning && !snapshot.Running)
-            {
-                await ReloadAllAsync();
-                return;
-            }
-
             _scrollKey++;
+            StateHasChanged();
+        });
+    }
+
+    private void OnChatRuntimeTurnFinished(WorkspaceChatTurnFinished turn)
+    {
+        _ = InvokeAsync(() =>
+        {
+            CommitFinishedTurn(turn);
             StateHasChanged();
         });
     }
@@ -1141,6 +1145,108 @@ else
         _live = snapshot.Live;
         _pendingUserText = snapshot.PendingUserText;
         _error = snapshot.Error;
+    }
+
+    private void CommitFinishedTurn(WorkspaceChatTurnFinished turn)
+    {
+        if (_workbench?.Project.Id != turn.ProjectId)
+            return;
+
+        ReconcileOptimisticUserMessage(turn.UserMessageId);
+
+        if (turn.AssistantMessageIds.Count > 0)
+        {
+            var assistantIds = turn.AssistantMessageIds.ToHashSet();
+            _messages.RemoveAll(message => message.Role == ChatMessageRole.Assistant && assistantIds.Contains(message.Id));
+        }
+
+        var liveMessages = turn.Live.Messages
+            .Where(message => message.Parts.Count > 0)
+            .ToList();
+
+        if (liveMessages.Count == 0)
+        {
+            if (turn.Status != ChatMessageStatus.Completed && turn.AssistantMessageIds.Count > 0)
+            {
+                _messages.Add(new ChatRenderableMessage(
+                    turn.AssistantMessageIds[0],
+                    ChatMessageRole.Assistant,
+                    turn.Status,
+                    []));
+            }
+        }
+        else
+        {
+            for (var index = 0; index < liveMessages.Count; index++)
+            {
+                var status = index == liveMessages.Count - 1
+                    ? turn.Status
+                    : ChatMessageStatus.Completed;
+                _messages.Add(new ChatRenderableMessage(
+                    MessageIdForLiveMessage(turn.AssistantMessageIds, index),
+                    ChatMessageRole.Assistant,
+                    status,
+                    CloneFinishedParts(liveMessages[index], status, turn.Error)));
+            }
+        }
+
+        _running = false;
+        _live = null;
+        _pendingUserText = null;
+        _error = turn.Error;
+        _scrollKey++;
+    }
+
+    private void ReconcileOptimisticUserMessage(Guid? persistedUserMessageId)
+    {
+        if (_optimisticUserMessageId is not Guid optimisticUserMessageId)
+            return;
+
+        var messageIndex = _messages.FindIndex(message => message.Id == optimisticUserMessageId);
+        if (messageIndex >= 0)
+        {
+            if (persistedUserMessageId is Guid userMessageId)
+                _messages[messageIndex] = _messages[messageIndex] with { Id = userMessageId };
+            else
+                _messages.RemoveAt(messageIndex);
+        }
+
+        _optimisticUserMessageId = null;
+    }
+
+    private static Guid MessageIdForLiveMessage(IReadOnlyList<Guid> messageIds, int index) =>
+        index < messageIds.Count ? messageIds[index] : Guid.NewGuid();
+
+    private static List<ChatMessagePart> CloneFinishedParts(
+        ChatLiveMessage liveMessage,
+        ChatMessageStatus status,
+        string? error)
+    {
+        var parts = liveMessage.CloneParts();
+        if (status is ChatMessageStatus.Failed or ChatMessageStatus.Cancelled)
+            MarkIncompleteToolChips(parts, status, error);
+
+        return parts;
+    }
+
+    private static void MarkIncompleteToolChips(
+        IReadOnlyList<ChatMessagePart> parts,
+        ChatMessageStatus status,
+        string? error)
+    {
+        var fallbackError = !string.IsNullOrWhiteSpace(error)
+            ? error
+            : status == ChatMessageStatus.Cancelled ? "Cancelled." : "Tool call did not complete.";
+
+        foreach (var chip in parts
+            .OfType<ChatToolPart>()
+            .Select(part => part.Chip)
+            .Where(chip => !chip.Completed))
+        {
+            chip.Completed = true;
+            chip.Error ??= fallbackError;
+            chip.MarkArgumentsComplete();
+        }
     }
 
     private async Task ApplyFormDraftAsync(AssistantFormDraft draft)
@@ -1199,8 +1305,10 @@ else
         _error = null;
         _pendingUserText = text;
 
+        var optimisticUserMessageId = Guid.NewGuid();
+        _optimisticUserMessageId = optimisticUserMessageId;
         _messages.Add(new ChatRenderableMessage(
-            Guid.NewGuid(),
+            optimisticUserMessageId,
             ChatMessageRole.User,
             ChatMessageStatus.Completed,
             [new ChatTextPart(text)]));
@@ -1230,6 +1338,7 @@ else
         _error = null;
         _input = string.Empty;
         _pendingUserText = null;
+        _optimisticUserMessageId = null;
         _live = null;
         _resetComposerKey++;
         await ReloadChatAsync();
@@ -1489,6 +1598,7 @@ else
         ChatRuntime.StateChanged -= OnChatRuntimeStateChanged;
         ChatRuntime.WorkspaceChanged -= OnChatRuntimeWorkspaceChanged;
         ChatRuntime.FormDraftProposed -= OnChatRuntimeFormDraftProposed;
+        ChatRuntime.TurnFinished -= OnChatRuntimeTurnFinished;
         if (_editorModule is not null)
         {
             try { await _editorModule.DisposeAsync(); } catch { }

@@ -7,6 +7,7 @@ public interface IWorkspaceChatRuntime
     event Action? StateChanged;
     event Action? WorkspaceChanged;
     event Action<AssistantFormDraft>? FormDraftProposed;
+    event Action<WorkspaceChatTurnFinished>? TurnFinished;
     bool IsRunning { get; }
     WorkspaceChatRuntimeSnapshot GetSnapshot();
     Task StartTurnAsync(Guid projectId, string userText, CancellationToken cancellationToken = default);
@@ -19,4 +20,12 @@ public sealed record WorkspaceChatRuntimeSnapshot(
     bool Running,
     ChatLiveTurn? Live,
     string? PendingUserText,
+    string? Error);
+
+public sealed record WorkspaceChatTurnFinished(
+    Guid ProjectId,
+    Guid? UserMessageId,
+    ChatLiveTurn Live,
+    IReadOnlyList<Guid> AssistantMessageIds,
+    ChatMessageStatus Status,
     string? Error);

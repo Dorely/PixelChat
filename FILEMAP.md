@@ -41,7 +41,7 @@
 | File | Description |
 |------|-------------|
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with visible/active image context, Shellmate-style tool-call streaming/execution, form-draft updates, and transcript replay. |
-| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, exposes live chat snapshots, and signals workspace/form side effects. |
+| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, exposes live snapshots, finished-turn commits, and workspace/form side effects. |
 | `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, form drafting, and immediate visible tool use. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records and form-draft payloads used by chat/runtime/UI. |
 | `AssistantToolRegistry.cs` | Tool registry for workspace state, form drafting, context chips, mode/asset selection, marking, reference, and export actions. |

@@ -14,7 +14,7 @@ public sealed record AssistantToolCallCompleted(string CallId, string ToolName, 
 
 public sealed record AssistantFormDraftProposed(AssistantFormDraft Draft) : AssistantTurnUpdate;
 
-public sealed record AssistantMessageCompleted(Guid MessageId) : AssistantTurnUpdate;
+public sealed record AssistantMessagePersisted(Guid MessageId) : AssistantTurnUpdate;
 
 public sealed record AssistantWorkspaceMutated : AssistantTurnUpdate;
 

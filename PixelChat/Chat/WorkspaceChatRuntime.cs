@@ -16,6 +16,7 @@ public sealed class WorkspaceChatRuntime(
     public event Action? StateChanged;
     public event Action? WorkspaceChanged;
     public event Action<AssistantFormDraft>? FormDraftProposed;
+    public event Action<WorkspaceChatTurnFinished>? TurnFinished;
 
     public bool IsRunning
     {
@@ -107,16 +108,34 @@ public sealed class WorkspaceChatRuntime(
         CancellationTokenSource turnCts,
         TaskCompletionSource persisted)
     {
+        var assistantMessageIds = new List<Guid>();
+        Guid? userMessageId = null;
+        var finalStatus = ChatMessageStatus.Completed;
+        string? finalError = null;
+
         try
         {
             using var scope = scopeFactory.CreateScope();
             var chat = scope.ServiceProvider.GetRequiredService<IAssistantChatService>();
             await foreach (var update in chat.SendAsync(projectId, text, turnCts.Token))
             {
-                if (update is AssistantUserMessagePersisted)
+                if (update is AssistantUserMessagePersisted userPersisted)
                 {
+                    userMessageId = userPersisted.MessageId;
                     persisted.TrySetResult();
                     continue;
+                }
+
+                if (update is AssistantMessagePersisted assistantPersisted)
+                {
+                    assistantMessageIds.Add(assistantPersisted.MessageId);
+                    continue;
+                }
+
+                if (update is AssistantTurnError turnError)
+                {
+                    finalStatus = turnError.Cancelled ? ChatMessageStatus.Cancelled : ChatMessageStatus.Failed;
+                    finalError = turnError.Message;
                 }
 
                 ApplyUpdate(update);
@@ -127,17 +146,39 @@ public sealed class WorkspaceChatRuntime(
         }
         catch (OperationCanceledException) when (turnCts.IsCancellationRequested)
         {
+            finalStatus = ChatMessageStatus.Cancelled;
+            finalError = "Cancelled.";
             persisted.TrySetResult();
             SetError("Cancelled.");
         }
         catch (Exception ex)
         {
+            finalStatus = ChatMessageStatus.Failed;
+            finalError = ex.Message;
             logger.LogError(ex, "Workspace chat turn failed.");
             persisted.TrySetException(ex);
             SetError(ex.Message);
         }
         finally
         {
+            WorkspaceChatTurnFinished? finished = null;
+            lock (_gate)
+            {
+                if (ReferenceEquals(_turnCts, turnCts))
+                {
+                    finished = new WorkspaceChatTurnFinished(
+                        projectId,
+                        userMessageId,
+                        _live?.Clone() ?? new ChatLiveTurn(),
+                        assistantMessageIds.ToList(),
+                        finalStatus,
+                        finalError);
+                }
+            }
+
+            if (finished is not null)
+                NotifyTurnFinished(finished);
+
             lock (_gate)
             {
                 if (ReferenceEquals(_turnCts, turnCts))
@@ -221,6 +262,24 @@ public sealed class WorkspaceChatRuntime(
     private void NotifyStateChanged() => Notify(StateChanged, "Workspace chat state subscriber failed.");
 
     private void NotifyWorkspaceChanged() => Notify(WorkspaceChanged, "Workspace chat workspace subscriber failed.");
+
+    private void NotifyTurnFinished(WorkspaceChatTurnFinished turn)
+    {
+        if (TurnFinished is null)
+            return;
+
+        foreach (Action<WorkspaceChatTurnFinished> handler in TurnFinished.GetInvocationList())
+        {
+            try
+            {
+                handler(turn);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Workspace chat turn-finished subscriber failed.");
+            }
+        }
+    }
 
     private void NotifyFormDraftProposed(AssistantFormDraft draft)
     {

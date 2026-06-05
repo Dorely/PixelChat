@@ -238,6 +238,8 @@ public sealed class ChatLiveMessage
 
         return clone;
     }
+
+    public List<ChatMessagePart> CloneParts() => Clone().Parts;
 }
 
 public sealed record ChatPersistedToolCall(

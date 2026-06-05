@@ -99,6 +99,7 @@ public sealed class AssistantChatService(
 
         IChatClient chat = null!;
         string? setupError = null;
+        Guid? setupFailureMessageId = null;
         try
         {
             chat = await chatClientFactory.CreateChatClientAsync(providerAvailability.Provider.Id, cancellationToken);
@@ -106,12 +107,15 @@ public sealed class AssistantChatService(
         catch (Exception ex)
         {
             logger.LogError(ex, "Assistant turn setup failed.");
-            await PersistFailedAssistantAsync(conversation.Id, nextOrder, ex.Message);
+            setupFailureMessageId = await PersistFailedAssistantAsync(conversation.Id, nextOrder, ex.Message);
             setupError = ex.Message;
         }
 
         if (setupError is not null)
         {
+            if (setupFailureMessageId is Guid messageId)
+                yield return new AssistantMessagePersisted(messageId);
+
             yield return new AssistantTurnError(setupError, Cancelled: false);
             yield break;
         }
@@ -258,6 +262,7 @@ public sealed class AssistantChatService(
                 activeAssistant.Status = AssistantMessageStatus.Cancelled;
                 activeAssistant.ErrorMessage = "Cancelled by user.";
                 await SafePersistAsync(activeAssistant);
+                yield return new AssistantMessagePersisted(activeAssistant.Id);
                 yield return new AssistantTurnError("Cancelled.", Cancelled: true);
                 yield break;
             }
@@ -268,6 +273,7 @@ public sealed class AssistantChatService(
                 activeAssistant.Status = AssistantMessageStatus.Failed;
                 activeAssistant.ErrorMessage = streamError;
                 await SafePersistAsync(activeAssistant);
+                yield return new AssistantMessagePersisted(activeAssistant.Id);
                 yield return new AssistantTurnError(streamError ?? "Assistant streaming failed.", Cancelled: false);
                 yield break;
             }
@@ -279,7 +285,7 @@ public sealed class AssistantChatService(
                 await SafePersistAsync(activeAssistant);
                 conversation.UpdatedAt = DateTime.UtcNow;
                 await conversations.SaveChangesAsync(CancellationToken.None);
-                yield return new AssistantMessageCompleted(activeAssistant.Id);
+                yield return new AssistantMessagePersisted(activeAssistant.Id);
                 yield break;
             }
 
@@ -297,6 +303,7 @@ public sealed class AssistantChatService(
             await SafePersistAsync(activeAssistant);
             conversation.UpdatedAt = DateTime.UtcNow;
             await conversations.SaveChangesAsync(CancellationToken.None);
+            yield return new AssistantMessagePersisted(activeAssistant.Id);
 
             messages.Add(new ChatMessage(ChatRole.Assistant, BuildAssistantContents(textBuilder.ToString(), manifest)));
 
@@ -631,7 +638,7 @@ public sealed class AssistantChatService(
             + $"\n\n[Tool result for {toolName} truncated before returning it to the model.]";
     }
 
-    private async Task PersistFailedAssistantAsync(Guid conversationId, int order, string error)
+    private async Task<Guid?> PersistFailedAssistantAsync(Guid conversationId, int order, string error)
     {
         try
         {
@@ -645,10 +652,12 @@ public sealed class AssistantChatService(
             };
             await conversations.AddMessageAsync(message, CancellationToken.None);
             await conversations.SaveChangesAsync(CancellationToken.None);
+            return message.Id;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to persist assistant setup failure.");
+            return null;
         }
     }
 
