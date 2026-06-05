@@ -177,6 +177,7 @@ else
     {
         await ReloadWorkbenchAsync();
         await ReloadChatAsync();
+        StateHasChanged();
     }
 
     private async Task ReloadWorkbenchAsync()
@@ -184,7 +185,6 @@ else
         _workbench = await Workflow.GetWorkbenchAsync(ParseProjectIdOrNull(_projectIdText));
         _projectIdText = _workbench.Project.Id.ToString();
         _loadedEditorAssetId = _workbench.Project.ActiveWorkspaceMode == WorkspaceMode.Edit ? _loadedEditorAssetId : null;
-        StateHasChanged();
     }
 
     private async Task ReloadChatAsync()
@@ -1119,7 +1119,11 @@ else
 
     private void OnChatRuntimeWorkspaceChanged()
     {
-        _ = InvokeAsync(ReloadWorkbenchAsync);
+        _ = InvokeAsync(async () =>
+        {
+            await ReloadWorkbenchAsync();
+            StateHasChanged();
+        });
     }
 
     private void OnChatRuntimeFormDraftProposed(AssistantFormDraft draft)
