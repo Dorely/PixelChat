@@ -1,5 +1,6 @@
 @page "/"
 @page "/chat"
+@using System.Globalization
 @using PixelChat.Art
 @using PixelChat.Chat
 @using PixelChat.Llm
@@ -332,14 +333,32 @@ else
     private RenderFragment RenderCompareWorkspace() => __builder =>
     {
         var activeBatch = _workbench!.ActiveBatch;
-        var outputAssets = activeBatch is null
-            ? []
-            : activeBatch.OutputAssetIds
+        var outputAssetsByIndex = new Dictionary<int, ArtAssetView>();
+        var outputErrorsByIndex = new Dictionary<int, GenerationOutputErrorView>();
+
+        if (activeBatch is not null)
+        {
+            outputAssetsByIndex = activeBatch.OutputAssetIds
                 .Select(assetId => _workbench.Assets.FirstOrDefault(asset => asset.Id == assetId))
                 .OfType<ArtAssetView>()
-                .ToList();
-        var outputErrors = activeBatch?.OutputErrors ?? [];
-        var pendingCount = activeBatch is null ? 0 : Math.Max(0, activeBatch.Count - outputAssets.Count - outputErrors.Count);
+                .Select((asset, fallbackIndex) => new
+                {
+                    Asset = asset,
+                    OutputIndex = asset.BatchOutputIndex ?? fallbackIndex,
+                })
+                .Where(item => item.OutputIndex >= 0 && item.OutputIndex < activeBatch.Count)
+                .GroupBy(item => item.OutputIndex)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group
+                        .OrderByDescending(item => item.Asset.CreatedAt)
+                        .First()
+                        .Asset);
+            outputErrorsByIndex = activeBatch.OutputErrors
+                .Where(error => error.OutputIndex >= 0 && error.OutputIndex < activeBatch.Count)
+                .GroupBy(error => error.OutputIndex)
+                .ToDictionary(group => group.Key, group => group.Last());
+        }
 
         <div class="workspace-panel compare-panel">
             <div class="panel-head">
@@ -372,17 +391,20 @@ else
                 }
 
                 <div class="compare-grid">
-                    @foreach (var asset in outputAssets)
+                    @for (var index = 0; index < activeBatch.Count; index++)
                     {
-                        @RenderAssetCard(asset, compact: false)
-                    }
-                    @foreach (var outputError in outputErrors)
-                    {
-                        @RenderGenerationErrorCard(outputError)
-                    }
-                    @for (var index = 0; index < pendingCount; index++)
-                    {
-                        @RenderGenerationPlaceholderCard(outputAssets.Count + outputErrors.Count + index)
+                        @if (outputAssetsByIndex.TryGetValue(index, out var asset))
+                        {
+                            @RenderAssetCard(asset, compact: false)
+                        }
+                        else if (outputErrorsByIndex.TryGetValue(index, out var outputError))
+                        {
+                            @RenderGenerationErrorCard(outputError)
+                        }
+                        else
+                        {
+                            @RenderGenerationPlaceholderCard(index)
+                        }
                     }
                 </div>
             }
@@ -888,17 +910,13 @@ else
         await throttler.WaitAsync(cancellationToken);
         try
         {
-            await using var scope = ScopeFactory.CreateAsyncScope();
-            var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
-            await workflow.GenerateBatchOutputAsync(projectId, batchId, outputIndex, cancellationToken);
+            var finalError = await GenerateBatchOutputWithRetriesAsync(projectId, batchId, outputIndex, cancellationToken);
+            if (finalError is not null)
+                await PersistGenerationFailureAsync(projectId, batchId, outputIndex, finalError.Message, cancellationToken);
         }
         catch (OperationCanceledException)
         {
             throw;
-        }
-        catch (Exception ex)
-        {
-            await PersistGenerationFailureAsync(projectId, batchId, outputIndex, ex.Message, cancellationToken);
         }
         finally
         {
@@ -910,6 +928,41 @@ else
             await ReloadWorkbenchAsync();
             StateHasChanged();
         });
+    }
+
+    private async Task<Exception?> GenerateBatchOutputWithRetriesAsync(
+        Guid projectId,
+        Guid batchId,
+        int outputIndex,
+        CancellationToken cancellationToken)
+    {
+        var maxAttempts = Math.Clamp(ImageOptions.Value.MaxRequestAttempts, 1, 10);
+        Exception? finalError = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                await using var scope = ScopeFactory.CreateAsyncScope();
+                var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
+                await workflow.GenerateBatchOutputAsync(projectId, batchId, outputIndex, cancellationToken);
+                return null;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                finalError = ex;
+                if (attempt >= maxAttempts || !IsTransientImageGenerationError(ex))
+                    break;
+
+                await Task.Delay(ImageGenerationRetryDelay(ex, attempt), cancellationToken);
+            }
+        }
+
+        return finalError;
     }
 
     private async Task PersistGenerationFailureAsync(Guid projectId, Guid batchId, int outputIndex, string error, CancellationToken cancellationToken)
@@ -925,6 +978,73 @@ else
         {
             _generationFailureLock.Release();
         }
+    }
+
+    private static bool IsTransientImageGenerationError(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            var message = current.Message;
+            if (message.Contains("Rate limit", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("429", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("Too Many Requests", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("Please try again", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static TimeSpan ImageGenerationRetryDelay(Exception exception, int failedAttempt)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            var providerDelay = TryReadProviderRetryDelay(current.Message);
+            if (providerDelay is { } delay && delay > TimeSpan.Zero)
+                return delay;
+        }
+
+        var backoffMilliseconds = Math.Min(5000, 250 * Math.Pow(2, Math.Max(0, failedAttempt - 1)));
+        return TimeSpan.FromMilliseconds(backoffMilliseconds);
+    }
+
+    private static TimeSpan? TryReadProviderRetryDelay(string message)
+    {
+        const string marker = "Please try again in ";
+        var markerIndex = message.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0)
+            return null;
+
+        var valueStart = markerIndex + marker.Length;
+        while (valueStart < message.Length && char.IsWhiteSpace(message[valueStart]))
+            valueStart++;
+
+        var valueEnd = valueStart;
+        while (valueEnd < message.Length && (char.IsDigit(message[valueEnd]) || message[valueEnd] == '.'))
+            valueEnd++;
+
+        if (valueEnd == valueStart
+            || !double.TryParse(message[valueStart..valueEnd], NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+        {
+            return null;
+        }
+
+        var unit = message[valueEnd..].TrimStart();
+        if (unit.StartsWith("ms", StringComparison.OrdinalIgnoreCase)
+            || unit.StartsWith("millisecond", StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeSpan.FromMilliseconds(value);
+        }
+
+        if (unit.StartsWith("s", StringComparison.OrdinalIgnoreCase)
+            || unit.StartsWith("second", StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeSpan.FromSeconds(value);
+        }
+
+        return null;
     }
 
     private async Task CompleteRunningGenerationAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken)

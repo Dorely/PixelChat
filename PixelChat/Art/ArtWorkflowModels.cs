@@ -30,6 +30,7 @@ public sealed record ArtAssetView(
     int? Height,
     Guid? ParentAssetId,
     Guid? SourceBatchId,
+    int? BatchOutputIndex,
     Guid? SourcePromptRecipeId,
     bool IsFavorite,
     string Notes,

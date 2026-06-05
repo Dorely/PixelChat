@@ -167,57 +167,49 @@ public sealed class ArtWorkflowService(
             ? await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
             : null;
 
-        try
-        {
-            var providerResult = await imageProvider.GenerateAsync(new ImageProviderGenerateRequest(
-                BuildPrompt(batch.Prompt, batch.NegativePrompt, recipe),
-                Clean(batch.NegativePrompt),
-                batch.Size,
-                1,
-                batch.MainlineModel,
-                batch.ImageModel,
-                references.Select(ToProviderReference).ToList(),
-                imageOptions.Value.DefaultOutputFormat,
-                imageOptions.Value.DefaultQuality,
-                imageOptions.Value.DefaultBackground), cancellationToken);
+        var providerResult = await imageProvider.GenerateAsync(new ImageProviderGenerateRequest(
+            BuildPrompt(batch.Prompt, batch.NegativePrompt, recipe),
+            Clean(batch.NegativePrompt),
+            batch.Size,
+            1,
+            batch.MainlineModel,
+            batch.ImageModel,
+            references.Select(ToProviderReference).ToList(),
+            imageOptions.Value.DefaultOutputFormat,
+            imageOptions.Value.DefaultQuality,
+            imageOptions.Value.DefaultBackground), cancellationToken);
 
-            batch.Provider = providerResult.Provider;
-            batch.MainlineModel = providerResult.MainlineModel;
-            batch.ImageModel = providerResult.ImageModel;
-            batch.RawProviderResponseJson = providerResult.RawMetadataJson;
-            batch.UpdatedAt = DateTime.UtcNow;
+        batch.Provider = providerResult.Provider;
+        batch.MainlineModel = providerResult.MainlineModel;
+        batch.ImageModel = providerResult.ImageModel;
+        batch.RawProviderResponseJson = providerResult.RawMetadataJson;
+        batch.UpdatedAt = DateTime.UtcNow;
 
-            var image = providerResult.Images.FirstOrDefault()
-                ?? throw new InvalidOperationException("Image provider completed without returning an image.");
-            var asset = CreateAsset(
-                projectId,
-                $"Image {LabelForIndex(outputIndex)}",
-                $"generated-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(image.ContentType)}",
-                ArtAssetKind.Generated,
-                image.ContentType,
-                image.Data,
-                parentAssetId: null,
-                sourceBatchId: batch.Id,
-                promptRecipeId: recipe?.Id,
-                prompt: batch.Prompt,
-                metadata: new
-                {
-                    OutputIndex = outputIndex,
-                    image.RevisedPrompt,
-                    image.ResponseId,
-                    image.CallId,
-                    image.OutputFormat,
-                    References = references.Select(a => new { a.Id, a.Label, a.ContentType }),
-                });
-            await db.ArtAssets.AddAsync(asset, cancellationToken);
-            await db.SaveChangesAsync(cancellationToken);
-            return AssetView(asset);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            await MarkGenerationBatchOutputFailedAsync(projectId, batchId, outputIndex, ex.Message, CancellationToken.None);
-            throw;
-        }
+        var image = providerResult.Images.FirstOrDefault()
+            ?? throw new InvalidOperationException("Image provider completed without returning an image.");
+        var asset = CreateAsset(
+            projectId,
+            $"Image {LabelForIndex(outputIndex)}",
+            $"generated-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(image.ContentType)}",
+            ArtAssetKind.Generated,
+            image.ContentType,
+            image.Data,
+            parentAssetId: null,
+            sourceBatchId: batch.Id,
+            promptRecipeId: recipe?.Id,
+            prompt: batch.Prompt,
+            metadata: new
+            {
+                OutputIndex = outputIndex,
+                image.RevisedPrompt,
+                image.ResponseId,
+                image.CallId,
+                image.OutputFormat,
+                References = references.Select(a => new { a.Id, a.Label, a.ContentType }),
+            });
+        await db.ArtAssets.AddAsync(asset, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return AssetView(asset);
     }
 
     public async Task MarkGenerationBatchOutputFailedAsync(
@@ -230,9 +222,13 @@ public sealed class ArtWorkflowService(
         var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken);
         if (batch is null)
             return;
+        var cleanedError = Clean(error);
+        if (string.IsNullOrWhiteSpace(cleanedError))
+            cleanedError = "Image request failed.";
+
         var errors = DeserializeOutputErrors(batch.OutputErrorsJson)
             .Where(item => item.OutputIndex != outputIndex)
-            .Append(new GenerationOutputErrorView(outputIndex, Clean(error)))
+            .Append(new GenerationOutputErrorView(outputIndex, cleanedError))
             .OrderBy(item => item.OutputIndex)
             .ToList();
         batch.OutputErrorsJson = SerializeOutputErrors(errors);
@@ -247,8 +243,17 @@ public sealed class ArtWorkflowService(
     {
         var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken)
             ?? throw new InvalidOperationException("Generation batch was not found.");
-        var outputCount = await db.ArtAssets.CountAsync(a => a.ProjectId == projectId && a.SourceBatchId == batchId, cancellationToken);
-        var errors = DeserializeOutputErrors(batch.OutputErrorsJson);
+        var outputAssets = await db.ArtAssets
+            .Where(a => a.ProjectId == projectId && a.SourceBatchId == batchId)
+            .ToListAsync(cancellationToken);
+        var outputIndexes = outputAssets
+            .Select(ReadBatchOutputIndex)
+            .OfType<int>()
+            .Where(index => index >= 0 && index < batch.Count)
+            .ToHashSet();
+        var unindexedOutputCount = outputAssets.Count(a => ReadBatchOutputIndex(a) is null);
+        var outputCount = outputIndexes.Count + unindexedOutputCount;
+        var errors = NormalizeOutputErrors(batch.OutputErrorsJson, batch.Count, outputIndexes);
 
         batch.Status = errors.Count switch
         {
@@ -258,7 +263,8 @@ public sealed class ArtWorkflowService(
         };
         batch.Error = errors.Count == 0
             ? string.Empty
-            : $"{errors.Count} of {batch.Count} image request(s) failed.";
+            : OutputErrorSummary(errors.Count, batch.Count);
+        batch.OutputErrorsJson = SerializeOutputErrors(errors);
         batch.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
         var batchAssets = await db.ArtAssets.Where(a => a.ProjectId == projectId).ToListAsync(cancellationToken);
@@ -281,8 +287,9 @@ public sealed class ArtWorkflowService(
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
+                await MarkGenerationBatchOutputFailedAsync(projectId, batch.Id, outputIndex, ex.Message, cancellationToken);
             }
         }
 
@@ -858,14 +865,31 @@ public sealed class ArtWorkflowService(
             asset.Height,
             asset.ParentAssetId,
             asset.SourceBatchId,
+            ReadBatchOutputIndex(asset),
             asset.SourcePromptRecipeId,
             asset.IsFavorite,
             asset.Notes,
             asset.Prompt,
             asset.CreatedAt);
 
-    private static GenerationBatchView BatchView(GenerationBatch batch, IReadOnlyList<ArtAsset> assets) =>
-        new(
+    private static GenerationBatchView BatchView(GenerationBatch batch, IReadOnlyList<ArtAsset> assets)
+    {
+        var outputAssets = assets
+            .Where(a => a.SourceBatchId == batch.Id)
+            .OrderBy(a => ReadBatchOutputIndex(a) ?? int.MaxValue)
+            .ThenBy(a => a.CreatedAt)
+            .ToList();
+        var outputIndexes = outputAssets
+            .Select(ReadBatchOutputIndex)
+            .OfType<int>()
+            .Where(index => index >= 0 && index < batch.Count)
+            .ToHashSet();
+        var outputErrors = NormalizeOutputErrors(batch.OutputErrorsJson, batch.Count, outputIndexes);
+        var displayError = outputErrors.Count > 0
+            ? OutputErrorSummary(outputErrors.Count, batch.Count)
+            : batch.Error;
+
+        return new(
             batch.Id,
             batch.Label,
             batch.Provider,
@@ -877,13 +901,14 @@ public sealed class ArtWorkflowService(
             batch.Count,
             DeserializeIds(batch.InputAssetIdsJson),
             DeserializeIds(batch.InputMaskIdsJson),
-            assets.Where(a => a.SourceBatchId == batch.Id).OrderBy(a => a.CreatedAt).Select(a => a.Id).ToList(),
+            outputAssets.Select(a => a.Id).ToList(),
             batch.ParentBatchId,
             batch.PromptRecipeId,
             batch.Status,
-            batch.Error,
-            DeserializeOutputErrors(batch.OutputErrorsJson),
+            displayError,
+            outputErrors,
             batch.CreatedAt);
+    }
 
     private static PromptRecipeView RecipeView(PromptRecipe recipe) =>
         new(
@@ -957,7 +982,81 @@ public sealed class ArtWorkflowService(
         JsonSerializer.Serialize(values.Select(v => v.Trim()).Where(v => v.Length > 0).ToList(), JsonOptions);
 
     private static string SerializeOutputErrors(IEnumerable<GenerationOutputErrorView> errors) =>
-        JsonSerializer.Serialize(errors.ToList(), JsonOptions);
+        JsonSerializer.Serialize(errors
+            .Where(error => error.OutputIndex >= 0)
+            .Select(error => new GenerationOutputErrorView(error.OutputIndex, Clean(error.Error)))
+            .Where(error => !string.IsNullOrWhiteSpace(error.Error))
+            .GroupBy(error => error.OutputIndex)
+            .Select(group => group.Last())
+            .OrderBy(error => error.OutputIndex)
+            .ToList(), JsonOptions);
+
+    private static string OutputErrorSummary(int errorCount, int requestedCount) =>
+        $"{errorCount} of {requestedCount} image request(s) failed.";
+
+    private static int? ReadBatchOutputIndex(ArtAsset asset) =>
+        ReadBatchOutputIndex(asset.SourceMetadataJson) ?? ReadBatchOutputIndexFromLabel(asset.Label);
+
+    private static int? ReadBatchOutputIndex(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("outputIndex", out var outputIndex)
+                && !root.TryGetProperty("OutputIndex", out outputIndex))
+            {
+                return null;
+            }
+
+            if (outputIndex.ValueKind == JsonValueKind.Number && outputIndex.TryGetInt32(out var numberValue))
+                return numberValue;
+            if (outputIndex.ValueKind == JsonValueKind.String && int.TryParse(outputIndex.GetString(), out var stringValue))
+                return stringValue;
+        }
+        catch (JsonException)
+        {
+        }
+
+        return null;
+    }
+
+    private static int? ReadBatchOutputIndexFromLabel(string label)
+    {
+        const string prefix = "Image ";
+        var trimmed = Clean(label);
+        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var token = trimmed[prefix.Length..].Trim();
+        if (token.Length == 1)
+        {
+            var letter = char.ToUpperInvariant(token[0]);
+            if (letter is >= 'A' and <= 'Z')
+                return letter - 'A';
+        }
+
+        return int.TryParse(token, out var number) && number > 0
+            ? number - 1
+            : null;
+    }
+
+    private static List<GenerationOutputErrorView> NormalizeOutputErrors(
+        string value,
+        int requestedCount,
+        ISet<int>? completedOutputIndexes = null) =>
+        DeserializeOutputErrors(value)
+            .Where(error => error.OutputIndex >= 0 && error.OutputIndex < requestedCount)
+            .Where(error => !string.IsNullOrWhiteSpace(error.Error))
+            .Where(error => completedOutputIndexes is null || !completedOutputIndexes.Contains(error.OutputIndex))
+            .Select(error => new GenerationOutputErrorView(error.OutputIndex, Clean(error.Error)))
+            .GroupBy(error => error.OutputIndex)
+            .Select(group => group.Last())
+            .OrderBy(error => error.OutputIndex)
+            .ToList();
 
     private static List<Guid> DeserializeIds(string value)
     {

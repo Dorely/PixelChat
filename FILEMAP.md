@@ -55,7 +55,7 @@
 | `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench, recipe management, and assistant tools. |
 | `ImageProviderModels.cs` | Provider abstraction plus generation/edit request and result records. |
 | `OpenAIAccountImageProvider.cs` | OpenAI account Responses image provider using Codex-style auth headers, SSE parsing, references, and masked edit payloads. |
-| `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, parallelism, timeout, and reference defaults. |
+| `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, parallelism, retry, timeout, and reference defaults. |
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 
