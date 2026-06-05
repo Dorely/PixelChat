@@ -127,12 +127,7 @@ public sealed class OpenAIAccountImageProvider(
         using var request = new HttpRequestMessage(HttpMethod.Post, OpenAIAccountProvider.ResponsesEndpoint);
         request.Content = new StringContent(json, Encoding.UTF8);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", connection.Token);
-        request.Headers.TryAddWithoutValidation("chatgpt-account-id", connection.AccountId);
-        request.Headers.TryAddWithoutValidation("OpenAI-Beta", "responses=experimental");
-        request.Headers.TryAddWithoutValidation("originator", "pi");
-        request.Headers.TryAddWithoutValidation("User-Agent", "PixelChat");
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        OpenAIAccountProvider.ApplyCodexRequestHeaders(request, connection.Token, connection.AccountId);
 
         var httpClient = httpClientFactory.CreateClient();
         var timeoutSeconds = Math.Clamp(options.Value.RequestTimeoutSeconds, 1, 3600);
@@ -158,16 +153,18 @@ public sealed class OpenAIAccountImageProvider(
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            var errorKind = ClassifyImageError(errorBody);
             logger.LogError(
-                "OpenAI account image API error: statusCode={StatusCode}, requestId={RequestId}, action={Action}, model={MainlineModel}, imageModel={ImageModel}, elapsedMs={ElapsedMs}, body={Body}",
+                "OpenAI account image API error: statusCode={StatusCode}, requestId={RequestId}, action={Action}, model={MainlineModel}, imageModel={ImageModel}, elapsedMs={ElapsedMs}, errorKind={ErrorKind}, body={Body}",
                 (int)response.StatusCode,
                 requestId,
                 diagnostics.Action,
                 mainlineModel,
                 imageModel,
                 stopwatch.ElapsedMilliseconds,
+                errorKind,
                 TruncateForLog(errorBody, 4000));
-            throw new HttpRequestException($"OpenAI account image request returned {(int)response.StatusCode}: {errorBody}");
+            throw new HttpRequestException($"OpenAI account image request returned {(int)response.StatusCode} ({errorKind}): {errorBody}");
         }
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -210,8 +207,9 @@ public sealed class OpenAIAccountImageProvider(
             if (type == "response.failed")
             {
                 var error = ReadResponseError(evt) ?? "OpenAI account image generation failed.";
+                var errorKind = ClassifyImageError(error);
                 logger.LogWarning(
-                    "OpenAI account image response failed: requestId={RequestId}, responseId={ResponseId}, action={Action}, model={MainlineModel}, imageModel={ImageModel}, elapsedMs={ElapsedMs}, eventCount={EventCount}, lastEventType={LastEventType}, error={Error}",
+                    "OpenAI account image response failed: requestId={RequestId}, responseId={ResponseId}, action={Action}, model={MainlineModel}, imageModel={ImageModel}, elapsedMs={ElapsedMs}, eventCount={EventCount}, lastEventType={LastEventType}, errorKind={ErrorKind}, error={Error}",
                     requestId,
                     responseId,
                     diagnostics.Action,
@@ -220,14 +218,16 @@ public sealed class OpenAIAccountImageProvider(
                     stopwatch.ElapsedMilliseconds,
                     eventCount,
                     lastEventType,
+                    errorKind,
                     error);
-                throw new InvalidOperationException(error);
+                throw new InvalidOperationException($"OpenAI account image generation failed ({errorKind}): {error}");
             }
             if (type == "error")
             {
                 var error = ReadResponseError(evt) ?? "Unknown error";
+                var errorKind = ClassifyImageError(error);
                 logger.LogWarning(
-                    "OpenAI account image stream error: requestId={RequestId}, responseId={ResponseId}, action={Action}, model={MainlineModel}, imageModel={ImageModel}, elapsedMs={ElapsedMs}, eventCount={EventCount}, lastEventType={LastEventType}, error={Error}",
+                    "OpenAI account image stream error: requestId={RequestId}, responseId={ResponseId}, action={Action}, model={MainlineModel}, imageModel={ImageModel}, elapsedMs={ElapsedMs}, eventCount={EventCount}, lastEventType={LastEventType}, errorKind={ErrorKind}, error={Error}",
                     requestId,
                     responseId,
                     diagnostics.Action,
@@ -236,8 +236,9 @@ public sealed class OpenAIAccountImageProvider(
                     stopwatch.ElapsedMilliseconds,
                     eventCount,
                     lastEventType,
+                    errorKind,
                     error);
-                throw new InvalidOperationException($"OpenAI account image error: {error}");
+                throw new InvalidOperationException($"OpenAI account image error ({errorKind}): {error}");
             }
 
             if (type == "response.output_item.done"
@@ -416,7 +417,6 @@ public sealed class OpenAIAccountImageProvider(
             content.Add(InputImage(reference));
 
         var tool = BaseImageTool(request.Size, request.Quality, request.OutputFormat, request.Background, imageModel);
-        tool["action"] = "generate";
 
         return BasePayload(mainlineModel, content, tool, "Use the image_generation tool to create one game-ready 2D art asset from the user's prompt.");
     }
@@ -437,7 +437,6 @@ public sealed class OpenAIAccountImageProvider(
             content.Add(InputImage(reference));
 
         var tool = BaseImageTool(request.Size, request.Quality, request.OutputFormat, request.Background, imageModel);
-        tool["action"] = "edit";
         tool["input_image_mask"] = new Dictionary<string, object?>
         {
             ["image_url"] = ToDataUrl(request.Mask),
@@ -474,22 +473,33 @@ public sealed class OpenAIAccountImageProvider(
         string quality,
         string outputFormat,
         string background,
-        string imageModel) =>
-        new()
+        string imageModel)
+    {
+        var tool = new Dictionary<string, object?>
         {
             ["type"] = "image_generation",
             ["model"] = imageModel,
             ["size"] = string.IsNullOrWhiteSpace(size) ? "auto" : size.Trim(),
-            ["quality"] = string.IsNullOrWhiteSpace(quality) ? "auto" : quality.Trim(),
             ["output_format"] = NormalizeOutputFormat(outputFormat),
             ["background"] = string.IsNullOrWhiteSpace(background) ? "auto" : background.Trim(),
         };
+
+        var cleanQuality = quality.Trim();
+        if (!string.IsNullOrWhiteSpace(cleanQuality)
+            && !string.Equals(cleanQuality, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            tool["quality"] = cleanQuality;
+        }
+
+        return tool;
+    }
 
     private static Dictionary<string, object?> InputImage(ImageProviderReference reference) =>
         new()
         {
             ["type"] = "input_image",
             ["image_url"] = ToDataUrl(reference),
+            ["detail"] = "auto",
         };
 
     private static string ToDataUrl(ImageProviderReference reference) =>
@@ -535,6 +545,44 @@ public sealed class OpenAIAccountImageProvider(
             return value;
         return value[..maxChars] + "...";
     }
+
+    private static string ClassifyImageError(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return "unknown";
+
+        if (IsCodexImageInputRateLimit(message))
+            return "codex_image_input_rate_limit";
+
+        if (message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("429", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Too Many Requests", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Please try again", StringComparison.OrdinalIgnoreCase))
+        {
+            return "rate_limit";
+        }
+
+        if (message.Contains("403", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Forbidden", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Cloudflare", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("cf-mitigated", StringComparison.OrdinalIgnoreCase))
+        {
+            return "codex_transport_forbidden";
+        }
+
+        if (message.Contains("invalid_value", StringComparison.OrdinalIgnoreCase)
+            && message.Contains("gpt-image", StringComparison.OrdinalIgnoreCase))
+        {
+            return "image_model_invalid";
+        }
+
+        return "api_error";
+    }
+
+    private static bool IsCodexImageInputRateLimit(string message) =>
+        message.Contains("input-images", StringComparison.OrdinalIgnoreCase)
+        && message.Contains("per min", StringComparison.OrdinalIgnoreCase)
+        && message.Contains("gpt-image", StringComparison.OrdinalIgnoreCase);
 
     private static string? ReadResponseError(JsonElement evt)
     {

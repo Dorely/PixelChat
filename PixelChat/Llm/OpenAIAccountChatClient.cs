@@ -88,12 +88,7 @@ public sealed class OpenAIAccountChatClient : IChatClient
         using var request = new HttpRequestMessage(HttpMethod.Post, OpenAIAccountProvider.ResponsesEndpoint);
         request.Content = new StringContent(json, Encoding.UTF8);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
-        request.Headers.TryAddWithoutValidation("chatgpt-account-id", _accountId);
-        request.Headers.TryAddWithoutValidation("OpenAI-Beta", "responses=experimental");
-        request.Headers.TryAddWithoutValidation("originator", "pi");
-        request.Headers.TryAddWithoutValidation("User-Agent", "PixelChat");
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        OpenAIAccountProvider.ApplyCodexRequestHeaders(request, _accessToken, _accountId);
 
         _logger.LogDebug(
             "OpenAI account request: POST {Endpoint}, account={AccountId}, model={Model}, messages={MessageCount}, tools={ToolCount}, bodyChars={BodyChars}",

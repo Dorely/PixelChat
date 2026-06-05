@@ -43,7 +43,7 @@ public class OpenAIAccountAuthService(
             $"code_challenge_method=S256&" +
             $"id_token_add_organizations=true&" +
             $"codex_cli_simplified_flow=true&" +
-            $"originator=pi";
+            $"originator={Uri.EscapeDataString(OpenAIAccountProvider.CodexOriginator)}";
 
         return (url, state);
     }
