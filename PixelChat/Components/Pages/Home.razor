@@ -120,6 +120,16 @@ else
 }
 
 @code {
+    private static readonly string[] DefaultLocalAiModels =
+    [
+        "birefnet-massive",
+        "birefnet-general",
+        "birefnet-dis",
+        "birefnet-hrsod",
+        "isnet-general-use",
+        "isnet-anime",
+    ];
+
     private readonly List<ChatRenderableMessage> _messages = [];
     private readonly HashSet<Guid> _draftReferenceAssetIds = [];
     private readonly HashSet<Guid> _recipeExampleAssetIds = [];
@@ -175,18 +185,26 @@ else
     private Guid? _assetDeleteCandidateId;
     private ArtAssetExportView? _exportAsset;
     private CancellationTokenSource? _exportProcessingCts;
+    private CancellationTokenSource? _exportTimerCts;
     private bool _exportModalOpen;
     private bool _exportProcessing;
+    private bool _exportLocalAiRunning;
+    private bool _exportLocalAiResultAvailable;
+    private bool _exportLocalAiCacheHit;
     private bool _exportRemoveBackground;
     private int _exportTolerance = 24;
     private long _exportRequestVersion;
     private string _exportFileName = string.Empty;
-    private string _exportRemovalMethod = "local-ai";
+    private string _exportRemovalMethod = "auto";
+    private string _exportLocalAiModel = "birefnet-massive";
+    private string _exportActualBackend = string.Empty;
     private string _exportPreviewBackground = "checkerboard";
     private string _exportAppliedMethod = string.Empty;
     private string _exportPreviewDataUrl = string.Empty;
     private string _exportStatus = string.Empty;
     private string? _exportError;
+    private DateTime? _exportStartedAt;
+    private TimeSpan _exportElapsed = TimeSpan.Zero;
     private int _exportTransparentPixels;
     private int _exportSemiTransparentPixels;
     private int _exportOpaquePixels;
@@ -988,7 +1006,7 @@ else
                             <label class="export-checkbox">
                                 <input type="checkbox"
                                        checked="@_exportRemoveBackground"
-                                       disabled="@_exportProcessing"
+                                       disabled="@(_exportProcessing && !_exportLocalAiRunning)"
                                        @onchange="OnExportRemoveBackgroundChanged" />
                                 <span>Remove background</span>
                             </label>
@@ -997,14 +1015,30 @@ else
                                 <span>Removal method</span>
                                 <select class="form-select"
                                         value="@_exportRemovalMethod"
-                                        disabled="@(!_exportRemoveBackground || _exportProcessing)"
+                                        disabled="@(!_exportRemoveBackground || (_exportProcessing && !_exportLocalAiRunning))"
                                         @onchange="OnExportRemovalMethodChanged">
-                                    <option value="local-ai">Local AI</option>
                                     <option value="auto">Fast cleanup</option>
+                                    <option value="local-ai">Local AI</option>
                                     <option value="checkerboard">Patterned checkerboard</option>
                                     <option value="edge">Edge colors</option>
                                 </select>
                             </label>
+
+                            @if (_exportRemoveBackground && IsLocalAiRemovalMethod(_exportRemovalMethod))
+                            {
+                                <label>
+                                    <span>Local AI model</span>
+                                    <select class="form-select"
+                                            value="@_exportLocalAiModel"
+                                            disabled="@(_exportProcessing && !_exportLocalAiRunning)"
+                                            @onchange="OnExportLocalAiModelChanged">
+                                        @foreach (var model in LocalAiModelOptions())
+                                        {
+                                            <option value="@model">@LocalAiModelLabel(model)</option>
+                                        }
+                                    </select>
+                                </label>
+                            }
 
                             <label>
                                 <span>Tolerance @_exportTolerance</span>
@@ -1023,6 +1057,11 @@ else
                                 @if (!string.IsNullOrWhiteSpace(_exportAppliedMethod))
                                 {
                                     <span>@ExportRemovalMethodLabel(_exportAppliedMethod)</span>
+                                }
+                                @if (_exportLocalAiResultAvailable && IsLocalAiRemovalMethod(_exportAppliedMethod))
+                                {
+                                    <span>@BackendLabel(_exportActualBackend)</span>
+                                    <span>@(_exportLocalAiCacheHit ? "cached" : "generated")</span>
                                 }
                                 @if (_exportTransparentPixels > 0 || _exportSemiTransparentPixels > 0)
                                 {
@@ -1045,7 +1084,33 @@ else
                                 </div>
                             </div>
 
-                            @if (!string.IsNullOrWhiteSpace(_exportStatus))
+                            @if (_exportRemoveBackground && IsLocalAiRemovalMethod(_exportRemovalMethod))
+                            {
+                                <div class="export-status export-local-ai-panel">
+                                    <div class="export-local-ai-status">
+                                        <span>@_exportStatus</span>
+                                        @if (_exportLocalAiRunning)
+                                        {
+                                            <span class="export-local-ai-elapsed">@FormatElapsed(_exportElapsed)</span>
+                                        }
+                                    </div>
+                                    <div class="export-local-ai-actions">
+                                        @if (_exportLocalAiRunning)
+                                        {
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelExportProcessing">Stop</button>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="btn btn-sm btn-primary" disabled="@(asset is null || _exportProcessing)" @onclick="() => StartLocalAiExportAsync(false)">Start</button>
+                                            @if (_exportLocalAiResultAvailable)
+                                            {
+                                                <button type="button" class="btn btn-sm btn-outline-primary" disabled="@_exportProcessing" @onclick="() => StartLocalAiExportAsync(true)">Regenerate</button>
+                                            }
+                                        }
+                                    </div>
+                                </div>
+                            }
+                            else if (!string.IsNullOrWhiteSpace(_exportStatus))
                             {
                                 <div class="export-status">@_exportStatus</div>
                             }
@@ -1058,14 +1123,10 @@ else
                 }
 
                 <footer class="export-modal-actions">
-                    @if (_exportProcessing)
-                    {
-                        <button type="button" class="btn btn-outline-secondary" @onclick="CancelExportProcessing">Stop</button>
-                    }
                     <button type="button" class="btn btn-outline-secondary" @onclick="CloseExportModal">Cancel</button>
                     <button type="button"
                             class="btn btn-primary"
-                            disabled="@(asset is null || _exportProcessing || string.IsNullOrWhiteSpace(_exportPreviewDataUrl))"
+                            disabled="@(!CanDownloadExport())"
                             @onclick="DownloadExportAsync">
                         Download PNG
                     </button>
@@ -1538,14 +1599,21 @@ else
         _exportModalOpen = true;
         _exportAsset = null;
         _exportProcessing = true;
-        _exportRemoveBackground = false;
+        _exportLocalAiRunning = false;
+        _exportLocalAiResultAvailable = false;
+        _exportLocalAiCacheHit = false;
+        _exportRemoveBackground = true;
         _exportTolerance = 24;
-        _exportRemovalMethod = DefaultExportRemovalMethod();
+        _exportRemovalMethod = "auto";
+        _exportLocalAiModel = DefaultLocalAiModel();
+        _exportActualBackend = string.Empty;
         _exportPreviewBackground = "checkerboard";
         _exportAppliedMethod = string.Empty;
         _exportTransparentPixels = 0;
         _exportSemiTransparentPixels = 0;
         _exportOpaquePixels = 0;
+        _exportElapsed = TimeSpan.Zero;
+        _exportStartedAt = null;
         _exportFileName = DefaultExportFileName(asset.FileName, asset.Label);
         _exportPreviewDataUrl = asset.PreviewDataUrl;
         _exportStatus = "Loading export asset...";
@@ -1561,10 +1629,10 @@ else
             _exportAsset = exportAsset;
             _exportFileName = DefaultExportFileName(exportAsset.FileName, exportAsset.Label);
             _exportPreviewDataUrl = exportAsset.DataUrl;
-            _exportStatus = "Analyzing background...";
+            _exportStatus = "Preparing fast cleanup preview...";
             StateHasChanged();
 
-            var preview = await PrepareFastExportPreviewAsync(exportAsset.DataUrl, removeBackground: false, removalMethod: "auto", operationCts.Token);
+            var preview = await PrepareFastExportPreviewAsync(exportAsset.DataUrl, removeBackground: true, removalMethod: "auto", operationCts.Token);
             if (version != _exportRequestVersion)
                 return;
 
@@ -1596,20 +1664,48 @@ else
 
     private async Task OnExportRemoveBackgroundChanged(ChangeEventArgs args)
     {
+        if (_exportLocalAiRunning)
+            CancelExportProcessing();
+
         _exportRemoveBackground = args.Value switch
         {
             bool value => value,
             string value when bool.TryParse(value, out var parsed) => parsed,
             _ => false,
         };
-        await RefreshExportPreviewAsync();
+
+        if (_exportRemoveBackground && IsLocalAiRemovalMethod(_exportRemovalMethod))
+            await ShowLocalAiSelectionAsync();
+        else
+            await RefreshExportPreviewAsync();
     }
 
     private async Task OnExportRemovalMethodChanged(ChangeEventArgs args)
     {
+        if (_exportLocalAiRunning)
+            CancelExportProcessing();
+
         _exportRemovalMethod = NormalizeExportRemovalMethod(args.Value?.ToString());
         if (_exportRemoveBackground)
-            await RefreshExportPreviewAsync();
+        {
+            if (IsLocalAiRemovalMethod(_exportRemovalMethod))
+                await ShowLocalAiSelectionAsync();
+            else
+                await RefreshExportPreviewAsync();
+        }
+    }
+
+    private async Task OnExportLocalAiModelChanged(ChangeEventArgs args)
+    {
+        if (_exportLocalAiRunning)
+            CancelExportProcessing();
+
+        _exportLocalAiModel = NormalizeLocalAiModel(args.Value?.ToString());
+        _exportLocalAiResultAvailable = false;
+        _exportLocalAiCacheHit = false;
+        _exportActualBackend = string.Empty;
+        if (_exportRemoveBackground && IsLocalAiRemovalMethod(_exportRemovalMethod))
+            await ShowLocalAiSelectionAsync();
     }
 
     private async Task OnExportToleranceChanged(ChangeEventArgs args)
@@ -1618,7 +1714,7 @@ else
         if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tolerance))
             _exportTolerance = Math.Clamp(tolerance, 0, 80);
 
-        if (_exportRemoveBackground)
+        if (_exportRemoveBackground && !IsLocalAiRemovalMethod(_exportRemovalMethod))
             await RefreshExportPreviewAsync();
     }
 
@@ -1638,17 +1734,29 @@ else
         var asset = _exportAsset;
         if (!_exportModalOpen || asset is null)
             return;
+        if (_exportRemoveBackground && IsLocalAiRemovalMethod(_exportRemovalMethod))
+        {
+            await ShowLocalAiSelectionAsync();
+            return;
+        }
 
         var version = ++_exportRequestVersion;
         var operationCts = BeginExportOperation();
         _exportProcessing = true;
+        _exportLocalAiResultAvailable = false;
+        _exportLocalAiCacheHit = false;
+        _exportActualBackend = string.Empty;
         _exportError = null;
         _exportStatus = _exportRemoveBackground ? "Removing background..." : "Preparing PNG preview...";
         StateHasChanged();
 
         try
         {
-            var preview = await PrepareExportPreviewAsync(asset, _exportRemoveBackground, version, operationCts.Token);
+            var preview = await PrepareFastExportPreviewAsync(
+                asset.DataUrl,
+                _exportRemoveBackground,
+                _exportRemoveBackground ? _exportRemovalMethod : "auto",
+                operationCts.Token);
             if (version != _exportRequestVersion)
                 return;
 
@@ -1678,30 +1786,6 @@ else
         }
     }
 
-    private async Task<ExportPreviewResult> PrepareExportPreviewAsync(
-        ArtAssetExportView asset,
-        bool? removeBackground,
-        long version,
-        CancellationToken cancellationToken)
-    {
-        if (removeBackground == true && IsLocalAiRemovalMethod(_exportRemovalMethod))
-        {
-            try
-            {
-                return await PrepareLocalAiExportPreviewAsync(asset, version, cancellationToken);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                if (version == _exportRequestVersion)
-                    _exportError = $"Local AI failed: {ex.Message} Fast cleanup fallback is shown.";
-
-                return await PrepareFastExportPreviewAsync(asset.DataUrl, removeBackground: true, removalMethod: "auto", cancellationToken);
-            }
-        }
-
-        return await PrepareFastExportPreviewAsync(asset.DataUrl, removeBackground, _exportRemovalMethod, cancellationToken);
-    }
-
     private async Task<ExportPreviewResult> PrepareFastExportPreviewAsync(
         string dataUrl,
         bool? removeBackground,
@@ -1718,37 +1802,62 @@ else
             removalMethod);
     }
 
-    private async Task<ExportPreviewResult> PrepareLocalAiExportPreviewAsync(
-        ArtAssetExportView asset,
-        long version,
-        CancellationToken cancellationToken)
+    private async Task ShowLocalAiSelectionAsync()
     {
-        var parsed = DataUrl.Parse(asset.DataUrl);
-        var progress = new Progress<BackgroundRemovalProgress>(update =>
+        var asset = _exportAsset;
+        if (_workbench is null || !_exportModalOpen || asset is null)
+            return;
+
+        var version = ++_exportRequestVersion;
+        var operationCts = BeginExportOperation();
+        _exportProcessing = true;
+        _exportLocalAiResultAvailable = false;
+        _exportLocalAiCacheHit = false;
+        _exportActualBackend = string.Empty;
+        _exportError = null;
+        _exportStatus = $"Checking Local AI cache for {LocalAiModelLabel(_exportLocalAiModel)}...";
+        StateHasChanged();
+
+        try
         {
+            var cache = await Workflow.GetBackgroundRemovalExportCacheAsync(
+                _workbench.Project.Id,
+                asset.Id,
+                CurrentLocalAiCacheRequest(),
+                operationCts.Token);
             if (version != _exportRequestVersion)
                 return;
 
-            _exportStatus = update.Message;
-            _ = InvokeAsync(StateHasChanged);
-        });
+            if (cache is null)
+            {
+                _exportStatus = $"No cached Local AI PNG for {LocalAiModelLabel(_exportLocalAiModel)}. Click Start to process and cache it, or switch to Fast cleanup.";
+                return;
+            }
 
-        var result = await BackgroundRemoval.RemoveBackgroundAsync(
-            new BackgroundRemovalRequest(asset.FileName, parsed.ContentType, parsed.Data),
-            progress,
-            cancellationToken);
-
-        var dataUrl = DataUrl.ToDataUrl(result.ContentType, result.Data);
-        var module = await EnsurePageModuleAsync();
-        var stats = await module.InvokeAsync<ExportAlphaStats>("analyzePngAlpha", cancellationToken, dataUrl);
-        return new ExportPreviewResult(
-            RemoveBackground: true,
-            DataUrl: dataUrl,
-            Message: result.Message,
-            Method: result.Method,
-            TransparentPixels: stats.TransparentPixels,
-            SemiTransparentPixels: stats.SemiTransparentPixels,
-            OpaquePixels: stats.OpaquePixels);
+            ApplyLocalAiCachePreview(cache, $"Cached Local AI result loaded for {LocalAiModelLabel(cache.ModelName)} using {BackendLabel(cache.ActualBackend)}.");
+        }
+        catch (OperationCanceledException)
+        {
+            if (version == _exportRequestVersion)
+                _exportStatus = "Export cancelled.";
+        }
+        catch (Exception ex)
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportError = ex.Message;
+                _exportStatus = string.Empty;
+            }
+        }
+        finally
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportProcessing = false;
+                CompleteExportOperation(operationCts);
+                StateHasChanged();
+            }
+        }
     }
 
     private void ApplyExportPreview(ExportPreviewResult preview)
@@ -1759,6 +1868,126 @@ else
         _exportTransparentPixels = preview.TransparentPixels;
         _exportSemiTransparentPixels = preview.SemiTransparentPixels;
         _exportOpaquePixels = preview.OpaquePixels;
+    }
+
+    private async Task StartLocalAiExportAsync(bool force)
+    {
+        var asset = _exportAsset;
+        if (_workbench is null || asset is null || _exportLocalAiRunning)
+            return;
+
+        var version = ++_exportRequestVersion;
+        var operationCts = BeginExportOperation();
+        _exportProcessing = true;
+        _exportLocalAiRunning = true;
+        _exportLocalAiCacheHit = false;
+        _exportError = null;
+        _exportStatus = $"Starting Local AI with {LocalAiModelLabel(_exportLocalAiModel)}...";
+        StartExportTimer();
+        StateHasChanged();
+
+        try
+        {
+            if (!force)
+            {
+                var cache = await Workflow.GetBackgroundRemovalExportCacheAsync(
+                    _workbench.Project.Id,
+                    asset.Id,
+                    CurrentLocalAiCacheRequest(),
+                    operationCts.Token);
+                if (cache is not null)
+                {
+                    if (version == _exportRequestVersion)
+                        ApplyLocalAiCachePreview(cache, $"Cached Local AI result loaded for {LocalAiModelLabel(cache.ModelName)} using {BackendLabel(cache.ActualBackend)}.");
+                    return;
+                }
+            }
+
+            var parsed = DataUrl.Parse(asset.DataUrl);
+            var progress = new Progress<BackgroundRemovalProgress>(update =>
+            {
+                if (version != _exportRequestVersion)
+                    return;
+
+                _exportStatus = update.Message;
+                _ = InvokeAsync(StateHasChanged);
+            });
+
+            var result = await BackgroundRemoval.RemoveBackgroundAsync(
+                new BackgroundRemovalRequest(
+                    asset.FileName,
+                    parsed.ContentType,
+                    parsed.Data,
+                    _exportLocalAiModel,
+                    BackgroundRemovalOptions.Value.Acceleration),
+                progress,
+                operationCts.Token);
+
+            var dataUrl = DataUrl.ToDataUrl(result.ContentType, result.Data);
+            var module = await EnsurePageModuleAsync();
+            var stats = await module.InvokeAsync<ExportAlphaStats>("analyzePngAlpha", operationCts.Token, dataUrl);
+            var cacheView = await Workflow.SaveBackgroundRemovalExportCacheAsync(
+                _workbench.Project.Id,
+                asset.Id,
+                new SaveBackgroundRemovalExportCacheRequest(
+                    "local-ai",
+                    result.Model,
+                    BackgroundRemovalOptions.Value.RembgPackageVersion,
+                    BackgroundRemovalOptions.Value.AlphaMatting,
+                    LocalAiOptionsHash(),
+                    result.ContentType,
+                    result.Data,
+                    stats.TransparentPixels,
+                    stats.SemiTransparentPixels,
+                    stats.OpaquePixels,
+                    result.ActualBackend),
+                operationCts.Token);
+
+            if (version != _exportRequestVersion)
+                return;
+
+            ApplyLocalAiCachePreview(cacheView, result.Message);
+            _exportLocalAiCacheHit = false;
+            _exportElapsed = result.Elapsed;
+        }
+        catch (OperationCanceledException)
+        {
+            if (version == _exportRequestVersion)
+                _exportStatus = "Local AI cancelled.";
+        }
+        catch (Exception ex)
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportError = ex.Message;
+                _exportStatus = "Local AI failed. Switch to Fast cleanup or try another model.";
+            }
+        }
+        finally
+        {
+            if (version == _exportRequestVersion)
+            {
+                StopExportTimer(reset: false);
+                _exportLocalAiRunning = false;
+                _exportProcessing = false;
+                CompleteExportOperation(operationCts);
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void ApplyLocalAiCachePreview(BackgroundRemovalExportCacheView cache, string message)
+    {
+        _exportPreviewDataUrl = cache.DataUrl;
+        _exportStatus = message;
+        _exportAppliedMethod = cache.RemovalMethod;
+        _exportTransparentPixels = cache.TransparentPixels;
+        _exportSemiTransparentPixels = cache.SemiTransparentPixels;
+        _exportOpaquePixels = cache.OpaquePixels;
+        _exportLocalAiResultAvailable = true;
+        _exportLocalAiCacheHit = true;
+        _exportActualBackend = cache.ActualBackend;
+        _exportLocalAiModel = NormalizeLocalAiModel(cache.ModelName);
     }
 
     private async Task DownloadExportAsync()
@@ -1812,6 +2041,8 @@ else
     {
         _exportProcessingCts?.Cancel();
         _exportProcessingCts?.Dispose();
+        StopExportTimer(reset: false);
+        _exportLocalAiRunning = false;
         _exportProcessingCts = new CancellationTokenSource();
         return _exportProcessingCts;
     }
@@ -1843,20 +2074,155 @@ else
         _exportProcessingCts?.Cancel();
         _exportProcessingCts?.Dispose();
         _exportProcessingCts = null;
+        StopExportTimer(reset: true);
         _exportModalOpen = false;
         _exportProcessing = false;
+        _exportLocalAiRunning = false;
+        _exportLocalAiResultAvailable = false;
+        _exportLocalAiCacheHit = false;
         _exportAsset = null;
         _exportPreviewDataUrl = string.Empty;
         _exportFileName = string.Empty;
-        _exportRemovalMethod = DefaultExportRemovalMethod();
+        _exportRemovalMethod = "auto";
+        _exportLocalAiModel = DefaultLocalAiModel();
+        _exportActualBackend = string.Empty;
         _exportPreviewBackground = "checkerboard";
         _exportAppliedMethod = string.Empty;
         _exportStatus = string.Empty;
         _exportError = null;
         _exportRemoveBackground = false;
+        _exportElapsed = TimeSpan.Zero;
+        _exportStartedAt = null;
         _exportTransparentPixels = 0;
         _exportSemiTransparentPixels = 0;
         _exportOpaquePixels = 0;
+    }
+
+    private bool CanDownloadExport()
+    {
+        if (_exportAsset is null || _exportProcessing || string.IsNullOrWhiteSpace(_exportPreviewDataUrl))
+            return false;
+
+        return !_exportRemoveBackground
+            || !IsLocalAiRemovalMethod(_exportRemovalMethod)
+            || _exportLocalAiResultAvailable;
+    }
+
+    private BackgroundRemovalExportCacheRequest CurrentLocalAiCacheRequest() =>
+        new(
+            "local-ai",
+            _exportLocalAiModel,
+            BackgroundRemovalOptions.Value.RembgPackageVersion,
+            BackgroundRemovalOptions.Value.AlphaMatting,
+            LocalAiOptionsHash());
+
+    private string LocalAiOptionsHash() =>
+        "rembg-cli-default-alpha-thresholds-v1";
+
+    private IReadOnlyList<string> LocalAiModelOptions()
+    {
+        var configured = BackgroundRemovalOptions.Value.AllowedModels;
+        var models = configured is { Length: > 0 }
+            ? configured
+            : DefaultLocalAiModels;
+        var normalized = models
+            .Select(NormalizeLocalAiModelName)
+            .Where(model => !string.IsNullOrWhiteSpace(model))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        return normalized.Count > 0 ? normalized : DefaultLocalAiModels;
+    }
+
+    private string DefaultLocalAiModel()
+    {
+        var models = LocalAiModelOptions();
+        var configured = NormalizeLocalAiModelName(BackgroundRemovalOptions.Value.ModelName);
+        return models.Contains(configured, StringComparer.Ordinal)
+            ? configured
+            : models[0];
+    }
+
+    private string NormalizeLocalAiModel(string? value)
+    {
+        var normalized = NormalizeLocalAiModelName(value);
+        var models = LocalAiModelOptions();
+        return models.Contains(normalized, StringComparer.Ordinal)
+            ? normalized
+            : models[0];
+    }
+
+    private static string NormalizeLocalAiModelName(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToLowerInvariant();
+
+    private static string LocalAiModelLabel(string model) =>
+        model.Trim().ToLowerInvariant() switch
+        {
+            "birefnet-massive" => "BiRefNet Massive",
+            "birefnet-general" => "BiRefNet General",
+            "birefnet-dis" => "BiRefNet DIS",
+            "birefnet-hrsod" => "BiRefNet HRSOD",
+            "isnet-general-use" => "ISNet General",
+            "isnet-anime" => "ISNet Anime",
+            "bria-rmbg" => "BRIA RMBG",
+            _ => model,
+        };
+
+    private static string BackendLabel(string backend) =>
+        backend.Trim().ToLowerInvariant() switch
+        {
+            "gpu" => "GPU",
+            "rocm" => "ROCm",
+            "cpu" => "CPU",
+            _ => backend,
+        };
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed.TotalHours >= 1)
+            return $"{(int)elapsed.TotalHours}:{elapsed.Minutes:00}:{elapsed.Seconds:00}";
+
+        return $"{(int)elapsed.TotalMinutes}:{elapsed.Seconds:00}";
+    }
+
+    private void StartExportTimer()
+    {
+        StopExportTimer(reset: true);
+        _exportStartedAt = DateTime.UtcNow;
+        _exportElapsed = TimeSpan.Zero;
+        _exportTimerCts = new CancellationTokenSource();
+        _ = RunExportTimerAsync(_exportTimerCts.Token);
+    }
+
+    private async Task RunExportTimerAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                if (_exportStartedAt is DateTime startedAt)
+                    _exportElapsed = DateTime.UtcNow - startedAt;
+
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void StopExportTimer(bool reset)
+    {
+        if (_exportStartedAt is DateTime startedAt && !reset)
+            _exportElapsed = DateTime.UtcNow - startedAt;
+        else if (reset)
+            _exportElapsed = TimeSpan.Zero;
+
+        _exportTimerCts?.Cancel();
+        _exportTimerCts?.Dispose();
+        _exportTimerCts = null;
+        _exportStartedAt = null;
     }
 
     private async Task<IJSObjectReference> EnsurePageModuleAsync()
@@ -2539,9 +2905,6 @@ else
     private string ExportPreviewBackgroundClass(string background) =>
         _exportPreviewBackground == background ? "filter-button is-active" : "filter-button";
 
-    private string DefaultExportRemovalMethod() =>
-        NormalizeExportRemovalMethod(BackgroundRemovalOptions.Value.DefaultMethod);
-
     private static string NormalizeExportRemovalMethod(string? value) =>
         value?.Trim().ToLowerInvariant() switch
         {
@@ -2703,6 +3066,8 @@ else
         _maskAutosaveCts?.Dispose();
         _exportProcessingCts?.Cancel();
         _exportProcessingCts?.Dispose();
+        _exportTimerCts?.Cancel();
+        _exportTimerCts?.Dispose();
         _maskAutosaveLock.Dispose();
         _dotNetRef?.Dispose();
     }

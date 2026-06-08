@@ -1052,6 +1052,34 @@
     background: #f8fafc;
 }
 
+.export-local-ai-panel {
+    display: grid;
+    gap: 0.5rem;
+}
+
+.export-local-ai-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.export-local-ai-elapsed {
+    flex: 0 0 auto;
+    padding: 0.15rem 0.4rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #344054;
+    font-variant-numeric: tabular-nums;
+}
+
+.export-local-ai-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
 .export-error {
     border: 1px solid #fecdca;
     color: #b42318;

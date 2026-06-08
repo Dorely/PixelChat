@@ -8,6 +8,8 @@ public interface IArtWorkflowService
     Task<ProjectView> CreateProjectAsync(string name, CancellationToken cancellationToken = default);
     Task<WorkbenchView> GetWorkbenchAsync(Guid? projectId = null, CancellationToken cancellationToken = default);
     Task<ArtAssetExportView> GetAssetForExportAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
+    Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, BackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
+    Task<BackgroundRemovalExportCacheView> SaveBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, SaveBackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
     Task SetWorkspaceModeAsync(Guid projectId, WorkspaceMode mode, CancellationToken cancellationToken = default);
     Task SelectBatchAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
     Task<GenerationBatchView> StartGenerateImagesAsync(Guid projectId, GenerateImagesRequest request, CancellationToken cancellationToken = default);

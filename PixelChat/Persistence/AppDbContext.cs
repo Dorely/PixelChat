@@ -13,6 +13,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<StoredSecret> StoredSecrets => Set<StoredSecret>();
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<ArtAsset> ArtAssets => Set<ArtAsset>();
+    public DbSet<BackgroundRemovalExportCache> BackgroundRemovalExportCaches => Set<BackgroundRemovalExportCache>();
     public DbSet<GenerationBatch> GenerationBatches => Set<GenerationBatch>();
     public DbSet<PromptRecipe> PromptRecipes => Set<PromptRecipe>();
     public DbSet<ImageMask> ImageMasks => Set<ImageMask>();
@@ -122,6 +123,26 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .WithMany()
                 .HasForeignKey(e => e.SourcePromptRecipeId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<BackgroundRemovalExportCache>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.AssetId });
+            entity.HasIndex(e => new
+            {
+                e.AssetId,
+                e.SourceImageSha256,
+                e.RemovalMethod,
+                e.ModelName,
+                e.RembgPackageVersion,
+                e.AlphaMatting,
+                e.OptionsHash,
+            }).IsUnique();
+
+            entity.HasOne(e => e.Asset)
+                .WithMany()
+                .HasForeignKey(e => e.AssetId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<GenerationBatch>(entity =>

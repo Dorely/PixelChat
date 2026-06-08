@@ -47,7 +47,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 int? count = null,
                 Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, background, recipeId, count, referenceAssetIds),
             name: "draft_generate_form",
-            description: "Draft values for the Generate form. Use background as auto or opaque instead of adding background instructions to the prompt; transparent generation is not supported by the current image model, so use auto for isolated assets and rely on Export background removal, especially the Local AI method for complex backgrounds, for real-alpha PNG output. Use recipeId to select a saved style recipe; keep prompt focused on the asset-specific request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
+            description: "Draft values for the Generate form. Use background as auto or opaque instead of adding background instructions to the prompt; transparent generation is not supported by the current image model, so use auto for isolated assets and rely on Export background removal, especially manual-start cached Local AI for complex backgrounds and internal holes, for real-alpha PNG output. Use recipeId to select a saved style recipe; keep prompt focused on the asset-specific request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -56,7 +56,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 string? background = null,
                 int count = 1) => DraftEditFormAsync(prompt, size, background, count),
             name: "draft_edit_form",
-            description: "Draft values for the current Edit form. Use background as auto or opaque instead of adding background instructions to the prompt; transparent generation is not supported by the current image model, so use auto for isolated assets and rely on Export background removal, especially the Local AI method for complex backgrounds, for real-alpha PNG output. This does not choose an asset or run an image edit; the user selects an asset, may paint/review a mask for targeted edits, and clicks Send Edit manually."),
+            description: "Draft values for the current Edit form. Use background as auto or opaque instead of adding background instructions to the prompt; transparent generation is not supported by the current image model, so use auto for isolated assets and rely on Export background removal, especially manual-start cached Local AI for complex backgrounds and internal holes, for real-alpha PNG output. This does not choose an asset or run an image edit; the user selects an asset, may paint/review a mask for targeted edits, and clicks Send Edit manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -80,7 +80,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         AIFunctionFactory.Create(
             method: (Guid assetId) => ExportAssetAsync(projectId, assetId),
             name: "export_asset",
-            description: "Prepare an existing asset for export by identifying it for the visible export modal. The user still controls export processing, including Local AI background removal, and browser download."),
+            description: "Prepare an existing asset for export by identifying it for the visible export modal. The modal opens with Fast cleanup; the user still controls browser download and can manually start cached Local AI background removal for difficult backgrounds."),
     ];
 
     public bool IsWorkspaceMutation(string toolName) => WorkspaceMutationTools.Contains(toolName);

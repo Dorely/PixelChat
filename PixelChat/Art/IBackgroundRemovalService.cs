@@ -11,14 +11,18 @@ public interface IBackgroundRemovalService
 public sealed record BackgroundRemovalRequest(
     string FileName,
     string ContentType,
-    byte[] Data);
+    byte[] Data,
+    string? ModelName = null,
+    string? RequestedBackend = null);
 
 public sealed record BackgroundRemovalResult(
     byte[] Data,
     string ContentType,
     string Method,
     string Model,
-    string Message);
+    string Message,
+    string ActualBackend,
+    TimeSpan Elapsed);
 
 public sealed record BackgroundRemovalProgress(
     string Stage,

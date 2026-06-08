@@ -47,6 +47,44 @@ public sealed record ArtAssetExportView(
     int? Width,
     int? Height);
 
+public sealed record BackgroundRemovalExportCacheRequest(
+    string RemovalMethod,
+    string ModelName,
+    string RembgPackageVersion,
+    bool AlphaMatting,
+    string OptionsHash);
+
+public sealed record SaveBackgroundRemovalExportCacheRequest(
+    string RemovalMethod,
+    string ModelName,
+    string RembgPackageVersion,
+    bool AlphaMatting,
+    string OptionsHash,
+    string ContentType,
+    byte[] Data,
+    int TransparentPixels,
+    int SemiTransparentPixels,
+    int OpaquePixels,
+    string ActualBackend);
+
+public sealed record BackgroundRemovalExportCacheView(
+    Guid Id,
+    Guid AssetId,
+    string SourceImageSha256,
+    string RemovalMethod,
+    string ModelName,
+    string RembgPackageVersion,
+    bool AlphaMatting,
+    string OptionsHash,
+    string ContentType,
+    string DataUrl,
+    int TransparentPixels,
+    int SemiTransparentPixels,
+    int OpaquePixels,
+    string ActualBackend,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
 public sealed record GenerationBatchView(
     Guid Id,
     string Label,

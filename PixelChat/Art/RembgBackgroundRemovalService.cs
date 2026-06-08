@@ -3,7 +3,6 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Extensions.Options;
 
 namespace PixelChat.Art;
@@ -37,47 +36,64 @@ public sealed class RembgBackgroundRemovalService(
         Directory.CreateDirectory(paths.Root);
         Directory.CreateDirectory(paths.TempRoot);
 
-        var rembgExe = await EnsureSidecarAsync(paths, configured, progress, cancellationToken);
-        var model = CleanModel(configured.ModelName);
+        var model = CleanModel(request.ModelName, configured.ModelName);
+        var requestedBackend = NormalizeBackend(request.RequestedBackend, configured.Acceleration);
+        var backends = BackendOrder(requestedBackend, configured.AllowCpuFallback).ToArray();
         var timeout = TimeSpan.FromSeconds(Math.Clamp(configured.TimeoutSeconds, 10, 3600));
+        var stopwatch = Stopwatch.StartNew();
         var tempDir = Path.Combine(paths.TempRoot, "export-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
 
         try
         {
-            progress?.Report(new("model", $"Downloading {model} if needed..."));
             var inputPath = Path.Combine(tempDir, "input" + ExtensionForContentType(request.ContentType));
-            var outputPath = Path.Combine(tempDir, "output.png");
             await File.WriteAllBytesAsync(inputPath, request.Data, cancellationToken);
+            var failures = new List<string>();
+            for (var attempt = 0; attempt < backends.Length; attempt++)
+            {
+                var backend = backends[attempt];
+                try
+                {
+                    var output = await RemoveWithBackendAsync(
+                        inputPath,
+                        tempDir,
+                        paths,
+                        configured,
+                        model,
+                        backend,
+                        timeout,
+                        progress,
+                        cancellationToken);
+                    stopwatch.Stop();
+                    var usedFallback = !string.Equals(backend, requestedBackend, StringComparison.Ordinal);
+                    var backendLabel = BackendLabel(backend);
+                    var message = usedFallback
+                        ? $"Local AI background removed with {model} using {backendLabel} fallback."
+                        : $"Local AI background removed with {model} using {backendLabel}.";
+                    progress?.Report(new("complete", message));
+                    return new BackgroundRemovalResult(
+                        output,
+                        "image/png",
+                        "local-ai",
+                        model,
+                        message,
+                        backend,
+                        stopwatch.Elapsed);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && attempt + 1 < backends.Length)
+                {
+                    failures.Add($"{BackendLabel(backend)} failed: {ex.Message}");
+                    logger.LogWarning(ex, "Local AI background removal failed on {Backend}; trying fallback.", backend);
+                    progress?.Report(new("fallback", $"{BackendLabel(backend)} failed; trying {BackendLabel(backends[attempt + 1])} fallback..."));
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    failures.Add($"{BackendLabel(backend)} failed: {ex.Message}");
+                    throw new InvalidOperationException($"Local AI background removal failed. {string.Join(' ', failures)}", ex);
+                }
+            }
 
-            var arguments = new List<string> { "i", "-m", model };
-            if (configured.AlphaMatting)
-                arguments.Add("-a");
-            arguments.Add(inputPath);
-            arguments.Add(outputPath);
-
-            progress?.Report(new("processing", $"Removing background with {model}..."));
-            var command = await RunCommandAsync(
-                rembgExe,
-                arguments,
-                tempDir,
-                ProcessEnvironment(paths),
-                timeout,
-                cancellationToken);
-
-            if (command.ExitCode != 0)
-                throw new InvalidOperationException($"rembg failed with exit code {command.ExitCode}: {TrimCommandOutput(command)}");
-            if (!File.Exists(outputPath))
-                throw new InvalidOperationException($"rembg completed without writing an output PNG. {TrimCommandOutput(command)}");
-
-            var output = await File.ReadAllBytesAsync(outputPath, cancellationToken);
-            progress?.Report(new("complete", $"Local AI background removal complete with {model}."));
-            return new BackgroundRemovalResult(
-                output,
-                "image/png",
-                "local-ai",
-                model,
-                $"Local AI background removed with {model}.");
+            throw new InvalidOperationException("Local AI background removal failed before processing could start.");
         }
         finally
         {
@@ -85,25 +101,73 @@ public sealed class RembgBackgroundRemovalService(
         }
     }
 
+    private async Task<byte[]> RemoveWithBackendAsync(
+        string inputPath,
+        string tempDir,
+        SidecarPaths paths,
+        BackgroundRemovalOptions configured,
+        string model,
+        string backend,
+        TimeSpan timeout,
+        IProgress<BackgroundRemovalProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        var rembgExe = await EnsureSidecarAsync(paths, configured, backend, progress, cancellationToken);
+        progress?.Report(new("model", $"Downloading {model} if needed..."));
+        var outputPath = Path.Combine(tempDir, $"output-{backend}.png");
+        File.Delete(outputPath);
+
+        var arguments = new List<string>
+        {
+            "i",
+            "-m",
+            model,
+            "-x",
+            ProviderExtras(backend),
+        };
+        if (configured.AlphaMatting)
+            arguments.Add("-a");
+        arguments.Add(inputPath);
+        arguments.Add(outputPath);
+
+        progress?.Report(new("processing", $"Removing background with {model} on {BackendLabel(backend)}..."));
+        var command = await RunCommandAsync(
+            rembgExe,
+            arguments,
+            tempDir,
+            ProcessEnvironment(paths),
+            timeout,
+            cancellationToken);
+
+        if (command.ExitCode != 0)
+            throw new InvalidOperationException($"rembg failed with exit code {command.ExitCode}: {TrimCommandOutput(command)}");
+        if (!File.Exists(outputPath))
+            throw new InvalidOperationException($"rembg completed without writing an output PNG. {TrimCommandOutput(command)}");
+
+        return await File.ReadAllBytesAsync(outputPath, cancellationToken);
+    }
+
     private async Task<string> EnsureSidecarAsync(
         SidecarPaths paths,
         BackgroundRemovalOptions configured,
+        string backend,
         IProgress<BackgroundRemovalProgress>? progress,
         CancellationToken cancellationToken)
     {
         await SetupLock.WaitAsync(cancellationToken);
         try
         {
-            progress?.Report(new("checking", "Checking local AI sidecar..."));
+            progress?.Report(new("checking", $"Checking local AI {BackendLabel(backend)} sidecar..."));
             Directory.CreateDirectory(paths.Downloads);
             Directory.CreateDirectory(paths.UvDirectory);
+            Directory.CreateDirectory(paths.VenvRoot);
             Directory.CreateDirectory(paths.ModelCache);
             Directory.CreateDirectory(paths.HuggingFaceCache);
             Directory.CreateDirectory(paths.UvCache);
 
             var uvExe = await EnsureUvAsync(paths, configured, progress, cancellationToken);
             await EnsurePythonAsync(uvExe, paths, configured, progress, cancellationToken);
-            return await EnsureRembgAsync(uvExe, paths, configured, progress, cancellationToken);
+            return await EnsureRembgAsync(uvExe, paths, configured, backend, progress, cancellationToken);
         }
         finally
         {
@@ -191,12 +255,15 @@ public sealed class RembgBackgroundRemovalService(
         string uvExe,
         SidecarPaths paths,
         BackgroundRemovalOptions configured,
+        string backend,
         IProgress<BackgroundRemovalProgress>? progress,
         CancellationToken cancellationToken)
     {
-        var expectedMarker = $"python={configured.PythonVersion};rembg={configured.RembgPackageVersion}";
-        var rembgExe = RembgExecutable(paths.VenvDirectory);
-        var markerPath = Path.Combine(paths.VenvDirectory, ".pixelchat-rembg-version");
+        var backendExtras = BackendPackageExtras(backend);
+        var expectedMarker = $"python={configured.PythonVersion};rembg={configured.RembgPackageVersion};backend={backend};package={backendExtras}";
+        var venvDirectory = paths.VenvDirectory(backend);
+        var rembgExe = RembgExecutable(venvDirectory);
+        var markerPath = Path.Combine(venvDirectory, ".pixelchat-rembg-version");
         if (File.Exists(rembgExe)
             && File.Exists(markerPath)
             && string.Equals(await File.ReadAllTextAsync(markerPath, cancellationToken), expectedMarker, StringComparison.Ordinal))
@@ -204,14 +271,14 @@ public sealed class RembgBackgroundRemovalService(
             return rembgExe;
         }
 
-        if (Directory.Exists(paths.VenvDirectory))
-            DeleteDirectoryInsideRoot(paths.VenvDirectory, paths.Root);
+        if (Directory.Exists(venvDirectory))
+            DeleteDirectoryInsideRoot(venvDirectory, paths.Root);
 
-        progress?.Report(new("venv", "Creating local background-removal environment..."));
+        progress?.Report(new("venv", $"Creating local {BackendLabel(backend)} background-removal environment..."));
         var setupTimeout = SetupTimeout(configured);
         var createVenv = await RunCommandAsync(
             uvExe,
-            ["venv", paths.VenvDirectory, "--python", CleanRequired(configured.PythonVersion, "Python version"), "--managed-python"],
+            ["venv", venvDirectory, "--python", CleanRequired(configured.PythonVersion, "Python version"), "--managed-python"],
             paths.Root,
             ProcessEnvironment(paths),
             setupTimeout,
@@ -219,12 +286,12 @@ public sealed class RembgBackgroundRemovalService(
         if (createVenv.ExitCode != 0)
             throw new InvalidOperationException($"uv could not create the rembg environment: {TrimCommandOutput(createVenv)}");
 
-        var venvPython = VenvPythonExecutable(paths.VenvDirectory);
+        var venvPython = VenvPythonExecutable(venvDirectory);
         if (!File.Exists(venvPython))
             throw new InvalidOperationException("uv created the rembg environment without a Python executable.");
 
-        progress?.Report(new("rembg", $"Installing rembg {configured.RembgPackageVersion}..."));
-        var package = $"rembg[cpu,cli]=={CleanRequired(configured.RembgPackageVersion, "rembg version")}";
+        progress?.Report(new("rembg", $"Installing rembg {configured.RembgPackageVersion} for {BackendLabel(backend)}..."));
+        var package = $"rembg[{backendExtras},cli]=={CleanRequired(configured.RembgPackageVersion, "rembg version")}";
         var installRembg = await RunCommandAsync(
             uvExe,
             ["pip", "install", "--python", venvPython, package],
@@ -393,8 +460,54 @@ public sealed class RembgBackgroundRemovalService(
     private static TimeSpan SetupTimeout(BackgroundRemovalOptions configured) =>
         TimeSpan.FromSeconds(Math.Max(600, configured.TimeoutSeconds));
 
-    private static string CleanModel(string? model) =>
-        string.IsNullOrWhiteSpace(model) ? "birefnet-general" : model.Trim();
+    private static IEnumerable<string> BackendOrder(string requestedBackend, bool allowCpuFallback)
+    {
+        yield return requestedBackend;
+        if (allowCpuFallback && requestedBackend is not "cpu")
+            yield return "cpu";
+    }
+
+    private static string NormalizeBackend(string? requestedBackend, string? configuredBackend) =>
+        (string.IsNullOrWhiteSpace(requestedBackend) ? configuredBackend : requestedBackend)?.Trim().ToLowerInvariant() switch
+        {
+            "cpu" => "cpu",
+            "rocm" or "amd" => "rocm",
+            "cuda" or "nvidia" or "gpu" => "gpu",
+            _ => "gpu",
+        };
+
+    private static string BackendPackageExtras(string backend) =>
+        backend switch
+        {
+            "rocm" => "rocm",
+            "gpu" => "gpu",
+            _ => "cpu",
+        };
+
+    private static string ProviderExtras(string backend) =>
+        backend switch
+        {
+            "rocm" => "{\"providers\":[\"ROCMExecutionProvider\"]}",
+            "gpu" => "{\"providers\":[\"CUDAExecutionProvider\"]}",
+            _ => "{\"providers\":[\"CPUExecutionProvider\"]}",
+        };
+
+    private static string BackendLabel(string backend) =>
+        backend switch
+        {
+            "rocm" => "ROCm",
+            "gpu" => "GPU",
+            _ => "CPU",
+        };
+
+    private static string CleanModel(string? requestedModel, string? configuredModel)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedModel))
+            return requestedModel.Trim().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(configuredModel))
+            return configuredModel.Trim().ToLowerInvariant();
+        return "birefnet-massive";
+    }
 
     private static string CleanRequired(string? value, string label)
     {
@@ -462,7 +575,7 @@ public sealed class RembgBackgroundRemovalService(
         string ToolsRoot,
         string UvDirectory,
         string UvExecutable,
-        string VenvDirectory,
+        string VenvRoot,
         string CacheRoot,
         string UvCache,
         string ModelCache,
@@ -470,6 +583,9 @@ public sealed class RembgBackgroundRemovalService(
         string PythonInstallDirectory,
         string TempRoot)
     {
+        public string VenvDirectory(string backend) =>
+            Path.Combine(VenvRoot, "rembg-" + NormalizeBackend(backend, backend));
+
         public static SidecarPaths Create(BackgroundRemovalOptions configured)
         {
             var root = string.IsNullOrWhiteSpace(configured.SidecarRoot)
@@ -487,7 +603,7 @@ public sealed class RembgBackgroundRemovalService(
                 toolsRoot,
                 uvDirectory,
                 uvExecutable,
-                Path.Combine(root, "venv", "rembg"),
+                Path.Combine(root, "venv"),
                 cacheRoot,
                 Path.Combine(cacheRoot, "uv"),
                 Path.Combine(root, "models", "u2net"),

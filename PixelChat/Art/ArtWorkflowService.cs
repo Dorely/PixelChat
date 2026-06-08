@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
@@ -109,6 +110,99 @@ public sealed class ArtWorkflowService(
             ?? throw new InvalidOperationException("Asset was not found.");
 
         return ExportAssetView(asset);
+    }
+
+    public async Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(
+        Guid projectId,
+        Guid assetId,
+        BackgroundRemovalExportCacheRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+        var normalized = NormalizeBackgroundRemovalCacheRequest(request);
+        var sourceHash = Sha256Hex(asset.Data);
+
+        var cache = await db.BackgroundRemovalExportCaches
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c =>
+                c.ProjectId == projectId
+                && c.AssetId == assetId
+                && c.SourceImageSha256 == sourceHash
+                && c.RemovalMethod == normalized.RemovalMethod
+                && c.ModelName == normalized.ModelName
+                && c.RembgPackageVersion == normalized.RembgPackageVersion
+                && c.AlphaMatting == normalized.AlphaMatting
+                && c.OptionsHash == normalized.OptionsHash,
+                cancellationToken);
+
+        return cache is null ? null : BackgroundRemovalCacheView(cache);
+    }
+
+    public async Task<BackgroundRemovalExportCacheView> SaveBackgroundRemovalExportCacheAsync(
+        Guid projectId,
+        Guid assetId,
+        SaveBackgroundRemovalExportCacheRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+        var normalized = NormalizeBackgroundRemovalCacheRequest(new BackgroundRemovalExportCacheRequest(
+            request.RemovalMethod,
+            request.ModelName,
+            request.RembgPackageVersion,
+            request.AlphaMatting,
+            request.OptionsHash));
+        var sourceHash = Sha256Hex(asset.Data);
+
+        var cache = await db.BackgroundRemovalExportCaches
+            .FirstOrDefaultAsync(c =>
+                c.ProjectId == projectId
+                && c.AssetId == assetId
+                && c.SourceImageSha256 == sourceHash
+                && c.RemovalMethod == normalized.RemovalMethod
+                && c.ModelName == normalized.ModelName
+                && c.RembgPackageVersion == normalized.RembgPackageVersion
+                && c.AlphaMatting == normalized.AlphaMatting
+                && c.OptionsHash == normalized.OptionsHash,
+                cancellationToken);
+        var now = DateTime.UtcNow;
+        if (cache is null)
+        {
+            cache = new BackgroundRemovalExportCache
+            {
+                ProjectId = projectId,
+                AssetId = assetId,
+                SourceImageSha256 = sourceHash,
+                RemovalMethod = normalized.RemovalMethod,
+                ModelName = normalized.ModelName,
+                RembgPackageVersion = normalized.RembgPackageVersion,
+                AlphaMatting = normalized.AlphaMatting,
+                OptionsHash = normalized.OptionsHash,
+                ActualBackend = NormalizeCacheString(request.ActualBackend, "unknown"),
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            await db.BackgroundRemovalExportCaches.AddAsync(cache, cancellationToken);
+        }
+        else
+        {
+            cache.UpdatedAt = now;
+            cache.ActualBackend = NormalizeCacheString(request.ActualBackend, "unknown");
+        }
+
+        cache.ContentType = string.IsNullOrWhiteSpace(request.ContentType) ? "image/png" : request.ContentType.Trim();
+        cache.Data = request.Data;
+        cache.TransparentPixels = request.TransparentPixels;
+        cache.SemiTransparentPixels = request.SemiTransparentPixels;
+        cache.OpaquePixels = request.OpaquePixels;
+
+        await db.SaveChangesAsync(cancellationToken);
+        return BackgroundRemovalCacheView(cache);
     }
 
     public async Task SetWorkspaceModeAsync(Guid projectId, WorkspaceMode mode, CancellationToken cancellationToken = default)
@@ -1377,6 +1471,39 @@ public sealed class ArtWorkflowService(
             DataUrl.ToDataUrl(asset.ContentType, asset.Data),
             asset.Width,
             asset.Height);
+
+    private static BackgroundRemovalExportCacheView BackgroundRemovalCacheView(BackgroundRemovalExportCache cache) =>
+        new(
+            cache.Id,
+            cache.AssetId,
+            cache.SourceImageSha256,
+            cache.RemovalMethod,
+            cache.ModelName,
+            cache.RembgPackageVersion,
+            cache.AlphaMatting,
+            cache.OptionsHash,
+            cache.ContentType,
+            DataUrl.ToDataUrl(cache.ContentType, cache.Data),
+            cache.TransparentPixels,
+            cache.SemiTransparentPixels,
+            cache.OpaquePixels,
+            cache.ActualBackend,
+            cache.CreatedAt,
+            cache.UpdatedAt);
+
+    private static BackgroundRemovalExportCacheRequest NormalizeBackgroundRemovalCacheRequest(BackgroundRemovalExportCacheRequest request) =>
+        new(
+            NormalizeCacheString(request.RemovalMethod, "local-ai"),
+            NormalizeCacheString(request.ModelName, "birefnet-massive"),
+            NormalizeCacheString(request.RembgPackageVersion, "unknown"),
+            request.AlphaMatting,
+            NormalizeCacheString(request.OptionsHash, "default"));
+
+    private static string NormalizeCacheString(string? value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : value.Trim().ToLowerInvariant();
+
+    private static string Sha256Hex(byte[] data) =>
+        Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
 
     private static GenerationBatchView BatchView(GenerationBatch batch, IReadOnlyList<ArtAsset> assets)
     {
