@@ -26,6 +26,7 @@ public class GenerationBatch
     public GenerationBatchStatus Status { get; set; } = GenerationBatchStatus.Queued;
     public string Error { get; set; } = string.Empty;
     public string OutputErrorsJson { get; set; } = "[]";
+    public string OutputStatesJson { get; set; } = "[]";
     public string AgentSummary { get; set; } = string.Empty;
     public string RawProviderResponseJson { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

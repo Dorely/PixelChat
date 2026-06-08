@@ -43,6 +43,7 @@ builder.Services.AddScoped<IOpenAIAccountAuthService, OpenAIAccountAuthService>(
 builder.Services.AddScoped<IChatClientFactory, ChatClientFactory>();
 builder.Services.AddScoped<IImageProvider, OpenAIAccountImageProvider>();
 builder.Services.AddScoped<IArtWorkflowService, ArtWorkflowService>();
+builder.Services.AddSingleton<IImageGenerationRuntime, ImageGenerationRuntime>();
 builder.Services.AddScoped<AssistantToolRegistry>();
 builder.Services.AddScoped<IAssistantChatService, AssistantChatService>();
 builder.Services.AddSingleton<IWorkspaceChatRuntime, WorkspaceChatRuntime>();
@@ -60,6 +61,8 @@ using (var scope = app.Services.CreateScope())
         await sqliteConnection.CloseAsync();
     }
 }
+
+await app.Services.GetRequiredService<IImageGenerationRuntime>().ReconcileInterruptedBatchesAsync();
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())

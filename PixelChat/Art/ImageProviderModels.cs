@@ -2,8 +2,16 @@ namespace PixelChat.Art;
 
 public interface IImageProvider
 {
-    Task<ImageProviderResult> GenerateAsync(ImageProviderGenerateRequest request, CancellationToken cancellationToken = default);
-    Task<ImageProviderResult> EditAsync(ImageProviderEditRequest request, CancellationToken cancellationToken = default);
+    Task<ImageProviderResult> GenerateAsync(
+        ImageProviderGenerateRequest request,
+        CancellationToken cancellationToken = default,
+        IProgress<ImageProviderProgress>? progress = null);
+
+    Task<ImageProviderResult> EditAsync(
+        ImageProviderEditRequest request,
+        CancellationToken cancellationToken = default,
+        IProgress<ImageProviderProgress>? progress = null);
+
     ImageProviderCapabilities DescribeCapabilities();
 }
 
@@ -51,6 +59,64 @@ public sealed record ImageProviderImage(
     string? RevisedPrompt,
     string? ResponseId,
     string? CallId);
+
+public sealed record ImageProviderProgress(
+    ImageProviderProgressKind Kind,
+    string Message,
+    string? RequestId = null,
+    string? ResponseId = null,
+    string? CallId = null,
+    string? ItemId = null,
+    int? ProviderOutputIndex = null,
+    int? PartialImageIndex = null,
+    string? PartialImageDataUrl = null,
+    string? ErrorKind = null,
+    int? StatusCode = null,
+    string? LastEventType = null,
+    int EventCount = 0);
+
+public enum ImageProviderProgressKind
+{
+    Started,
+    InProgress,
+    Generating,
+    PartialImage,
+    Completed,
+    Failed,
+    StreamEndedWithoutImage
+}
+
+public sealed class ImageProviderException : InvalidOperationException
+{
+    public ImageProviderException(
+        string message,
+        string errorKind,
+        string? requestId = null,
+        string? responseId = null,
+        string? callId = null,
+        int? statusCode = null,
+        string? lastEventType = null,
+        int eventCount = 0,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        ErrorKind = string.IsNullOrWhiteSpace(errorKind) ? "unknown" : errorKind.Trim();
+        RequestId = requestId;
+        ResponseId = responseId;
+        CallId = callId;
+        StatusCode = statusCode;
+        LastEventType = lastEventType;
+        EventCount = eventCount;
+    }
+
+    public string ErrorKind { get; }
+    public string? RequestId { get; }
+    public string? ResponseId { get; }
+    public string? CallId { get; }
+    public int? StatusCode { get; }
+    public string? LastEventType { get; }
+    public int EventCount { get; }
+}
 
 public sealed record ImageProviderCapabilities(
     bool SupportsReferenceImages,

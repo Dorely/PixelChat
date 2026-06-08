@@ -22,7 +22,10 @@ public sealed class OpenAIAccountImageProvider(
             Sizes: ["auto", "1024x1024", "1024x1536", "1536x1024"],
             OutputFormats: ["png", "jpeg", "webp"]);
 
-    public async Task<ImageProviderResult> GenerateAsync(ImageProviderGenerateRequest request, CancellationToken cancellationToken = default)
+    public async Task<ImageProviderResult> GenerateAsync(
+        ImageProviderGenerateRequest request,
+        CancellationToken cancellationToken = default,
+        IProgress<ImageProviderProgress>? progress = null)
     {
         var connection = await ResolveConnectionAsync(cancellationToken);
         var mainlineModel = CleanModel(request.MainlineModel, options.Value.DefaultMainlineModel);
@@ -49,7 +52,8 @@ public sealed class OpenAIAccountImageProvider(
                     includedReferenceCount,
                     HasMask: false),
                 request.OutputFormat,
-                cancellationToken);
+                cancellationToken,
+                progress);
             images.Add(result.Image);
             metadata.Add(result.Metadata);
         }
@@ -62,7 +66,10 @@ public sealed class OpenAIAccountImageProvider(
             JsonSerializer.Serialize(metadata, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 
-    public async Task<ImageProviderResult> EditAsync(ImageProviderEditRequest request, CancellationToken cancellationToken = default)
+    public async Task<ImageProviderResult> EditAsync(
+        ImageProviderEditRequest request,
+        CancellationToken cancellationToken = default,
+        IProgress<ImageProviderProgress>? progress = null)
     {
         var connection = await ResolveConnectionAsync(cancellationToken);
         var mainlineModel = CleanModel(request.MainlineModel, options.Value.DefaultMainlineModel);
@@ -90,7 +97,8 @@ public sealed class OpenAIAccountImageProvider(
                     InputImageCount: 1 + includedReferenceCount,
                     HasMask: hasMask),
                 request.OutputFormat,
-                cancellationToken);
+                cancellationToken,
+                progress);
             images.Add(result.Image);
             metadata.Add(result.Metadata);
         }
@@ -123,10 +131,15 @@ public sealed class OpenAIAccountImageProvider(
         Dictionary<string, object?> payload,
         OpenAIImageRequestDiagnostics diagnostics,
         string requestedOutputFormat,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<ImageProviderProgress>? progress)
     {
         var json = JsonSerializer.Serialize(payload);
         var stopwatch = Stopwatch.StartNew();
+        string? requestId = null;
+        string? responseId = null;
+        string? lastEventType = null;
+        var eventCount = 0;
         using var request = new HttpRequestMessage(HttpMethod.Post, OpenAIAccountProvider.ResponsesEndpoint);
         request.Content = new StringContent(json, Encoding.UTF8);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
@@ -151,12 +164,17 @@ public sealed class OpenAIAccountImageProvider(
             json.Length,
             timeoutSeconds);
 
+        ReportProgress(progress, new ImageProviderProgress(ImageProviderProgressKind.Started, "Image request started."));
+
+        try
+        {
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        var requestId = ReadResponseRequestId(response);
+        requestId = ReadResponseRequestId(response);
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
             var errorKind = ClassifyImageError(errorBody);
+            var errorMessage = ReadErrorMessage(errorBody) ?? errorBody;
             logger.LogError(
                 "OpenAI account image API error: statusCode={StatusCode}, requestId={RequestId}, action={Action}, model={MainlineModel}, imageModel={ImageModel}, elapsedMs={ElapsedMs}, errorKind={ErrorKind}, body={Body}",
                 (int)response.StatusCode,
@@ -167,14 +185,17 @@ public sealed class OpenAIAccountImageProvider(
                 stopwatch.ElapsedMilliseconds,
                 errorKind,
                 TruncateForLog(errorBody, 4000));
-            throw new HttpRequestException($"OpenAI account image request returned {(int)response.StatusCode} ({errorKind}): {errorBody}");
+            var exception = new ImageProviderException(
+                $"OpenAI account image request returned {(int)response.StatusCode} ({errorKind}): {errorMessage}",
+                errorKind,
+                requestId,
+                statusCode: (int)response.StatusCode);
+            ReportProgress(progress, FailedProgress(exception, ImageProviderProgressKind.Failed));
+            throw exception;
         }
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
-        string? responseId = null;
-        string? lastEventType = null;
-        var eventCount = 0;
         string? line;
 
         while ((line = await reader.ReadLineAsync(cancellationToken)) is not null)
@@ -205,7 +226,16 @@ public sealed class OpenAIAccountImageProvider(
             lastEventType = type;
             eventCount++;
             if (type == "response.created" && evt.TryGetProperty("response", out var createdResponse))
+            {
                 responseId = ReadString(createdResponse, "id");
+                ReportProgress(progress, new ImageProviderProgress(
+                    ImageProviderProgressKind.InProgress,
+                    "Image response created.",
+                    requestId,
+                    responseId,
+                    LastEventType: lastEventType,
+                    EventCount: eventCount));
+            }
 
             if (type == "response.failed")
             {
@@ -223,7 +253,15 @@ public sealed class OpenAIAccountImageProvider(
                     lastEventType,
                     errorKind,
                     error);
-                throw new InvalidOperationException($"OpenAI account image generation failed ({errorKind}): {error}");
+                var exception = new ImageProviderException(
+                    $"OpenAI account image generation failed ({errorKind}): {error}",
+                    errorKind,
+                    requestId,
+                    responseId,
+                    lastEventType: lastEventType,
+                    eventCount: eventCount);
+                ReportProgress(progress, FailedProgress(exception, ImageProviderProgressKind.Failed));
+                throw exception;
             }
             if (type == "error")
             {
@@ -241,7 +279,30 @@ public sealed class OpenAIAccountImageProvider(
                     lastEventType,
                     errorKind,
                     error);
-                throw new InvalidOperationException($"OpenAI account image error ({errorKind}): {error}");
+                var exception = new ImageProviderException(
+                    $"OpenAI account image error ({errorKind}): {error}",
+                    errorKind,
+                    requestId,
+                    responseId,
+                    lastEventType: lastEventType,
+                    eventCount: eventCount);
+                ReportProgress(progress, FailedProgress(exception, ImageProviderProgressKind.Failed));
+                throw exception;
+            }
+
+            if (type is "response.image_generation_call.in_progress"
+                or "response.image_generation_call.generating"
+                or "response.image_generation_call.partial_image"
+                or "response.image_generation_call.completed")
+            {
+                ReportProgress(progress, ImageGenerationCallProgress(
+                    evt,
+                    type,
+                    requestedOutputFormat,
+                    requestId,
+                    responseId,
+                    lastEventType,
+                    eventCount));
             }
 
             if (type == "response.output_item.done"
@@ -259,7 +320,17 @@ public sealed class OpenAIAccountImageProvider(
                     eventCount,
                     lastEventType);
                 if (imageResult is not null)
+                {
+                    ReportProgress(progress, new ImageProviderProgress(
+                        ImageProviderProgressKind.Completed,
+                        "Image result received.",
+                        requestId,
+                        imageResult.Image.ResponseId,
+                        imageResult.Image.CallId,
+                        LastEventType: lastEventType,
+                        EventCount: eventCount));
                     return imageResult;
+                }
             }
 
             if (type == "response.completed"
@@ -278,7 +349,17 @@ public sealed class OpenAIAccountImageProvider(
                     eventCount,
                     lastEventType);
                 if (imageResult is not null)
+                {
+                    ReportProgress(progress, new ImageProviderProgress(
+                        ImageProviderProgressKind.Completed,
+                        "Image result received.",
+                        requestId,
+                        imageResult.Image.ResponseId,
+                        imageResult.Image.CallId,
+                        LastEventType: lastEventType,
+                        EventCount: eventCount));
                     return imageResult;
+                }
             }
         }
 
@@ -292,7 +373,29 @@ public sealed class OpenAIAccountImageProvider(
             stopwatch.ElapsedMilliseconds,
             eventCount,
             lastEventType);
-        throw new InvalidOperationException($"OpenAI account image generation completed without returning an image. responseId={responseId ?? "unknown"}, requestId={requestId ?? "unknown"}, events={eventCount}, lastEvent={lastEventType ?? "none"}.");
+        var missingImageException = new ImageProviderException(
+            $"OpenAI account image generation completed without returning an image. responseId={responseId ?? "unknown"}, requestId={requestId ?? "unknown"}, events={eventCount}, lastEvent={lastEventType ?? "none"}.",
+            "stream_completed_without_image",
+            requestId,
+            responseId,
+            lastEventType: lastEventType,
+            eventCount: eventCount);
+        ReportProgress(progress, FailedProgress(missingImageException, ImageProviderProgressKind.StreamEndedWithoutImage));
+        throw missingImageException;
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            var timeoutException = new ImageProviderException(
+                $"OpenAI account image request timed out after {timeoutSeconds} seconds.",
+                "timeout",
+                requestId,
+                responseId,
+                lastEventType: lastEventType,
+                eventCount: eventCount,
+                innerException: ex);
+            ReportProgress(progress, FailedProgress(timeoutException, ImageProviderProgressKind.Failed));
+            throw timeoutException;
+        }
     }
 
     private OpenAIImageReadResult? TryReadImageResultFromResponse(
@@ -356,6 +459,7 @@ public sealed class OpenAIAccountImageProvider(
         }
         catch (FormatException ex)
         {
+            var invalidCallId = ReadString(item, "id");
             logger.LogError(
                 ex,
                 "OpenAI account returned invalid base64 image result: requestId={RequestId}, responseId={ResponseId}, action={Action}, model={MainlineModel}, imageModel={ImageModel}, callId={CallId}, elapsedMs={ElapsedMs}, eventCount={EventCount}, lastEventType={LastEventType}, resultChars={ResultChars}",
@@ -364,12 +468,20 @@ public sealed class OpenAIAccountImageProvider(
                 diagnostics.Action,
                 mainlineModel,
                 imageModel,
-                ReadString(item, "id"),
+                invalidCallId,
                 elapsed.TotalMilliseconds,
                 eventCount,
                 lastEventType,
                 result.Length);
-            throw new InvalidOperationException("OpenAI account returned an image_generation_call result that was not valid base64.", ex);
+            throw new ImageProviderException(
+                "OpenAI account returned an image_generation_call result that was not valid base64.",
+                "invalid_image_result",
+                requestId,
+                responseId,
+                invalidCallId,
+                lastEventType: lastEventType,
+                eventCount: eventCount,
+                innerException: ex);
         }
 
         var outputFormat = NormalizeOutputFormat(ReadString(item, "output_format") ?? requestedOutputFormat);
@@ -474,7 +586,7 @@ public sealed class OpenAIAccountImageProvider(
             ["store"] = false,
         };
 
-    private static Dictionary<string, object?> BaseImageTool(
+    private Dictionary<string, object?> BaseImageTool(
         string size,
         string quality,
         string outputFormat,
@@ -489,6 +601,9 @@ public sealed class OpenAIAccountImageProvider(
             ["output_format"] = NormalizeOutputFormat(outputFormat),
             ["background"] = NormalizeBackground(background),
         };
+        var partialImages = Math.Clamp(options.Value.PartialImages, 0, 3);
+        if (partialImages > 0)
+            tool["partial_images"] = partialImages;
 
         var cleanQuality = quality.Trim();
         if (!string.IsNullOrWhiteSpace(cleanQuality)
@@ -534,6 +649,97 @@ public sealed class OpenAIAccountImageProvider(
         element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static int? ReadInt(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+            return null;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var numberValue))
+            return numberValue;
+        if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out var stringValue))
+            return stringValue;
+        return null;
+    }
+
+    private static ImageProviderProgress ImageGenerationCallProgress(
+        JsonElement evt,
+        string type,
+        string requestedOutputFormat,
+        string? requestId,
+        string? responseId,
+        string? lastEventType,
+        int eventCount)
+    {
+        var callId = ReadString(evt, "call_id")
+            ?? ReadString(evt, "item_id")
+            ?? ReadString(evt, "id");
+        var itemId = ReadString(evt, "item_id");
+        var outputIndex = ReadInt(evt, "output_index");
+        var partialImageIndex = ReadInt(evt, "partial_image_index");
+        var partialImageBase64 = ReadString(evt, "partial_image_b64");
+        var outputFormat = NormalizeOutputFormat(requestedOutputFormat);
+
+        return type switch
+        {
+            "response.image_generation_call.generating" => new ImageProviderProgress(
+                ImageProviderProgressKind.Generating,
+                "Generating image.",
+                requestId,
+                responseId,
+                callId,
+                itemId,
+                outputIndex,
+                LastEventType: lastEventType,
+                EventCount: eventCount),
+            "response.image_generation_call.partial_image" => new ImageProviderProgress(
+                ImageProviderProgressKind.PartialImage,
+                partialImageIndex is int index ? $"Received partial image {index + 1}." : "Received partial image.",
+                requestId,
+                responseId,
+                callId,
+                itemId,
+                outputIndex,
+                partialImageIndex,
+                string.IsNullOrWhiteSpace(partialImageBase64) ? null : $"data:image/{outputFormat};base64,{partialImageBase64}",
+                LastEventType: lastEventType,
+                EventCount: eventCount),
+            "response.image_generation_call.completed" => new ImageProviderProgress(
+                ImageProviderProgressKind.Completed,
+                "Image generation call completed.",
+                requestId,
+                responseId,
+                callId,
+                itemId,
+                outputIndex,
+                LastEventType: lastEventType,
+                EventCount: eventCount),
+            _ => new ImageProviderProgress(
+                ImageProviderProgressKind.InProgress,
+                "Image generation call started.",
+                requestId,
+                responseId,
+                callId,
+                itemId,
+                outputIndex,
+                LastEventType: lastEventType,
+                EventCount: eventCount),
+        };
+    }
+
+    private static ImageProviderProgress FailedProgress(ImageProviderException exception, ImageProviderProgressKind kind) =>
+        new(
+            kind,
+            exception.Message,
+            exception.RequestId,
+            exception.ResponseId,
+            exception.CallId,
+            ErrorKind: exception.ErrorKind,
+            StatusCode: exception.StatusCode,
+            LastEventType: exception.LastEventType,
+            EventCount: exception.EventCount);
+
+    private static void ReportProgress(IProgress<ImageProviderProgress>? progress, ImageProviderProgress update) =>
+        progress?.Report(update);
 
     private static string? ReadResponseRequestId(HttpResponseMessage response) =>
         ReadHeader(response, "x-request-id")
@@ -610,6 +816,30 @@ public sealed class OpenAIAccountImageProvider(
             && error.TryGetProperty("message", out errorMessage)
             && errorMessage.ValueKind == JsonValueKind.String)
             return errorMessage.GetString();
+        return null;
+    }
+
+    private static string? ReadErrorMessage(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            if (root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String)
+                return message.GetString();
+            if (root.TryGetProperty("error", out var error)
+                && error.TryGetProperty("message", out var errorMessage)
+                && errorMessage.ValueKind == JsonValueKind.String)
+            {
+                return errorMessage.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
         return null;
     }
 

@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PixelChat.Llm;
@@ -18,6 +19,7 @@ public sealed class ArtWorkflowService(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() },
     };
 
     private sealed record ImagePayload(string ContentType, byte[] Data, int Width, int Height);
@@ -161,6 +163,7 @@ public sealed class ArtWorkflowService(
             ParentBatchId = request.ParentBatchId,
             PromptRecipeId = recipe?.Id,
             Status = GenerationBatchStatus.Running,
+            OutputStatesJson = SerializeOutputStates(CreateInitialOutputStates(count)),
         };
         await db.GenerationBatches.AddAsync(batch, cancellationToken);
         project.ActiveBatchId = batch.Id;
@@ -187,7 +190,8 @@ public sealed class ArtWorkflowService(
         Guid projectId,
         Guid batchId,
         int outputIndex,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<ImageProviderProgress>? progress = null)
     {
         var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken)
             ?? throw new InvalidOperationException("Generation batch was not found.");
@@ -220,7 +224,7 @@ public sealed class ArtWorkflowService(
                 references.Select(ToProviderReference).ToList(),
                 imageOptions.Value.DefaultOutputFormat,
                 imageOptions.Value.DefaultQuality,
-                NormalizeBackground(batch.Background)), cancellationToken);
+                NormalizeBackground(batch.Background)), cancellationToken, progress);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -279,6 +283,24 @@ public sealed class ArtWorkflowService(
         return AssetView(asset);
     }
 
+    public async Task MarkGenerationBatchOutputStateAsync(
+        Guid projectId,
+        Guid batchId,
+        GenerationOutputStateView outputState,
+        CancellationToken cancellationToken = default)
+    {
+        var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken);
+        if (batch is null || outputState.OutputIndex < 0 || outputState.OutputIndex >= batch.Count)
+            return;
+
+        var states = UpsertOutputState(
+            NormalizeOutputStates(batch.OutputStatesJson, batch.Count),
+            CleanOutputState(outputState));
+        batch.OutputStatesJson = SerializeOutputStates(states);
+        batch.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task MarkGenerationBatchOutputFailedAsync(
         Guid projectId,
         Guid batchId,
@@ -286,19 +308,54 @@ public sealed class ArtWorkflowService(
         string error,
         CancellationToken cancellationToken = default)
     {
+        await MarkGenerationBatchOutputFailedAsync(
+            projectId,
+            batchId,
+            new GenerationOutputErrorView(outputIndex, error),
+            cancellationToken);
+    }
+
+    public async Task MarkGenerationBatchOutputFailedAsync(
+        Guid projectId,
+        Guid batchId,
+        GenerationOutputErrorView outputError,
+        CancellationToken cancellationToken = default)
+    {
         var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken);
         if (batch is null)
             return;
-        var cleanedError = Clean(error);
+        if (outputError.OutputIndex < 0 || outputError.OutputIndex >= batch.Count)
+            return;
+
+        var cleanedError = Clean(outputError.Error);
         if (string.IsNullOrWhiteSpace(cleanedError))
             cleanedError = "Image request failed.";
 
+        var cleanedOutputError = outputError with { Error = cleanedError };
         var errors = DeserializeOutputErrors(batch.OutputErrorsJson)
-            .Where(item => item.OutputIndex != outputIndex)
-            .Append(new GenerationOutputErrorView(outputIndex, cleanedError))
+            .Where(item => item.OutputIndex != outputError.OutputIndex)
+            .Append(CleanOutputError(cleanedOutputError))
             .OrderBy(item => item.OutputIndex)
             .ToList();
+        var existingState = NormalizeOutputStates(batch.OutputStatesJson, batch.Count)
+            .FirstOrDefault(item => item.OutputIndex == outputError.OutputIndex);
+        var failedState = new GenerationOutputStateView(
+            outputError.OutputIndex,
+            GenerationOutputStatus.Failed,
+            existingState?.Attempt ?? 0,
+            "Image request failed.",
+            cleanedError,
+            outputError.ErrorKind,
+            outputError.RequestId,
+            outputError.ResponseId,
+            outputError.CallId,
+            outputError.LastEventType,
+            outputError.EventCount,
+            existingState?.StartedAt,
+            DateTime.UtcNow,
+            DateTime.UtcNow);
         batch.OutputErrorsJson = SerializeOutputErrors(errors);
+        batch.OutputStatesJson = SerializeOutputStates(UpsertOutputState(NormalizeOutputStates(batch.OutputStatesJson, batch.Count), failedState));
         batch.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
 
@@ -306,7 +363,7 @@ public sealed class ArtWorkflowService(
             "Image generation output failure persisted: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, error={Error}",
             projectId,
             batchId,
-            outputIndex,
+            outputError.OutputIndex,
             TruncateForLog(cleanedError, 1000));
     }
 
@@ -327,18 +384,54 @@ public sealed class ArtWorkflowService(
             .ToHashSet();
         var unindexedOutputCount = outputAssets.Count(a => ReadBatchOutputIndex(a) is null);
         var outputCount = outputIndexes.Count + unindexedOutputCount;
-        var errors = NormalizeOutputErrors(batch.OutputErrorsJson, batch.Count, outputIndexes);
+        var states = NormalizeOutputStates(batch.OutputStatesJson, batch.Count, outputIndexes);
+        foreach (var outputIndex in outputIndexes)
+        {
+            var existingState = states.FirstOrDefault(state => state.OutputIndex == outputIndex);
+            states = UpsertOutputState(states, new GenerationOutputStateView(
+                outputIndex,
+                GenerationOutputStatus.Succeeded,
+                existingState?.Attempt ?? 0,
+                "Image saved.",
+                "",
+                RequestId: existingState?.RequestId,
+                ResponseId: existingState?.ResponseId,
+                CallId: existingState?.CallId,
+                LastEventType: existingState?.LastEventType,
+                EventCount: existingState?.EventCount ?? 0,
+                StartedAt: existingState?.StartedAt,
+                UpdatedAt: DateTime.UtcNow,
+                CompletedAt: existingState?.CompletedAt ?? DateTime.UtcNow));
+        }
+
+        var errors = MergeOutputErrors(
+            NormalizeOutputErrors(batch.OutputErrorsJson, batch.Count, outputIndexes),
+            states
+                .Where(state => IsFailedOutputStatus(state.Status) && !outputIndexes.Contains(state.OutputIndex))
+                .Select(OutputErrorFromState));
         var missingErrorSlots = Math.Max(0, batch.Count - outputCount - errors.Count);
         if (missingErrorSlots > 0)
         {
             var errorIndexes = errors.Select(error => error.OutputIndex).ToHashSet();
-            errors.AddRange(Enumerable.Range(0, batch.Count)
+            var missingErrors = Enumerable.Range(0, batch.Count)
                 .Where(index => !outputIndexes.Contains(index) && !errorIndexes.Contains(index))
                 .Take(missingErrorSlots)
-                .Select(index => new GenerationOutputErrorView(index, "Image request did not return an output before the batch completed.")));
-            errors = errors
-                .OrderBy(error => error.OutputIndex)
+                .Select(index => new GenerationOutputErrorView(index, "Image request did not return an output before the batch completed."))
                 .ToList();
+            errors = MergeOutputErrors(errors, missingErrors);
+            foreach (var missingError in missingErrors)
+            {
+                var existingState = states.FirstOrDefault(state => state.OutputIndex == missingError.OutputIndex);
+                states = UpsertOutputState(states, new GenerationOutputStateView(
+                    missingError.OutputIndex,
+                    GenerationOutputStatus.Failed,
+                    existingState?.Attempt ?? 0,
+                    "Image request failed.",
+                    missingError.Error,
+                    StartedAt: existingState?.StartedAt,
+                    UpdatedAt: DateTime.UtcNow,
+                    CompletedAt: DateTime.UtcNow));
+            }
         }
 
         batch.Status = errors.Count switch
@@ -351,6 +444,7 @@ public sealed class ArtWorkflowService(
             ? string.Empty
             : OutputErrorSummary(errors.Count, batch.Count);
         batch.OutputErrorsJson = SerializeOutputErrors(errors);
+        batch.OutputStatesJson = SerializeOutputStates(states);
         batch.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
 
@@ -376,7 +470,17 @@ public sealed class ArtWorkflowService(
         {
             try
             {
+                await MarkGenerationBatchOutputStateAsync(
+                    projectId,
+                    batch.Id,
+                    new GenerationOutputStateView(outputIndex, GenerationOutputStatus.Running, 1, "Generating image.", StartedAt: DateTime.UtcNow, UpdatedAt: DateTime.UtcNow),
+                    cancellationToken);
                 await GenerateBatchOutputAsync(projectId, batch.Id, outputIndex, cancellationToken);
+                await MarkGenerationBatchOutputStateAsync(
+                    projectId,
+                    batch.Id,
+                    new GenerationOutputStateView(outputIndex, GenerationOutputStatus.Succeeded, 1, "Image saved.", UpdatedAt: DateTime.UtcNow, CompletedAt: DateTime.UtcNow),
+                    cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -389,6 +493,36 @@ public sealed class ArtWorkflowService(
         }
 
         return await CompleteGenerationBatchAsync(projectId, batch.Id, cancellationToken);
+    }
+
+    public async Task ReconcileInterruptedGenerationBatchesAsync(CancellationToken cancellationToken = default)
+    {
+        var runningBatches = await db.GenerationBatches
+            .Where(batch => batch.Status == GenerationBatchStatus.Running)
+            .ToListAsync(cancellationToken);
+        foreach (var batch in runningBatches)
+        {
+            var outputAssets = await db.ArtAssets
+                .Where(asset => asset.ProjectId == batch.ProjectId && asset.SourceBatchId == batch.Id)
+                .ToListAsync(cancellationToken);
+            var outputIndexes = outputAssets
+                .Select(ReadBatchOutputIndex)
+                .OfType<int>()
+                .Where(index => index >= 0 && index < batch.Count)
+                .ToHashSet();
+            var states = NormalizeOutputStates(batch.OutputStatesJson, batch.Count, outputIndexes);
+            foreach (var state in states.Where(state => !outputIndexes.Contains(state.OutputIndex) && !IsTerminalOutputStatus(state.Status)).ToList())
+            {
+                var error = new GenerationOutputErrorView(
+                    state.OutputIndex,
+                    "Image generation was interrupted before this request completed.",
+                    LastEventType: state.LastEventType,
+                    EventCount: state.EventCount);
+                await MarkGenerationBatchOutputFailedAsync(batch.ProjectId, batch.Id, error, cancellationToken);
+            }
+
+            await CompleteGenerationBatchAsync(batch.ProjectId, batch.Id, cancellationToken);
+        }
     }
 
     public async Task<GenerationBatchView> EditImageAsync(
@@ -1256,7 +1390,12 @@ public sealed class ArtWorkflowService(
             .OfType<int>()
             .Where(index => index >= 0 && index < batch.Count)
             .ToHashSet();
-        var outputErrors = NormalizeOutputErrors(batch.OutputErrorsJson, batch.Count, outputIndexes);
+        var outputStates = NormalizeOutputStates(batch.OutputStatesJson, batch.Count, outputIndexes);
+        var outputErrors = MergeOutputErrors(
+            NormalizeOutputErrors(batch.OutputErrorsJson, batch.Count, outputIndexes),
+            outputStates
+                .Where(state => IsFailedOutputStatus(state.Status) && !outputIndexes.Contains(state.OutputIndex))
+                .Select(OutputErrorFromState));
         var displayError = outputErrors.Count > 0
             ? OutputErrorSummary(outputErrors.Count, batch.Count)
             : batch.Error;
@@ -1279,6 +1418,7 @@ public sealed class ArtWorkflowService(
             batch.PromptRecipeId,
             batch.Status,
             displayError,
+            outputStates,
             outputErrors,
             batch.CreatedAt);
     }
@@ -1364,11 +1504,20 @@ public sealed class ArtWorkflowService(
     private static string SerializeOutputErrors(IEnumerable<GenerationOutputErrorView> errors) =>
         JsonSerializer.Serialize(errors
             .Where(error => error.OutputIndex >= 0)
-            .Select(error => new GenerationOutputErrorView(error.OutputIndex, Clean(error.Error)))
+            .Select(CleanOutputError)
             .Where(error => !string.IsNullOrWhiteSpace(error.Error))
             .GroupBy(error => error.OutputIndex)
             .Select(group => group.Last())
             .OrderBy(error => error.OutputIndex)
+            .ToList(), JsonOptions);
+
+    private static string SerializeOutputStates(IEnumerable<GenerationOutputStateView> states) =>
+        JsonSerializer.Serialize(states
+            .Where(state => state.OutputIndex >= 0)
+            .Select(CleanOutputState)
+            .GroupBy(state => state.OutputIndex)
+            .Select(group => group.Last())
+            .OrderBy(state => state.OutputIndex)
             .ToList(), JsonOptions);
 
     private static string OutputErrorSummary(int errorCount, int requestedCount) =>
@@ -1437,11 +1586,50 @@ public sealed class ArtWorkflowService(
             .Where(error => error.OutputIndex >= 0 && error.OutputIndex < requestedCount)
             .Where(error => !string.IsNullOrWhiteSpace(error.Error))
             .Where(error => completedOutputIndexes is null || !completedOutputIndexes.Contains(error.OutputIndex))
-            .Select(error => new GenerationOutputErrorView(error.OutputIndex, Clean(error.Error)))
+            .Select(CleanOutputError)
             .GroupBy(error => error.OutputIndex)
             .Select(group => group.Last())
             .OrderBy(error => error.OutputIndex)
             .ToList();
+
+    private static List<GenerationOutputStateView> NormalizeOutputStates(
+        string value,
+        int requestedCount,
+        ISet<int>? completedOutputIndexes = null)
+    {
+        var now = DateTime.UtcNow;
+        var states = DeserializeOutputStates(value)
+            .Where(state => state.OutputIndex >= 0 && state.OutputIndex < requestedCount)
+            .Select(CleanOutputState)
+            .GroupBy(state => state.OutputIndex)
+            .Select(group => group.Last())
+            .ToDictionary(state => state.OutputIndex);
+
+        for (var outputIndex = 0; outputIndex < requestedCount; outputIndex++)
+        {
+            if (completedOutputIndexes is not null && completedOutputIndexes.Contains(outputIndex))
+            {
+                states[outputIndex] = states.TryGetValue(outputIndex, out var existing)
+                    ? existing with
+                    {
+                        Status = GenerationOutputStatus.Succeeded,
+                        Message = "Image saved.",
+                        Error = string.Empty,
+                        UpdatedAt = existing.UpdatedAt ?? now,
+                        CompletedAt = existing.CompletedAt ?? now,
+                    }
+                    : new GenerationOutputStateView(outputIndex, GenerationOutputStatus.Succeeded, Message: "Image saved.", UpdatedAt: now, CompletedAt: now);
+                continue;
+            }
+
+            if (!states.ContainsKey(outputIndex))
+                states[outputIndex] = new GenerationOutputStateView(outputIndex, GenerationOutputStatus.Queued, Message: "Waiting for earlier image requests.");
+        }
+
+        return states.Values
+            .OrderBy(state => state.OutputIndex)
+            .ToList();
+    }
 
     private static List<Guid> DeserializeIds(string value)
     {
@@ -1471,13 +1659,100 @@ public sealed class ArtWorkflowService(
         }
     }
 
+    private static IReadOnlyList<GenerationOutputStateView> CreateInitialOutputStates(int count) =>
+        Enumerable.Range(0, count)
+            .Select(index => new GenerationOutputStateView(index, GenerationOutputStatus.Queued, Message: "Waiting for earlier image requests."))
+            .ToList();
+
+    private static List<GenerationOutputStateView> UpsertOutputState(
+        IEnumerable<GenerationOutputStateView> states,
+        GenerationOutputStateView state) =>
+        states
+            .Where(item => item.OutputIndex != state.OutputIndex)
+            .Append(CleanOutputState(state))
+            .OrderBy(item => item.OutputIndex)
+            .ToList();
+
+    private static List<GenerationOutputErrorView> MergeOutputErrors(
+        IEnumerable<GenerationOutputErrorView> first,
+        IEnumerable<GenerationOutputErrorView> second) =>
+        first
+            .Concat(second)
+            .Select(CleanOutputError)
+            .Where(error => error.OutputIndex >= 0)
+            .Where(error => !string.IsNullOrWhiteSpace(error.Error))
+            .GroupBy(error => error.OutputIndex)
+            .Select(group => group.Last())
+            .OrderBy(error => error.OutputIndex)
+            .ToList();
+
+    private static GenerationOutputErrorView OutputErrorFromState(GenerationOutputStateView state) =>
+        new(
+            state.OutputIndex,
+            string.IsNullOrWhiteSpace(state.Error) ? "Image request failed." : state.Error,
+            state.ErrorKind,
+            state.RequestId,
+            state.ResponseId,
+            state.CallId,
+            LastEventType: state.LastEventType,
+            EventCount: state.EventCount);
+
+    private static GenerationOutputErrorView CleanOutputError(GenerationOutputErrorView error) =>
+        error with
+        {
+            Error = Clean(error.Error),
+            ErrorKind = CleanNullable(error.ErrorKind),
+            RequestId = CleanNullable(error.RequestId),
+            ResponseId = CleanNullable(error.ResponseId),
+            CallId = CleanNullable(error.CallId),
+            LastEventType = CleanNullable(error.LastEventType),
+        };
+
+    private static GenerationOutputStateView CleanOutputState(GenerationOutputStateView state) =>
+        state with
+        {
+            Message = Clean(state.Message),
+            Error = Clean(state.Error),
+            ErrorKind = CleanNullable(state.ErrorKind),
+            RequestId = CleanNullable(state.RequestId),
+            ResponseId = CleanNullable(state.ResponseId),
+            CallId = CleanNullable(state.CallId),
+            LastEventType = CleanNullable(state.LastEventType),
+        };
+
+    private static bool IsTerminalOutputStatus(GenerationOutputStatus status) =>
+        status is GenerationOutputStatus.Succeeded or GenerationOutputStatus.Failed or GenerationOutputStatus.Cancelled;
+
+    private static bool IsFailedOutputStatus(GenerationOutputStatus status) =>
+        status is GenerationOutputStatus.Failed or GenerationOutputStatus.Cancelled;
+
+    private static string? CleanNullable(string? value)
+    {
+        var cleaned = Clean(value);
+        return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
+    }
+
     private static List<GenerationOutputErrorView> DeserializeOutputErrors(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return [];
         try
         {
-            return JsonSerializer.Deserialize<List<GenerationOutputErrorView>>(value) ?? [];
+            return JsonSerializer.Deserialize<List<GenerationOutputErrorView>>(value, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static List<GenerationOutputStateView> DeserializeOutputStates(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<GenerationOutputStateView>>(value, JsonOptions) ?? [];
         }
         catch (JsonException)
         {

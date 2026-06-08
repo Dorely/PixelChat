@@ -65,12 +65,46 @@ public sealed record GenerationBatchView(
     Guid? PromptRecipeId,
     GenerationBatchStatus Status,
     string Error,
+    IReadOnlyList<GenerationOutputStateView> OutputStates,
     IReadOnlyList<GenerationOutputErrorView> OutputErrors,
     DateTime CreatedAt);
 
 public sealed record GenerationOutputErrorView(
     int OutputIndex,
-    string Error);
+    string Error,
+    string? ErrorKind = null,
+    string? RequestId = null,
+    string? ResponseId = null,
+    string? CallId = null,
+    int? StatusCode = null,
+    string? LastEventType = null,
+    int EventCount = 0);
+
+public sealed record GenerationOutputStateView(
+    int OutputIndex,
+    GenerationOutputStatus Status,
+    int Attempt = 0,
+    string Message = "",
+    string Error = "",
+    string? ErrorKind = null,
+    string? RequestId = null,
+    string? ResponseId = null,
+    string? CallId = null,
+    string? LastEventType = null,
+    int EventCount = 0,
+    DateTime? StartedAt = null,
+    DateTime? UpdatedAt = null,
+    DateTime? CompletedAt = null);
+
+public enum GenerationOutputStatus
+{
+    Queued,
+    Running,
+    Generating,
+    Succeeded,
+    Failed,
+    Cancelled
+}
 
 public sealed record PromptRecipeView(
     Guid Id,

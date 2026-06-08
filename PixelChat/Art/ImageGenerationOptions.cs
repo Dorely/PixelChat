@@ -14,5 +14,6 @@ public sealed class ImageGenerationOptions
     public int MaxParallelRequests { get; set; } = 4;
     public int MaxRequestAttempts { get; set; } = 3;
     public int RequestTimeoutSeconds { get; set; } = 600;
+    public int PartialImages { get; set; } = 2;
     public int MaxReferenceImages { get; set; } = 4;
 }

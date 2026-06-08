@@ -11,8 +11,8 @@
 @inject IArtWorkflowService Workflow
 @inject IAssistantChatService ChatService
 @inject IWorkspaceChatRuntime ChatRuntime
+@inject IImageGenerationRuntime ImageRuntime
 @inject ILlmProviderService ProviderService
-@inject IServiceScopeFactory ScopeFactory
 @inject IOptions<ImageGenerationOptions> ImageOptions
 @inject ILogger<Home> Logger
 @inject IJSRuntime JS
@@ -121,15 +121,13 @@ else
     private readonly List<ChatRenderableMessage> _messages = [];
     private readonly HashSet<Guid> _draftReferenceAssetIds = [];
     private readonly HashSet<Guid> _recipeExampleAssetIds = [];
-    private readonly SemaphoreSlim _generationFailureLock = new(1, 1);
-
     private WorkbenchView? _workbench;
+    private ImageGenerationRuntimeSnapshot _generationRuntimeSnapshot = new([]);
     private ChatLiveTurn? _live;
     private IJSObjectReference? _editorModule;
     private DotNetObjectReference<Home>? _dotNetRef;
     private ElementReference _editorCanvas;
     private Guid? _loadedEditorAssetId;
-    private CancellationTokenSource? _generationCts;
     private CancellationTokenSource? _maskAutosaveCts;
     private readonly SemaphoreSlim _maskAutosaveLock = new(1, 1);
     private long _maskAutosaveVersion;
@@ -173,7 +171,6 @@ else
     private string _assetOrganization = "latest";
     private Guid? _editAssetId;
     private Guid? _assetDeleteCandidateId;
-    private Guid? _runningGenerationBatchId;
     private ArtAssetExportView? _exportAsset;
     private bool _exportModalOpen;
     private bool _exportProcessing;
@@ -197,6 +194,8 @@ else
         ChatRuntime.WorkspaceChanged += OnChatRuntimeWorkspaceChanged;
         ChatRuntime.FormDraftProposed += OnChatRuntimeFormDraftProposed;
         ChatRuntime.TurnFinished += OnChatRuntimeTurnFinished;
+        ImageRuntime.StateChanged += OnImageGenerationRuntimeStateChanged;
+        _generationRuntimeSnapshot = ImageRuntime.GetSnapshot();
         await ReloadAllAsync();
         ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
     }
@@ -377,6 +376,8 @@ else
         var activeBatch = _workbench!.ActiveBatch;
         var outputAssetsByIndex = new Dictionary<int, ArtAssetView>();
         var outputErrorsByIndex = new Dictionary<int, GenerationOutputErrorView>();
+        var outputStatesByIndex = new Dictionary<int, GenerationOutputStateView>();
+        var runtimeOutputsByIndex = new Dictionary<int, ImageGenerationOutputRuntimeView>();
 
         if (activeBatch is not null)
         {
@@ -400,16 +401,18 @@ else
                 .Where(error => error.OutputIndex >= 0 && error.OutputIndex < activeBatch.Count)
                 .GroupBy(error => error.OutputIndex)
                 .ToDictionary(group => group.Key, group => group.Last());
+            outputStatesByIndex = activeBatch.OutputStates
+                .Where(state => state.OutputIndex >= 0 && state.OutputIndex < activeBatch.Count)
+                .GroupBy(state => state.OutputIndex)
+                .ToDictionary(group => group.Key, group => group.Last());
+            runtimeOutputsByIndex = _generationRuntimeSnapshot.Batches
+                .FirstOrDefault(batch => batch.BatchId == activeBatch.Id)
+                ?.Outputs
+                .Where(output => output.OutputIndex >= 0 && output.OutputIndex < activeBatch.Count)
+                .GroupBy(output => output.OutputIndex)
+                .ToDictionary(group => group.Key, group => group.Last())
+                ?? [];
         }
-        var occupiedOutputIndexes = outputAssetsByIndex.Keys.Concat(outputErrorsByIndex.Keys).ToHashSet();
-        var pendingOutputIndexes = activeBatch is null
-            ? new List<int>()
-            : Enumerable.Range(0, activeBatch.Count)
-                .Where(index => !occupiedOutputIndexes.Contains(index))
-                .ToList();
-        var currentGeneratingIndex = activeBatch?.Status == GenerationBatchStatus.Running && pendingOutputIndexes.Count > 0
-            ? pendingOutputIndexes[0]
-            : -1;
 
         <div class="workspace-panel compare-panel">
             <div class="panel-head">
@@ -455,13 +458,22 @@ else
                         }
                         else
                         {
-                            @if (IsTerminalGenerationStatus(activeBatch.Status))
+                            var outputState = ResolveOutputState(index, outputStatesByIndex, runtimeOutputsByIndex);
+                            if (IsFailedOutputStatus(outputState.Status))
+                            {
+                                @RenderGenerationErrorCard(OutputErrorFromState(outputState, runtimeOutputsByIndex.GetValueOrDefault(index)))
+                            }
+                            else if (outputErrorsByIndex.TryGetValue(index, out var persistedOutputError))
+                            {
+                                @RenderGenerationErrorCard(persistedOutputError)
+                            }
+                            else if (IsTerminalGenerationStatus(activeBatch.Status))
                             {
                                 @RenderGenerationErrorCard(new GenerationOutputErrorView(index, MissingOutputError(activeBatch.Status)))
                             }
                             else
                             {
-                                @RenderGenerationPlaceholderCard(index, index == currentGeneratingIndex)
+                                @RenderGenerationPlaceholderCard(outputState, runtimeOutputsByIndex.GetValueOrDefault(index))
                             }
                         }
                     }
@@ -847,14 +859,36 @@ else
         </article>
     };
 
-    private RenderFragment RenderGenerationPlaceholderCard(int index, bool isGenerating) => __builder =>
+    private RenderFragment RenderGenerationPlaceholderCard(GenerationOutputStateView outputState, ImageGenerationOutputRuntimeView? runtimeOutput) => __builder =>
     {
-        var status = isGenerating ? "Generating" : "Queued";
-        var message = isGenerating
-            ? "Waiting for the image request to complete."
-            : "Waiting for earlier image requests.";
+        var status = runtimeOutput?.Status ?? outputState.Status;
+        var isGenerating = status is GenerationOutputStatus.Running or GenerationOutputStatus.Generating;
+        var label = status switch
+        {
+            GenerationOutputStatus.Generating => "Generating",
+            GenerationOutputStatus.Running => "Running",
+            _ => "Queued",
+        };
+        var message = !string.IsNullOrWhiteSpace(runtimeOutput?.Message)
+            ? runtimeOutput.Message
+            : !string.IsNullOrWhiteSpace(outputState.Message)
+                ? outputState.Message
+                : status == GenerationOutputStatus.Queued
+                    ? "Waiting for earlier image requests."
+                    : "Waiting for the image request to complete.";
+        var partialImageDataUrl = runtimeOutput?.PartialImageDataUrl;
         <article class="asset-card generation-placeholder-card">
-            @if (isGenerating)
+            @if (!string.IsNullOrWhiteSpace(partialImageDataUrl))
+            {
+                <div class="generation-partial-frame">
+                    <img src="@partialImageDataUrl" alt="@($"Partial preview for Image {LabelForIndex(outputState.OutputIndex)}")" />
+                    @if (isGenerating)
+                    {
+                        <div class="generation-partial-spinner" aria-hidden="true"></div>
+                    }
+                </div>
+            }
+            else if (isGenerating)
             {
                 <div class="generation-spinner" aria-hidden="true"></div>
             }
@@ -864,8 +898,8 @@ else
             }
             <div class="asset-card-body">
                 <div class="asset-title-row">
-                    <strong>Image @LabelForIndex(index)</strong>
-                    <span>@status</span>
+                    <strong>Image @LabelForIndex(outputState.OutputIndex)</strong>
+                    <span>@label</span>
                 </div>
                 <p>@message</p>
             </div>
@@ -882,6 +916,10 @@ else
                     <span>Failed</span>
                 </div>
                 <p>@outputError.Error</p>
+                @if (!string.IsNullOrWhiteSpace(GenerationErrorDetails(outputError)))
+                {
+                    <small class="generation-error-details">@GenerationErrorDetails(outputError)</small>
+                }
             </div>
         </article>
     };
@@ -1039,7 +1077,7 @@ else
         try
         {
             var projectId = _workbench.Project.Id;
-            var batch = await Workflow.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
+            var batch = await ImageRuntime.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
                 _generatePrompt,
                 _negativePrompt,
                 _generateSize,
@@ -1057,11 +1095,6 @@ else
                 batch.Size,
                 _generatePrompt.Trim().Length,
                 CurrentReferenceAssetIds().Count);
-            _runningGenerationBatchId = batch.Id;
-            _generationCts?.Cancel();
-            _generationCts?.Dispose();
-            _generationCts = new CancellationTokenSource();
-            _ = RunGenerationBatchAsync(projectId, batch.Id, batch.Count, _generationCts.Token);
         }
         catch (Exception ex)
         {
@@ -1073,303 +1106,6 @@ else
             _busyText = string.Empty;
             StateHasChanged();
         }
-    }
-
-    private async Task RunGenerationBatchAsync(Guid projectId, Guid batchId, int count, CancellationToken cancellationToken)
-    {
-        var parallelLimit = Math.Clamp(ImageOptions.Value.MaxParallelRequests, 1, Math.Max(1, ImageOptions.Value.MaxOutputs));
-        Logger.LogDebug(
-            "Image generation background batch starting: projectId={ProjectId}, batchId={BatchId}, count={Count}, parallelLimit={ParallelLimit}",
-            projectId,
-            batchId,
-            count,
-            parallelLimit);
-        using var throttler = new SemaphoreSlim(parallelLimit, parallelLimit);
-        var tasks = Enumerable.Range(0, count).Select(outputIndex => RunGenerationOutputAsync(
-            projectId,
-            batchId,
-            outputIndex,
-            throttler,
-            cancellationToken));
-
-        try
-        {
-            await Task.WhenAll(tasks);
-            await CompleteRunningGenerationAsync(projectId, batchId, cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            Logger.LogDebug(
-                "Image generation background batch cancelled: projectId={ProjectId}, batchId={BatchId}",
-                projectId,
-                batchId);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(
-                ex,
-                "Image generation background batch failed unexpectedly: projectId={ProjectId}, batchId={BatchId}",
-                projectId,
-                batchId);
-            await InvokeAsync(() =>
-            {
-                _error = ex.Message;
-                StateHasChanged();
-            });
-        }
-        finally
-        {
-            if (_runningGenerationBatchId == batchId)
-                _runningGenerationBatchId = null;
-            Logger.LogDebug(
-                "Image generation background batch finished: projectId={ProjectId}, batchId={BatchId}",
-                projectId,
-                batchId);
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private async Task RunGenerationOutputAsync(
-        Guid projectId,
-        Guid batchId,
-        int outputIndex,
-        SemaphoreSlim throttler,
-        CancellationToken cancellationToken)
-    {
-        await throttler.WaitAsync(cancellationToken);
-        try
-        {
-            Logger.LogDebug(
-                "Image generation output worker starting: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
-                projectId,
-                batchId,
-                outputIndex);
-            var finalError = await GenerateBatchOutputWithRetriesAsync(projectId, batchId, outputIndex, cancellationToken);
-            if (finalError is not null)
-            {
-                Logger.LogWarning(
-                    finalError,
-                    "Image generation output worker failed after retries: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
-                    projectId,
-                    batchId,
-                    outputIndex);
-                await PersistGenerationFailureAsync(projectId, batchId, outputIndex, finalError.Message, cancellationToken);
-            }
-            else
-            {
-                Logger.LogDebug(
-                    "Image generation output worker succeeded: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
-                    projectId,
-                    batchId,
-                    outputIndex);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            Logger.LogDebug(
-                "Image generation output worker cancelled: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
-                projectId,
-                batchId,
-                outputIndex);
-            throw;
-        }
-        finally
-        {
-            throttler.Release();
-        }
-
-        await InvokeAsync(async () =>
-        {
-            await ReloadWorkbenchAsync();
-            StateHasChanged();
-        });
-    }
-
-    private async Task<Exception?> GenerateBatchOutputWithRetriesAsync(
-        Guid projectId,
-        Guid batchId,
-        int outputIndex,
-        CancellationToken cancellationToken)
-    {
-        var maxAttempts = Math.Clamp(ImageOptions.Value.MaxRequestAttempts, 1, 10);
-        Exception? finalError = null;
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            try
-            {
-                Logger.LogDebug(
-                    "Image generation output attempt starting: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, attempt={Attempt}, maxAttempts={MaxAttempts}",
-                    projectId,
-                    batchId,
-                    outputIndex,
-                    attempt,
-                    maxAttempts);
-                await using var scope = ScopeFactory.CreateAsyncScope();
-                var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
-                await workflow.GenerateBatchOutputAsync(projectId, batchId, outputIndex, cancellationToken);
-                return null;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                finalError = ex;
-                if (attempt >= maxAttempts || !IsTransientImageGenerationError(ex))
-                {
-                    Logger.LogWarning(
-                        ex,
-                        "Image generation output attempt failed without retry: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, attempt={Attempt}, maxAttempts={MaxAttempts}, transient={Transient}",
-                        projectId,
-                        batchId,
-                        outputIndex,
-                        attempt,
-                        maxAttempts,
-                        IsTransientImageGenerationError(ex));
-                    break;
-                }
-
-                var delay = ImageGenerationRetryDelay(ex, attempt);
-                Logger.LogWarning(
-                    ex,
-                    "Image generation output attempt failed; retrying: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, attempt={Attempt}, maxAttempts={MaxAttempts}, retryDelayMs={RetryDelayMs}",
-                    projectId,
-                    batchId,
-                    outputIndex,
-                    attempt,
-                    maxAttempts,
-                    delay.TotalMilliseconds);
-                await Task.Delay(delay, cancellationToken);
-            }
-        }
-
-        return finalError;
-    }
-
-    private async Task PersistGenerationFailureAsync(Guid projectId, Guid batchId, int outputIndex, string error, CancellationToken cancellationToken)
-    {
-        await _generationFailureLock.WaitAsync(cancellationToken);
-        try
-        {
-            await using var scope = ScopeFactory.CreateAsyncScope();
-            var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
-            await workflow.MarkGenerationBatchOutputFailedAsync(projectId, batchId, outputIndex, error, cancellationToken);
-            Logger.LogDebug(
-                "Image generation output failure persisted from UI runner: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
-                projectId,
-                batchId,
-                outputIndex);
-        }
-        finally
-        {
-            _generationFailureLock.Release();
-        }
-    }
-
-    private static bool IsTransientImageGenerationError(Exception exception)
-    {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-        {
-            var message = current.Message;
-            if (message.Contains("Rate limit", StringComparison.OrdinalIgnoreCase)
-                || message.Contains("429", StringComparison.OrdinalIgnoreCase)
-                || message.Contains("Too Many Requests", StringComparison.OrdinalIgnoreCase)
-                || message.Contains("Please try again", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static TimeSpan ImageGenerationRetryDelay(Exception exception, int failedAttempt)
-    {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-        {
-            var providerDelay = TryReadProviderRetryDelay(current.Message);
-            if (providerDelay is { } delay && delay > TimeSpan.Zero)
-            {
-                var minimumDelay = IsImagePerMinuteRateLimit(current.Message)
-                    ? TimeSpan.FromSeconds(10)
-                    : TimeSpan.FromMilliseconds(500);
-                return delay < minimumDelay ? minimumDelay : delay;
-            }
-        }
-
-        if (ContainsImagePerMinuteRateLimit(exception))
-            return TimeSpan.FromSeconds(Math.Min(30, 10 * failedAttempt));
-
-        var backoffMilliseconds = Math.Min(5000, 250 * Math.Pow(2, Math.Max(0, failedAttempt - 1)));
-        return TimeSpan.FromMilliseconds(backoffMilliseconds);
-    }
-
-    private static TimeSpan? TryReadProviderRetryDelay(string message)
-    {
-        const string marker = "Please try again in ";
-        var markerIndex = message.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (markerIndex < 0)
-            return null;
-
-        var valueStart = markerIndex + marker.Length;
-        while (valueStart < message.Length && char.IsWhiteSpace(message[valueStart]))
-            valueStart++;
-
-        var valueEnd = valueStart;
-        while (valueEnd < message.Length && (char.IsDigit(message[valueEnd]) || message[valueEnd] == '.'))
-            valueEnd++;
-
-        if (valueEnd == valueStart
-            || !double.TryParse(message[valueStart..valueEnd], NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
-        {
-            return null;
-        }
-
-        var unit = message[valueEnd..].TrimStart();
-        if (unit.StartsWith("ms", StringComparison.OrdinalIgnoreCase)
-            || unit.StartsWith("millisecond", StringComparison.OrdinalIgnoreCase))
-        {
-            return TimeSpan.FromMilliseconds(value);
-        }
-
-        if (unit.StartsWith("s", StringComparison.OrdinalIgnoreCase)
-            || unit.StartsWith("second", StringComparison.OrdinalIgnoreCase))
-        {
-            return TimeSpan.FromSeconds(value);
-        }
-
-        return null;
-    }
-
-    private static bool ContainsImagePerMinuteRateLimit(Exception exception)
-    {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-        {
-            if (IsImagePerMinuteRateLimit(current.Message))
-                return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsImagePerMinuteRateLimit(string message) =>
-        message.Contains("per min", StringComparison.OrdinalIgnoreCase)
-        && (message.Contains("gpt-image", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("input-images", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("image", StringComparison.OrdinalIgnoreCase));
-
-    private async Task CompleteRunningGenerationAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken)
-    {
-        await using var scope = ScopeFactory.CreateAsyncScope();
-        var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
-        await workflow.CompleteGenerationBatchAsync(projectId, batchId, cancellationToken);
-        await InvokeAsync(async () =>
-        {
-            await ReloadWorkbenchAsync();
-            StateHasChanged();
-        });
     }
 
     private void OnGenerateRecipeChanged(ChangeEventArgs args)
@@ -2127,6 +1863,16 @@ else
         });
     }
 
+    private void OnImageGenerationRuntimeStateChanged(object? sender, EventArgs args)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            _generationRuntimeSnapshot = ImageRuntime.GetSnapshot();
+            await ReloadWorkbenchAsync();
+            StateHasChanged();
+        });
+    }
+
     private void ApplyChatRuntimeSnapshot(WorkspaceChatRuntimeSnapshot snapshot)
     {
         _running = snapshot.Running;
@@ -2575,7 +2321,8 @@ else
     private bool CanGenerate =>
         !string.IsNullOrWhiteSpace(_generatePrompt)
         && string.IsNullOrWhiteSpace(_busyText)
-        && _runningGenerationBatchId is null;
+        && _workbench is not null
+        && !ImageRuntime.HasRunningBatch(_workbench.Project.Id);
 
     private bool CanSaveRecipe =>
         !string.IsNullOrWhiteSpace(_recipeName)
@@ -2726,6 +2473,69 @@ else
     private static bool IsTerminalGenerationStatus(GenerationBatchStatus status) =>
         status is GenerationBatchStatus.Succeeded or GenerationBatchStatus.CompletedWithErrors or GenerationBatchStatus.Failed;
 
+    private static bool IsFailedOutputStatus(GenerationOutputStatus status) =>
+        status is GenerationOutputStatus.Failed or GenerationOutputStatus.Cancelled;
+
+    private static GenerationOutputStateView ResolveOutputState(
+        int outputIndex,
+        IReadOnlyDictionary<int, GenerationOutputStateView> outputStatesByIndex,
+        IReadOnlyDictionary<int, ImageGenerationOutputRuntimeView> runtimeOutputsByIndex)
+    {
+        if (runtimeOutputsByIndex.TryGetValue(outputIndex, out var runtimeOutput))
+            return new GenerationOutputStateView(
+                outputIndex,
+                runtimeOutput.Status,
+                runtimeOutput.Attempt,
+                runtimeOutput.Message,
+                runtimeOutput.Error,
+                runtimeOutput.ErrorKind,
+                runtimeOutput.RequestId,
+                runtimeOutput.ResponseId,
+                runtimeOutput.CallId,
+                runtimeOutput.LastEventType,
+                runtimeOutput.EventCount);
+
+        return outputStatesByIndex.TryGetValue(outputIndex, out var outputState)
+            ? outputState
+            : new GenerationOutputStateView(outputIndex, GenerationOutputStatus.Queued, Message: "Waiting for earlier image requests.");
+    }
+
+    private static GenerationOutputErrorView OutputErrorFromState(
+        GenerationOutputStateView outputState,
+        ImageGenerationOutputRuntimeView? runtimeOutput)
+    {
+        var error = !string.IsNullOrWhiteSpace(runtimeOutput?.Error)
+            ? runtimeOutput.Error
+            : !string.IsNullOrWhiteSpace(outputState.Error)
+                ? outputState.Error
+                : "Image request failed.";
+        return new GenerationOutputErrorView(
+            outputState.OutputIndex,
+            error,
+            runtimeOutput?.ErrorKind ?? outputState.ErrorKind,
+            runtimeOutput?.RequestId ?? outputState.RequestId,
+            runtimeOutput?.ResponseId ?? outputState.ResponseId,
+            runtimeOutput?.CallId ?? outputState.CallId,
+            LastEventType: runtimeOutput?.LastEventType ?? outputState.LastEventType,
+            EventCount: runtimeOutput?.EventCount ?? outputState.EventCount);
+    }
+
+    private static string GenerationErrorDetails(GenerationOutputErrorView outputError)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(outputError.ErrorKind))
+            parts.Add(outputError.ErrorKind);
+        if (!string.IsNullOrWhiteSpace(outputError.RequestId))
+            parts.Add($"request {outputError.RequestId}");
+        if (!string.IsNullOrWhiteSpace(outputError.ResponseId))
+            parts.Add($"response {outputError.ResponseId}");
+        if (!string.IsNullOrWhiteSpace(outputError.LastEventType))
+            parts.Add($"last event {outputError.LastEventType}");
+        if (outputError.EventCount > 0)
+            parts.Add($"{outputError.EventCount} event(s)");
+        return string.Join(" | ", parts);
+    }
+
     private static string MissingOutputError(GenerationBatchStatus status) =>
         status == GenerationBatchStatus.Failed
             ? "Image request failed before an output was saved."
@@ -2751,15 +2561,13 @@ else
         ChatRuntime.WorkspaceChanged -= OnChatRuntimeWorkspaceChanged;
         ChatRuntime.FormDraftProposed -= OnChatRuntimeFormDraftProposed;
         ChatRuntime.TurnFinished -= OnChatRuntimeTurnFinished;
+        ImageRuntime.StateChanged -= OnImageGenerationRuntimeStateChanged;
         if (_editorModule is not null)
         {
             try { await _editorModule.DisposeAsync(); } catch { }
         }
-        _generationCts?.Cancel();
-        _generationCts?.Dispose();
         _maskAutosaveCts?.Cancel();
         _maskAutosaveCts?.Dispose();
-        _generationFailureLock.Dispose();
         _maskAutosaveLock.Dispose();
         _dotNetRef?.Dispose();
     }
