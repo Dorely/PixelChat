@@ -12,8 +12,10 @@
 @inject IAssistantChatService ChatService
 @inject IWorkspaceChatRuntime ChatRuntime
 @inject IImageGenerationRuntime ImageRuntime
+@inject IBackgroundRemovalService BackgroundRemoval
 @inject ILlmProviderService ProviderService
 @inject IOptions<ImageGenerationOptions> ImageOptions
+@inject IOptions<BackgroundRemovalOptions> BackgroundRemovalOptions
 @inject ILogger<Home> Logger
 @inject IJSRuntime JS
 
@@ -172,13 +174,14 @@ else
     private Guid? _editAssetId;
     private Guid? _assetDeleteCandidateId;
     private ArtAssetExportView? _exportAsset;
+    private CancellationTokenSource? _exportProcessingCts;
     private bool _exportModalOpen;
     private bool _exportProcessing;
     private bool _exportRemoveBackground;
     private int _exportTolerance = 24;
     private long _exportRequestVersion;
     private string _exportFileName = string.Empty;
-    private string _exportRemovalMethod = "auto";
+    private string _exportRemovalMethod = "local-ai";
     private string _exportPreviewBackground = "checkerboard";
     private string _exportAppliedMethod = string.Empty;
     private string _exportPreviewDataUrl = string.Empty;
@@ -996,7 +999,8 @@ else
                                         value="@_exportRemovalMethod"
                                         disabled="@(!_exportRemoveBackground || _exportProcessing)"
                                         @onchange="OnExportRemovalMethodChanged">
-                                    <option value="auto">Auto</option>
+                                    <option value="local-ai">Local AI</option>
+                                    <option value="auto">Fast cleanup</option>
                                     <option value="checkerboard">Patterned checkerboard</option>
                                     <option value="edge">Edge colors</option>
                                 </select>
@@ -1009,7 +1013,7 @@ else
                                        max="80"
                                        step="1"
                                        value="@_exportTolerance"
-                                       disabled="@(!_exportRemoveBackground || _exportProcessing)"
+                                       disabled="@(!_exportRemoveBackground || _exportProcessing || IsLocalAiRemovalMethod(_exportRemovalMethod))"
                                        @onchange="OnExportToleranceChanged" />
                             </label>
 
@@ -1054,6 +1058,10 @@ else
                 }
 
                 <footer class="export-modal-actions">
+                    @if (_exportProcessing)
+                    {
+                        <button type="button" class="btn btn-outline-secondary" @onclick="CancelExportProcessing">Stop</button>
+                    }
                     <button type="button" class="btn btn-outline-secondary" @onclick="CloseExportModal">Cancel</button>
                     <button type="button"
                             class="btn btn-primary"
@@ -1526,12 +1534,13 @@ else
             return;
 
         var version = ++_exportRequestVersion;
+        var operationCts = BeginExportOperation();
         _exportModalOpen = true;
         _exportAsset = null;
         _exportProcessing = true;
         _exportRemoveBackground = false;
         _exportTolerance = 24;
-        _exportRemovalMethod = "auto";
+        _exportRemovalMethod = DefaultExportRemovalMethod();
         _exportPreviewBackground = "checkerboard";
         _exportAppliedMethod = string.Empty;
         _exportTransparentPixels = 0;
@@ -1555,12 +1564,16 @@ else
             _exportStatus = "Analyzing background...";
             StateHasChanged();
 
-            var preview = await PrepareExportPreviewAsync(exportAsset.DataUrl, removeBackground: null);
+            var preview = await PrepareFastExportPreviewAsync(exportAsset.DataUrl, removeBackground: false, removalMethod: "auto", operationCts.Token);
             if (version != _exportRequestVersion)
                 return;
 
-            _exportRemoveBackground = preview.RemoveBackground;
             ApplyExportPreview(preview);
+        }
+        catch (OperationCanceledException)
+        {
+            if (version == _exportRequestVersion)
+                _exportStatus = "Export cancelled.";
         }
         catch (Exception ex)
         {
@@ -1575,6 +1588,7 @@ else
             if (version == _exportRequestVersion)
             {
                 _exportProcessing = false;
+                CompleteExportOperation(operationCts);
                 StateHasChanged();
             }
         }
@@ -1626,6 +1640,7 @@ else
             return;
 
         var version = ++_exportRequestVersion;
+        var operationCts = BeginExportOperation();
         _exportProcessing = true;
         _exportError = null;
         _exportStatus = _exportRemoveBackground ? "Removing background..." : "Preparing PNG preview...";
@@ -1633,11 +1648,16 @@ else
 
         try
         {
-            var preview = await PrepareExportPreviewAsync(asset.DataUrl, _exportRemoveBackground);
+            var preview = await PrepareExportPreviewAsync(asset, _exportRemoveBackground, version, operationCts.Token);
             if (version != _exportRequestVersion)
                 return;
 
             ApplyExportPreview(preview);
+        }
+        catch (OperationCanceledException)
+        {
+            if (version == _exportRequestVersion)
+                _exportStatus = "Export cancelled.";
         }
         catch (Exception ex)
         {
@@ -1652,20 +1672,83 @@ else
             if (version == _exportRequestVersion)
             {
                 _exportProcessing = false;
+                CompleteExportOperation(operationCts);
                 StateHasChanged();
             }
         }
     }
 
-    private async Task<ExportPreviewResult> PrepareExportPreviewAsync(string dataUrl, bool? removeBackground)
+    private async Task<ExportPreviewResult> PrepareExportPreviewAsync(
+        ArtAssetExportView asset,
+        bool? removeBackground,
+        long version,
+        CancellationToken cancellationToken)
+    {
+        if (removeBackground == true && IsLocalAiRemovalMethod(_exportRemovalMethod))
+        {
+            try
+            {
+                return await PrepareLocalAiExportPreviewAsync(asset, version, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                if (version == _exportRequestVersion)
+                    _exportError = $"Local AI failed: {ex.Message} Fast cleanup fallback is shown.";
+
+                return await PrepareFastExportPreviewAsync(asset.DataUrl, removeBackground: true, removalMethod: "auto", cancellationToken);
+            }
+        }
+
+        return await PrepareFastExportPreviewAsync(asset.DataUrl, removeBackground, _exportRemovalMethod, cancellationToken);
+    }
+
+    private async Task<ExportPreviewResult> PrepareFastExportPreviewAsync(
+        string dataUrl,
+        bool? removeBackground,
+        string removalMethod,
+        CancellationToken cancellationToken)
     {
         var module = await EnsurePageModuleAsync();
         return await module.InvokeAsync<ExportPreviewResult>(
             "prepareExportPreview",
+            cancellationToken,
             dataUrl,
             _exportTolerance,
             removeBackground,
-            _exportRemovalMethod);
+            removalMethod);
+    }
+
+    private async Task<ExportPreviewResult> PrepareLocalAiExportPreviewAsync(
+        ArtAssetExportView asset,
+        long version,
+        CancellationToken cancellationToken)
+    {
+        var parsed = DataUrl.Parse(asset.DataUrl);
+        var progress = new Progress<BackgroundRemovalProgress>(update =>
+        {
+            if (version != _exportRequestVersion)
+                return;
+
+            _exportStatus = update.Message;
+            _ = InvokeAsync(StateHasChanged);
+        });
+
+        var result = await BackgroundRemoval.RemoveBackgroundAsync(
+            new BackgroundRemovalRequest(asset.FileName, parsed.ContentType, parsed.Data),
+            progress,
+            cancellationToken);
+
+        var dataUrl = DataUrl.ToDataUrl(result.ContentType, result.Data);
+        var module = await EnsurePageModuleAsync();
+        var stats = await module.InvokeAsync<ExportAlphaStats>("analyzePngAlpha", cancellationToken, dataUrl);
+        return new ExportPreviewResult(
+            RemoveBackground: true,
+            DataUrl: dataUrl,
+            Message: result.Message,
+            Method: result.Method,
+            TransparentPixels: stats.TransparentPixels,
+            SemiTransparentPixels: stats.SemiTransparentPixels,
+            OpaquePixels: stats.OpaquePixels);
     }
 
     private void ApplyExportPreview(ExportPreviewResult preview)
@@ -1685,6 +1768,7 @@ else
             return;
 
         var version = ++_exportRequestVersion;
+        var operationCts = BeginExportOperation();
         _exportProcessing = true;
         _exportError = null;
         _exportStatus = "Preparing download...";
@@ -1696,9 +1780,14 @@ else
             var fileName = CleanExportFileName(string.IsNullOrWhiteSpace(_exportFileName)
                 ? DefaultExportFileName(asset.FileName, asset.Label)
                 : _exportFileName);
-            await module.InvokeVoidAsync("downloadExportPng", _exportPreviewDataUrl, fileName);
+            await module.InvokeVoidAsync("downloadExportPng", operationCts.Token, _exportPreviewDataUrl, fileName);
             if (version == _exportRequestVersion)
                 _exportStatus = "Download prepared.";
+        }
+        catch (OperationCanceledException)
+        {
+            if (version == _exportRequestVersion)
+                _exportStatus = "Export cancelled.";
         }
         catch (Exception ex)
         {
@@ -1713,9 +1802,37 @@ else
             if (version == _exportRequestVersion)
             {
                 _exportProcessing = false;
+                CompleteExportOperation(operationCts);
                 StateHasChanged();
             }
         }
+    }
+
+    private CancellationTokenSource BeginExportOperation()
+    {
+        _exportProcessingCts?.Cancel();
+        _exportProcessingCts?.Dispose();
+        _exportProcessingCts = new CancellationTokenSource();
+        return _exportProcessingCts;
+    }
+
+    private void CompleteExportOperation(CancellationTokenSource operationCts)
+    {
+        if (!ReferenceEquals(_exportProcessingCts, operationCts))
+            return;
+
+        _exportProcessingCts.Dispose();
+        _exportProcessingCts = null;
+    }
+
+    private void CancelExportProcessing()
+    {
+        if (!_exportProcessing)
+            return;
+
+        _exportStatus = "Cancelling export...";
+        _exportProcessingCts?.Cancel();
+        StateHasChanged();
     }
 
     private void CloseExportModal() => ResetExportModal();
@@ -1723,12 +1840,15 @@ else
     private void ResetExportModal()
     {
         _exportRequestVersion++;
+        _exportProcessingCts?.Cancel();
+        _exportProcessingCts?.Dispose();
+        _exportProcessingCts = null;
         _exportModalOpen = false;
         _exportProcessing = false;
         _exportAsset = null;
         _exportPreviewDataUrl = string.Empty;
         _exportFileName = string.Empty;
-        _exportRemovalMethod = "auto";
+        _exportRemovalMethod = DefaultExportRemovalMethod();
         _exportPreviewBackground = "checkerboard";
         _exportAppliedMethod = string.Empty;
         _exportStatus = string.Empty;
@@ -2419,20 +2539,28 @@ else
     private string ExportPreviewBackgroundClass(string background) =>
         _exportPreviewBackground == background ? "filter-button is-active" : "filter-button";
 
+    private string DefaultExportRemovalMethod() =>
+        NormalizeExportRemovalMethod(BackgroundRemovalOptions.Value.DefaultMethod);
+
     private static string NormalizeExportRemovalMethod(string? value) =>
         value?.Trim().ToLowerInvariant() switch
         {
+            "local-ai" or "localai" or "ai" or "rembg" => "local-ai",
             "checkerboard" or "patternedcheckerboard" or "patterned-checkerboard" => "checkerboard",
             "edge" or "edgecolors" or "edge-colors" => "edge",
             _ => "auto",
         };
 
+    private static bool IsLocalAiRemovalMethod(string? method) =>
+        NormalizeExportRemovalMethod(method) == "local-ai";
+
     private static string ExportRemovalMethodLabel(string method) =>
         NormalizeExportRemovalMethod(method) switch
         {
+            "local-ai" => "Local AI",
             "checkerboard" => "Patterned checkerboard",
             "edge" => "Edge colors",
-            _ => "Auto",
+            _ => "Fast cleanup",
         };
 
     private static string DefaultExportFileName(string fileName, string label)
@@ -2555,6 +2683,11 @@ else
         int SemiTransparentPixels,
         int OpaquePixels);
 
+    private sealed record ExportAlphaStats(
+        int TransparentPixels,
+        int SemiTransparentPixels,
+        int OpaquePixels);
+
     public async ValueTask DisposeAsync()
     {
         ChatRuntime.StateChanged -= OnChatRuntimeStateChanged;
@@ -2568,6 +2701,8 @@ else
         }
         _maskAutosaveCts?.Cancel();
         _maskAutosaveCts?.Dispose();
+        _exportProcessingCts?.Cancel();
+        _exportProcessingCts?.Dispose();
         _maskAutosaveLock.Dispose();
         _dotNetRef?.Dispose();
     }

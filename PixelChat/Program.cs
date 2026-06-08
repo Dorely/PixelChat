@@ -38,12 +38,14 @@ builder.Services.AddScoped<IAssistantConversationRepository, AssistantConversati
 builder.Services.AddScoped<ISecretStore, SqliteSecretStore>();
 builder.Services.Configure<AgentOptions>(builder.Configuration.GetSection(AgentOptions.SectionName));
 builder.Services.Configure<ImageGenerationOptions>(builder.Configuration.GetSection(ImageGenerationOptions.SectionName));
+builder.Services.Configure<BackgroundRemovalOptions>(builder.Configuration.GetSection(BackgroundRemovalOptions.SectionName));
 builder.Services.AddScoped<ILlmProviderService, LlmProviderService>();
 builder.Services.AddScoped<IOpenAIAccountAuthService, OpenAIAccountAuthService>();
 builder.Services.AddScoped<IChatClientFactory, ChatClientFactory>();
 builder.Services.AddScoped<IImageProvider, OpenAIAccountImageProvider>();
 builder.Services.AddScoped<IArtWorkflowService, ArtWorkflowService>();
 builder.Services.AddSingleton<IImageGenerationRuntime, ImageGenerationRuntime>();
+builder.Services.AddSingleton<IBackgroundRemovalService, RembgBackgroundRemovalService>();
 builder.Services.AddScoped<AssistantToolRegistry>();
 builder.Services.AddScoped<IAssistantChatService, AssistantChatService>();
 builder.Services.AddSingleton<IWorkspaceChatRuntime, WorkspaceChatRuntime>();

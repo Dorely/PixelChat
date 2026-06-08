@@ -140,6 +140,24 @@ export async function prepareExportPreview(imageUrl, tolerance, removeBackground
     };
 }
 
+export async function analyzePngAlpha(imageUrl) {
+    const image = await loadImage(imageUrl);
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth || image.width;
+    canvas.height = image.naturalHeight || image.height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const stats = alphaStats(imageData.data);
+    return {
+        TransparentPixels: stats.transparent,
+        SemiTransparentPixels: stats.semiTransparent,
+        OpaquePixels: stats.opaque,
+    };
+}
+
 export function downloadExportPng(dataUrl, fileName) {
     if (!dataUrl || !dataUrl.startsWith("data:image/png;base64,")) {
         throw new Error("Export preview is not a PNG.");
