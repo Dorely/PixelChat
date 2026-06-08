@@ -51,7 +51,7 @@
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, export cache, streaming compare batches, masks, recipe CRUD, chat attachments, import, crop, generation, and masked edits. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, export cache, streaming compare batches, masks, recipe CRUD, chat attachments, import, crop, generation prompt assembly, and masked edits. |
 | `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench, recipe management, and assistant tools. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns background generation, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
@@ -90,7 +90,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat attachments, Generate/Compare/Edit/Recipes/Assets tabs, canvas editor helpers, and export modal processing with cached manual Local AI plus fast cleanup. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat attachments, Generate/Compare/Edit/Recipes/Assets tabs, canvas helpers, and export modal processing with cached Local AI, key-color cleanup, and fast cleanup. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, defaults, API-key updates, and child model rows. |

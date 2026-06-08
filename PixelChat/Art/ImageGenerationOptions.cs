@@ -9,7 +9,7 @@ public sealed class ImageGenerationOptions
     public string DefaultSize { get; set; } = "auto";
     public string DefaultQuality { get; set; } = "auto";
     public string DefaultOutputFormat { get; set; } = "png";
-    public string DefaultBackground { get; set; } = "auto";
+    public string DefaultBackground { get; set; } = "removable";
     public int MaxOutputs { get; set; } = 4;
     public int MaxParallelRequests { get; set; } = 4;
     public int MaxRequestAttempts { get; set; } = 3;

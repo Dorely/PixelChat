@@ -106,7 +106,7 @@ export function exportCropPng(canvas) {
     return output.toDataURL("image/png");
 }
 
-export async function prepareExportPreview(imageUrl, tolerance, removeBackground, removalMethod) {
+export async function prepareExportPreview(imageUrl, tolerance, removeBackground, removalMethod, cleanKeyColor) {
     const image = await loadImage(imageUrl);
     const canvas = document.createElement("canvas");
     canvas.width = image.naturalWidth || image.width;
@@ -117,26 +117,39 @@ export async function prepareExportPreview(imageUrl, tolerance, removeBackground
 
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const analysis = analyzeExportBackground(imageData.data, canvas.width, canvas.height);
+    const keyAnalysis = analyzeKeyColorBackground(imageData.data, canvas.width, canvas.height);
     const method = normalizeRemovalMethod(removalMethod);
     const shouldRemove = removeBackground === null || removeBackground === undefined
         ? analysis.shouldRemove || analysis.checkerboard.shouldRemove
         : Boolean(removeBackground);
+    const shouldCleanKey = shouldRemove
+        && (cleanKeyColor === null || cleanKeyColor === undefined
+            ? keyAnalysis.detected
+            : Boolean(cleanKeyColor));
 
     let result = { removedPixels: 0, method: "", detail: "" };
     if (shouldRemove) {
         result = removeExportBackground(imageData, analysis, normalizeTolerance(tolerance), method);
-        ctx.putImageData(imageData, 0, 0);
     }
 
+    let keyResult = { removedPixels: 0, softenedPixels: 0 };
+    if (shouldCleanKey) {
+        keyResult = removeKeyColorBackground(imageData);
+    }
+
+    ctx.putImageData(imageData, 0, 0);
     const stats = alphaStats(imageData.data);
     return {
         RemoveBackground: shouldRemove,
         DataUrl: canvas.toDataURL("image/png"),
-        Message: exportPreviewMessage(shouldRemove, analysis, result, stats),
-        Method: result.method,
+        Message: exportPreviewMessage(shouldRemove, analysis, result, stats, keyResult),
+        Method: mergeExportMethods(result.method, keyResult.removedPixels > 0 ? "key-color" : ""),
         TransparentPixels: stats.transparent,
         SemiTransparentPixels: stats.semiTransparent,
         OpaquePixels: stats.opaque,
+        KeyColorDetected: keyAnalysis.detected,
+        KeyColorPixels: keyAnalysis.candidatePixels,
+        KeyColorRemovedPixels: keyResult.removedPixels,
     };
 }
 
@@ -155,6 +168,38 @@ export async function analyzePngAlpha(imageUrl) {
         TransparentPixels: stats.transparent,
         SemiTransparentPixels: stats.semiTransparent,
         OpaquePixels: stats.opaque,
+    };
+}
+
+export async function prepareKeyColorCleanupPreview(imageUrl, cleanKeyColor) {
+    const image = await loadImage(imageUrl);
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth || image.width;
+    canvas.height = image.naturalHeight || image.height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const keyAnalysis = analyzeKeyColorBackground(imageData.data, canvas.width, canvas.height);
+    const keyResult = cleanKeyColor ? removeKeyColorBackground(imageData) : { removedPixels: 0, softenedPixels: 0 };
+    ctx.putImageData(imageData, 0, 0);
+
+    const stats = alphaStats(imageData.data);
+    return {
+        DataUrl: canvas.toDataURL("image/png"),
+        Message: keyResult.removedPixels > 0
+            ? `Key color cleanup removed ${keyResult.removedPixels.toLocaleString()} magenta px.`
+            : keyAnalysis.detected
+                ? "Magenta key color detected."
+                : "No magenta key color detected.",
+        Method: keyResult.removedPixels > 0 ? "key-color" : "",
+        TransparentPixels: stats.transparent,
+        SemiTransparentPixels: stats.semiTransparent,
+        OpaquePixels: stats.opaque,
+        KeyColorDetected: keyAnalysis.detected,
+        KeyColorPixels: keyAnalysis.candidatePixels,
+        KeyColorRemovedPixels: keyResult.removedPixels,
     };
 }
 
@@ -1049,6 +1094,130 @@ function nearestPaletteColor(data, offset, palette) {
     return closest;
 }
 
+const keyBackgroundColor = { r: 255, g: 0, b: 255 };
+
+function analyzeKeyColorBackground(data, width, height) {
+    const edgeBand = Math.max(2, Math.min(36, Math.floor(Math.min(width, height) * 0.025)));
+    let edgeSamples = 0;
+    let edgeCandidates = 0;
+    let candidatePixels = 0;
+
+    for (let pixelIndex = 0; pixelIndex < width * height; pixelIndex++) {
+        const offset = pixelIndex * 4;
+        if (isKeyColorCandidate(data, offset, 20)) {
+            candidatePixels++;
+        }
+    }
+
+    const sample = (x, y) => {
+        const offset = ((y * width) + x) * 4;
+        if (data[offset + 3] < 8) return;
+        edgeSamples++;
+        if (isKeyColorCandidate(data, offset, 20)) {
+            edgeCandidates++;
+        }
+    };
+
+    for (let y = 0; y < edgeBand; y++) {
+        for (let x = 0; x < width; x++) {
+            sample(x, y);
+            sample(x, height - 1 - y);
+        }
+    }
+
+    for (let y = edgeBand; y < height - edgeBand; y++) {
+        for (let x = 0; x < edgeBand; x++) {
+            sample(x, y);
+            sample(width - 1 - x, y);
+        }
+    }
+
+    const edgeShare = edgeSamples > 0 ? edgeCandidates / edgeSamples : 0;
+    const imageShare = candidatePixels / Math.max(1, width * height);
+    return {
+        detected: edgeShare >= 0.08 || (edgeShare >= 0.035 && imageShare >= 0.025),
+        candidatePixels,
+        edgeCandidates,
+        edgeShare,
+    };
+}
+
+function removeKeyColorBackground(imageData) {
+    const { data, width, height } = imageData;
+    const pixelCount = width * height;
+    const mask = new Uint8Array(pixelCount);
+
+    for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex++) {
+        const offset = pixelIndex * 4;
+        if (isKeyColorCandidate(data, offset, 0)) {
+            mask[pixelIndex] = 1;
+        }
+    }
+
+    removeTinyMaskComponents(mask, width, height, 4);
+    const removedPixels = applyAlphaMask(imageData, mask);
+    const softenedPixels = softenKeyColorBoundary(imageData, mask);
+    return { removedPixels, softenedPixels };
+}
+
+function isKeyColorCandidate(data, offset, extraTolerance) {
+    const alpha = data[offset + 3];
+    if (alpha < 8) return false;
+
+    const r = data[offset];
+    const g = data[offset + 1];
+    const b = data[offset + 2];
+    const distance = Math.sqrt(colorDistanceSquared(
+        r,
+        g,
+        b,
+        keyBackgroundColor.r,
+        keyBackgroundColor.g,
+        keyBackgroundColor.b));
+    const tolerance = 108 + extraTolerance;
+    const magentaDominance = Math.min(r, b) - g;
+    return distance <= tolerance
+        && r >= 150 - extraTolerance
+        && b >= 150 - extraTolerance
+        && g <= 125 + extraTolerance
+        && magentaDominance >= 55 - extraTolerance;
+}
+
+function softenKeyColorBoundary(imageData, mask) {
+    const { data, width, height } = imageData;
+    let softenedPixels = 0;
+    const maxDistance = 164;
+
+    for (let y = 0; y < height; y++) {
+        let pixelIndex = y * width;
+        for (let x = 0; x < width; x++, pixelIndex++) {
+            if (mask[pixelIndex]) continue;
+            const alphaOffset = pixelIndex * 4 + 3;
+            if (data[alphaOffset] <= 0) continue;
+            if (!hasNearbyMask(mask, width, height, x, y, 2)) continue;
+
+            const offset = pixelIndex * 4;
+            const r = data[offset];
+            const g = data[offset + 1];
+            const b = data[offset + 2];
+            const magentaDominance = Math.min(r, b) - g;
+            if (magentaDominance < 24 || r < 110 || b < 110 || g > 170) continue;
+
+            const distance = Math.sqrt(colorDistanceSquared(r, g, b, keyBackgroundColor.r, keyBackgroundColor.g, keyBackgroundColor.b));
+            if (distance > maxDistance) continue;
+
+            const targetAlpha = Math.max(24, Math.min(230, Math.round(255 * (distance / maxDistance))));
+            if (data[alphaOffset] > targetAlpha) {
+                decontaminatePixel(data, offset, keyBackgroundColor, targetAlpha / 255);
+                data[alphaOffset] = targetAlpha;
+                softenedPixels++;
+            }
+        }
+    }
+
+    return softenedPixels;
+}
+
 function alphaStats(data) {
     let transparent = 0;
     let semiTransparent = 0;
@@ -1070,7 +1239,11 @@ function colorDistanceSquared(r1, g1, b1, r2, g2, b2) {
     return dr * dr + dg * dg + db * db;
 }
 
-function exportPreviewMessage(removeBackground, analysis, result, stats) {
+function exportPreviewMessage(removeBackground, analysis, result, stats, keyResult) {
+    const keySuffix = keyResult?.removedPixels > 0
+        ? ` Key color cleanup removed ${keyResult.removedPixels.toLocaleString()} magenta px.`
+        : "";
+
     if (removeBackground) {
         if (result.removedPixels > 0) {
             const transparent = stats.transparent.toLocaleString();
@@ -1078,8 +1251,12 @@ function exportPreviewMessage(removeBackground, analysis, result, stats) {
                 ? `, ${stats.semiTransparent.toLocaleString()} soft edge px`
                 : "";
             return result.method === "checkerboard"
-                ? `Patterned checkerboard removed: ${transparent} transparent px${soft}.`
-                : `Edge-color background removed: ${transparent} transparent px${soft}.`;
+                ? `Patterned checkerboard removed: ${transparent} transparent px${soft}.${keySuffix}`
+                : `Edge-color background removed: ${transparent} transparent px${soft}.${keySuffix}`;
+        }
+
+        if (keySuffix) {
+            return `Key color cleanup removed ${keyResult.removedPixels.toLocaleString()} magenta px.`;
         }
 
         if (result.detail === "checkerboard fallback") {
@@ -1100,6 +1277,11 @@ function exportPreviewMessage(removeBackground, analysis, result, stats) {
     }
 
     return analysis.shouldRemove ? "Background detected." : "PNG preview ready.";
+}
+
+function mergeExportMethods(primary, secondary) {
+    const methods = [primary, secondary].filter(value => value && String(value).trim().length > 0);
+    return methods.join("+");
 }
 
 function normalizeRemovalMethod(value) {

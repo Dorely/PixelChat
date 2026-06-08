@@ -309,7 +309,7 @@ public sealed class ArtWorkflowService(
         try
         {
             providerResult = await imageProvider.GenerateAsync(new ImageProviderGenerateRequest(
-                BuildPrompt(batch.Prompt, batch.NegativePrompt, recipe),
+                BuildPrompt(batch.Prompt, batch.NegativePrompt, recipe, batch.Background),
                 Clean(batch.NegativePrompt),
                 batch.Size,
                 1,
@@ -668,7 +668,7 @@ public sealed class ArtWorkflowService(
         try
         {
             var providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
-                prompt,
+                BuildPrompt(prompt, string.Empty, null, batch.Background),
                 batch.Size,
                 count,
                 batch.MainlineModel,
@@ -1362,7 +1362,7 @@ public sealed class ArtWorkflowService(
         };
     }
 
-    private static string BuildPrompt(string prompt, string negativePrompt, PromptRecipe? recipe)
+    private static string BuildPrompt(string prompt, string negativePrompt, PromptRecipe? recipe, string? background)
     {
         var parts = new List<string>();
         if (recipe is not null)
@@ -1392,6 +1392,15 @@ public sealed class ArtWorkflowService(
             avoidRules.AddRange(DeserializeStrings(recipe.AvoidRulesJson));
         if (avoidRules.Count > 0)
             parts.Add("Avoid: " + string.Join("; ", avoidRules));
+        if (NormalizeBackground(background) == "removable")
+        {
+            parts.Add(
+                """
+                Export background requirement:
+                Place the asset on a flat, solid chroma-key magenta background using exactly #ff00ff. The same solid magenta should be visible through open holes, railings, gaps, cutouts, and transparent-looking interior spaces. Do not use checkerboards, transparency grids, white or gray faux transparency, texture, gradients, shadows, reflections, floor planes, scenery, or extra props in the background.
+                """);
+        }
+
         return string.Join("\n\n", parts);
     }
 
@@ -1588,7 +1597,9 @@ public sealed class ArtWorkflowService(
     private static string NormalizeBackground(string? value) =>
         value?.Trim().ToLowerInvariant() switch
         {
+            "removable" or "removablecolor" or "removable-color" or "transparent" or "chroma" or "chromakey" or "chroma-key" => "removable",
             "opaque" => "opaque",
+            "auto" => "auto",
             _ => "auto",
         };
 

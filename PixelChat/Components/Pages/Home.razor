@@ -163,7 +163,7 @@ else
     private string _generatePrompt = string.Empty;
     private string _negativePrompt = string.Empty;
     private string _generateSize = "auto";
-    private string _generateBackground = "auto";
+    private string _generateBackground = "removable";
     private int _generateCount = 1;
     private string _selectedRecipeText = string.Empty;
     private Guid? _editingRecipeId;
@@ -176,7 +176,7 @@ else
     private string _recipePreferredSize = "auto";
     private string _editPrompt = string.Empty;
     private string _editSize = "auto";
-    private string _editBackground = "auto";
+    private string _editBackground = "removable";
     private int _editCount = 1;
     private int _brushSize = 36;
     private string _editorTool = "mask";
@@ -192,12 +192,20 @@ else
     private bool _exportLocalAiResultAvailable;
     private bool _exportLocalAiCacheHit;
     private bool _exportRemoveBackground;
+    private bool _exportKeyCleanupInitialized;
+    private bool _exportKeyColorDetected;
+    private bool _exportCleanKeyBeforeLocalAi;
+    private bool _exportCleanKeyAfterRemoval;
     private int _exportTolerance = 24;
+    private int _exportKeyColorPixels;
+    private int _exportKeyColorRemovedPixels;
     private long _exportRequestVersion;
     private string _exportFileName = string.Empty;
     private string _exportRemovalMethod = "auto";
     private string _exportLocalAiModel = "birefnet-massive";
     private string _exportActualBackend = string.Empty;
+    private string _exportLocalAiBaseDataUrl = string.Empty;
+    private string _exportLocalAiBaseStatus = string.Empty;
     private string _exportPreviewBackground = "checkerboard";
     private string _exportAppliedMethod = string.Empty;
     private string _exportPreviewDataUrl = string.Empty;
@@ -208,6 +216,9 @@ else
     private int _exportTransparentPixels;
     private int _exportSemiTransparentPixels;
     private int _exportOpaquePixels;
+    private int _exportLocalAiBaseTransparentPixels;
+    private int _exportLocalAiBaseSemiTransparentPixels;
+    private int _exportLocalAiBaseOpaquePixels;
 
     protected override async Task OnInitializedAsync()
     {
@@ -356,6 +367,7 @@ else
                     <label>
                         <span>Background</span>
                         <select class="form-select" @bind="_generateBackground">
+                            <option value="removable">Removable color</option>
                             <option value="auto">Auto</option>
                             <option value="opaque">Opaque</option>
                         </select>
@@ -569,6 +581,7 @@ else
                             <label>
                                 <span>Background</span>
                                 <select class="form-select" @bind="_editBackground">
+                                    <option value="removable">Removable color</option>
                                     <option value="auto">Auto</option>
                                     <option value="opaque">Opaque</option>
                                 </select>
@@ -1038,6 +1051,32 @@ else
                                         }
                                     </select>
                                 </label>
+
+                                <label class="export-checkbox">
+                                    <input type="checkbox"
+                                           checked="@_exportCleanKeyBeforeLocalAi"
+                                           disabled="@(_exportProcessing && !_exportLocalAiRunning)"
+                                           @onchange="OnExportCleanKeyBeforeLocalAiChanged" />
+                                    <span>Clean key color before Local AI</span>
+                                </label>
+
+                                <label class="export-checkbox">
+                                    <input type="checkbox"
+                                           checked="@_exportCleanKeyAfterRemoval"
+                                           disabled="@(_exportProcessing && !_exportLocalAiRunning)"
+                                           @onchange="OnExportCleanKeyAfterRemovalChanged" />
+                                    <span>Clean key color after Local AI</span>
+                                </label>
+                            }
+                            else if (_exportRemoveBackground)
+                            {
+                                <label class="export-checkbox">
+                                    <input type="checkbox"
+                                           checked="@_exportCleanKeyAfterRemoval"
+                                           disabled="@_exportProcessing"
+                                           @onchange="OnExportCleanKeyAfterRemovalChanged" />
+                                    <span>Clean key color after cleanup</span>
+                                </label>
                             }
 
                             <label>
@@ -1062,6 +1101,14 @@ else
                                 {
                                     <span>@BackendLabel(_exportActualBackend)</span>
                                     <span>@(_exportLocalAiCacheHit ? "cached" : "generated")</span>
+                                }
+                                @if (_exportKeyColorDetected)
+                                {
+                                    <span>@_exportKeyColorPixels.ToString("N0", CultureInfo.InvariantCulture) key-color px</span>
+                                }
+                                @if (_exportKeyColorRemovedPixels > 0)
+                                {
+                                    <span>@_exportKeyColorRemovedPixels.ToString("N0", CultureInfo.InvariantCulture) key-color removed</span>
                                 }
                                 @if (_exportTransparentPixels > 0 || _exportSemiTransparentPixels > 0)
                                 {
@@ -1603,15 +1650,26 @@ else
         _exportLocalAiResultAvailable = false;
         _exportLocalAiCacheHit = false;
         _exportRemoveBackground = true;
+        _exportKeyCleanupInitialized = false;
+        _exportKeyColorDetected = false;
+        _exportCleanKeyBeforeLocalAi = false;
+        _exportCleanKeyAfterRemoval = false;
         _exportTolerance = 24;
+        _exportKeyColorPixels = 0;
+        _exportKeyColorRemovedPixels = 0;
         _exportRemovalMethod = "auto";
         _exportLocalAiModel = DefaultLocalAiModel();
         _exportActualBackend = string.Empty;
+        _exportLocalAiBaseDataUrl = string.Empty;
+        _exportLocalAiBaseStatus = string.Empty;
         _exportPreviewBackground = "checkerboard";
         _exportAppliedMethod = string.Empty;
         _exportTransparentPixels = 0;
         _exportSemiTransparentPixels = 0;
         _exportOpaquePixels = 0;
+        _exportLocalAiBaseTransparentPixels = 0;
+        _exportLocalAiBaseSemiTransparentPixels = 0;
+        _exportLocalAiBaseOpaquePixels = 0;
         _exportElapsed = TimeSpan.Zero;
         _exportStartedAt = null;
         _exportFileName = DefaultExportFileName(asset.FileName, asset.Label);
@@ -1632,7 +1690,7 @@ else
             _exportStatus = "Preparing fast cleanup preview...";
             StateHasChanged();
 
-            var preview = await PrepareFastExportPreviewAsync(exportAsset.DataUrl, removeBackground: true, removalMethod: "auto", operationCts.Token);
+            var preview = await PrepareFastExportPreviewAsync(exportAsset.DataUrl, removeBackground: true, removalMethod: "auto", cleanKeyColor: null, operationCts.Token);
             if (version != _exportRequestVersion)
                 return;
 
@@ -1708,6 +1766,37 @@ else
             await ShowLocalAiSelectionAsync();
     }
 
+    private async Task OnExportCleanKeyBeforeLocalAiChanged(ChangeEventArgs args)
+    {
+        if (_exportLocalAiRunning)
+            CancelExportProcessing();
+
+        _exportCleanKeyBeforeLocalAi = ReadCheckboxValue(args);
+        _exportLocalAiResultAvailable = false;
+        _exportLocalAiCacheHit = false;
+        _exportActualBackend = string.Empty;
+        _exportLocalAiBaseDataUrl = string.Empty;
+        _exportLocalAiBaseStatus = string.Empty;
+
+        if (_exportRemoveBackground && IsLocalAiRemovalMethod(_exportRemovalMethod))
+            await ShowLocalAiSelectionAsync();
+    }
+
+    private async Task OnExportCleanKeyAfterRemovalChanged(ChangeEventArgs args)
+    {
+        if (_exportLocalAiRunning)
+            CancelExportProcessing();
+
+        _exportCleanKeyAfterRemoval = ReadCheckboxValue(args);
+        if (_exportRemoveBackground && IsLocalAiRemovalMethod(_exportRemovalMethod))
+        {
+            await RefreshLocalAiPostProcessAsync();
+            return;
+        }
+
+        await RefreshExportPreviewAsync();
+    }
+
     private async Task OnExportToleranceChanged(ChangeEventArgs args)
     {
         var value = args.Value?.ToString();
@@ -1723,6 +1812,14 @@ else
         var value = args.Value?.ToString() ?? string.Empty;
         _exportFileName = string.IsNullOrWhiteSpace(value) ? _exportFileName : CleanExportFileName(value);
     }
+
+    private static bool ReadCheckboxValue(ChangeEventArgs args) =>
+        args.Value switch
+        {
+            bool value => value,
+            string value when bool.TryParse(value, out var parsed) => parsed,
+            _ => false,
+        };
 
     private void SetExportPreviewBackground(string background)
     {
@@ -1746,6 +1843,8 @@ else
         _exportLocalAiResultAvailable = false;
         _exportLocalAiCacheHit = false;
         _exportActualBackend = string.Empty;
+        _exportLocalAiBaseDataUrl = string.Empty;
+        _exportLocalAiBaseStatus = string.Empty;
         _exportError = null;
         _exportStatus = _exportRemoveBackground ? "Removing background..." : "Preparing PNG preview...";
         StateHasChanged();
@@ -1756,6 +1855,7 @@ else
                 asset.DataUrl,
                 _exportRemoveBackground,
                 _exportRemoveBackground ? _exportRemovalMethod : "auto",
+                _exportRemoveBackground ? _exportCleanKeyAfterRemoval : false,
                 operationCts.Token);
             if (version != _exportRequestVersion)
                 return;
@@ -1790,6 +1890,7 @@ else
         string dataUrl,
         bool? removeBackground,
         string removalMethod,
+        bool? cleanKeyColor,
         CancellationToken cancellationToken)
     {
         var module = await EnsurePageModuleAsync();
@@ -1799,7 +1900,21 @@ else
             dataUrl,
             _exportTolerance,
             removeBackground,
-            removalMethod);
+            removalMethod,
+            cleanKeyColor);
+    }
+
+    private async Task<ExportKeyCleanupResult> PrepareKeyColorCleanupPreviewAsync(
+        string dataUrl,
+        bool cleanKeyColor,
+        CancellationToken cancellationToken)
+    {
+        var module = await EnsurePageModuleAsync();
+        return await module.InvokeAsync<ExportKeyCleanupResult>(
+            "prepareKeyColorCleanupPreview",
+            cancellationToken,
+            dataUrl,
+            cleanKeyColor);
     }
 
     private async Task ShowLocalAiSelectionAsync()
@@ -1814,6 +1929,8 @@ else
         _exportLocalAiResultAvailable = false;
         _exportLocalAiCacheHit = false;
         _exportActualBackend = string.Empty;
+        _exportLocalAiBaseDataUrl = string.Empty;
+        _exportLocalAiBaseStatus = string.Empty;
         _exportError = null;
         _exportStatus = $"Checking Local AI cache for {LocalAiModelLabel(_exportLocalAiModel)}...";
         StateHasChanged();
@@ -1834,7 +1951,10 @@ else
                 return;
             }
 
-            ApplyLocalAiCachePreview(cache, $"Cached Local AI result loaded for {LocalAiModelLabel(cache.ModelName)} using {BackendLabel(cache.ActualBackend)}.");
+            await ApplyLocalAiCachePreviewAsync(
+                cache,
+                $"Cached Local AI result loaded for {LocalAiModelLabel(cache.ModelName)} using {BackendLabel(cache.ActualBackend)}.",
+                operationCts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -1868,6 +1988,15 @@ else
         _exportTransparentPixels = preview.TransparentPixels;
         _exportSemiTransparentPixels = preview.SemiTransparentPixels;
         _exportOpaquePixels = preview.OpaquePixels;
+        _exportKeyColorDetected = preview.KeyColorDetected;
+        _exportKeyColorPixels = preview.KeyColorPixels;
+        _exportKeyColorRemovedPixels = preview.KeyColorRemovedPixels;
+        if (!_exportKeyCleanupInitialized)
+        {
+            _exportCleanKeyBeforeLocalAi = preview.KeyColorDetected;
+            _exportCleanKeyAfterRemoval = preview.KeyColorDetected;
+            _exportKeyCleanupInitialized = true;
+        }
     }
 
     private async Task StartLocalAiExportAsync(bool force)
@@ -1898,12 +2027,27 @@ else
                 if (cache is not null)
                 {
                     if (version == _exportRequestVersion)
-                        ApplyLocalAiCachePreview(cache, $"Cached Local AI result loaded for {LocalAiModelLabel(cache.ModelName)} using {BackendLabel(cache.ActualBackend)}.");
+                        await ApplyLocalAiCachePreviewAsync(
+                            cache,
+                            $"Cached Local AI result loaded for {LocalAiModelLabel(cache.ModelName)} using {BackendLabel(cache.ActualBackend)}.",
+                            operationCts.Token);
                     return;
                 }
             }
 
-            var parsed = DataUrl.Parse(asset.DataUrl);
+            var localAiInputDataUrl = asset.DataUrl;
+            if (_exportCleanKeyBeforeLocalAi)
+            {
+                _exportStatus = "Cleaning key color before Local AI...";
+                StateHasChanged();
+                var cleanedInput = await PrepareKeyColorCleanupPreviewAsync(asset.DataUrl, cleanKeyColor: true, operationCts.Token);
+                localAiInputDataUrl = cleanedInput.DataUrl;
+                _exportKeyColorDetected = _exportKeyColorDetected || cleanedInput.KeyColorDetected || cleanedInput.KeyColorRemovedPixels > 0;
+                _exportKeyColorPixels = Math.Max(_exportKeyColorPixels, cleanedInput.KeyColorPixels);
+                _exportKeyColorRemovedPixels = cleanedInput.KeyColorRemovedPixels;
+            }
+
+            var parsed = DataUrl.Parse(localAiInputDataUrl);
             var progress = new Progress<BackgroundRemovalProgress>(update =>
             {
                 if (version != _exportRequestVersion)
@@ -1946,7 +2090,7 @@ else
             if (version != _exportRequestVersion)
                 return;
 
-            ApplyLocalAiCachePreview(cacheView, result.Message);
+            await ApplyLocalAiCachePreviewAsync(cacheView, result.Message, operationCts.Token);
             _exportLocalAiCacheHit = false;
             _exportElapsed = result.Elapsed;
         }
@@ -1976,18 +2120,94 @@ else
         }
     }
 
-    private void ApplyLocalAiCachePreview(BackgroundRemovalExportCacheView cache, string message)
+    private async Task ApplyLocalAiCachePreviewAsync(
+        BackgroundRemovalExportCacheView cache,
+        string message,
+        CancellationToken cancellationToken)
     {
-        _exportPreviewDataUrl = cache.DataUrl;
-        _exportStatus = message;
+        _exportLocalAiBaseDataUrl = cache.DataUrl;
+        _exportLocalAiBaseStatus = message;
+        _exportLocalAiBaseTransparentPixels = cache.TransparentPixels;
+        _exportLocalAiBaseSemiTransparentPixels = cache.SemiTransparentPixels;
+        _exportLocalAiBaseOpaquePixels = cache.OpaquePixels;
         _exportAppliedMethod = cache.RemovalMethod;
-        _exportTransparentPixels = cache.TransparentPixels;
-        _exportSemiTransparentPixels = cache.SemiTransparentPixels;
-        _exportOpaquePixels = cache.OpaquePixels;
         _exportLocalAiResultAvailable = true;
         _exportLocalAiCacheHit = true;
         _exportActualBackend = cache.ActualBackend;
         _exportLocalAiModel = NormalizeLocalAiModel(cache.ModelName);
+
+        await ApplyLocalAiBasePreviewAsync(cancellationToken);
+    }
+
+    private async Task ApplyLocalAiBasePreviewAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_exportLocalAiBaseDataUrl))
+            return;
+
+        _exportAppliedMethod = "local-ai";
+        _exportLocalAiResultAvailable = true;
+        if (_exportCleanKeyAfterRemoval)
+        {
+            var cleaned = await PrepareKeyColorCleanupPreviewAsync(_exportLocalAiBaseDataUrl, cleanKeyColor: true, cancellationToken);
+            _exportPreviewDataUrl = cleaned.DataUrl;
+            _exportStatus = AppendKeyCleanupMessage(_exportLocalAiBaseStatus, cleaned);
+            _exportTransparentPixels = cleaned.TransparentPixels;
+            _exportSemiTransparentPixels = cleaned.SemiTransparentPixels;
+            _exportOpaquePixels = cleaned.OpaquePixels;
+            _exportKeyColorDetected = _exportKeyColorDetected || cleaned.KeyColorDetected || cleaned.KeyColorRemovedPixels > 0;
+            _exportKeyColorPixels = Math.Max(_exportKeyColorPixels, cleaned.KeyColorPixels);
+            _exportKeyColorRemovedPixels = cleaned.KeyColorRemovedPixels;
+            return;
+        }
+
+        _exportPreviewDataUrl = _exportLocalAiBaseDataUrl;
+        _exportStatus = _exportLocalAiBaseStatus;
+        _exportTransparentPixels = _exportLocalAiBaseTransparentPixels;
+        _exportSemiTransparentPixels = _exportLocalAiBaseSemiTransparentPixels;
+        _exportOpaquePixels = _exportLocalAiBaseOpaquePixels;
+        _exportKeyColorRemovedPixels = 0;
+    }
+
+    private async Task RefreshLocalAiPostProcessAsync()
+    {
+        if (!_exportModalOpen || !_exportLocalAiResultAvailable || string.IsNullOrWhiteSpace(_exportLocalAiBaseDataUrl))
+            return;
+
+        var version = ++_exportRequestVersion;
+        var operationCts = BeginExportOperation();
+        _exportProcessing = true;
+        _exportError = null;
+        _exportStatus = _exportCleanKeyAfterRemoval ? "Applying key color cleanup..." : "Restoring cached Local AI preview...";
+        StateHasChanged();
+
+        try
+        {
+            await ApplyLocalAiBasePreviewAsync(operationCts.Token);
+            if (version != _exportRequestVersion)
+                return;
+        }
+        catch (OperationCanceledException)
+        {
+            if (version == _exportRequestVersion)
+                _exportStatus = "Export cancelled.";
+        }
+        catch (Exception ex)
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportError = ex.Message;
+                _exportStatus = string.Empty;
+            }
+        }
+        finally
+        {
+            if (version == _exportRequestVersion)
+            {
+                _exportProcessing = false;
+                CompleteExportOperation(operationCts);
+                StateHasChanged();
+            }
+        }
     }
 
     private async Task DownloadExportAsync()
@@ -2091,11 +2311,22 @@ else
         _exportStatus = string.Empty;
         _exportError = null;
         _exportRemoveBackground = false;
+        _exportKeyCleanupInitialized = false;
+        _exportKeyColorDetected = false;
+        _exportCleanKeyBeforeLocalAi = false;
+        _exportCleanKeyAfterRemoval = false;
+        _exportKeyColorPixels = 0;
+        _exportKeyColorRemovedPixels = 0;
+        _exportLocalAiBaseDataUrl = string.Empty;
+        _exportLocalAiBaseStatus = string.Empty;
         _exportElapsed = TimeSpan.Zero;
         _exportStartedAt = null;
         _exportTransparentPixels = 0;
         _exportSemiTransparentPixels = 0;
         _exportOpaquePixels = 0;
+        _exportLocalAiBaseTransparentPixels = 0;
+        _exportLocalAiBaseSemiTransparentPixels = 0;
+        _exportLocalAiBaseOpaquePixels = 0;
     }
 
     private bool CanDownloadExport()
@@ -2117,7 +2348,16 @@ else
             LocalAiOptionsHash());
 
     private string LocalAiOptionsHash() =>
-        "rembg-cli-default-alpha-thresholds-v1";
+        $"rembg-cli-default-alpha-thresholds-v1;pre-key-magenta={_exportCleanKeyBeforeLocalAi.ToString().ToLowerInvariant()}";
+
+    private static string AppendKeyCleanupMessage(string message, ExportKeyCleanupResult cleaned)
+    {
+        if (cleaned.KeyColorRemovedPixels <= 0)
+            return message;
+
+        var baseMessage = string.IsNullOrWhiteSpace(message) ? "Local AI background removed." : message.Trim();
+        return $"{baseMessage} Key color cleanup removed {cleaned.KeyColorRemovedPixels.ToString("N0", CultureInfo.InvariantCulture)} magenta px.";
+    }
 
     private IReadOnlyList<string> LocalAiModelOptions()
     {
@@ -2854,7 +3094,8 @@ else
     private static string NormalizeDraftBackground(string? background, string current) =>
         background?.Trim().ToLowerInvariant() switch
         {
-            "transparent" => "auto",
+            "transparent" => "removable",
+            "removable" or "removablecolor" or "removable-color" or "chroma" or "chromakey" or "chroma-key" => "removable",
             "opaque" => "opaque",
             "auto" => "auto",
             _ => current,
@@ -2895,6 +3136,7 @@ else
     private static string BackgroundLabel(string background) =>
         background.Trim().ToLowerInvariant() switch
         {
+            "removable" or "transparent" => "Removable color",
             "opaque" => "Opaque background",
             _ => "Auto background",
         };
@@ -3044,7 +3286,21 @@ else
         string Method,
         int TransparentPixels,
         int SemiTransparentPixels,
-        int OpaquePixels);
+        int OpaquePixels,
+        bool KeyColorDetected,
+        int KeyColorPixels,
+        int KeyColorRemovedPixels);
+
+    private sealed record ExportKeyCleanupResult(
+        string DataUrl,
+        string Message,
+        string Method,
+        int TransparentPixels,
+        int SemiTransparentPixels,
+        int OpaquePixels,
+        bool KeyColorDetected,
+        int KeyColorPixels,
+        int KeyColorRemovedPixels);
 
     private sealed record ExportAlphaStats(
         int TransparentPixels,

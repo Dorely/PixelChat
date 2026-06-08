@@ -642,6 +642,7 @@ public sealed class OpenAIAccountImageProvider(
         value?.Trim().ToLowerInvariant() switch
         {
             "opaque" => "opaque",
+            "removable" or "removablecolor" or "removable-color" or "transparent" or "chroma" or "chromakey" or "chroma-key" => "opaque",
             _ => "auto",
         };
 
