@@ -85,6 +85,36 @@ public sealed record BackgroundRemovalExportCacheView(
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
+public sealed record SaveExportStepCacheRequest(
+    int StepIndex,
+    string ParentImageSha256,
+    string Method,
+    string OptionsHash,
+    string ModelName,
+    string ActualBackend,
+    string ContentType,
+    byte[] Data,
+    int? Width,
+    int? Height);
+
+public sealed record ExportStepCacheView(
+    Guid Id,
+    Guid AssetId,
+    string SourceImageSha256,
+    int StepIndex,
+    string ParentImageSha256,
+    string OutputImageSha256,
+    string Method,
+    string OptionsHash,
+    string ModelName,
+    string ActualBackend,
+    string ContentType,
+    string DataUrl,
+    int? Width,
+    int? Height,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
 public sealed record GenerationBatchView(
     Guid Id,
     string Label,

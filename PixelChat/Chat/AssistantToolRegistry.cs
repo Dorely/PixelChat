@@ -80,7 +80,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         AIFunctionFactory.Create(
             method: (Guid assetId) => ExportAssetAsync(projectId, assetId),
             name: "export_asset",
-            description: "Prepare an existing asset for export by identifying it for the visible export modal. The modal opens with Fast cleanup and can apply magenta key-color cleanup; the user still controls browser download and can manually start cached Local AI background removal for difficult backgrounds."),
+            description: "Prepare an existing asset for export by identifying it for the visible export modal. Export uses a persisted applied-step stack: the user can apply fast cleanup, key-color cleanup, and Local AI in sequence, reset to the original image, then download the current PNG."),
     ];
 
     public bool IsWorkspaceMutation(string toolName) => WorkspaceMutationTools.Contains(toolName);

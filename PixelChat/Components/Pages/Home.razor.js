@@ -150,6 +150,8 @@ export async function prepareExportPreview(imageUrl, tolerance, removeBackground
         KeyColorDetected: keyAnalysis.detected,
         KeyColorPixels: keyAnalysis.candidatePixels,
         KeyColorRemovedPixels: keyResult.removedPixels,
+        Width: canvas.width,
+        Height: canvas.height,
     };
 }
 
@@ -168,6 +170,8 @@ export async function analyzePngAlpha(imageUrl) {
         TransparentPixels: stats.transparent,
         SemiTransparentPixels: stats.semiTransparent,
         OpaquePixels: stats.opaque,
+        Width: canvas.width,
+        Height: canvas.height,
     };
 }
 
@@ -200,6 +204,8 @@ export async function prepareKeyColorCleanupPreview(imageUrl, cleanKeyColor) {
         KeyColorDetected: keyAnalysis.detected,
         KeyColorPixels: keyAnalysis.candidatePixels,
         KeyColorRemovedPixels: keyResult.removedPixels,
+        Width: canvas.width,
+        Height: canvas.height,
     };
 }
 

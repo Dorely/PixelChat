@@ -205,6 +205,105 @@ public sealed class ArtWorkflowService(
         return BackgroundRemovalCacheView(cache);
     }
 
+    public async Task<IReadOnlyList<ExportStepCacheView>> GetExportStepCacheAsync(
+        Guid projectId,
+        Guid assetId,
+        CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+        var sourceHash = Sha256Hex(asset.Data);
+
+        var steps = await db.ExportStepCaches
+            .AsNoTracking()
+            .Where(step =>
+                step.ProjectId == projectId
+                && step.AssetId == assetId
+                && step.SourceImageSha256 == sourceHash)
+            .OrderBy(step => step.StepIndex)
+            .ToListAsync(cancellationToken);
+
+        return steps.Select(ExportStepCacheView).ToList();
+    }
+
+    public async Task<ExportStepCacheView> SaveExportStepCacheAsync(
+        Guid projectId,
+        Guid assetId,
+        SaveExportStepCacheRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+        if (request.StepIndex < 0)
+            throw new InvalidOperationException("Export step index must be zero or greater.");
+        if (request.Data.Length == 0)
+            throw new InvalidOperationException("Export step PNG data is required.");
+
+        var sourceHash = Sha256Hex(asset.Data);
+        var now = DateTime.UtcNow;
+
+        var existingTail = await db.ExportStepCaches
+            .Where(step =>
+                step.ProjectId == projectId
+                && step.AssetId == assetId
+                && step.SourceImageSha256 == sourceHash
+                && step.StepIndex >= request.StepIndex)
+            .ToListAsync(cancellationToken);
+        if (existingTail.Count > 0)
+            db.ExportStepCaches.RemoveRange(existingTail);
+
+        var step = new ExportStepCache
+        {
+            ProjectId = projectId,
+            AssetId = assetId,
+            SourceImageSha256 = sourceHash,
+            StepIndex = request.StepIndex,
+            ParentImageSha256 = NormalizeCacheString(request.ParentImageSha256, Sha256Hex(asset.Data)),
+            OutputImageSha256 = Sha256Hex(request.Data),
+            Method = NormalizeCacheString(request.Method, "unknown"),
+            OptionsHash = NormalizeCacheString(request.OptionsHash, "default"),
+            ModelName = NormalizeCacheString(request.ModelName, string.Empty),
+            ActualBackend = NormalizeCacheString(request.ActualBackend, string.Empty),
+            ContentType = string.IsNullOrWhiteSpace(request.ContentType) ? "image/png" : request.ContentType.Trim(),
+            Data = request.Data,
+            Width = request.Width,
+            Height = request.Height,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        await db.ExportStepCaches.AddAsync(step, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return ExportStepCacheView(step);
+    }
+
+    public async Task ClearExportStepCacheAsync(
+        Guid projectId,
+        Guid assetId,
+        CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+        var sourceHash = Sha256Hex(asset.Data);
+
+        var steps = await db.ExportStepCaches
+            .Where(step =>
+                step.ProjectId == projectId
+                && step.AssetId == assetId
+                && step.SourceImageSha256 == sourceHash)
+            .ToListAsync(cancellationToken);
+        if (steps.Count == 0)
+            return;
+
+        db.ExportStepCaches.RemoveRange(steps);
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task SetWorkspaceModeAsync(Guid projectId, WorkspaceMode mode, CancellationToken cancellationToken = default)
     {
         var project = await GetProjectAsync(projectId, cancellationToken);
@@ -1499,6 +1598,25 @@ public sealed class ArtWorkflowService(
             cache.ActualBackend,
             cache.CreatedAt,
             cache.UpdatedAt);
+
+    private static ExportStepCacheView ExportStepCacheView(ExportStepCache step) =>
+        new(
+            step.Id,
+            step.AssetId,
+            step.SourceImageSha256,
+            step.StepIndex,
+            step.ParentImageSha256,
+            step.OutputImageSha256,
+            step.Method,
+            step.OptionsHash,
+            step.ModelName,
+            step.ActualBackend,
+            step.ContentType,
+            DataUrl.ToDataUrl(step.ContentType, step.Data),
+            step.Width,
+            step.Height,
+            step.CreatedAt,
+            step.UpdatedAt);
 
     private static BackgroundRemovalExportCacheRequest NormalizeBackgroundRemovalCacheRequest(BackgroundRemovalExportCacheRequest request) =>
         new(

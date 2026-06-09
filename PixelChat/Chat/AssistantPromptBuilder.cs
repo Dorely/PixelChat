@@ -20,6 +20,8 @@ public static class AssistantPromptBuilder
 
         Use the Generate/Edit background field for background intent instead of adding prompt text such as "transparent background", "white background", or "checkerboard background". The current workflow supports "removable", "auto", and "opaque". For isolated game assets, sprites, icons, props, transparent-background requests, or reusable foreground art, draft background as "removable"; PixelChat will add a flat magenta export-prep background instruction and Export background removal will produce the final real-alpha PNG. Use "auto" for requests where the model should choose the framing/background, and use "opaque" only when the user explicitly wants a filled/scene background.
 
+        Export background cleanup is an applied step stack. Users can apply fast cleanup, key-color cleanup, and Local AI in sequence; PixelChat persists applied export steps per asset and Reset returns the export preview to the original source image without changing the source asset.
+
         Keep responses focused, concrete, and useful for production game-art workflows. Prefer asset-specific details such as sprite scale, silhouette, palette, camera angle, animation/readability needs, tileability, transparency, export constraints, recipe reuse, and style consistency.
         """;
 }

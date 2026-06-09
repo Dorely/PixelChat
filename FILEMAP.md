@@ -51,7 +51,7 @@
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, export cache, streaming compare batches, masks, recipe CRUD, chat attachments, import, crop, generation prompt assembly, and masked edits. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, export/step caches, streaming compare batches, masks, recipe CRUD, chat attachments, import, crop, generation prompt assembly, and masked edits. |
 | `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench, recipe management, and assistant tools. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns background generation, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
@@ -90,7 +90,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat attachments, Generate/Compare/Edit/Recipes/Assets tabs, canvas helpers, and export modal processing with cached Local AI, key-color cleanup, and fast cleanup. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat attachments, Generate/Compare/Edit/Recipes/Assets tabs, canvas helpers, and export step-stack processing with Local AI, key-color cleanup, and fast cleanup. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, defaults, API-key updates, and child model rows. |
@@ -117,6 +117,7 @@
 | `Project.cs` | EF entity for art workbench projects, active batch, and active workspace mode including the Assets tab. |
 | `ArtAsset.cs` | EF entity for imported, generated, edited, and cropped image BLOBs plus lineage, favorite flag, prompt, and metadata. |
 | `BackgroundRemovalExportCache.cs` | EF entity for cached Local AI export PNGs keyed by source asset bytes, model, rembg version, and processing options. |
+| `ExportStepCache.cs` | EF entity for persisted applied export-step PNGs per source asset and source image hash. |
 | `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, output errors, lineage, and status. |
 | `PromptRecipe.cs` | EF entity for reusable visible prompt templates, style/avoid rules, examples, and preferred defaults. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets. |
@@ -132,7 +133,7 @@
 
 | File | Description |
 |------|-------------|
-| `AppDbContext.cs` | EF Core context for providers, OAuth metadata, stored secrets, assistant transcripts, projects, assets, export caches, batches, recipes, masks, and context chips. |
+| `AppDbContext.cs` | EF Core context for providers, OAuth metadata, stored secrets, assistant transcripts, projects, assets, export caches/step caches, batches, recipes, masks, and context chips. |
 | `DatabaseMigrationBootstrapper.cs` | Migration bootstrapper that clears stale SQLite migration locks before running EF migrations. |
 | `PersistenceServiceCollectionExtensions.cs` | DI extension that wires `AppDbContext` to SQLite from configuration. |
 | `SqliteConnectionSettings.cs` | SQLite connection-string builder and PRAGMA setup for busy timeout and WAL mode. |
@@ -147,6 +148,7 @@
 | `20260605194957_GenerationBatchBackground.cs` / `.Designer.cs` | EF migration adding generation batch background mode with `auto` as the existing-row default. |
 | `20260605214431_GenerationOutputStates.cs` / `.Designer.cs` | EF migration adding per-output generation state JSON for progress, retries, and structured failures. |
 | `20260608210339_BackgroundRemovalExportCache.cs` / `.Designer.cs` | EF migration adding persistent Local AI export PNG cache records and cache-key indexes. |
+| `20260608232906_ExportStepCache.cs` / `.Designer.cs` | EF migration adding persisted applied export-step PNG cache records and indexes. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

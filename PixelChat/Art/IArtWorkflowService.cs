@@ -10,6 +10,9 @@ public interface IArtWorkflowService
     Task<ArtAssetExportView> GetAssetForExportAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, BackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
     Task<BackgroundRemovalExportCacheView> SaveBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, SaveBackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ExportStepCacheView>> GetExportStepCacheAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
+    Task<ExportStepCacheView> SaveExportStepCacheAsync(Guid projectId, Guid assetId, SaveExportStepCacheRequest request, CancellationToken cancellationToken = default);
+    Task ClearExportStepCacheAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task SetWorkspaceModeAsync(Guid projectId, WorkspaceMode mode, CancellationToken cancellationToken = default);
     Task SelectBatchAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
     Task<GenerationBatchView> StartGenerateImagesAsync(Guid projectId, GenerateImagesRequest request, CancellationToken cancellationToken = default);

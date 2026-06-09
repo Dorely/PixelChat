@@ -14,6 +14,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<ArtAsset> ArtAssets => Set<ArtAsset>();
     public DbSet<BackgroundRemovalExportCache> BackgroundRemovalExportCaches => Set<BackgroundRemovalExportCache>();
+    public DbSet<ExportStepCache> ExportStepCaches => Set<ExportStepCache>();
     public DbSet<GenerationBatch> GenerationBatches => Set<GenerationBatch>();
     public DbSet<PromptRecipe> PromptRecipes => Set<PromptRecipe>();
     public DbSet<ImageMask> ImageMasks => Set<ImageMask>();
@@ -138,6 +139,18 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 e.AlphaMatting,
                 e.OptionsHash,
             }).IsUnique();
+
+            entity.HasOne(e => e.Asset)
+                .WithMany()
+                .HasForeignKey(e => e.AssetId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ExportStepCache>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.AssetId, e.SourceImageSha256, e.StepIndex }).IsUnique();
+            entity.HasIndex(e => new { e.ProjectId, e.AssetId, e.SourceImageSha256 });
+            entity.HasIndex(e => e.OutputImageSha256);
 
             entity.HasOne(e => e.Asset)
                 .WithMany()
