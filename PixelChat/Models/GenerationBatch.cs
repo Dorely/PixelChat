@@ -18,6 +18,10 @@ public class GenerationBatch
     public int Count { get; set; }
     public string InputAssetIdsJson { get; set; } = "[]";
     public string InputMaskIdsJson { get; set; } = "[]";
+    public string? EditSourceContentType { get; set; }
+    public byte[]? EditSourceData { get; set; }
+    public int? EditSourceWidth { get; set; }
+    public int? EditSourceHeight { get; set; }
     public Guid? ParentBatchId { get; set; }
     public GenerationBatch? ParentBatch { get; set; }
     public ICollection<GenerationBatch> ChildBatches { get; set; } = [];

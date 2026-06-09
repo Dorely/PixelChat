@@ -13,6 +13,12 @@ public sealed class ImageGenerationRuntime(
 
     public event EventHandler? StateChanged;
 
+    private enum RuntimeBatchKind
+    {
+        Generate,
+        Edit
+    }
+
     public ImageGenerationRuntimeSnapshot GetSnapshot()
     {
         lock (_lock)
@@ -55,7 +61,37 @@ public sealed class ImageGenerationRuntime(
         }
         NotifyStateChanged();
 
-        _ = Task.Run(() => RunGenerationBatchAsync(projectId, batch.Id, batch.Count));
+        _ = Task.Run(() => RunGenerationBatchAsync(projectId, batch.Id, batch.Count, RuntimeBatchKind.Generate));
+        return batch;
+    }
+
+    public async Task<GenerationBatchView> StartEditImageAsync(
+        Guid projectId,
+        EditImageRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (HasRunningBatch(projectId))
+            throw new InvalidOperationException("An image generation batch is already running for this project.");
+
+        GenerationBatchView batch;
+        await using (var scope = scopeFactory.CreateAsyncScope())
+        {
+            var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
+            batch = await workflow.StartEditImageAsync(projectId, request, cancellationToken);
+        }
+
+        var runtimeBatch = new ImageGenerationBatchRuntimeView(
+            projectId,
+            batch.Id,
+            IsRunning: true,
+            batch.OutputStates.Select(ToRuntimeOutput).ToList());
+        lock (_lock)
+        {
+            _batches[batch.Id] = runtimeBatch;
+        }
+        NotifyStateChanged();
+
+        _ = Task.Run(() => RunGenerationBatchAsync(projectId, batch.Id, batch.Count, RuntimeBatchKind.Edit));
         return batch;
     }
 
@@ -67,7 +103,7 @@ public sealed class ImageGenerationRuntime(
         NotifyStateChanged();
     }
 
-    private async Task RunGenerationBatchAsync(Guid projectId, Guid batchId, int count)
+    private async Task RunGenerationBatchAsync(Guid projectId, Guid batchId, int count, RuntimeBatchKind kind)
     {
         var parallelLimit = Math.Clamp(imageOptions.Value.MaxParallelRequests, 1, Math.Max(1, imageOptions.Value.MaxOutputs));
         logger.LogDebug(
@@ -79,7 +115,7 @@ public sealed class ImageGenerationRuntime(
 
         using var throttler = new SemaphoreSlim(parallelLimit, parallelLimit);
         var tasks = Enumerable.Range(0, count)
-            .Select(outputIndex => RunGenerationOutputAsync(projectId, batchId, outputIndex, throttler))
+            .Select(outputIndex => RunGenerationOutputAsync(projectId, batchId, outputIndex, throttler, kind))
             .ToArray();
 
         try
@@ -99,12 +135,12 @@ public sealed class ImageGenerationRuntime(
         }
     }
 
-    private async Task RunGenerationOutputAsync(Guid projectId, Guid batchId, int outputIndex, SemaphoreSlim throttler)
+    private async Task RunGenerationOutputAsync(Guid projectId, Guid batchId, int outputIndex, SemaphoreSlim throttler, RuntimeBatchKind kind)
     {
         await throttler.WaitAsync();
         try
         {
-            var finalError = await GenerateBatchOutputWithRetriesAsync(projectId, batchId, outputIndex);
+            var finalError = await GenerateBatchOutputWithRetriesAsync(projectId, batchId, outputIndex, kind);
             if (finalError is null)
                 return;
 
@@ -122,7 +158,7 @@ public sealed class ImageGenerationRuntime(
         }
     }
 
-    private async Task<Exception?> GenerateBatchOutputWithRetriesAsync(Guid projectId, Guid batchId, int outputIndex)
+    private async Task<Exception?> GenerateBatchOutputWithRetriesAsync(Guid projectId, Guid batchId, int outputIndex, RuntimeBatchKind kind)
     {
         var maxAttempts = Math.Clamp(imageOptions.Value.MaxRequestAttempts, 1, 10);
         Exception? finalError = null;
@@ -143,7 +179,10 @@ public sealed class ImageGenerationRuntime(
                 var progress = new ActionProgress(update => HandleProviderProgress(projectId, batchId, outputIndex, attempt, update));
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
-                await workflow.GenerateBatchOutputAsync(projectId, batchId, outputIndex, CancellationToken.None, progress);
+                if (kind == RuntimeBatchKind.Edit)
+                    await workflow.GenerateEditBatchOutputAsync(projectId, batchId, outputIndex, CancellationToken.None, progress);
+                else
+                    await workflow.GenerateBatchOutputAsync(projectId, batchId, outputIndex, CancellationToken.None, progress);
 
                 await PersistOutputStateAsync(projectId, batchId, new GenerationOutputStateView(
                     outputIndex,

@@ -17,13 +17,14 @@ public interface IArtWorkflowService
     Task SelectBatchAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
     Task<GenerationBatchView> StartGenerateImagesAsync(Guid projectId, GenerateImagesRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> GenerateBatchOutputAsync(Guid projectId, Guid batchId, int outputIndex, CancellationToken cancellationToken = default, IProgress<ImageProviderProgress>? progress = null);
+    Task<GenerationBatchView> StartEditImageAsync(Guid projectId, EditImageRequest request, CancellationToken cancellationToken = default);
+    Task<ArtAssetView> GenerateEditBatchOutputAsync(Guid projectId, Guid batchId, int outputIndex, CancellationToken cancellationToken = default, IProgress<ImageProviderProgress>? progress = null);
     Task MarkGenerationBatchOutputStateAsync(Guid projectId, Guid batchId, GenerationOutputStateView outputState, CancellationToken cancellationToken = default);
     Task MarkGenerationBatchOutputFailedAsync(Guid projectId, Guid batchId, int outputIndex, string error, CancellationToken cancellationToken = default);
     Task MarkGenerationBatchOutputFailedAsync(Guid projectId, Guid batchId, GenerationOutputErrorView outputError, CancellationToken cancellationToken = default);
     Task<GenerationBatchView> CompleteGenerationBatchAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
     Task ReconcileInterruptedGenerationBatchesAsync(CancellationToken cancellationToken = default);
     Task<GenerationBatchView> GenerateImagesAsync(Guid projectId, GenerateImagesRequest request, CancellationToken cancellationToken = default);
-    Task<GenerationBatchView> EditImageAsync(Guid projectId, EditImageRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> ImportAssetAsync(Guid projectId, ImportAssetRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> CreateCropAssetAsync(Guid projectId, CropAssetRequest request, CancellationToken cancellationToken = default);
     Task<ImageMaskView> UpsertAssetMaskAsync(Guid projectId, Guid assetId, string maskDataUrl, string label, CancellationToken cancellationToken = default);

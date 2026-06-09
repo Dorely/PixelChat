@@ -587,7 +587,7 @@ else
                             </label>
                         </div>
                         <button type="button" class="btn btn-primary"
-                                disabled="@(!_workbench!.ImageProviderStatus.Connected || string.IsNullOrWhiteSpace(_editPrompt))"
+                                disabled="@(!CanEditImage)"
                                 @onclick="EditImageAsync">
                             Send Edit
                         </button>
@@ -1489,10 +1489,13 @@ else
     private async Task EditImageAsync()
     {
         var asset = CurrentEditAsset();
-        if (_workbench is null || asset is null || _editorModule is null || string.IsNullOrWhiteSpace(_editPrompt))
+        if (_workbench is null || asset is null || _editorModule is null || !CanEditImage)
             return;
 
-        await RunWorkflowAsync("Sending edit...", async () =>
+        _busyText = "Starting edit...";
+        _error = null;
+        StateHasChanged();
+        try
         {
             var hasPaint = await _editorModule.InvokeAsync<bool>("hasMaskPaint", _editorCanvas);
             if (hasPaint)
@@ -1504,7 +1507,8 @@ else
             var maskDataUrl = hasPaint
                 ? await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas)
                 : null;
-            await Workflow.EditImageAsync(_workbench.Project.Id, new EditImageRequest(
+            var projectId = _workbench.Project.Id;
+            var batch = await ImageRuntime.StartEditImageAsync(projectId, new EditImageRequest(
                 asset.Id,
                 _editPrompt,
                 _editSize,
@@ -1513,7 +1517,29 @@ else
                 sourceDataUrl,
                 maskDataUrl,
                 CurrentReferenceAssetIds().Where(id => id != asset.Id).ToList()));
-        });
+            await ReloadWorkbenchAsync();
+            Logger.LogDebug(
+                "Image edit background batch scheduled: projectId={ProjectId}, batchId={BatchId}, sourceAssetId={SourceAssetId}, count={Count}, size={Size}, promptChars={PromptChars}, referenceImages={ReferenceImageCount}, hasMask={HasMask}",
+                projectId,
+                batch.Id,
+                asset.Id,
+                batch.Count,
+                batch.Size,
+                _editPrompt.Trim().Length,
+                CurrentReferenceAssetIds().Count(id => id != asset.Id),
+                hasPaint);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Image edit batch setup failed.");
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busyText = string.Empty;
+            _loadedEditorAssetId = null;
+            StateHasChanged();
+        }
     }
 
     private async Task AttachAssetAsync(ArtAssetView asset)
@@ -3001,6 +3027,15 @@ else
         !string.IsNullOrWhiteSpace(_generatePrompt)
         && string.IsNullOrWhiteSpace(_busyText)
         && _workbench is not null
+        && !ImageRuntime.HasRunningBatch(_workbench.Project.Id);
+
+    private bool CanEditImage =>
+        !string.IsNullOrWhiteSpace(_editPrompt)
+        && string.IsNullOrWhiteSpace(_busyText)
+        && _workbench is not null
+        && _workbench.ImageProviderStatus.Connected
+        && CurrentEditAsset() is not null
+        && _editorModule is not null
         && !ImageRuntime.HasRunningBatch(_workbench.Project.Id);
 
     private bool CanSaveRecipe =>

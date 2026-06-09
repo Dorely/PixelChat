@@ -49,32 +49,40 @@ public sealed class ArtWorkflowService(
     public async Task<WorkbenchView> GetWorkbenchAsync(Guid? projectId = null, CancellationToken cancellationToken = default)
     {
         var selected = projectId is Guid id
-            ? await db.Projects.FirstOrDefaultAsync(p => p.Id == id, cancellationToken)
+            ? await db.Projects.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, cancellationToken)
             : null;
         if (selected is null)
         {
             var defaultProject = await EnsureDefaultProjectAsync(cancellationToken);
-            selected = await db.Projects.FirstAsync(p => p.Id == defaultProject.Id, cancellationToken);
+            selected = await db.Projects.AsNoTracking().FirstAsync(p => p.Id == defaultProject.Id, cancellationToken);
         }
 
-        var projects = await db.Projects.OrderBy(p => p.CreatedAt).ToListAsync(cancellationToken);
+        var projects = await db.Projects
+            .AsNoTracking()
+            .OrderBy(p => p.CreatedAt)
+            .ToListAsync(cancellationToken);
         var assets = await db.ArtAssets
+            .AsNoTracking()
             .Where(a => a.ProjectId == selected.Id)
             .OrderByDescending(a => a.CreatedAt)
             .ToListAsync(cancellationToken);
         var batches = await db.GenerationBatches
+            .AsNoTracking()
             .Where(b => b.ProjectId == selected.Id)
             .OrderByDescending(b => b.CreatedAt)
             .ToListAsync(cancellationToken);
         var recipes = await db.PromptRecipes
+            .AsNoTracking()
             .Where(r => r.ProjectId == selected.Id)
             .OrderBy(r => r.Name)
             .ToListAsync(cancellationToken);
         var masks = await db.ImageMasks
+            .AsNoTracking()
             .Where(m => m.ProjectId == selected.Id)
             .OrderByDescending(m => m.CreatedAt)
             .ToListAsync(cancellationToken);
         var attachments = await db.ChatContextAttachments
+            .AsNoTracking()
             .Where(a => a.ProjectId == selected.Id)
             .OrderBy(a => a.SortOrder)
             .ThenBy(a => a.CreatedAt)
@@ -718,7 +726,7 @@ public sealed class ArtWorkflowService(
         }
     }
 
-    public async Task<GenerationBatchView> EditImageAsync(
+    public async Task<GenerationBatchView> StartEditImageAsync(
         Guid projectId,
         EditImageRequest request,
         CancellationToken cancellationToken = default)
@@ -727,7 +735,10 @@ public sealed class ArtWorkflowService(
         var prompt = CleanRequired(request.Prompt, "Edit prompt is required.");
         var sourceAsset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == request.SourceAssetId, cancellationToken)
             ?? throw new InvalidOperationException("Source asset was not found.");
-        var references = await ResolveAssetsAsync(projectId, request.ReferenceAssetIds, cancellationToken);
+        var referenceIds = request.ReferenceAssetIds
+            .Where(id => id != sourceAsset.Id)
+            .ToList();
+        var references = await ResolveAssetsAsync(projectId, referenceIds, cancellationToken);
         var count = ClampCount(request.Count);
 
         var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
@@ -757,19 +768,88 @@ public sealed class ArtWorkflowService(
             Count = count,
             InputAssetIdsJson = SerializeIds(new[] { sourceAsset.Id }.Concat(references.Select(a => a.Id))),
             InputMaskIdsJson = SerializeIds(storedMask is null ? Enumerable.Empty<Guid>() : new[] { storedMask.Id }),
+            EditSourceContentType = sourceImage.ContentType,
+            EditSourceData = sourceImage.Data,
+            EditSourceWidth = sourceImage.Width,
+            EditSourceHeight = sourceImage.Height,
             ParentBatchId = sourceAsset.SourceBatchId,
             Status = GenerationBatchStatus.Running,
+            OutputStatesJson = SerializeOutputStates(CreateInitialOutputStates(count)),
         };
         await db.GenerationBatches.AddAsync(batch, cancellationToken);
         project.ActiveBatchId = batch.Id;
+        project.ActiveWorkspaceMode = WorkspaceMode.Compare;
+        project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
 
+        logger.LogDebug(
+            "Image edit batch created: projectId={ProjectId}, batchId={BatchId}, sourceAssetId={SourceAssetId}, count={Count}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, hasMask={HasMask}, promptChars={PromptChars}",
+            projectId,
+            batch.Id,
+            sourceAsset.Id,
+            batch.Count,
+            batch.Size,
+            batch.MainlineModel,
+            batch.ImageModel,
+            references.Count,
+            storedMask is not null,
+            prompt.Length);
+
+        var batchAssets = await db.ArtAssets.Where(a => a.ProjectId == projectId).ToListAsync(cancellationToken);
+        return BatchView(batch, batchAssets);
+    }
+
+    public async Task<ArtAssetView> GenerateEditBatchOutputAsync(
+        Guid projectId,
+        Guid batchId,
+        int outputIndex,
+        CancellationToken cancellationToken = default,
+        IProgress<ImageProviderProgress>? progress = null)
+    {
+        var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken)
+            ?? throw new InvalidOperationException("Generation batch was not found.");
+        if (outputIndex < 0 || outputIndex >= batch.Count)
+            throw new InvalidOperationException("Output index is outside the batch range.");
+
+        var inputAssetIds = DeserializeIds(batch.InputAssetIdsJson);
+        var sourceAssetId = inputAssetIds.FirstOrDefault();
+        if (sourceAssetId == Guid.Empty)
+            throw new InvalidOperationException("Edit batch source asset was not found.");
+
+        var sourceAsset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == sourceAssetId, cancellationToken)
+            ?? throw new InvalidOperationException("Source asset was not found.");
+        var references = await ResolveAssetsAsync(projectId, inputAssetIds.Skip(1).ToList(), cancellationToken);
+        var sourceImage = ResolveStoredEditSourceImage(batch, sourceAsset);
+
+        ImageMask? storedMask = null;
+        var inputMaskId = DeserializeIds(batch.InputMaskIdsJson).FirstOrDefault();
+        if (inputMaskId != Guid.Empty)
+        {
+            storedMask = await db.ImageMasks.FirstOrDefaultAsync(m => m.ProjectId == projectId && m.Id == inputMaskId, cancellationToken)
+                ?? throw new InvalidOperationException("Edit mask was not found.");
+            ValidateEditImageAndMask(sourceImage, storedMask);
+        }
+
+        logger.LogDebug(
+            "Image edit output starting: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, sourceAssetId={SourceAssetId}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, hasMask={HasMask}, promptChars={PromptChars}",
+            projectId,
+            batchId,
+            outputIndex,
+            sourceAsset.Id,
+            batch.Size,
+            batch.MainlineModel,
+            batch.ImageModel,
+            references.Count,
+            storedMask is not null,
+            batch.Prompt.Length);
+
+        ImageProviderResult providerResult;
         try
         {
-            var providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
-                BuildPrompt(prompt, string.Empty, null, batch.Background),
+            providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
+                BuildPrompt(batch.Prompt, string.Empty, null, batch.Background),
                 batch.Size,
-                count,
+                1,
                 batch.MainlineModel,
                 batch.ImageModel,
                 new ImageProviderReference(sourceAsset.FileName, sourceImage.ContentType, sourceImage.Data),
@@ -777,56 +857,65 @@ public sealed class ArtWorkflowService(
                 references.Select(ToProviderReference).ToList(),
                 imageOptions.Value.DefaultOutputFormat,
                 imageOptions.Value.DefaultQuality,
-                NormalizeBackground(batch.Background)), cancellationToken);
-
-            batch.Provider = providerResult.Provider;
-            batch.MainlineModel = providerResult.MainlineModel;
-            batch.ImageModel = providerResult.ImageModel;
-            batch.RawProviderResponseJson = providerResult.RawMetadataJson;
-            batch.Status = GenerationBatchStatus.Succeeded;
-            batch.UpdatedAt = DateTime.UtcNow;
-
-            var ordinal = 0;
-            foreach (var image in providerResult.Images)
-            {
-                var asset = CreateAsset(
-                    projectId,
-                    $"{sourceAsset.Label} edit {LabelForIndex(ordinal++)}",
-                    $"edited-{DateTime.UtcNow:yyyyMMddHHmmss}-{ordinal}.{ExtensionForContentType(image.ContentType)}",
-                    ArtAssetKind.Edited,
-                    image.ContentType,
-                    image.Data,
-                    sourceAsset.Id,
-                    batch.Id,
-                    sourceAsset.SourcePromptRecipeId,
-                    prompt,
-                    new
-                    {
-                        image.RevisedPrompt,
-                        image.ResponseId,
-                        image.CallId,
-                        image.OutputFormat,
-                        SourceAssetId = sourceAsset.Id,
-                        MaskId = storedMask?.Id,
-                    });
-                await db.ArtAssets.AddAsync(asset, cancellationToken);
-            }
-
-            project.ActiveWorkspaceMode = WorkspaceMode.Compare;
-            project.UpdatedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync(cancellationToken);
+                NormalizeBackground(batch.Background)), cancellationToken, progress);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            batch.Status = GenerationBatchStatus.Failed;
-            batch.Error = ex.Message;
-            batch.UpdatedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync(CancellationToken.None);
+            logger.LogWarning(
+                ex,
+                "Image edit output failed before asset creation: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, mainlineModel={MainlineModel}, imageModel={ImageModel}",
+                projectId,
+                batchId,
+                outputIndex,
+                batch.MainlineModel,
+                batch.ImageModel);
             throw;
         }
 
-        var batchAssets = await db.ArtAssets.Where(a => a.ProjectId == projectId).ToListAsync(cancellationToken);
-        return BatchView(batch, batchAssets);
+        batch.Provider = providerResult.Provider;
+        batch.MainlineModel = providerResult.MainlineModel;
+        batch.ImageModel = providerResult.ImageModel;
+        batch.RawProviderResponseJson = providerResult.RawMetadataJson;
+        batch.UpdatedAt = DateTime.UtcNow;
+
+        var image = providerResult.Images.FirstOrDefault()
+            ?? throw new InvalidOperationException("Image provider completed without returning an image.");
+        var asset = CreateAsset(
+            projectId,
+            $"{sourceAsset.Label} edit {LabelForIndex(outputIndex)}",
+            $"edited-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(image.ContentType)}",
+            ArtAssetKind.Edited,
+            image.ContentType,
+            image.Data,
+            sourceAsset.Id,
+            batch.Id,
+            sourceAsset.SourcePromptRecipeId,
+            batch.Prompt,
+            new
+            {
+                OutputIndex = outputIndex,
+                image.RevisedPrompt,
+                image.ResponseId,
+                image.CallId,
+                image.OutputFormat,
+                SourceAssetId = sourceAsset.Id,
+                MaskId = storedMask?.Id,
+                References = references.Select(a => new { a.Id, a.Label, a.ContentType }),
+            });
+        await db.ArtAssets.AddAsync(asset, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        logger.LogDebug(
+            "Image edit output succeeded: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, assetId={AssetId}, contentType={ContentType}, width={Width}, height={Height}, imageBytes={ImageBytes}",
+            projectId,
+            batchId,
+            outputIndex,
+            asset.Id,
+            asset.ContentType,
+            asset.Width,
+            asset.Height,
+            asset.Data.Length);
+        return AssetView(asset);
     }
 
     public async Task<ArtAssetView> ImportAssetAsync(Guid projectId, ImportAssetRequest request, CancellationToken cancellationToken = default)
@@ -1198,6 +1287,28 @@ public sealed class ArtWorkflowService(
             throw new InvalidOperationException("Source image dimensions could not be read.");
 
         return new ImagePayload(contentType, sourceAsset.Data, width.Value, height.Value);
+    }
+
+    private static ImagePayload ResolveStoredEditSourceImage(GenerationBatch batch, ArtAsset sourceAsset)
+    {
+        if (batch.EditSourceData is not { Length: > 0 } data)
+            return ResolveEditSourceImage(sourceAsset, null);
+
+        var contentType = NormalizeImageContentType(batch.EditSourceContentType ?? string.Empty)
+            ?? throw new InvalidOperationException("Edit source snapshot is invalid.");
+        var width = batch.EditSourceWidth;
+        var height = batch.EditSourceHeight;
+        if (width is null || height is null || width <= 0 || height <= 0)
+        {
+            var size = ImageMetadataReader.TryReadSize(data, contentType);
+            width = size.Width;
+            height = size.Height;
+        }
+
+        if (width is null || height is null || width <= 0 || height <= 0)
+            throw new InvalidOperationException("Edit source snapshot dimensions could not be read.");
+
+        return new ImagePayload(contentType, data, width.Value, height.Value);
     }
 
     private static ImagePayload ParsePngDataUrl(string dataUrl, string error)

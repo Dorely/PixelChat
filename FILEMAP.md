@@ -53,7 +53,7 @@
 |------|-------------|
 | `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, export/step caches, streaming compare batches, masks, recipe CRUD, chat attachments, import, crop, generation prompt assembly, and masked edits. |
 | `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench, recipe management, and assistant tools. |
-| `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns background generation, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
+| `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns background generation/edit batches, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
 | `BackgroundRemovalOptions.cs` | Configurable local background-removal sidecar defaults for uv, Python, rembg, model list, acceleration, cache paths, alpha matting, and timeout. |
 | `ImageProviderModels.cs` | Provider abstraction plus generation/edit request, result, streaming progress, and structured error records. |
@@ -149,6 +149,7 @@
 | `20260605214431_GenerationOutputStates.cs` / `.Designer.cs` | EF migration adding per-output generation state JSON for progress, retries, and structured failures. |
 | `20260608210339_BackgroundRemovalExportCache.cs` / `.Designer.cs` | EF migration adding persistent Local AI export PNG cache records and cache-key indexes. |
 | `20260608232906_ExportStepCache.cs` / `.Designer.cs` | EF migration adding persisted applied export-step PNG cache records and indexes. |
+| `20260609011241_EditBatchSourceSnapshots.cs` / `.Designer.cs` | EF migration adding nullable edit-source PNG snapshot columns to generation batches. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

@@ -7,6 +7,7 @@ public interface IImageGenerationRuntime
     ImageGenerationRuntimeSnapshot GetSnapshot();
     bool HasRunningBatch(Guid projectId);
     Task<GenerationBatchView> StartGenerateImagesAsync(Guid projectId, GenerateImagesRequest request, CancellationToken cancellationToken = default);
+    Task<GenerationBatchView> StartEditImageAsync(Guid projectId, EditImageRequest request, CancellationToken cancellationToken = default);
     Task ReconcileInterruptedBatchesAsync(CancellationToken cancellationToken = default);
 }
 
