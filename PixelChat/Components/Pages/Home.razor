@@ -195,7 +195,7 @@ else
     private int _exportTolerance = 24;
     private long _exportRequestVersion;
     private string _exportFileName = string.Empty;
-    private string _exportRemovalMethod = "auto";
+    private string _exportRemovalMethod = "key-color";
     private string _exportLocalAiModel = "birefnet-massive";
     private string _exportActualBackend = string.Empty;
     private string _exportOriginalDataUrl = string.Empty;
@@ -1017,6 +1017,7 @@ else
                                         value="@_exportRemovalMethod"
                                         disabled="@_exportLocalAiRunning"
                                         @onchange="OnExportRemovalMethodChanged">
+                                    <option value="none">None</option>
                                     <option value="auto">Fast cleanup</option>
                                     <option value="checkerboard">Patterned checkerboard</option>
                                     <option value="edge">Edge colors</option>
@@ -1624,7 +1625,7 @@ else
         _exportLocalAiRunning = false;
         _exportLocalAiResultAvailable = false;
         _exportTolerance = 24;
-        _exportRemovalMethod = "auto";
+        _exportRemovalMethod = "key-color";
         _exportLocalAiModel = DefaultLocalAiModel();
         _exportActualBackend = string.Empty;
         _exportOriginalDataUrl = string.Empty;
@@ -1749,9 +1750,21 @@ else
 
         var version = ++_exportRequestVersion;
         var operationCts = BeginExportOperation();
+        if (IsNoExportStep(method))
+        {
+            _exportProcessing = false;
+            _exportError = null;
+            _exportPreviewDataUrl = _exportCurrentDataUrl;
+            _exportStatus = "No processing selected. Download PNG will export the current preview.";
+            CompleteExportOperation(operationCts);
+            StateHasChanged();
+            return;
+        }
+
         if (IsLocalAiRemovalMethod(method))
         {
             _exportProcessing = false;
+            _exportError = null;
             _exportPreviewDataUrl = _exportCurrentDataUrl;
             _exportStatus = "Local AI will process the current applied image when you click Apply step.";
             CompleteExportOperation(operationCts);
@@ -1874,6 +1887,14 @@ else
         var asset = _exportAsset;
         if (_workbench is null || !_exportModalOpen || asset is null)
             return;
+        if (IsNoExportStep(_exportRemovalMethod))
+        {
+            ClearPendingExportStepPreview();
+            _exportPreviewDataUrl = CurrentExportInputDataUrl();
+            _exportError = null;
+            _exportStatus = "No processing selected. Download PNG will export the current preview.";
+            return;
+        }
 
         var refreshPreview = false;
         var version = ++_exportRequestVersion;
@@ -2139,7 +2160,7 @@ else
         _exportAsset = null;
         _exportPreviewDataUrl = string.Empty;
         _exportFileName = string.Empty;
-        _exportRemovalMethod = "auto";
+        _exportRemovalMethod = "key-color";
         _exportLocalAiModel = DefaultLocalAiModel();
         _exportActualBackend = string.Empty;
         _exportPreviewBackground = "checkerboard";
@@ -2259,6 +2280,7 @@ else
     private bool CanApplyExportStep() =>
         _exportAsset is not null
         && _exportModalOpen
+        && !IsNoExportStep(_exportRemovalMethod)
         && !_exportLocalAiRunning
         && !string.IsNullOrWhiteSpace(_exportPreviewDataUrl);
 
@@ -3145,12 +3167,16 @@ else
     private static string NormalizeExportRemovalMethod(string? value) =>
         value?.Trim().ToLowerInvariant() switch
         {
+            "none" or "no-processing" or "noprocessing" => "none",
             "local-ai" or "localai" or "ai" or "rembg" => "local-ai",
             "key" or "keycolor" or "key-color" or "magenta" or "chroma" or "chromakey" or "chroma-key" => "key-color",
             "checkerboard" or "patternedcheckerboard" or "patterned-checkerboard" => "checkerboard",
             "edge" or "edgecolors" or "edge-colors" => "edge",
             _ => "auto",
         };
+
+    private static bool IsNoExportStep(string? method) =>
+        NormalizeExportRemovalMethod(method) == "none";
 
     private static bool IsLocalAiRemovalMethod(string? method) =>
         NormalizeExportRemovalMethod(method) == "local-ai";
@@ -3161,6 +3187,7 @@ else
     private static string ExportRemovalMethodLabel(string method) =>
         NormalizeExportRemovalMethod(method) switch
         {
+            "none" => "None",
             "local-ai" => "Local AI",
             "key-color" => "Key color cleanup",
             "checkerboard" => "Patterned checkerboard",
