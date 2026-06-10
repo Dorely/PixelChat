@@ -1154,6 +1154,11 @@ public sealed class ArtWorkflowService(
         var references = await ResolveAssetsAsync(projectId, referenceIds, cancellationToken);
         var count = ClampCount(request.Count);
 
+        PromptRecipe? recipe = null;
+        if (request.PromptRecipeId is Guid recipeId)
+            recipe = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+                ?? throw new InvalidOperationException("Prompt recipe was not found.");
+
         var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
         ImageMask? storedMask = null;
         if (!string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
@@ -1186,6 +1191,7 @@ public sealed class ArtWorkflowService(
             EditSourceWidth = sourceImage.Width,
             EditSourceHeight = sourceImage.Height,
             ParentBatchId = sourceAsset.SourceBatchId,
+            PromptRecipeId = recipe?.Id,
             Status = GenerationBatchStatus.Running,
             OutputStatesJson = SerializeOutputStates(CreateInitialOutputStates(count)),
         };
@@ -1233,6 +1239,9 @@ public sealed class ArtWorkflowService(
             ?? throw new InvalidOperationException("Source asset was not found.");
         var references = await ResolveAssetsAsync(projectId, inputAssetIds.Skip(1).ToList(), cancellationToken);
         var sourceImage = ResolveStoredEditSourceImage(batch, sourceAsset);
+        var recipe = batch.PromptRecipeId is Guid recipeId
+            ? await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+            : null;
 
         ImageMask? storedMask = null;
         var inputMaskId = DeserializeIds(batch.InputMaskIdsJson).FirstOrDefault();
@@ -1260,7 +1269,7 @@ public sealed class ArtWorkflowService(
         try
         {
             providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
-                BuildPrompt(batch.Prompt, string.Empty, null, batch.Background),
+                BuildPrompt(batch.Prompt, string.Empty, recipe, batch.Background),
                 batch.Size,
                 1,
                 batch.MainlineModel,
@@ -1302,7 +1311,7 @@ public sealed class ArtWorkflowService(
             image.Data,
             sourceAsset.Id,
             batch.Id,
-            sourceAsset.SourcePromptRecipeId,
+            recipe?.Id,
             batch.Prompt,
             new
             {
@@ -2121,13 +2130,14 @@ public sealed class ArtWorkflowService(
         var parts = new List<string>();
         if (recipe is not null)
         {
+            parts.Add("Recipe guidance: Use the following reusable style and production guide for this class of asset. The specific subject and one-off requirements come from the request that follows.");
             if (!string.IsNullOrWhiteSpace(recipe.PromptTemplate))
-                parts.Add("Recipe style template:\n" + recipe.PromptTemplate.Trim());
+                parts.Add("Recipe prompt:\n" + recipe.PromptTemplate.Trim());
         }
 
         parts.Add(recipe is null
             ? prompt.Trim()
-            : "Asset-specific request:\n" + prompt.Trim());
+            : "Specific request:\n" + prompt.Trim());
 
         if (recipe is not null)
         {
@@ -2135,7 +2145,7 @@ public sealed class ArtWorkflowService(
             {
                 var styleRules = DeserializeStrings(recipe.StyleRulesJson);
                 if (styleRules.Count > 0)
-                    parts.Add("Style rules: " + string.Join("; ", styleRules));
+                    parts.Add("Reusable rules: " + string.Join("; ", styleRules));
             }
         }
 

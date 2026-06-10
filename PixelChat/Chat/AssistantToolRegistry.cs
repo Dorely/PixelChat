@@ -51,16 +51,17 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 int? count = null,
                 Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, background, recipeId, count, referenceAssetIds),
             name: "draft_generate_form",
-            description: "Draft values for the Generate form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select a saved style recipe; keep prompt focused on the asset-specific request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
+            description: "Draft values for the Generate form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select a saved reusable recipe guide for the asset class; keep prompt focused on the new one-off asset request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
 
         AIFunctionFactory.Create(
             method: (
                 string prompt,
                 string? size = null,
                 string? background = null,
-                int count = 1) => DraftEditFormAsync(prompt, size, background, count),
+                Guid? recipeId = null,
+                int count = 1) => DraftEditFormAsync(prompt, size, background, recipeId, count),
             name: "draft_edit_form",
-            description: "Draft values for the current Edit form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. This does not choose an asset or run an image edit; the user selects an asset, may paint/review a mask for targeted edits, and clicks Send Edit manually."),
+            description: "Draft values for the current Edit form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select a saved reusable recipe guide; keep prompt focused on the requested edit or animation, not the reusable recipe text. This does not choose an asset or run an image edit; the user selects an asset, may paint/review a mask for targeted edits, and clicks Send Edit manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -73,7 +74,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 string? preferredSize = null,
                 string? notes = null) => DraftPromptRecipeFormAsync(name, promptTemplate, assetType, styleRules, avoidRules, exampleAssetIds, preferredSize, notes),
             name: "draft_prompt_recipe_form",
-            description: "Draft values for the prompt recipe editor. This does not save a recipe; the user reviews the form and clicks Save manually."),
+            description: "Draft values for the prompt recipe editor. Recipes are reusable style and production guides for repeatable asset classes, not specific one-off asset prompts. Keep promptTemplate and styleRules durable across many future requests, and put only reusable constraints in avoidRules. This does not save a recipe; the user reviews the form and clicks Save manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -173,6 +174,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         string prompt,
         string? size,
         string? background,
+        Guid? recipeId,
         int count)
     {
         var draft = new AssistantFormDraft(
@@ -180,7 +182,8 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             Prompt: prompt,
             Size: size ?? "auto",
             Background: NormalizeBackground(background),
-            Count: ClampCount(count));
+            Count: ClampCount(count),
+            PromptRecipeId: recipeId);
         return Task.FromResult(JsonSerializer.Serialize(draft));
     }
 

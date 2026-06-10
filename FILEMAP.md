@@ -42,17 +42,17 @@
 |------|-------------|
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit asset/mask/sprite-frame image context, Shellmate-style tool-call streaming/execution, form-draft updates, and transcript replay. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, exposes live snapshots, finished-turn commits, and workspace/form side effects. |
-| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, form drafting, non-destructive sprite-sheet box edits, explicit normalization, and immediate visible tool use. |
+| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, reusable recipe guidance, form drafting, sprite-sheet box edits, explicit normalization, and immediate visible tool use. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records and form draft payloads used by chat/runtime/UI. |
-| `AssistantToolRegistry.cs` | Tool registry for workspace state, form drafting, sprite-sheet detection/box update/normalization/reset/frame attachment, chat attachments, workspace mode switching, asset favorites/notes, and export actions. |
+| `AssistantToolRegistry.cs` | Tool registry for workspace state, recipe-aware form drafting, sprite-sheet detection/box update/normalization/reset/frame attachment, chat attachments, workspace mode switching, asset favorites/notes, and export actions. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, autosaved sprite-sheet working assets/frame records, export/step caches, streaming compare batches, masks, recipes, chat attachments, import, crop, prompt assembly, and masked edits. |
-| `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench, sprite-sheet editor, recipe management, and assistant tools. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, sprite-sheet records, export caches, recipe-aware generation/edit prompt assembly, masks, chat attachments, import, crop, and masked edits. |
+| `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench, sprite-sheet editor, recipe-aware generation/edit, recipe management, and assistant tools. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns background generation/edit batches, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
 | `BackgroundRemovalOptions.cs` | Configurable local background-removal sidecar defaults for uv, Python, rembg, model list, acceleration, cache paths, alpha matting, and timeout. |
@@ -93,7 +93,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: project top bar, chat attachments, Generate/Compare/Edit/Sprites/Recipes/Assets tabs, canvas helpers, and export step-stack processing with Local AI, key-color cleanup, fast cleanup, and sprite JSON sidecars. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: chat attachments, recipe-aware Generate/Edit, Compare/Sprites/Recipes/Assets tabs, canvas helpers, and export step-stack processing. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, defaults, API-key updates, and child model rows. |
@@ -128,7 +128,7 @@
 | `BackgroundRemovalExportCache.cs` | EF entity for cached Local AI export PNGs keyed by source asset bytes, model, rembg version, and processing options. |
 | `ExportStepCache.cs` | EF entity for persisted applied export-step PNGs per source asset and source image hash. |
 | `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, output errors, lineage, and status. |
-| `PromptRecipe.cs` | EF entity for reusable visible prompt templates, style/avoid rules, examples, and preferred defaults. |
+| `PromptRecipe.cs` | EF entity for reusable prompt/style/production guides, avoid rules, passive examples, and preferred defaults. |
 | `SpriteSheetDefinition.cs` | EF entity for row-based sprite-sheet definitions linking immutable source assets to mutable working sprite-sheet assets plus layout, FPS, and loop defaults. |
 | `SpriteSheetFrameRecord.cs` | EF entity for durable sprite frame records, current/source/cell/sprite rectangles, labels, previews, dimensions, and timestamps. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets. |

@@ -351,6 +351,7 @@ public sealed record EditImageRequest(
     string Size,
     int Count,
     string Background,
+    Guid? PromptRecipeId,
     string? SourcePngDataUrl,
     string? MaskPngDataUrl,
     IReadOnlyList<Guid> ReferenceAssetIds);
