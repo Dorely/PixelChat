@@ -42,9 +42,9 @@
 |------|-------------|
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit asset/mask/sprite-frame image context, Shellmate-style tool-call streaming/execution, form-draft updates, and transcript replay. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, exposes live snapshots, finished-turn commits, and workspace/form side effects. |
-| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, form drafting, autosaved sprite-sheet edits, and immediate visible tool use. |
+| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, form drafting, non-destructive sprite-sheet box edits, explicit normalization, and immediate visible tool use. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records and form draft payloads used by chat/runtime/UI. |
-| `AssistantToolRegistry.cs` | Tool registry for workspace state, form drafting, sprite-sheet detection/update/reset/frame attachment, chat attachments, workspace mode switching, asset favorites/notes, and export actions. |
+| `AssistantToolRegistry.cs` | Tool registry for workspace state, form drafting, sprite-sheet detection/box update/normalization/reset/frame attachment, chat attachments, workspace mode switching, asset favorites/notes, and export actions. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
@@ -63,7 +63,7 @@
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 | `SpriteSheetImageAnalyzer.cs` | Server-side PNG foreground analyzer used by assistant tools to detect row-major sprite frame bounding boxes. |
 | `SpriteSheetPngCodec.cs` | Minimal PNG RGBA decoder/encoder used by server-side sprite-sheet rendering. |
-| `SpriteSheetServerRenderer.cs` | Server-side normalizer that stitches current sprite boxes into an autosaved working PNG for assistant tool updates. |
+| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization renderer used by assistant tools for frame previews and explicit working-PNG stitching. |
 
 ### Components/
 
@@ -102,7 +102,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with an Edit-like start flow, dominant interactive source-box canvas, autosaved working sheet normalization, frame thumbnails/attachments, reset, animation, and export. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with non-destructive interactive source-box editing, metadata autosave, explicit Normalize Sheet stitching, frame thumbnails/attachments, crop animation preview, reset, and export. |
 
 ### Llm/
 

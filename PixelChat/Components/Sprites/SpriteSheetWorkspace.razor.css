@@ -59,7 +59,7 @@
 
 .sprite-side-panel {
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
     gap: 0.65rem;
     min-width: 0;
     min-height: 0;
@@ -75,10 +75,20 @@
 }
 
 .sprite-tool-strip {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
     gap: 0.75rem;
-    align-items: end;
+    align-items: center;
+    padding: 0.65rem;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.sprite-settings-panel {
+    display: grid;
+    gap: 0.45rem;
     padding: 0.65rem;
     border: 1px solid #d7dee8;
     border-radius: 8px;
@@ -87,7 +97,7 @@
 
 .sprite-grid-controls {
     display: grid;
-    grid-template-columns: repeat(8, minmax(72px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.45rem;
     align-items: end;
 }
@@ -118,10 +128,11 @@
 .selected-frame-readout {
     display: flex;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: 0.35rem;
     color: #344054;
     font-size: 0.78rem;
+    flex: 1 1 320px;
 }
 
 .selected-frame-readout span {
@@ -216,7 +227,11 @@
 
     .sprite-side-panel {
         grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
-        grid-template-rows: auto minmax(0, 1fr) auto;
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
+    }
+
+    .sprite-settings-panel {
+        grid-column: 1;
     }
 
     .frame-list-head,
@@ -225,7 +240,7 @@
     }
 
     .sprite-animation-panel {
-        grid-row: 1 / span 2;
+        grid-row: 1;
     }
 }
 
@@ -237,7 +252,8 @@
 
     .frame-list-head,
     .sprite-frame-list,
-    .sprite-animation-panel {
+    .sprite-animation-panel,
+    .sprite-settings-panel {
         grid-column: auto;
         grid-row: auto;
     }

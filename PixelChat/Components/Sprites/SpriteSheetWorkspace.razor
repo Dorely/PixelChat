@@ -36,9 +36,35 @@
                     <div class="tool-button-row">
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Select)" @onclick="() => SetToolAsync(SpriteEditTool.Select)">Select</button>
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Draw)" @onclick="() => SetToolAsync(SpriteEditTool.Draw)">Draw</button>
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@(_frames.Count == 0)" @onclick="NormalizeSheetAsync">Normalize Sheet</button>
                         <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_selectedFrameIndex < 0 || _frames.Count == 0)" @onclick="DeleteSelectedFrameAsync">Delete</button>
                     </div>
 
+                    <div class="selected-frame-readout">
+                        @if (SelectedFrame() is { } selected)
+                        {
+                            <span>@selected.Label</span>
+                            <span>X @selected.X</span>
+                            <span>Y @selected.Y</span>
+                            <span>W @selected.Width</span>
+                            <span>H @selected.Height</span>
+                        }
+                        else
+                        {
+                            <span>No frame selected</span>
+                        }
+                    </div>
+                </div>
+            </section>
+
+            <aside class="sprite-side-panel">
+                <div class="sprite-canvas-panel sprite-animation-panel">
+                    <div class="section-title">Animation</div>
+                    <canvas class="sprite-animation-canvas" @ref="_animationCanvas"></canvas>
+                </div>
+
+                <div class="sprite-settings-panel">
+                    <div class="section-title">Sheet Settings</div>
                     <div class="sprite-grid-controls">
                         <label>
                             <span>Rows</span>
@@ -73,28 +99,6 @@
                             <span>Loop</span>
                         </label>
                     </div>
-
-                    <div class="selected-frame-readout">
-                        @if (SelectedFrame() is { } selected)
-                        {
-                            <span>@selected.Label</span>
-                            <span>X @selected.X</span>
-                            <span>Y @selected.Y</span>
-                            <span>W @selected.Width</span>
-                            <span>H @selected.Height</span>
-                        }
-                        else
-                        {
-                            <span>No frame selected</span>
-                        }
-                    </div>
-                </div>
-            </section>
-
-            <aside class="sprite-side-panel">
-                <div class="sprite-canvas-panel sprite-animation-panel">
-                    <div class="section-title">Animation</div>
-                    <canvas class="sprite-animation-canvas" @ref="_animationCanvas"></canvas>
                 </div>
 
                 <div class="frame-list-head">
@@ -156,6 +160,7 @@
     private CancellationTokenSource? _autosaveCts;
 
     private Guid? _loadedSpriteSheetId;
+    private DateTime? _loadedSpriteSheetUpdatedAt;
     private string _workingImageDataUrl = string.Empty;
     private int _rows = 1;
     private int _columns = 1;
@@ -179,13 +184,14 @@
         if (active is null || CurrentWorkingAsset(active) is not { } working)
         {
             _loadedSpriteSheetId = null;
+            _loadedSpriteSheetUpdatedAt = null;
             _workingImageDataUrl = string.Empty;
             _frames.Clear();
             _selectedFrameIndex = -1;
             return;
         }
 
-        if (_loadedSpriteSheetId == active.Id && _workingImageDataUrl == working.PreviewDataUrl)
+        if (_loadedSpriteSheetId == active.Id && _loadedSpriteSheetUpdatedAt == active.UpdatedAt && _workingImageDataUrl == working.PreviewDataUrl)
             return;
 
         LoadSheet(active, working);
@@ -264,7 +270,7 @@
                 }));
             FitCellsToFrames();
             _selectedFrameIndex = _frames.Count > 0 ? 0 : -1;
-            await AutosaveNowAsync();
+            await AutosaveLayoutNowAsync();
             _status = $"Detected {_frames.Count} frame(s).";
         }
         catch (Exception ex)
@@ -286,6 +292,7 @@
         {
             var reset = await Workflow.ResetSpriteSheetToOriginalAsync(Workbench.Project.Id, active.Id);
             _loadedSpriteSheetId = null;
+            _loadedSpriteSheetUpdatedAt = null;
             _frames.Clear();
             _selectedFrameIndex = -1;
             _status = $"{reset.Label} reset.";
@@ -302,6 +309,63 @@
     {
         if (CurrentWorkingAsset() is { } asset)
             await OnExportAsset.InvokeAsync(asset);
+    }
+
+    private async Task NormalizeSheetAsync()
+    {
+        if (_module is null || Workbench.ActiveSpriteSheet is not { } active || string.IsNullOrWhiteSpace(_workingImageDataUrl) || _frames.Count == 0)
+            return;
+
+        _error = null;
+        _status = "Normalizing sprite sheet...";
+        try
+        {
+            NormalizeLayout();
+            var output = await _module.InvokeAsync<SpriteSheetRenderOutput>(
+                "renderSpriteSheetNormalize",
+                _workingImageDataUrl,
+                BuildLayoutPayload());
+            if (string.IsNullOrWhiteSpace(output.DataUrl))
+                throw new InvalidOperationException("Sprite sheet render did not produce a PNG.");
+
+            var saved = await Workflow.NormalizeSpriteSheetAsync(Workbench.Project.Id, new NormalizeSpriteSheetRequest(
+                active.Id,
+                output.DataUrl,
+                _rows,
+                _columns,
+                _cellWidth,
+                _cellHeight,
+                _padding,
+                _gutter,
+                _fps,
+                _loop,
+                output.Frames));
+            _workingImageDataUrl = output.DataUrl;
+            LoadSheet(saved, new ArtAssetView(
+                saved.WorkingAssetId ?? Guid.Empty,
+                saved.Label,
+                "sprite-sheet.png",
+                ArtAssetKind.SpriteSheet,
+                "image/png",
+                output.DataUrl,
+                output.Width,
+                output.Height,
+                saved.SourceAssetId,
+                null,
+                null,
+                null,
+                false,
+                string.Empty,
+                string.Empty,
+                DateTime.UtcNow));
+            _status = "Sprite sheet normalized.";
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
     }
 
     private async Task SetToolAsync(SpriteEditTool tool)
@@ -325,7 +389,7 @@
         _frames.Remove(frame);
         ReindexFrames();
         _selectedFrameIndex = _frames.Count == 0 ? -1 : Math.Clamp(frame.Index, 0, _frames.Count - 1);
-        await AutosaveNowAsync();
+        await AutosaveLayoutNowAsync();
     }
 
     private async Task MoveFrameAsync(int index, int delta)
@@ -337,7 +401,7 @@
         (_frames[index], _frames[target]) = (_frames[target], _frames[index]);
         ReindexFrames();
         _selectedFrameIndex = target;
-        await AutosaveNowAsync();
+        await AutosaveLayoutNowAsync();
     }
 
     private async Task AttachFrameAsync(SpriteSheetEditorFrame frame)
@@ -391,7 +455,7 @@
         ReindexFrames();
         _selectedFrameIndex = change.SelectedIndex;
         FitCellsToFrames(onlyWhenTooSmall: true);
-        await AutosaveNowAsync();
+        await AutosaveLayoutNowAsync();
     }
 
     [JSInvokable]
@@ -412,7 +476,7 @@
             try
             {
                 await Task.Delay(600, token);
-                await InvokeAsync(AutosaveNowAsync);
+                await InvokeAsync(AutosaveLayoutNowAsync);
             }
             catch (OperationCanceledException)
             {
@@ -420,7 +484,7 @@
         }, token);
     }
 
-    private async Task AutosaveNowAsync()
+    private async Task AutosaveLayoutNowAsync()
     {
         if (_module is null || Workbench.ActiveSpriteSheet is not { } active || string.IsNullOrWhiteSpace(_workingImageDataUrl))
             return;
@@ -429,16 +493,13 @@
         NormalizeLayout();
         try
         {
-            var output = await _module.InvokeAsync<SpriteSheetRenderOutput>(
-                "renderSpriteSheetAutosave",
+            var output = await _module.InvokeAsync<SpriteSheetFramePreviewOutput>(
+                "renderSpriteFramePreviews",
                 _workingImageDataUrl,
                 BuildLayoutPayload());
-            if (string.IsNullOrWhiteSpace(output.DataUrl))
-                throw new InvalidOperationException("Sprite sheet render did not produce a PNG.");
 
-            var saved = await Workflow.AutosaveSpriteSheetAsync(Workbench.Project.Id, new AutosaveSpriteSheetRequest(
+            var saved = await Workflow.AutosaveSpriteSheetLayoutAsync(Workbench.Project.Id, new AutosaveSpriteSheetLayoutRequest(
                 active.Id,
-                output.DataUrl,
                 _rows,
                 _columns,
                 _cellWidth,
@@ -448,16 +509,15 @@
                 _fps,
                 _loop,
                 output.Frames));
-            _workingImageDataUrl = output.DataUrl;
             LoadSheet(saved, new ArtAssetView(
                 saved.WorkingAssetId ?? Guid.Empty,
                 saved.Label,
                 "sprite-sheet.png",
                 ArtAssetKind.SpriteSheet,
                 "image/png",
-                output.DataUrl,
-                output.Width,
-                output.Height,
+                _workingImageDataUrl,
+                null,
+                null,
                 saved.SourceAssetId,
                 null,
                 null,
@@ -466,7 +526,7 @@
                 string.Empty,
                 string.Empty,
                 DateTime.UtcNow));
-            _status = "Autosaved.";
+            _status = "Layout autosaved.";
             _error = null;
             await OnChanged.InvokeAsync();
         }
@@ -480,6 +540,7 @@
     private void LoadSheet(SpriteSheetDefinitionView sheet, ArtAssetView working)
     {
         _loadedSpriteSheetId = sheet.Id;
+        _loadedSpriteSheetUpdatedAt = sheet.UpdatedAt;
         _workingImageDataUrl = working.PreviewDataUrl;
         _rows = Math.Max(1, sheet.Rows);
         _columns = Math.Max(1, sheet.Columns);
@@ -675,6 +736,11 @@
         public string DataUrl { get; set; } = string.Empty;
         public int Width { get; set; }
         public int Height { get; set; }
+        public List<SpriteSheetFrameView> Frames { get; set; } = [];
+    }
+
+    private sealed class SpriteSheetFramePreviewOutput
+    {
         public List<SpriteSheetFrameView> Frames { get; set; } = [];
     }
 

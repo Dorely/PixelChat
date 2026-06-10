@@ -47,11 +47,27 @@ export async function drawSpriteBoxEditor(sourceCanvas, animationCanvas, dotNetR
     state.tool = String(tool || "select").toLowerCase();
     drawSourceCanvas(sourceCanvas, state);
 
-    const output = renderOutputCanvas(image, layout);
-    startAnimation(animationCanvas, output.canvas, output.frames, layout);
+    const previews = buildFramePreviewCanvases(image, layout);
+    startAnimation(animationCanvas, previews.frames, layout);
 }
 
-export async function renderSpriteSheetAutosave(imageUrl, payload) {
+export async function renderSpriteFramePreviews(imageUrl, payload) {
+    const image = await loadImage(imageUrl);
+    const layout = normalizeLayout(payload);
+    const previews = buildFramePreviewCanvases(image, layout);
+    return {
+        Frames: previews.frames.map(frame => ({
+            Index: frame.index,
+            Label: frame.label,
+            SourceRect: toDotNetRect(frame.sourceRect),
+            CellRect: toDotNetRect(frame.cellRect),
+            SpriteRect: toDotNetRect(frame.spriteRect),
+            PreviewPngDataUrl: frame.previewCanvas.toDataURL("image/png"),
+        })),
+    };
+}
+
+export async function renderSpriteSheetNormalize(imageUrl, payload) {
     const image = await loadImage(imageUrl);
     const layout = normalizeLayout(payload);
     const output = renderOutputCanvas(image, layout);
@@ -264,6 +280,57 @@ function drawHandles(ctx, x, y, w, h) {
     }
 }
 
+function buildFramePreviewCanvases(image, layout) {
+    const frames = [];
+    const frameCount = Math.min(layout.frameCount, layout.frames.length, layout.rows * layout.columns);
+    for (let index = 0; index < frameCount; index++) {
+        const frame = layout.frames[index];
+        const sourceRect = clampRect(frame.sourceRect, imageWidth(image), imageHeight(image));
+        const row = Math.floor(index / layout.columns);
+        const column = index % layout.columns;
+        const cellRect = {
+            x: column * (layout.cellWidth + layout.gutter),
+            y: row * (layout.cellHeight + layout.gutter),
+            w: layout.cellWidth,
+            h: layout.cellHeight,
+        };
+        const destX = Math.round(cellRect.x + ((layout.cellWidth - sourceRect.w) / 2));
+        const baseline = cellRect.y + layout.cellHeight - layout.padding;
+        const destY = Math.round(baseline - sourceRect.h);
+        const spriteRect = {
+            x: destX,
+            y: destY,
+            w: sourceRect.w,
+            h: sourceRect.h,
+        };
+        const previewCanvas = document.createElement("canvas");
+        previewCanvas.width = sourceRect.w;
+        previewCanvas.height = sourceRect.h;
+        const previewCtx = previewCanvas.getContext("2d");
+        previewCtx.imageSmoothingEnabled = false;
+        previewCtx.drawImage(
+            image,
+            sourceRect.x,
+            sourceRect.y,
+            sourceRect.w,
+            sourceRect.h,
+            0,
+            0,
+            sourceRect.w,
+            sourceRect.h);
+        frames.push({
+            index,
+            label: frame.label || `Frame ${index + 1}`,
+            sourceRect,
+            cellRect,
+            spriteRect,
+            previewCanvas,
+        });
+    }
+
+    return { frames };
+}
+
 function renderOutputCanvas(image, layout) {
     if (layout.frames.length === 0) {
         const canvas = document.createElement("canvas");
@@ -344,7 +411,7 @@ function renderOutputCanvas(image, layout) {
     return { canvas, frames };
 }
 
-function startAnimation(canvas, outputCanvas, frames, layout) {
+function startAnimation(canvas, frames, layout) {
     stopAnimation(canvas);
     if (!canvas || frames.length === 0) {
         const ctx = resizeCanvas(canvas);
@@ -353,7 +420,6 @@ function startAnimation(canvas, outputCanvas, frames, layout) {
     }
 
     const state = {
-        outputCanvas,
         frames,
         layout,
         index: 0,
@@ -382,14 +448,14 @@ function drawAnimationFrame(canvas, state) {
     const ctx = resizeCanvas(canvas);
     drawChecker(ctx, canvas.width, canvas.height);
     const frame = state.frames[state.index] || state.frames[0];
-    const viewport = fitRect(canvas.width, canvas.height, frame.cellRect.w, frame.cellRect.h, 12 * deviceScale());
+    const viewport = fitRect(canvas.width, canvas.height, frame.previewCanvas.width, frame.previewCanvas.height, 12 * deviceScale());
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(
-        state.outputCanvas,
-        frame.cellRect.x,
-        frame.cellRect.y,
-        frame.cellRect.w,
-        frame.cellRect.h,
+        frame.previewCanvas,
+        0,
+        0,
+        frame.previewCanvas.width,
+        frame.previewCanvas.height,
         viewport.x,
         viewport.y,
         viewport.w,

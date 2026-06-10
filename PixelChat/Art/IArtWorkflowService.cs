@@ -15,7 +15,9 @@ public interface IArtWorkflowService
     Task ClearExportStepCacheAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDetectionResult> DetectSpriteSheetFramesAsync(Guid projectId, SpriteSheetDetectionRequest request, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> StartSpriteSheetEditAsync(Guid projectId, Guid sourceAssetId, CancellationToken cancellationToken = default);
-    Task<SpriteSheetDefinitionView> AutosaveSpriteSheetAsync(Guid projectId, AutosaveSpriteSheetRequest request, CancellationToken cancellationToken = default);
+    Task<SpriteSheetDefinitionView> AutosaveSpriteSheetLayoutAsync(Guid projectId, AutosaveSpriteSheetLayoutRequest request, CancellationToken cancellationToken = default);
+    Task<SpriteSheetDefinitionView> NormalizeSpriteSheetAsync(Guid projectId, NormalizeSpriteSheetRequest request, CancellationToken cancellationToken = default);
+    Task<SpriteSheetDefinitionView> NormalizeSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> UpdateSpriteSheetFramesAsync(Guid projectId, UpdateSpriteSheetFramesRequest request, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task SelectSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);

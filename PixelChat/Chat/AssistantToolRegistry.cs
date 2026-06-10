@@ -14,6 +14,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         "switch_workspace_mode",
         "mark_asset",
         "update_sprite_sheet_frames",
+        "normalize_sprite_sheet",
         "reset_sprite_sheet_to_original",
         "attach_sprite_sheet_frames",
     };
@@ -96,7 +97,12 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 bool? loop = null,
                 SpriteSheetFrameUpdateView[]? frames = null) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, padding, gutter, fps, loop, frames),
             name: "update_sprite_sheet_frames",
-            description: "Update the visible Sprites workspace working sheet. Sets frame boxes/layout, renders the normalized working PNG in place, rebases frame boxes, and autosaves frame records. Use detected boxes or user-requested adjustments."),
+            description: "Update the visible Sprites workspace frame boxes and layout settings without changing the working image bytes. Use detected boxes or user-requested box adjustments."),
+
+        AIFunctionFactory.Create(
+            method: (Guid spriteSheetId) => NormalizeSpriteSheetAsync(projectId, spriteSheetId),
+            name: "normalize_sprite_sheet",
+            description: "Normalize the selected sprite sheet by cropping the saved boxes, applying padding/gutter/grid settings, stitching a new working PNG, and rebasing frame boxes."),
 
         AIFunctionFactory.Create(
             method: (Guid spriteSheetId) => ResetSpriteSheetToOriginalAsync(projectId, spriteSheetId),
@@ -252,6 +258,19 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             saved.WorkingAssetId,
             saved.SourceAssetId,
             message = "Sprite sheet reset to original image and frame records cleared.",
+        });
+    }
+
+    private async Task<string> NormalizeSpriteSheetAsync(Guid projectId, Guid spriteSheetId)
+    {
+        var saved = await workflow.NormalizeSpriteSheetAsync(projectId, spriteSheetId);
+        return JsonSerializer.Serialize(new
+        {
+            saved.Id,
+            saved.WorkingAssetId,
+            saved.SourceAssetId,
+            frameCount = saved.Frames.Count,
+            message = "Sprite sheet normalized.",
         });
     }
 

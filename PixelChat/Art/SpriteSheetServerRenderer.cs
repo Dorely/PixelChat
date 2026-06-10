@@ -2,6 +2,64 @@ namespace PixelChat.Art;
 
 internal static class SpriteSheetServerRenderer
 {
+    public static SpriteSheetServerPreviewResult BuildFramePreviews(
+        byte[] sourceRgba,
+        int sourceWidth,
+        int sourceHeight,
+        int rows,
+        int columns,
+        int cellWidth,
+        int cellHeight,
+        int padding,
+        int gutter,
+        int fps,
+        IReadOnlyList<SpriteSheetFrameUpdateView> inputFrames)
+    {
+        rows = Math.Clamp(rows, 1, 32);
+        columns = Math.Clamp(columns, 1, 64);
+        cellWidth = Math.Clamp(cellWidth, 1, 8192);
+        cellHeight = Math.Clamp(cellHeight, 1, 8192);
+        padding = Math.Clamp(padding, 0, 4096);
+        gutter = Math.Clamp(gutter, 0, 4096);
+        _ = Math.Clamp(fps, 1, 60);
+        var maxFrames = checked(rows * columns);
+        var frames = inputFrames
+            .Where(frame => frame.Index >= 0 && frame.Index < maxFrames)
+            .OrderBy(frame => frame.Index)
+            .Take(maxFrames)
+            .ToList();
+        if (frames.Count == 0)
+            return new SpriteSheetServerPreviewResult([]);
+
+        var savedFrames = new List<SpriteSheetFrameView>();
+        foreach (var input in frames)
+        {
+            var sourceRect = ClampRect(input.SourceRect, sourceWidth, sourceHeight);
+            var row = input.Index / columns;
+            var column = input.Index % columns;
+            var cellRect = new SpriteSheetRect(
+                column * (cellWidth + gutter),
+                row * (cellHeight + gutter),
+                cellWidth,
+                cellHeight);
+            var destX = (int)Math.Round((double)cellRect.X + ((cellWidth - sourceRect.Width) / 2d));
+            var baseline = cellRect.Y + cellHeight - padding;
+            var destY = baseline - sourceRect.Height;
+            var spriteRect = new SpriteSheetRect(destX, destY, sourceRect.Width, sourceRect.Height);
+            var previewRgba = CropRect(sourceRgba, sourceWidth, sourceHeight, sourceRect);
+            var previewDataUrl = DataUrl.ToDataUrl("image/png", SpriteSheetPngCodec.EncodeRgba(sourceRect.Width, sourceRect.Height, previewRgba));
+            savedFrames.Add(new SpriteSheetFrameView(
+                input.Index,
+                string.IsNullOrWhiteSpace(input.Label) ? $"Frame {input.Index + 1}" : input.Label.Trim(),
+                sourceRect,
+                cellRect,
+                spriteRect,
+                previewDataUrl));
+        }
+
+        return new SpriteSheetServerPreviewResult(savedFrames);
+    }
+
     public static SpriteSheetServerRenderResult Render(
         byte[] sourceRgba,
         int sourceWidth,
@@ -57,7 +115,7 @@ internal static class SpriteSheetServerRenderer
             var rebasedSourceRect = spriteRect.Width > 0 && spriteRect.Height > 0
                 ? spriteRect
                 : new SpriteSheetRect(cellRect.X, cellRect.Y, 1, 1);
-            var previewRgba = CropCell(outputRgba, outputWidth, outputHeight, cellRect);
+            var previewRgba = CropRect(outputRgba, outputWidth, outputHeight, cellRect);
             var previewDataUrl = DataUrl.ToDataUrl("image/png", SpriteSheetPngCodec.EncodeRgba(cellRect.Width, cellRect.Height, previewRgba));
             savedFrames.Add(new SpriteSheetFrameView(
                 input.Index,
@@ -136,23 +194,23 @@ internal static class SpriteSheetServerRenderer
         }
     }
 
-    private static byte[] CropCell(byte[] source, int sourceWidth, int sourceHeight, SpriteSheetRect cellRect)
+    private static byte[] CropRect(byte[] source, int sourceWidth, int sourceHeight, SpriteSheetRect rect)
     {
-        var output = new byte[checked(cellRect.Width * cellRect.Height * 4)];
-        for (var y = 0; y < cellRect.Height; y++)
+        var output = new byte[checked(rect.Width * rect.Height * 4)];
+        for (var y = 0; y < rect.Height; y++)
         {
-            var sourceY = cellRect.Y + y;
+            var sourceY = rect.Y + y;
             if (sourceY < 0 || sourceY >= sourceHeight)
                 continue;
 
-            for (var x = 0; x < cellRect.Width; x++)
+            for (var x = 0; x < rect.Width; x++)
             {
-                var sourceX = cellRect.X + x;
+                var sourceX = rect.X + x;
                 if (sourceX < 0 || sourceX >= sourceWidth)
                     continue;
 
                 var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
-                var targetIndex = ((y * cellRect.Width) + x) * 4;
+                var targetIndex = ((y * rect.Width) + x) * 4;
                 output[targetIndex] = source[sourceIndex];
                 output[targetIndex + 1] = source[sourceIndex + 1];
                 output[targetIndex + 2] = source[sourceIndex + 2];
@@ -168,4 +226,7 @@ internal sealed record SpriteSheetServerRenderResult(
     byte[] PngData,
     int Width,
     int Height,
+    IReadOnlyList<SpriteSheetFrameView> Frames);
+
+internal sealed record SpriteSheetServerPreviewResult(
     IReadOnlyList<SpriteSheetFrameView> Frames);

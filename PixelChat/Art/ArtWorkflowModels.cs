@@ -112,7 +112,19 @@ public sealed record SpriteSheetFrameDetectionView(
     int Index,
     SpriteSheetRect SourceRect);
 
-public sealed record AutosaveSpriteSheetRequest(
+public sealed record AutosaveSpriteSheetLayoutRequest(
+    Guid SpriteSheetId,
+    int Rows,
+    int Columns,
+    int CellWidth,
+    int CellHeight,
+    int Padding,
+    int Gutter,
+    int Fps,
+    bool Loop,
+    IReadOnlyList<SpriteSheetFrameView> Frames);
+
+public sealed record NormalizeSpriteSheetRequest(
     Guid SpriteSheetId,
     string WorkingPngDataUrl,
     int Rows,

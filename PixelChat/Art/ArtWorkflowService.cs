@@ -426,9 +426,28 @@ public sealed class ArtWorkflowService(
         return SpriteSheetView(definition, []);
     }
 
-    public async Task<SpriteSheetDefinitionView> AutosaveSpriteSheetAsync(
+    public async Task<SpriteSheetDefinitionView> AutosaveSpriteSheetLayoutAsync(
         Guid projectId,
-        AutosaveSpriteSheetRequest request,
+        AutosaveSpriteSheetLayoutRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var definition = await db.SpriteSheetDefinitions
+            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == request.SpriteSheetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite sheet was not found.");
+        UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop);
+        await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, request.Frames, cancellationToken);
+
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveSpriteSheetId = definition.Id;
+        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+        project.UpdatedAt = definition.UpdatedAt;
+        await db.SaveChangesAsync(cancellationToken);
+        return await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
+    }
+
+    public async Task<SpriteSheetDefinitionView> NormalizeSpriteSheetAsync(
+        Guid projectId,
+        NormalizeSpriteSheetRequest request,
         CancellationToken cancellationToken = default)
     {
         var definition = await db.SpriteSheetDefinitions
@@ -453,6 +472,57 @@ public sealed class ArtWorkflowService(
         return await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
     }
 
+    public async Task<SpriteSheetDefinitionView> NormalizeSpriteSheetAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        CancellationToken cancellationToken = default)
+    {
+        var definition = await db.SpriteSheetDefinitions
+            .Include(s => s.OutputAsset)
+            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite sheet was not found.");
+        var working = definition.OutputAsset ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
+        if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Agent sprite-sheet normalization currently requires a PNG working image.");
+
+        var records = await db.SpriteSheetFrameRecords
+            .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == definition.Id)
+            .OrderBy(frame => frame.Index)
+            .ToListAsync(cancellationToken);
+        if (records.Count == 0)
+            throw new InvalidOperationException("At least one sprite frame is required.");
+
+        var updates = records
+            .Select(frame => new SpriteSheetFrameUpdateView(
+                frame.Index,
+                frame.Label,
+                RectView(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight)))
+            .ToList();
+        var layout = SpriteSheetServerRenderer.Render(
+            rgba,
+            width,
+            height,
+            definition.Rows,
+            definition.Columns,
+            definition.CellWidth,
+            definition.CellHeight,
+            definition.Padding,
+            definition.Gutter,
+            definition.Fps,
+            updates);
+        var parsed = new ImagePayload("image/png", layout.PngData, layout.Width, layout.Height);
+        UpdateWorkingSpriteAsset(working, parsed, definition, DateTime.UtcNow);
+        await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, layout.Frames, cancellationToken);
+
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveSpriteSheetId = definition.Id;
+        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+        project.UpdatedAt = DateTime.UtcNow;
+        definition.UpdatedAt = project.UpdatedAt;
+        await db.SaveChangesAsync(cancellationToken);
+        return await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
+    }
+
     public async Task<SpriteSheetDefinitionView> UpdateSpriteSheetFramesAsync(
         Guid projectId,
         UpdateSpriteSheetFramesRequest request,
@@ -464,9 +534,9 @@ public sealed class ArtWorkflowService(
             ?? throw new InvalidOperationException("Sprite sheet was not found.");
         var working = definition.OutputAsset ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
         if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
-            throw new InvalidOperationException("Agent sprite-sheet updates currently require a PNG working image.");
+            throw new InvalidOperationException("Agent sprite-sheet frame updates currently require a PNG working image.");
 
-        var layout = SpriteSheetServerRenderer.Render(
+        var layout = SpriteSheetServerRenderer.BuildFramePreviews(
             rgba,
             width,
             height,
@@ -478,9 +548,7 @@ public sealed class ArtWorkflowService(
             request.Gutter,
             request.Fps,
             request.Frames);
-        var parsed = new ImagePayload("image/png", layout.PngData, layout.Width, layout.Height);
         UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop);
-        UpdateWorkingSpriteAsset(working, parsed, definition, DateTime.UtcNow);
         await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, layout.Frames, cancellationToken);
 
         var project = await GetProjectAsync(projectId, cancellationToken);
