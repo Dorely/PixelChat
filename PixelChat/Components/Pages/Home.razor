@@ -52,6 +52,7 @@ else
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Generate)" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">Generate</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Compare)" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Compare</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Edit)" @onclick="() => SetModeAsync(WorkspaceMode.Edit)">Edit</button>
+                <button type="button" class="@ModeButtonClass(WorkspaceMode.Sprites)" @onclick="() => SetModeAsync(WorkspaceMode.Sprites)">Sprites</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Recipes)" @onclick="() => SetModeAsync(WorkspaceMode.Recipes)">Recipes</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Assets)" @onclick="() => SetModeAsync(WorkspaceMode.Assets)">Assets</button>
             </nav>
@@ -106,6 +107,9 @@ else
                     case WorkspaceMode.Edit:
                         @RenderEditWorkspace()
                         break;
+                    case WorkspaceMode.Sprites:
+                        @RenderSpritesWorkspace()
+                        break;
                     case WorkspaceMode.Recipes:
                         @RenderRecipesWorkspace()
                         break;
@@ -141,6 +145,8 @@ else
     private DotNetObjectReference<Home>? _dotNetRef;
     private ElementReference _editorCanvas;
     private Guid? _loadedEditorAssetId;
+    private AssistantFormDraft? _spriteSheetDraft;
+    private long _spriteSheetDraftVersion;
     private CancellationTokenSource? _maskAutosaveCts;
     private readonly SemaphoreSlim _maskAutosaveLock = new(1, 1);
     private long _maskAutosaveVersion;
@@ -204,6 +210,7 @@ else
     private string _exportPreviewBackground = "checkerboard";
     private string _exportAppliedMethod = string.Empty;
     private string _exportPreviewDataUrl = string.Empty;
+    private bool _exportSpriteManifestAvailable;
     private ExportStepOutput? _exportPendingStepOutput;
     private string _exportPendingStepSourceHash = string.Empty;
     private string _exportPendingStepSelection = string.Empty;
@@ -597,6 +604,15 @@ else
         </div>
     };
 
+    private RenderFragment RenderSpritesWorkspace() => __builder =>
+    {
+        <SpriteSheetWorkspace Workbench="@_workbench"
+                              Draft="@_spriteSheetDraft"
+                              DraftVersion="@_spriteSheetDraftVersion"
+                              OnChanged="OnSpriteSheetChangedAsync"
+                              OnExportAsset="OpenExportAsync" />
+    };
+
     private RenderFragment RenderRecipesWorkspace() => __builder =>
     {
         var selectedRecipe = SelectedRecipeForEditor();
@@ -881,6 +897,7 @@ else
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AttachAssetAsync(asset)">Attach</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenSpriteSheetAsync(asset)">Sprite Sheet</button>
                     <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => AskDeleteAsset(asset.Id)">Delete</button>
                     <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => OpenExportAsync(asset)">Export</button>
                 </div>
@@ -1059,6 +1076,10 @@ else
                             <div class="export-meta">
                                 <span>@FormatExportDimensions()</span>
                                 <span>PNG</span>
+                                @if (_exportSpriteManifestAvailable)
+                                {
+                                    <span>Sprite JSON</span>
+                                }
                             </div>
 
                             <div class="export-step-actions">
@@ -1124,7 +1145,7 @@ else
                             class="btn btn-primary"
                             disabled="@(!CanDownloadExport())"
                             @onclick="DownloadExportAsync">
-                        Download PNG
+                        @(_exportSpriteManifestAvailable ? "Download PNG + JSON" : "Download PNG")
                     </button>
                 </footer>
             </div>
@@ -1611,6 +1632,33 @@ else
         await ReloadWorkbenchAsync();
     }
 
+    private async Task OpenSpriteSheetAsync(ArtAssetView asset)
+    {
+        if (_workbench is null)
+            return;
+
+        await FlushMaskAutosaveAsync();
+        _spriteSheetDraft = new AssistantFormDraft(
+            AssistantFormDraftTarget.SpriteSheet,
+            SourceAssetId: asset.Id,
+            Rows: 1,
+            Columns: 1,
+            Padding: 8,
+            Gutter: 16,
+            Fps: 8,
+            Loop: true,
+            Anchor: "bottom-center");
+        _spriteSheetDraftVersion++;
+        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Sprites);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task OnSpriteSheetChangedAsync()
+    {
+        await ReloadWorkbenchAsync();
+        StateHasChanged();
+    }
+
     private async Task OpenExportAsync(ArtAssetView asset)
     {
         if (_workbench is null)
@@ -1633,6 +1681,7 @@ else
         _exportCurrentImageSha256 = string.Empty;
         _exportPreviewBackground = "checkerboard";
         _exportAppliedMethod = string.Empty;
+        _exportSpriteManifestAvailable = false;
         _exportCurrentWidth = asset.Width;
         _exportCurrentHeight = asset.Height;
         ClearPendingExportStepPreview();
@@ -1659,6 +1708,11 @@ else
             _exportCurrentImageSha256 = Sha256DataUrl(exportAsset.DataUrl);
             _exportCurrentWidth = exportAsset.Width;
             _exportCurrentHeight = exportAsset.Height;
+            _exportSpriteManifestAvailable = await Workflow.BuildSpriteSheetManifestJsonAsync(
+                _workbench.Project.Id,
+                exportAsset.Id,
+                _exportFileName,
+                operationCts.Token) is not null;
             _exportStatus = "Loading applied export steps...";
             if (version != _exportRequestVersion)
                 return;
@@ -2087,7 +2141,24 @@ else
             var fileName = CleanExportFileName(string.IsNullOrWhiteSpace(_exportFileName)
                 ? DefaultExportFileName(asset.FileName, asset.Label)
                 : _exportFileName);
-            await module.InvokeVoidAsync("downloadExportPng", operationCts.Token, _exportPreviewDataUrl, fileName);
+            var spriteManifestJson = _exportSpriteManifestAvailable && _workbench is not null
+                ? await Workflow.BuildSpriteSheetManifestJsonAsync(_workbench.Project.Id, asset.Id, fileName, operationCts.Token)
+                : null;
+            if (string.IsNullOrWhiteSpace(spriteManifestJson))
+            {
+                await module.InvokeVoidAsync("downloadExportPng", operationCts.Token, _exportPreviewDataUrl, fileName);
+            }
+            else
+            {
+                await module.InvokeVoidAsync(
+                    "downloadExportBundle",
+                    operationCts.Token,
+                    _exportPreviewDataUrl,
+                    fileName,
+                    spriteManifestJson,
+                    SpriteManifestFileName(fileName));
+            }
+
             if (version == _exportRequestVersion)
                 _exportStatus = "Download prepared.";
         }
@@ -2165,6 +2236,7 @@ else
         _exportActualBackend = string.Empty;
         _exportPreviewBackground = "checkerboard";
         _exportAppliedMethod = string.Empty;
+        _exportSpriteManifestAvailable = false;
         _exportStatus = string.Empty;
         _exportError = null;
         _exportOriginalDataUrl = string.Empty;
@@ -2750,6 +2822,13 @@ else
                 await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Recipes);
                 await ReloadWorkbenchAsync();
                 break;
+
+            case AssistantFormDraftTarget.SpriteSheet:
+                _spriteSheetDraft = draft;
+                _spriteSheetDraftVersion++;
+                await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Sprites);
+                await ReloadWorkbenchAsync();
+                break;
         }
     }
 
@@ -3220,6 +3299,13 @@ else
             stem = "asset";
 
         return stem + ".png";
+    }
+
+    private static string SpriteManifestFileName(string pngFileName)
+    {
+        var cleanPng = CleanExportFileName(pngFileName);
+        var stem = Path.GetFileNameWithoutExtension(cleanPng);
+        return (string.IsNullOrWhiteSpace(stem) ? "asset" : stem) + ".sprite.json";
     }
 
     private static string LabelForIndex(int index)

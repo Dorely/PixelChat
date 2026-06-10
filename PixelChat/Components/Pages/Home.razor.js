@@ -222,6 +222,21 @@ export function downloadExportPng(dataUrl, fileName) {
     link.remove();
 }
 
+export function downloadExportBundle(dataUrl, fileName, manifestJson, manifestFileName) {
+    downloadExportPng(dataUrl, fileName);
+    if (!manifestJson) return;
+
+    const blob = new Blob([manifestJson], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = normalizeJsonFileName(manifestFileName || "sprite-sheet.sprite.json");
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function loadMaskIntoPaint(state, maskUrl) {
     const image = await loadImage(maskUrl);
     const width = image.naturalWidth || image.width;
@@ -1335,6 +1350,18 @@ function normalizeExportFileName(value) {
     const cleaned = String(value).trim().replace(/[\\/:*?"<>|]+/g, "-");
     const withoutExtension = cleaned.replace(/\.[^.]*$/, "");
     return `${withoutExtension || "asset"}.png`;
+}
+
+function normalizeJsonFileName(value) {
+    const fallback = "sprite-sheet.sprite.json";
+    if (!value) return fallback;
+
+    const cleaned = String(value).trim().replace(/[\\/:*?"<>|]+/g, "-");
+    const withoutExtension = cleaned
+        .replace(/\.sprite\.json$/i, "")
+        .replace(/\.json$/i, "")
+        .replace(/\.[^.]*$/, "");
+    return `${withoutExtension || "sprite-sheet"}.sprite.json`;
 }
 
 function loadImage(src) {

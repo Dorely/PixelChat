@@ -76,6 +76,11 @@ public sealed class ArtWorkflowService(
             .Where(r => r.ProjectId == selected.Id)
             .OrderBy(r => r.Name)
             .ToListAsync(cancellationToken);
+        var spriteSheets = await db.SpriteSheetDefinitions
+            .AsNoTracking()
+            .Where(s => s.ProjectId == selected.Id)
+            .OrderByDescending(s => s.UpdatedAt)
+            .ToListAsync(cancellationToken);
         var masks = await db.ImageMasks
             .AsNoTracking()
             .Where(m => m.ProjectId == selected.Id)
@@ -91,6 +96,7 @@ public sealed class ArtWorkflowService(
         var assetViews = assets.Select(AssetView).ToList();
         var batchViews = batches.Select(batch => BatchView(batch, assets)).ToList();
         var recipeViews = recipes.Select(RecipeView).ToList();
+        var spriteSheetViews = spriteSheets.Select(SpriteSheetView).ToList();
         var maskViews = masks.Select(MaskView).ToList();
         var attachmentViews = attachments.Select(AttachmentView).ToList();
 
@@ -101,9 +107,11 @@ public sealed class ArtWorkflowService(
             assetViews,
             batchViews,
             recipeViews,
+            spriteSheetViews,
             maskViews,
             attachmentViews,
             batchViews.FirstOrDefault(b => b.Id == selected.ActiveBatchId),
+            spriteSheetViews.FirstOrDefault(s => s.Id == selected.ActiveSpriteSheetId),
             providerStatus);
     }
 
@@ -310,6 +318,158 @@ public sealed class ArtWorkflowService(
 
         db.ExportStepCaches.RemoveRange(steps);
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<SpriteSheetDetectionResult> DetectSpriteSheetFramesAsync(
+        Guid projectId,
+        SpriteSheetDetectionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var source = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == request.SourceAssetId, cancellationToken)
+            ?? throw new InvalidOperationException("Source asset was not found.");
+
+        return SpriteSheetImageAnalyzer.Detect(
+            source.Id,
+            source.Data,
+            source.ContentType,
+            source.Width,
+            source.Height,
+            request.ExpectedFrames,
+            request.LayoutHint,
+            request.BackgroundMode);
+    }
+
+    public async Task<SpriteSheetDefinitionView> SaveSpriteSheetAsync(
+        Guid projectId,
+        SaveSpriteSheetRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var source = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == request.SourceAssetId, cancellationToken)
+            ?? throw new InvalidOperationException("Source asset was not found.");
+        var parsed = ParsePngDataUrl(request.SpriteSheetPngDataUrl, "Sprite sheet output must be a PNG data URL.");
+        var rows = Math.Max(1, request.Rows);
+        var columns = Math.Max(1, request.Columns);
+        var cellWidth = Math.Max(1, request.CellWidth);
+        var cellHeight = Math.Max(1, request.CellHeight);
+        var padding = Math.Clamp(request.Padding, 0, 4096);
+        var gutter = Math.Clamp(request.Gutter, 0, 4096);
+        var fps = Math.Clamp(request.Fps, 1, 60);
+        var frames = NormalizeSpriteSheetFrames(request.Frames, rows, columns, cellWidth, cellHeight, fps);
+        if (frames.Count == 0)
+            throw new InvalidOperationException("At least one sprite frame is required.");
+
+        var now = DateTime.UtcNow;
+        var definition = new SpriteSheetDefinition
+        {
+            ProjectId = projectId,
+            SourceAssetId = source.Id,
+            Label = CleanSpriteSheetLabel(request.Label, source.Label),
+            Rows = rows,
+            Columns = columns,
+            CellWidth = cellWidth,
+            CellHeight = cellHeight,
+            Padding = padding,
+            Gutter = gutter,
+            Fps = fps,
+            Loop = request.Loop,
+            FramesJson = JsonSerializer.Serialize(frames, JsonOptions),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        var output = CreateAsset(
+            projectId,
+            definition.Label,
+            $"sprite-sheet-{now:yyyyMMddHHmmss}.png",
+            ArtAssetKind.SpriteSheet,
+            parsed.ContentType,
+            parsed.Data,
+            source.Id,
+            source.SourceBatchId,
+            source.SourcePromptRecipeId,
+            source.Prompt,
+            new
+            {
+                Source = "sprite-sheet",
+                SourceAssetId = source.Id,
+                SpriteSheetDefinitionId = definition.Id,
+                rows,
+                columns,
+                cellWidth,
+                cellHeight,
+                frameCount = frames.Count,
+            });
+        definition.OutputAssetId = output.Id;
+
+        await db.SpriteSheetDefinitions.AddAsync(definition, cancellationToken);
+        await db.ArtAssets.AddAsync(output, cancellationToken);
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveSpriteSheetId = definition.Id;
+        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+        project.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+        return SpriteSheetView(definition);
+    }
+
+    public async Task SelectSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default)
+    {
+        if (!await db.SpriteSheetDefinitions.AnyAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken))
+            throw new InvalidOperationException("Sprite sheet was not found.");
+
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveSpriteSheetId = spriteSheetId;
+        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+        project.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<string?> BuildSpriteSheetManifestJsonAsync(
+        Guid projectId,
+        Guid assetId,
+        string pngFileName,
+        CancellationToken cancellationToken = default)
+    {
+        var definition = await db.SpriteSheetDefinitions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.OutputAssetId == assetId, cancellationToken);
+        if (definition is null)
+            return null;
+
+        var asset = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite sheet asset was not found.");
+        var frames = DeserializeSpriteSheetFrames(definition.FramesJson);
+        var manifest = new
+        {
+            version = 1,
+            format = "pixelchat.sprite-sheet",
+            image = string.IsNullOrWhiteSpace(pngFileName) ? asset.FileName : pngFileName,
+            width = asset.Width,
+            height = asset.Height,
+            definition.Rows,
+            definition.Columns,
+            definition.CellWidth,
+            definition.CellHeight,
+            definition.Padding,
+            definition.Gutter,
+            fps = definition.Fps,
+            loop = definition.Loop,
+            frames = frames.Select(frame => new
+            {
+                frame.Index,
+                frame.SourceRect,
+                frame.CellRect,
+                frame.SpriteRect,
+                frame.OffsetX,
+                frame.OffsetY,
+                pivot = new { x = frame.PivotX, y = frame.PivotY },
+                frame.Duration,
+            }),
+        };
+        return JsonSerializer.Serialize(manifest, JsonOptions);
     }
 
     public async Task SetWorkspaceModeAsync(Guid projectId, WorkspaceMode mode, CancellationToken cancellationToken = default)
@@ -1204,6 +1364,8 @@ public sealed class ArtWorkflowService(
             recentAssets = view.Assets.Take(12).Select(CompactAsset),
             recentBatches = view.Batches.Take(6),
             recipes = view.Recipes.Take(12),
+            spriteSheets = view.SpriteSheets.Take(12),
+            activeSpriteSheet = view.ActiveSpriteSheet,
             provider = view.ImageProviderStatus,
         }, JsonOptions);
     }
@@ -1659,7 +1821,7 @@ public sealed class ArtWorkflowService(
     };
 
     private static ProjectView ProjectView(Project project) =>
-        new(project.Id, project.Name, project.ActiveWorkspaceMode, project.ActiveBatchId);
+        new(project.Id, project.Name, project.ActiveWorkspaceMode, project.ActiveBatchId, project.ActiveSpriteSheetId);
 
     private static ArtAssetView AssetView(ArtAsset asset) =>
         new(
@@ -1690,6 +1852,24 @@ public sealed class ArtWorkflowService(
             DataUrl.ToDataUrl(asset.ContentType, asset.Data),
             asset.Width,
             asset.Height);
+
+    private static SpriteSheetDefinitionView SpriteSheetView(SpriteSheetDefinition spriteSheet) =>
+        new(
+            spriteSheet.Id,
+            spriteSheet.SourceAssetId,
+            spriteSheet.OutputAssetId,
+            spriteSheet.Label,
+            spriteSheet.Rows,
+            spriteSheet.Columns,
+            spriteSheet.CellWidth,
+            spriteSheet.CellHeight,
+            spriteSheet.Padding,
+            spriteSheet.Gutter,
+            spriteSheet.Fps,
+            spriteSheet.Loop,
+            DeserializeSpriteSheetFrames(spriteSheet.FramesJson),
+            spriteSheet.CreatedAt,
+            spriteSheet.UpdatedAt);
 
     private static BackgroundRemovalExportCacheView BackgroundRemovalCacheView(BackgroundRemovalExportCache cache) =>
         new(
@@ -1736,6 +1916,65 @@ public sealed class ArtWorkflowService(
             NormalizeCacheString(request.RembgPackageVersion, "unknown"),
             request.AlphaMatting,
             NormalizeCacheString(request.OptionsHash, "default"));
+
+    private static List<SpriteSheetFrameView> NormalizeSpriteSheetFrames(
+        IReadOnlyList<SpriteSheetFrameView> frames,
+        int rows,
+        int columns,
+        int cellWidth,
+        int cellHeight,
+        int fps)
+    {
+        var maxFrames = checked(rows * columns);
+        var duration = Math.Round(1d / Math.Clamp(fps, 1, 60), 6);
+        return frames
+            .Where(frame => frame.Index >= 0 && frame.Index < maxFrames)
+            .OrderBy(frame => frame.Index)
+            .Take(maxFrames)
+            .Select(frame =>
+            {
+                var index = frame.Index;
+                var row = index / columns;
+                var column = index % columns;
+                var fallbackCell = new SpriteSheetRect(column * cellWidth, row * cellHeight, cellWidth, cellHeight);
+                return new SpriteSheetFrameView(
+                    index,
+                    NormalizeSpriteRect(frame.SourceRect),
+                    NormalizeSpriteRect(frame.CellRect, fallbackCell),
+                    NormalizeSpriteRect(frame.SpriteRect, fallbackCell),
+                    frame.OffsetX,
+                    frame.OffsetY,
+                    frame.PivotX is >= 0 and <= 1 ? frame.PivotX : 0.5,
+                    frame.PivotY is >= 0 and <= 1 ? frame.PivotY : 1.0,
+                    frame.Duration > 0 ? frame.Duration : duration);
+            })
+            .ToList();
+    }
+
+    private static SpriteSheetRect NormalizeSpriteRect(SpriteSheetRect rect) =>
+        new(
+            Math.Max(0, rect.X),
+            Math.Max(0, rect.Y),
+            Math.Max(1, rect.Width),
+            Math.Max(1, rect.Height));
+
+    private static SpriteSheetRect NormalizeSpriteRect(SpriteSheetRect rect, SpriteSheetRect fallback) =>
+        rect.Width <= 0 || rect.Height <= 0 ? fallback : NormalizeSpriteRect(rect);
+
+    private static IReadOnlyList<SpriteSheetFrameView> DeserializeSpriteSheetFrames(string framesJson)
+    {
+        if (string.IsNullOrWhiteSpace(framesJson))
+            return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<SpriteSheetFrameView>>(framesJson, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
 
     private static string NormalizeCacheString(string? value, string fallback) =>
         string.IsNullOrWhiteSpace(value) ? fallback : value.Trim().ToLowerInvariant();
@@ -1840,6 +2079,17 @@ public sealed class ArtWorkflowService(
         if (string.IsNullOrWhiteSpace(trimmed))
             throw new InvalidOperationException(error);
         return trimmed;
+    }
+
+    private static string CleanSpriteSheetLabel(string value, string sourceLabel)
+    {
+        var trimmed = Clean(value);
+        if (!string.IsNullOrWhiteSpace(trimmed))
+            return trimmed;
+
+        return string.IsNullOrWhiteSpace(sourceLabel)
+            ? "Sprite sheet"
+            : $"{sourceLabel} sprite sheet";
     }
 
     private static string? NormalizeImageContentType(string contentType) =>

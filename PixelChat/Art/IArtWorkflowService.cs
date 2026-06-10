@@ -13,6 +13,10 @@ public interface IArtWorkflowService
     Task<IReadOnlyList<ExportStepCacheView>> GetExportStepCacheAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<ExportStepCacheView> SaveExportStepCacheAsync(Guid projectId, Guid assetId, SaveExportStepCacheRequest request, CancellationToken cancellationToken = default);
     Task ClearExportStepCacheAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
+    Task<SpriteSheetDetectionResult> DetectSpriteSheetFramesAsync(Guid projectId, SpriteSheetDetectionRequest request, CancellationToken cancellationToken = default);
+    Task<SpriteSheetDefinitionView> SaveSpriteSheetAsync(Guid projectId, SaveSpriteSheetRequest request, CancellationToken cancellationToken = default);
+    Task SelectSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
+    Task<string?> BuildSpriteSheetManifestJsonAsync(Guid projectId, Guid assetId, string pngFileName, CancellationToken cancellationToken = default);
     Task SetWorkspaceModeAsync(Guid projectId, WorkspaceMode mode, CancellationToken cancellationToken = default);
     Task SelectBatchAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
     Task<GenerationBatchView> StartGenerateImagesAsync(Guid projectId, GenerateImagesRequest request, CancellationToken cancellationToken = default);

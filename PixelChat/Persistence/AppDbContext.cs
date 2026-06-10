@@ -17,6 +17,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<ExportStepCache> ExportStepCaches => Set<ExportStepCache>();
     public DbSet<GenerationBatch> GenerationBatches => Set<GenerationBatch>();
     public DbSet<PromptRecipe> PromptRecipes => Set<PromptRecipe>();
+    public DbSet<SpriteSheetDefinition> SpriteSheetDefinitions => Set<SpriteSheetDefinition>();
     public DbSet<ImageMask> ImageMasks => Set<ImageMask>();
     public DbSet<ChatContextAttachment> ChatContextAttachments => Set<ChatContextAttachment>();
     public DbSet<AssistantConversation> AssistantConversations => Set<AssistantConversation>();
@@ -95,6 +96,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
         modelBuilder.Entity<Project>(entity =>
         {
             entity.HasIndex(e => e.Name);
+            entity.HasIndex(e => e.ActiveSpriteSheetId);
             entity.Property(e => e.ActiveWorkspaceMode).HasConversion<string>();
         });
 
@@ -189,6 +191,28 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .WithMany(p => p.PromptRecipes)
                 .HasForeignKey(e => e.ProjectId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SpriteSheetDefinition>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.UpdatedAt });
+            entity.HasIndex(e => e.SourceAssetId);
+            entity.HasIndex(e => e.OutputAssetId);
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.SpriteSheets)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.SourceAsset)
+                .WithMany()
+                .HasForeignKey(e => e.SourceAssetId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.OutputAsset)
+                .WithMany()
+                .HasForeignKey(e => e.OutputAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<ImageMask>(entity =>

@@ -594,7 +594,7 @@ public sealed class AssistantChatService(
     private static bool TryReadFormDraft(string toolName, string result, out AssistantFormDraft draft)
     {
         draft = null!;
-        if (toolName is not ("draft_generate_form" or "draft_edit_form" or "draft_prompt_recipe_form")
+        if (toolName is not ("draft_generate_form" or "draft_edit_form" or "draft_prompt_recipe_form" or "draft_sprite_sheet_layout")
             || string.IsNullOrWhiteSpace(result))
         {
             return false;

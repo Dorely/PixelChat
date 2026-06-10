@@ -35,7 +35,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         AIFunctionFactory.Create(
             method: (string mode) => SwitchWorkspaceModeAsync(projectId, mode),
             name: "switch_workspace_mode",
-            description: "Switch the visible workspace mode. Allowed values: generate, compare, edit, recipes, assets."),
+            description: "Switch the visible workspace mode. Allowed values: generate, compare, edit, sprites, recipes, assets."),
 
         AIFunctionFactory.Create(
             method: (
@@ -70,6 +70,31 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 string? notes = null) => DraftPromptRecipeFormAsync(name, promptTemplate, assetType, styleRules, avoidRules, exampleAssetIds, preferredSize, notes),
             name: "draft_prompt_recipe_form",
             description: "Draft values for the prompt recipe editor. This does not save a recipe; the user reviews the form and clicks Save manually."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid sourceAssetId,
+                int? expectedFrames = null,
+                string? layoutHint = null,
+                string? backgroundMode = null) => DetectSpriteSheetFramesAsync(projectId, sourceAssetId, expectedFrames, layoutHint, backgroundMode),
+            name: "detect_sprite_sheet_frames",
+            description: "Read-only sprite-sheet image analysis for an existing source asset. Detects foreground frame bounding boxes using alpha or magenta key-color background and returns row-major pixel boxes."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid sourceAssetId,
+                int rows,
+                int columns,
+                int? cellWidth = null,
+                int? cellHeight = null,
+                int? padding = null,
+                int? gutter = null,
+                int? fps = null,
+                bool? loop = null,
+                string? anchor = null,
+                AssistantSpriteSheetFrameDraft[]? frames = null) => DraftSpriteSheetLayoutAsync(sourceAssetId, rows, columns, cellWidth, cellHeight, padding, gutter, fps, loop, anchor, frames),
+            name: "draft_sprite_sheet_layout",
+            description: "Draft editable sprite-sheet layout values in the Sprites workspace. Use after detecting or reasoning about boxes. This does not create a derivative asset; the user reviews the preview and clicks Apply Sheet."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId, bool? favorite = null, string? notes = null) =>
@@ -162,6 +187,52 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         return Task.FromResult(JsonSerializer.Serialize(draft));
     }
 
+    private async Task<string> DetectSpriteSheetFramesAsync(
+        Guid projectId,
+        Guid sourceAssetId,
+        int? expectedFrames,
+        string? layoutHint,
+        string? backgroundMode)
+    {
+        var result = await workflow.DetectSpriteSheetFramesAsync(
+            projectId,
+            new SpriteSheetDetectionRequest(
+                sourceAssetId,
+                expectedFrames,
+                layoutHint,
+                backgroundMode));
+        return JsonSerializer.Serialize(result);
+    }
+
+    private static Task<string> DraftSpriteSheetLayoutAsync(
+        Guid sourceAssetId,
+        int rows,
+        int columns,
+        int? cellWidth,
+        int? cellHeight,
+        int? padding,
+        int? gutter,
+        int? fps,
+        bool? loop,
+        string? anchor,
+        AssistantSpriteSheetFrameDraft[]? frames)
+    {
+        var draft = new AssistantFormDraft(
+            AssistantFormDraftTarget.SpriteSheet,
+            SourceAssetId: sourceAssetId,
+            Rows: Math.Clamp(rows, 1, 32),
+            Columns: Math.Clamp(columns, 1, 64),
+            CellWidth: cellWidth is int width ? Math.Clamp(width, 1, 8192) : null,
+            CellHeight: cellHeight is int height ? Math.Clamp(height, 1, 8192) : null,
+            Padding: padding is int paddingValue ? Math.Clamp(paddingValue, 0, 2048) : null,
+            Gutter: gutter is int gutterValue ? Math.Clamp(gutterValue, 0, 2048) : null,
+            Fps: fps is int fpsValue ? Math.Clamp(fpsValue, 1, 60) : null,
+            Loop: loop,
+            Anchor: string.IsNullOrWhiteSpace(anchor) ? "bottom-center" : anchor.Trim(),
+            SpriteFrames: frames ?? []);
+        return Task.FromResult(JsonSerializer.Serialize(draft));
+    }
+
     private async Task<string> MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes)
     {
         await workflow.MarkAssetAsync(projectId, assetId, favorite, notes);
@@ -193,6 +264,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             "generate" => WorkspaceMode.Generate,
             "compare" => WorkspaceMode.Compare,
             "edit" => WorkspaceMode.Edit,
+            "sprites" or "sprite" or "spritesheet" or "spritesheets" => WorkspaceMode.Sprites,
             "recipes" or "recipe" => WorkspaceMode.Recipes,
             "assets" or "asset" => WorkspaceMode.Assets,
             _ => throw new InvalidOperationException($"Unknown workspace mode '{mode}'.")

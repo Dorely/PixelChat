@@ -8,16 +8,19 @@ public sealed record WorkbenchView(
     IReadOnlyList<ArtAssetView> Assets,
     IReadOnlyList<GenerationBatchView> Batches,
     IReadOnlyList<PromptRecipeView> Recipes,
+    IReadOnlyList<SpriteSheetDefinitionView> SpriteSheets,
     IReadOnlyList<ImageMaskView> Masks,
     IReadOnlyList<ChatContextAttachmentView> Attachments,
     GenerationBatchView? ActiveBatch,
+    SpriteSheetDefinitionView? ActiveSpriteSheet,
     ProviderStatusView ImageProviderStatus);
 
 public sealed record ProjectView(
     Guid Id,
     string Name,
     WorkspaceMode ActiveWorkspaceMode,
-    Guid? ActiveBatchId);
+    Guid? ActiveBatchId,
+    Guid? ActiveSpriteSheetId);
 
 public sealed record ArtAssetView(
     Guid Id,
@@ -46,6 +49,72 @@ public sealed record ArtAssetExportView(
     string DataUrl,
     int? Width,
     int? Height);
+
+public sealed record SpriteSheetDefinitionView(
+    Guid Id,
+    Guid SourceAssetId,
+    Guid? OutputAssetId,
+    string Label,
+    int Rows,
+    int Columns,
+    int CellWidth,
+    int CellHeight,
+    int Padding,
+    int Gutter,
+    int Fps,
+    bool Loop,
+    IReadOnlyList<SpriteSheetFrameView> Frames,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
+public sealed record SpriteSheetFrameView(
+    int Index,
+    SpriteSheetRect SourceRect,
+    SpriteSheetRect CellRect,
+    SpriteSheetRect SpriteRect,
+    int OffsetX,
+    int OffsetY,
+    double PivotX,
+    double PivotY,
+    double Duration);
+
+public sealed record SpriteSheetRect(
+    int X,
+    int Y,
+    int Width,
+    int Height);
+
+public sealed record SpriteSheetDetectionRequest(
+    Guid SourceAssetId,
+    int? ExpectedFrames,
+    string? LayoutHint,
+    string? BackgroundMode);
+
+public sealed record SpriteSheetDetectionResult(
+    Guid SourceAssetId,
+    int ImageWidth,
+    int ImageHeight,
+    int Rows,
+    int Columns,
+    IReadOnlyList<SpriteSheetFrameDetectionView> Frames);
+
+public sealed record SpriteSheetFrameDetectionView(
+    int Index,
+    SpriteSheetRect SourceRect);
+
+public sealed record SaveSpriteSheetRequest(
+    Guid SourceAssetId,
+    string Label,
+    string SpriteSheetPngDataUrl,
+    int Rows,
+    int Columns,
+    int CellWidth,
+    int CellHeight,
+    int Padding,
+    int Gutter,
+    int Fps,
+    bool Loop,
+    IReadOnlyList<SpriteSheetFrameView> Frames);
 
 public sealed record BackgroundRemovalExportCacheRequest(
     string RemovalMethod,
