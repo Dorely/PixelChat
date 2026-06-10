@@ -13,21 +13,8 @@ public enum AssistantFormDraftTarget
 {
     Generate,
     Edit,
-    Recipe,
-    SpriteSheet
+    Recipe
 }
-
-public sealed record AssistantSpriteRect(
-    int X,
-    int Y,
-    int Width,
-    int Height);
-
-public sealed record AssistantSpriteSheetFrameDraft(
-    int Index,
-    AssistantSpriteRect SourceRect,
-    int OffsetX = 0,
-    int OffsetY = 0);
 
 public sealed record AssistantFormDraft(
     AssistantFormDraftTarget Target,
@@ -44,15 +31,4 @@ public sealed record AssistantFormDraft(
     IReadOnlyList<string>? StyleRules = null,
     IReadOnlyList<string>? AvoidRules = null,
     string? Notes = null,
-    string? PreferredSize = null,
-    Guid? SourceAssetId = null,
-    int? Rows = null,
-    int? Columns = null,
-    int? CellWidth = null,
-    int? CellHeight = null,
-    int? Padding = null,
-    int? Gutter = null,
-    int? Fps = null,
-    bool? Loop = null,
-    string? Anchor = null,
-    IReadOnlyList<AssistantSpriteSheetFrameDraft>? SpriteFrames = null);
+    string? PreferredSize = null);

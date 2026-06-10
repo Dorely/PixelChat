@@ -145,8 +145,6 @@ else
     private DotNetObjectReference<Home>? _dotNetRef;
     private ElementReference _editorCanvas;
     private Guid? _loadedEditorAssetId;
-    private AssistantFormDraft? _spriteSheetDraft;
-    private long _spriteSheetDraftVersion;
     private CancellationTokenSource? _maskAutosaveCts;
     private readonly SemaphoreSlim _maskAutosaveLock = new(1, 1);
     private long _maskAutosaveVersion;
@@ -607,8 +605,6 @@ else
     private RenderFragment RenderSpritesWorkspace() => __builder =>
     {
         <SpriteSheetWorkspace Workbench="@_workbench"
-                              Draft="@_spriteSheetDraft"
-                              DraftVersion="@_spriteSheetDraftVersion"
                               OnChanged="OnSpriteSheetChangedAsync"
                               OnExportAsset="OpenExportAsync" />
     };
@@ -801,6 +797,7 @@ else
                 {
                     var asset = AttachmentAsset(attachment);
                     var mask = AttachmentMask(attachment);
+                    var spriteFrame = AttachmentSpriteFrame(attachment);
                     <span class="chat-attachment-chip">
                         @if (asset is not null)
                         {
@@ -809,6 +806,10 @@ else
                         else if (mask is not null)
                         {
                             <img src="@mask.PreviewDataUrl" alt="@mask.Label" />
+                        }
+                        else if (spriteFrame is not null)
+                        {
+                            <img src="@spriteFrame.PreviewDataUrl" alt="@spriteFrame.Label" />
                         }
                         <span>
                             <small>@AttachmentKindLabel(attachment)</small>
@@ -1638,18 +1639,7 @@ else
             return;
 
         await FlushMaskAutosaveAsync();
-        _spriteSheetDraft = new AssistantFormDraft(
-            AssistantFormDraftTarget.SpriteSheet,
-            SourceAssetId: asset.Id,
-            Rows: 1,
-            Columns: 1,
-            Padding: 8,
-            Gutter: 16,
-            Fps: 8,
-            Loop: true,
-            Anchor: "bottom-center");
-        _spriteSheetDraftVersion++;
-        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Sprites);
+        await Workflow.StartSpriteSheetEditAsync(_workbench.Project.Id, asset.Id);
         await ReloadWorkbenchAsync();
     }
 
@@ -2823,12 +2813,6 @@ else
                 await ReloadWorkbenchAsync();
                 break;
 
-            case AssistantFormDraftTarget.SpriteSheet:
-                _spriteSheetDraft = draft;
-                _spriteSheetDraftVersion++;
-                await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Sprites);
-                await ReloadWorkbenchAsync();
-                break;
         }
     }
 
@@ -3070,10 +3054,16 @@ else
             ? _workbench?.Masks.FirstOrDefault(mask => mask.Id == attachment.RefId)
             : null;
 
+    private SpriteSheetFrameRecordView? AttachmentSpriteFrame(ChatContextAttachmentView attachment) =>
+        attachment.Type == ChatContextAttachmentType.SpriteFrame
+            ? _workbench?.SpriteSheets.SelectMany(sheet => sheet.Frames).FirstOrDefault(frame => frame.Id == attachment.RefId)
+            : null;
+
     private static string AttachmentKindLabel(ChatContextAttachmentView attachment) => attachment.Type switch
     {
         ChatContextAttachmentType.PromptRecipe => "Recipe",
         ChatContextAttachmentType.GenerationBatch => "Batch",
+        ChatContextAttachmentType.SpriteFrame => "Frame",
         _ => attachment.Type.ToString()
     };
 

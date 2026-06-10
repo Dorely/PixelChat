@@ -1,3 +1,4 @@
+const editorStates = new WeakMap();
 const animations = new WeakMap();
 
 export async function detectSpriteSheetFrames(imageUrl, expectedFrames, layoutHint, backgroundMode) {
@@ -35,16 +36,22 @@ export async function detectSpriteSheetFrames(imageUrl, expectedFrames, layoutHi
     };
 }
 
-export async function drawSpriteSheetCanvases(sourceCanvas, previewCanvas, animationCanvas, imageUrl, payload, selectedIndex) {
+export async function drawSpriteBoxEditor(sourceCanvas, animationCanvas, dotNetRef, imageUrl, payload, selectedIndex, tool) {
     const image = await loadImage(imageUrl);
     const layout = normalizeLayout(payload);
-    drawSourceCanvas(sourceCanvas, image, layout, Number(selectedIndex) || 0);
+    const state = ensureEditorState(sourceCanvas, dotNetRef);
+    state.image = image;
+    state.imageUrl = imageUrl;
+    state.layout = layout;
+    state.selectedIndex = Number.isFinite(Number(selectedIndex)) ? Number(selectedIndex) : -1;
+    state.tool = String(tool || "select").toLowerCase();
+    drawSourceCanvas(sourceCanvas, state);
+
     const output = renderOutputCanvas(image, layout);
-    drawPreviewCanvas(previewCanvas, output.canvas, output.frames);
     startAnimation(animationCanvas, output.canvas, output.frames, layout);
 }
 
-export async function renderSpriteSheetOutput(imageUrl, payload) {
+export async function renderSpriteSheetAutosave(imageUrl, payload) {
     const image = await loadImage(imageUrl);
     const layout = normalizeLayout(payload);
     const output = renderOutputCanvas(image, layout);
@@ -54,25 +61,224 @@ export async function renderSpriteSheetOutput(imageUrl, payload) {
         Height: output.canvas.height,
         Frames: output.frames.map(frame => ({
             Index: frame.index,
-            SourceRect: toDotNetRect(frame.sourceRect),
+            Label: frame.label,
+            SourceRect: toDotNetRect(frame.rebasedSourceRect),
             CellRect: toDotNetRect(frame.cellRect),
             SpriteRect: toDotNetRect(frame.spriteRect),
-            OffsetX: frame.offsetX,
-            OffsetY: frame.offsetY,
-            PivotX: 0.5,
-            PivotY: 1.0,
-            Duration: frame.duration,
+            PreviewPngDataUrl: frame.previewCanvas.toDataURL("image/png"),
         })),
     };
 }
 
-export function disposeSpriteSheetCanvases(animationCanvas) {
+export function disposeSpriteBoxEditor(sourceCanvas, animationCanvas) {
     stopAnimation(animationCanvas);
+    editorStates.delete(sourceCanvas);
+}
+
+function ensureEditorState(canvas, dotNetRef) {
+    let state = editorStates.get(canvas);
+    if (state) {
+        state.dotNetRef = dotNetRef;
+        return state;
+    }
+
+    state = {
+        dotNetRef,
+        image: null,
+        imageUrl: "",
+        layout: null,
+        selectedIndex: -1,
+        tool: "select",
+        viewport: null,
+        drag: null,
+    };
+    editorStates.set(canvas, state);
+
+    canvas.addEventListener("pointerdown", event => onPointerDown(canvas, state, event));
+    canvas.addEventListener("pointermove", event => onPointerMove(canvas, state, event));
+    canvas.addEventListener("pointerup", event => onPointerUp(canvas, state, event));
+    canvas.addEventListener("pointercancel", event => onPointerUp(canvas, state, event));
+    canvas.addEventListener("pointerleave", event => {
+        if (state.drag) onPointerUp(canvas, state, event);
+    });
+    return state;
+}
+
+function onPointerDown(canvas, state, event) {
+    if (!state.image || !state.layout || !state.viewport) return;
+    const point = eventToImagePoint(canvas, state, event);
+    if (!point) return;
+    event.preventDefault();
+    canvas.setPointerCapture?.(event.pointerId);
+
+    if (state.tool === "draw") {
+        const index = state.layout.frames.length;
+        const label = `Frame ${index + 1}`;
+        const frame = {
+            index,
+            label,
+            sourceRect: { x: point.x, y: point.y, w: 1, h: 1 },
+        };
+        state.layout.frames.push(frame);
+        state.layout.frameCount = state.layout.frames.length;
+        state.selectedIndex = index;
+        state.drag = { type: "draw", index, start: point };
+        drawSourceCanvas(canvas, state);
+        return;
+    }
+
+    const hit = hitTest(state, point);
+    if (!hit) {
+        state.selectedIndex = -1;
+        state.dotNetRef?.invokeMethodAsync("OnSpriteBoxSelected", -1);
+        drawSourceCanvas(canvas, state);
+        return;
+    }
+
+    state.selectedIndex = hit.index;
+    state.dotNetRef?.invokeMethodAsync("OnSpriteBoxSelected", hit.index);
+    const frame = state.layout.frames[hit.index];
+    state.drag = {
+        type: hit.handle ? "resize" : "move",
+        index: hit.index,
+        handle: hit.handle,
+        start: point,
+        original: { ...frame.sourceRect },
+    };
+    drawSourceCanvas(canvas, state);
+}
+
+function onPointerMove(canvas, state, event) {
+    if (!state.drag || !state.layout || !state.viewport) return;
+    const point = eventToImagePoint(canvas, state, event);
+    if (!point) return;
+    event.preventDefault();
+
+    const frame = state.layout.frames[state.drag.index];
+    if (!frame) return;
+
+    if (state.drag.type === "draw") {
+        frame.sourceRect = rectFromPoints(state.drag.start, point);
+    } else if (state.drag.type === "move") {
+        const dx = point.x - state.drag.start.x;
+        const dy = point.y - state.drag.start.y;
+        frame.sourceRect = clampRect({
+            x: Math.round(state.drag.original.x + dx),
+            y: Math.round(state.drag.original.y + dy),
+            w: state.drag.original.w,
+            h: state.drag.original.h,
+        }, imageWidth(state.image), imageHeight(state.image));
+    } else if (state.drag.type === "resize") {
+        frame.sourceRect = resizeRect(state.drag.original, state.drag.handle, point, imageWidth(state.image), imageHeight(state.image));
+    }
+
+    drawSourceCanvas(canvas, state);
+}
+
+function onPointerUp(canvas, state, event) {
+    if (!state.drag || !state.layout) return;
+    event.preventDefault();
+
+    const frame = state.layout.frames[state.drag.index];
+    if (frame) {
+        frame.sourceRect = clampRect(frame.sourceRect, imageWidth(state.image), imageHeight(state.image));
+        if (frame.sourceRect.w < 3 || frame.sourceRect.h < 3) {
+            state.layout.frames.splice(state.drag.index, 1);
+            state.selectedIndex = -1;
+        }
+    }
+
+    reindexLayoutFrames(state.layout);
+    state.layout.frameCount = state.layout.frames.length;
+    const selectedIndex = state.selectedIndex >= 0 && state.selectedIndex < state.layout.frames.length
+        ? state.selectedIndex
+        : (state.layout.frames.length > 0 ? 0 : -1);
+    state.selectedIndex = selectedIndex;
+    state.drag = null;
+    drawSourceCanvas(canvas, state);
+    state.dotNetRef?.invokeMethodAsync("OnSpriteBoxesChanged", {
+        SelectedIndex: selectedIndex,
+        Frames: state.layout.frames.map(frame => ({
+            Index: frame.index,
+            Label: frame.label,
+            SourceRect: toDotNetRect(frame.sourceRect),
+        })),
+    });
+}
+
+function drawSourceCanvas(canvas, state) {
+    const ctx = resizeCanvas(canvas);
+    drawChecker(ctx, canvas.width, canvas.height);
+    if (!state.image || !state.layout) return;
+
+    const width = imageWidth(state.image);
+    const height = imageHeight(state.image);
+    const viewport = fitRect(canvas.width, canvas.height, width, height, 18 * deviceScale());
+    state.viewport = viewport;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(state.image, viewport.x, viewport.y, viewport.w, viewport.h);
+
+    const scaleX = viewport.w / width;
+    const scaleY = viewport.h / height;
+    ctx.save();
+    ctx.lineWidth = Math.max(2, 2 * deviceScale());
+    ctx.font = `${Math.max(12, 12 * deviceScale())}px system-ui, sans-serif`;
+    ctx.textBaseline = "top";
+    for (const frame of state.layout.frames) {
+        const rect = frame.sourceRect;
+        const x = viewport.x + rect.x * scaleX;
+        const y = viewport.y + rect.y * scaleY;
+        const w = rect.w * scaleX;
+        const h = rect.h * scaleY;
+        const selected = frame.index === state.selectedIndex;
+        ctx.strokeStyle = selected ? "#f59f00" : "#1f6feb";
+        ctx.fillStyle = selected ? "rgba(245,159,0,0.16)" : "rgba(31,111,235,0.12)";
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeRect(x, y, w, h);
+
+        const label = frame.label || `Frame ${frame.index + 1}`;
+        const labelWidth = Math.min(ctx.measureText(label).width + 10 * deviceScale(), Math.max(28 * deviceScale(), w));
+        ctx.fillStyle = selected ? "rgba(122,83,0,0.92)" : "rgba(15,77,184,0.9)";
+        ctx.fillRect(x, y, labelWidth, 20 * deviceScale());
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(label, x + 5 * deviceScale(), y + 3 * deviceScale(), labelWidth - 8 * deviceScale());
+
+        if (selected) drawHandles(ctx, x, y, w, h);
+    }
+    ctx.restore();
+}
+
+function drawHandles(ctx, x, y, w, h) {
+    const size = 8 * deviceScale();
+    const half = size / 2;
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#f59f00";
+    for (const point of [
+        [x, y],
+        [x + w, y],
+        [x, y + h],
+        [x + w, y + h],
+    ]) {
+        ctx.fillRect(point[0] - half, point[1] - half, size, size);
+        ctx.strokeRect(point[0] - half, point[1] - half, size, size);
+    }
 }
 
 function renderOutputCanvas(image, layout) {
+    if (layout.frames.length === 0) {
+        const canvas = document.createElement("canvas");
+        canvas.width = imageWidth(image);
+        canvas.height = imageHeight(image);
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(image, 0, 0);
+        return { canvas, frames: [] };
+    }
+
+    const frameCount = Math.min(layout.frameCount, layout.frames.length, layout.rows * layout.columns);
+    const rows = Math.max(layout.rows, Math.ceil(frameCount / layout.columns));
     const width = layout.columns * layout.cellWidth + Math.max(0, layout.columns - 1) * layout.gutter;
-    const height = layout.rows * layout.cellHeight + Math.max(0, layout.rows - 1) * layout.gutter;
+    const height = rows * layout.cellHeight + Math.max(0, rows - 1) * layout.gutter;
     if (width <= 0 || height <= 0 || width > 32767 || height > 32767 || width * height > 120_000_000) {
         throw new Error("Sprite sheet output is too large for browser rendering.");
     }
@@ -85,11 +291,9 @@ function renderOutputCanvas(image, layout) {
     ctx.clearRect(0, 0, width, height);
 
     const frames = [];
-    const frameCount = Math.min(layout.frameCount, layout.frames.length, layout.rows * layout.columns);
-    const duration = Number((1 / Math.max(1, layout.fps)).toFixed(6));
     for (let index = 0; index < frameCount; index++) {
         const frame = layout.frames[index];
-        const sourceRect = clampRect(frame.sourceRect, image.naturalWidth || image.width, image.naturalHeight || image.height);
+        const sourceRect = clampRect(frame.sourceRect, imageWidth(image), imageHeight(image));
         const row = Math.floor(index / layout.columns);
         const column = index % layout.columns;
         const cellRect = {
@@ -98,9 +302,9 @@ function renderOutputCanvas(image, layout) {
             w: layout.cellWidth,
             h: layout.cellHeight,
         };
-        const destX = Math.round(cellRect.x + ((layout.cellWidth - sourceRect.w) / 2) + frame.offsetX);
+        const destX = Math.round(cellRect.x + ((layout.cellWidth - sourceRect.w) / 2));
         const baseline = cellRect.y + layout.cellHeight - layout.padding;
-        const destY = Math.round(baseline - sourceRect.h + frame.offsetY);
+        const destY = Math.round(baseline - sourceRect.h);
         const spriteRect = {
             x: destX,
             y: destY,
@@ -118,75 +322,35 @@ function renderOutputCanvas(image, layout) {
             destY,
             sourceRect.w,
             sourceRect.h);
+
+        const rebasedSourceRect = intersectRect(spriteRect, width, height);
+        const previewCanvas = document.createElement("canvas");
+        previewCanvas.width = cellRect.w;
+        previewCanvas.height = cellRect.h;
+        const previewCtx = previewCanvas.getContext("2d");
+        previewCtx.imageSmoothingEnabled = false;
+        previewCtx.drawImage(canvas, cellRect.x, cellRect.y, cellRect.w, cellRect.h, 0, 0, cellRect.w, cellRect.h);
         frames.push({
             index,
+            label: frame.label || `Frame ${index + 1}`,
             sourceRect,
             cellRect,
             spriteRect,
-            offsetX: frame.offsetX,
-            offsetY: frame.offsetY,
-            duration,
+            rebasedSourceRect,
+            previewCanvas,
         });
     }
 
     return { canvas, frames };
 }
 
-function drawSourceCanvas(canvas, image, layout, selectedIndex) {
-    const ctx = resizeCanvas(canvas);
-    drawChecker(ctx, canvas.width, canvas.height);
-    const viewport = fitRect(canvas.width, canvas.height, image.naturalWidth || image.width, image.naturalHeight || image.height, 18 * deviceScale());
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(image, viewport.x, viewport.y, viewport.w, viewport.h);
-
-    const scaleX = viewport.w / (image.naturalWidth || image.width);
-    const scaleY = viewport.h / (image.naturalHeight || image.height);
-    ctx.save();
-    ctx.lineWidth = Math.max(2, 2 * deviceScale());
-    ctx.font = `${Math.max(11, 11 * deviceScale())}px system-ui, sans-serif`;
-    ctx.textBaseline = "top";
-    for (const frame of layout.frames.slice(0, layout.frameCount)) {
-        const rect = frame.sourceRect;
-        const x = viewport.x + rect.x * scaleX;
-        const y = viewport.y + rect.y * scaleY;
-        const w = rect.w * scaleX;
-        const h = rect.h * scaleY;
-        const selected = frame.index === selectedIndex;
-        ctx.strokeStyle = selected ? "#f59f00" : "#1f6feb";
-        ctx.fillStyle = selected ? "rgba(245,159,0,0.16)" : "rgba(31,111,235,0.12)";
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeRect(x, y, w, h);
-        ctx.fillStyle = selected ? "#7a5300" : "#0f4db8";
-        ctx.fillText(String(frame.index + 1), x + 4 * deviceScale(), y + 4 * deviceScale());
-    }
-    ctx.restore();
-}
-
-function drawPreviewCanvas(canvas, outputCanvas, frames) {
-    const ctx = resizeCanvas(canvas);
-    drawChecker(ctx, canvas.width, canvas.height);
-    const viewport = fitRect(canvas.width, canvas.height, outputCanvas.width, outputCanvas.height, 18 * deviceScale());
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(outputCanvas, viewport.x, viewport.y, viewport.w, viewport.h);
-
-    const scaleX = viewport.w / outputCanvas.width;
-    const scaleY = viewport.h / outputCanvas.height;
-    ctx.save();
-    ctx.lineWidth = Math.max(1, deviceScale());
-    ctx.strokeStyle = "rgba(31,111,235,0.7)";
-    for (const frame of frames) {
-        ctx.strokeRect(
-            viewport.x + frame.cellRect.x * scaleX,
-            viewport.y + frame.cellRect.y * scaleY,
-            frame.cellRect.w * scaleX,
-            frame.cellRect.h * scaleY);
-    }
-    ctx.restore();
-}
-
 function startAnimation(canvas, outputCanvas, frames, layout) {
     stopAnimation(canvas);
-    if (!canvas || frames.length === 0) return;
+    if (!canvas || frames.length === 0) {
+        const ctx = resizeCanvas(canvas);
+        drawChecker(ctx, canvas.width, canvas.height);
+        return;
+    }
 
     const state = {
         outputCanvas,
@@ -232,30 +396,102 @@ function drawAnimationFrame(canvas, state) {
         viewport.h);
 }
 
+function hitTest(state, point) {
+    for (let index = state.layout.frames.length - 1; index >= 0; index--) {
+        const frame = state.layout.frames[index];
+        const handle = hitHandle(frame.sourceRect, point, state);
+        if (handle) return { index, handle };
+        const rect = frame.sourceRect;
+        if (point.x >= rect.x && point.x <= rect.x + rect.w && point.y >= rect.y && point.y <= rect.y + rect.h) {
+            return { index, handle: null };
+        }
+    }
+
+    return null;
+}
+
+function hitHandle(rect, point, state) {
+    if (!state.viewport || !state.image) return null;
+    const handleSize = 10 / Math.max(0.001, state.viewport.w / imageWidth(state.image));
+    const handles = [
+        ["nw", rect.x, rect.y],
+        ["ne", rect.x + rect.w, rect.y],
+        ["sw", rect.x, rect.y + rect.h],
+        ["se", rect.x + rect.w, rect.y + rect.h],
+    ];
+    for (const [name, x, y] of handles) {
+        if (Math.abs(point.x - x) <= handleSize && Math.abs(point.y - y) <= handleSize) return name;
+    }
+    return null;
+}
+
+function resizeRect(original, handle, point, width, height) {
+    let x1 = original.x;
+    let y1 = original.y;
+    let x2 = original.x + original.w;
+    let y2 = original.y + original.h;
+    if (handle.includes("n")) y1 = point.y;
+    if (handle.includes("s")) y2 = point.y;
+    if (handle.includes("w")) x1 = point.x;
+    if (handle.includes("e")) x2 = point.x;
+    return clampRect({
+        x: Math.min(x1, x2),
+        y: Math.min(y1, y2),
+        w: Math.abs(x2 - x1),
+        h: Math.abs(y2 - y1),
+    }, width, height);
+}
+
+function eventToImagePoint(canvas, state, event) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / Math.max(1, rect.width);
+    const scaleY = canvas.height / Math.max(1, rect.height);
+    const x = (event.clientX - rect.left) * scaleX;
+    const y = (event.clientY - rect.top) * scaleY;
+    const viewport = state.viewport;
+    if (!viewport || x < viewport.x || x > viewport.x + viewport.w || y < viewport.y || y > viewport.y + viewport.h) {
+        return null;
+    }
+
+    return {
+        x: Math.round((x - viewport.x) / (viewport.w / imageWidth(state.image))),
+        y: Math.round((y - viewport.y) / (viewport.h / imageHeight(state.image))),
+    };
+}
+
+function rectFromPoints(a, b) {
+    return {
+        x: Math.min(a.x, b.x),
+        y: Math.min(a.y, b.y),
+        w: Math.max(1, Math.abs(b.x - a.x)),
+        h: Math.max(1, Math.abs(b.y - a.y)),
+    };
+}
+
 function normalizeLayout(payload) {
     const rows = clampInt(read(payload, "Rows", "rows"), 1, 32, 1);
     let columns = clampInt(read(payload, "Columns", "columns"), 1, 64, 1);
-    const frameCount = clampInt(read(payload, "FrameCount", "frameCount"), 1, 128, 1);
-    if (rows * columns < frameCount) {
-        columns = Math.max(1, Math.ceil(frameCount / rows));
-    }
-
     const frames = (read(payload, "Frames", "frames") || []).map((frame, fallbackIndex) => {
         const rect = read(frame, "SourceRect", "sourceRect") || {};
         return {
             index: clampInt(read(frame, "Index", "index"), 0, 127, fallbackIndex),
+            label: String(read(frame, "Label", "label") || `Frame ${fallbackIndex + 1}`),
             sourceRect: {
                 x: clampInt(read(rect, "X", "x"), 0, 32767, 0),
                 y: clampInt(read(rect, "Y", "y"), 0, 32767, 0),
                 w: clampInt(read(rect, "Width", "width", "W", "w"), 1, 32767, 1),
                 h: clampInt(read(rect, "Height", "height", "H", "h"), 1, 32767, 1),
             },
-            offsetX: clampInt(read(frame, "OffsetX", "offsetX"), -32767, 32767, 0),
-            offsetY: clampInt(read(frame, "OffsetY", "offsetY"), -32767, 32767, 0),
         };
     });
 
     frames.sort((left, right) => left.index - right.index);
+    const frameCount = frames.length;
+    if (frameCount > 0 && rows * columns < frameCount) {
+        columns = Math.max(1, Math.ceil(frameCount / rows));
+    }
+
+    reindexFrames(frames);
     return {
         rows,
         columns,
@@ -268,6 +504,17 @@ function normalizeLayout(payload) {
         loop: Boolean(read(payload, "Loop", "loop") ?? true),
         frames,
     };
+}
+
+function reindexLayoutFrames(layout) {
+    reindexFrames(layout.frames);
+}
+
+function reindexFrames(frames) {
+    frames.forEach((frame, index) => {
+        frame.index = index;
+        if (!frame.label) frame.label = `Frame ${index + 1}`;
+    });
 }
 
 function detectFramesFromPixels(data, width, height, expectedFrames, backgroundMode) {
@@ -425,8 +672,8 @@ function isForeground(r, g, b, a, backgroundMode) {
 
 function imagePixels(image) {
     const canvas = document.createElement("canvas");
-    canvas.width = image.naturalWidth || image.width;
-    canvas.height = image.naturalHeight || image.height;
+    canvas.width = imageWidth(image);
+    canvas.height = imageHeight(image);
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
     return {
@@ -460,12 +707,12 @@ function drawChecker(ctx, width, height) {
     }
 }
 
-function fitRect(canvasWidth, canvasHeight, imageWidth, imageHeight, padding) {
+function fitRect(canvasWidth, canvasHeight, imageWidthValue, imageHeightValue, padding) {
     const maxW = Math.max(1, canvasWidth - padding * 2);
     const maxH = Math.max(1, canvasHeight - padding * 2);
-    const scale = Math.min(maxW / imageWidth, maxH / imageHeight);
-    const w = imageWidth * scale;
-    const h = imageHeight * scale;
+    const scale = Math.min(maxW / imageWidthValue, maxH / imageHeightValue);
+    const w = imageWidthValue * scale;
+    const h = imageHeightValue * scale;
     return { x: (canvasWidth - w) / 2, y: (canvasHeight - h) / 2, w, h };
 }
 
@@ -478,6 +725,14 @@ function clampRect(rect, width, height) {
         w: clampInt(rect.w, 1, Math.max(1, width - x), 1),
         h: clampInt(rect.h, 1, Math.max(1, height - y), 1),
     };
+}
+
+function intersectRect(rect, width, height) {
+    const x1 = Math.max(0, Math.min(width, rect.x));
+    const y1 = Math.max(0, Math.min(height, rect.y));
+    const x2 = Math.max(0, Math.min(width, rect.x + rect.w));
+    const y2 = Math.max(0, Math.min(height, rect.y + rect.h));
+    return { x: x1, y: y1, w: Math.max(1, x2 - x1), h: Math.max(1, y2 - y1) };
 }
 
 function toDotNetRect(rect) {
@@ -505,6 +760,14 @@ function clampInt(value, min, max, fallback) {
 
 function deviceScale() {
     return window.devicePixelRatio || 1;
+}
+
+function imageWidth(image) {
+    return image?.naturalWidth || image?.width || 1;
+}
+
+function imageHeight(image) {
+    return image?.naturalHeight || image?.height || 1;
 }
 
 async function loadImage(url) {

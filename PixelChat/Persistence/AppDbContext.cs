@@ -18,6 +18,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<GenerationBatch> GenerationBatches => Set<GenerationBatch>();
     public DbSet<PromptRecipe> PromptRecipes => Set<PromptRecipe>();
     public DbSet<SpriteSheetDefinition> SpriteSheetDefinitions => Set<SpriteSheetDefinition>();
+    public DbSet<SpriteSheetFrameRecord> SpriteSheetFrameRecords => Set<SpriteSheetFrameRecord>();
     public DbSet<ImageMask> ImageMasks => Set<ImageMask>();
     public DbSet<ChatContextAttachment> ChatContextAttachments => Set<ChatContextAttachment>();
     public DbSet<AssistantConversation> AssistantConversations => Set<AssistantConversation>();
@@ -213,6 +214,22 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .WithMany()
                 .HasForeignKey(e => e.OutputAssetId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<SpriteSheetFrameRecord>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.SpriteSheetDefinitionId, e.Index }).IsUnique();
+            entity.HasIndex(e => e.SpriteSheetDefinitionId);
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.SpriteSheetFrameRecords)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.SpriteSheetDefinition)
+                .WithMany(s => s.FrameRecords)
+                .HasForeignKey(e => e.SpriteSheetDefinitionId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ImageMask>(entity =>

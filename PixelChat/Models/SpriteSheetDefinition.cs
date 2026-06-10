@@ -24,6 +24,8 @@ public class SpriteSheetDefinition
     public bool Loop { get; set; } = true;
     public string FramesJson { get; set; } = "[]";
 
+    public ICollection<SpriteSheetFrameRecord> FrameRecords { get; set; } = [];
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

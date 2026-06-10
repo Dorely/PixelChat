@@ -13,6 +13,9 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         "clear_chat_attachments",
         "switch_workspace_mode",
         "mark_asset",
+        "update_sprite_sheet_frames",
+        "reset_sprite_sheet_to_original",
+        "attach_sprite_sheet_frames",
     };
 
     public IList<AITool> Build(Guid projectId) =>
@@ -25,7 +28,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         AIFunctionFactory.Create(
             method: (string type, Guid refId, string? label = null) => AttachContextAsync(projectId, type, refId, label),
             name: "attach_chat_attachment",
-            description: "Attach an existing asset, mask, crop, prompt recipe, or generation batch to the visible chat attachments."),
+            description: "Attach an existing asset, mask, crop, sprite frame, prompt recipe, or generation batch to the visible chat attachments."),
 
         AIFunctionFactory.Create(
             method: () => ClearContextAsync(projectId),
@@ -82,19 +85,28 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
 
         AIFunctionFactory.Create(
             method: (
-                Guid sourceAssetId,
+                Guid spriteSheetId,
                 int rows,
                 int columns,
-                int? cellWidth = null,
-                int? cellHeight = null,
+                int cellWidth,
+                int cellHeight,
                 int? padding = null,
                 int? gutter = null,
                 int? fps = null,
                 bool? loop = null,
-                string? anchor = null,
-                AssistantSpriteSheetFrameDraft[]? frames = null) => DraftSpriteSheetLayoutAsync(sourceAssetId, rows, columns, cellWidth, cellHeight, padding, gutter, fps, loop, anchor, frames),
-            name: "draft_sprite_sheet_layout",
-            description: "Draft editable sprite-sheet layout values in the Sprites workspace. Use after detecting or reasoning about boxes. This does not create a derivative asset; the user reviews the preview and clicks Apply Sheet."),
+                SpriteSheetFrameUpdateView[]? frames = null) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, padding, gutter, fps, loop, frames),
+            name: "update_sprite_sheet_frames",
+            description: "Update the visible Sprites workspace working sheet. Sets frame boxes/layout, renders the normalized working PNG in place, rebases frame boxes, and autosaves frame records. Use detected boxes or user-requested adjustments."),
+
+        AIFunctionFactory.Create(
+            method: (Guid spriteSheetId) => ResetSpriteSheetToOriginalAsync(projectId, spriteSheetId),
+            name: "reset_sprite_sheet_to_original",
+            description: "Reset the selected working sprite sheet to its immutable original image and clear all frame records."),
+
+        AIFunctionFactory.Create(
+            method: (Guid spriteSheetId, Guid[]? frameIds = null) => AttachSpriteSheetFramesAsync(projectId, spriteSheetId, frameIds),
+            name: "attach_sprite_sheet_frames",
+            description: "Attach one or more saved sprite frame previews to visible chat context. Omit frameIds to attach every frame in the sheet."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId, bool? favorite = null, string? notes = null) =>
@@ -204,33 +216,49 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         return JsonSerializer.Serialize(result);
     }
 
-    private static Task<string> DraftSpriteSheetLayoutAsync(
-        Guid sourceAssetId,
+    private async Task<string> UpdateSpriteSheetFramesAsync(
+        Guid projectId,
+        Guid spriteSheetId,
         int rows,
         int columns,
-        int? cellWidth,
-        int? cellHeight,
+        int cellWidth,
+        int cellHeight,
         int? padding,
         int? gutter,
         int? fps,
         bool? loop,
-        string? anchor,
-        AssistantSpriteSheetFrameDraft[]? frames)
+        SpriteSheetFrameUpdateView[]? frames)
     {
-        var draft = new AssistantFormDraft(
-            AssistantFormDraftTarget.SpriteSheet,
-            SourceAssetId: sourceAssetId,
-            Rows: Math.Clamp(rows, 1, 32),
-            Columns: Math.Clamp(columns, 1, 64),
-            CellWidth: cellWidth is int width ? Math.Clamp(width, 1, 8192) : null,
-            CellHeight: cellHeight is int height ? Math.Clamp(height, 1, 8192) : null,
-            Padding: padding is int paddingValue ? Math.Clamp(paddingValue, 0, 2048) : null,
-            Gutter: gutter is int gutterValue ? Math.Clamp(gutterValue, 0, 2048) : null,
-            Fps: fps is int fpsValue ? Math.Clamp(fpsValue, 1, 60) : null,
-            Loop: loop,
-            Anchor: string.IsNullOrWhiteSpace(anchor) ? "bottom-center" : anchor.Trim(),
-            SpriteFrames: frames ?? []);
-        return Task.FromResult(JsonSerializer.Serialize(draft));
+        var saved = await workflow.UpdateSpriteSheetFramesAsync(projectId, new UpdateSpriteSheetFramesRequest(
+            spriteSheetId,
+            Math.Clamp(rows, 1, 32),
+            Math.Clamp(columns, 1, 64),
+            Math.Clamp(cellWidth, 1, 8192),
+            Math.Clamp(cellHeight, 1, 8192),
+            padding is int paddingValue ? Math.Clamp(paddingValue, 0, 4096) : 8,
+            gutter is int gutterValue ? Math.Clamp(gutterValue, 0, 4096) : 16,
+            fps is int fpsValue ? Math.Clamp(fpsValue, 1, 60) : 8,
+            loop ?? true,
+            frames ?? []));
+        return JsonSerializer.Serialize(saved);
+    }
+
+    private async Task<string> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId)
+    {
+        var saved = await workflow.ResetSpriteSheetToOriginalAsync(projectId, spriteSheetId);
+        return JsonSerializer.Serialize(new
+        {
+            saved.Id,
+            saved.WorkingAssetId,
+            saved.SourceAssetId,
+            message = "Sprite sheet reset to original image and frame records cleared.",
+        });
+    }
+
+    private async Task<string> AttachSpriteSheetFramesAsync(Guid projectId, Guid spriteSheetId, Guid[]? frameIds)
+    {
+        var attachments = await workflow.AttachSpriteSheetFramesAsync(projectId, spriteSheetId, frameIds);
+        return JsonSerializer.Serialize(attachments);
     }
 
     private async Task<string> MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes)
@@ -253,6 +281,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             "asset" => ChatContextAttachmentType.Asset,
             "mask" => ChatContextAttachmentType.Mask,
             "crop" => ChatContextAttachmentType.Crop,
+            "spriteframe" or "sprite" or "frame" => ChatContextAttachmentType.SpriteFrame,
             "promptrecipe" or "recipe" => ChatContextAttachmentType.PromptRecipe,
             "generationbatch" or "batch" => ChatContextAttachmentType.GenerationBatch,
             _ => throw new InvalidOperationException($"Unknown context attachment type '{type}'.")

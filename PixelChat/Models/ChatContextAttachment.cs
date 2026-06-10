@@ -20,5 +20,6 @@ public enum ChatContextAttachmentType
     Mask,
     Crop,
     PromptRecipe,
-    GenerationBatch
+    GenerationBatch,
+    SpriteFrame
 }

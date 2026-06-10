@@ -1,7 +1,5 @@
 @namespace PixelChat.Components.Sprites
-@using System.Globalization
 @using PixelChat.Art
-@using PixelChat.Chat
 @using PixelChat.Models
 @implements IAsyncDisposable
 @inject IArtWorkflowService Workflow
@@ -15,114 +13,117 @@
         </div>
         <div class="sprite-head-actions">
             <InputFile OnChange="ImportSourceAsync" accept="image/png,image/jpeg" />
-            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!CanAutoDetect)" @onclick="AutoDetectAsync">Auto Detect</button>
-            <button type="button" class="btn btn-sm btn-primary" disabled="@(!CanApply)" @onclick="ApplySheetAsync">Apply Sheet</button>
-            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(CurrentOutputAsset() is null)" @onclick="ExportDerivativeAsync">Export...</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet)" @onclick="AutoDetectAsync">Auto Detect</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(!HasActiveSheet)" @onclick="ResetToOriginalAsync">Reset</button>
+            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(CurrentWorkingAsset() is null)" @onclick="ExportWorkingAsync">Export...</button>
         </div>
     </div>
 
-    @if (SourceAssets.Count == 0)
+    @if (!HasActiveSheet)
     {
-        <div class="empty-state">Import or generate an image to prepare a sprite sheet.</div>
+        <div class="empty-state">Select Sprite Sheet on an asset card or import an image to start.</div>
     }
     else
     {
-        <div class="sprite-layout">
-            <section class="sprite-stage">
+        <div class="sprite-editor-grid">
+            <section class="sprite-editor-main">
                 <div class="sprite-canvas-panel">
                     <div class="section-title">Source Boxes</div>
                     <canvas class="sprite-source-canvas" @ref="_sourceCanvas"></canvas>
                 </div>
-                <div class="sprite-preview-stack">
-                    <div class="sprite-canvas-panel">
-                        <div class="section-title">Normalized Sheet</div>
-                        <canvas class="sprite-preview-canvas" @ref="_previewCanvas"></canvas>
+
+                <div class="sprite-tool-strip">
+                    <div class="tool-button-row">
+                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Select)" @onclick="() => SetToolAsync(SpriteEditTool.Select)">Select</button>
+                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Draw)" @onclick="() => SetToolAsync(SpriteEditTool.Draw)">Draw</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_selectedFrameIndex < 0 || _frames.Count == 0)" @onclick="DeleteSelectedFrameAsync">Delete</button>
                     </div>
-                    <div class="sprite-canvas-panel sprite-animation-panel">
-                        <div class="section-title">Animation</div>
-                        <canvas class="sprite-animation-canvas" @ref="_animationCanvas"></canvas>
+
+                    <div class="sprite-grid-controls">
+                        <label>
+                            <span>Rows</span>
+                            <input class="form-control form-control-sm" type="number" min="1" max="32" @bind="_rows" @bind:after="OnLayoutFieldChangedAsync" />
+                        </label>
+                        <label>
+                            <span>Columns</span>
+                            <input class="form-control form-control-sm" type="number" min="1" max="64" @bind="_columns" @bind:after="OnLayoutFieldChangedAsync" />
+                        </label>
+                        <label>
+                            <span>Cell W</span>
+                            <input class="form-control form-control-sm" type="number" min="1" max="8192" @bind="_cellWidth" @bind:after="OnLayoutFieldChangedAsync" />
+                        </label>
+                        <label>
+                            <span>Cell H</span>
+                            <input class="form-control form-control-sm" type="number" min="1" max="8192" @bind="_cellHeight" @bind:after="OnLayoutFieldChangedAsync" />
+                        </label>
+                        <label>
+                            <span>Padding</span>
+                            <input class="form-control form-control-sm" type="number" min="0" max="2048" @bind="_padding" @bind:after="OnLayoutFieldChangedAsync" />
+                        </label>
+                        <label>
+                            <span>Gutter</span>
+                            <input class="form-control form-control-sm" type="number" min="0" max="2048" @bind="_gutter" @bind:after="OnLayoutFieldChangedAsync" />
+                        </label>
+                        <label>
+                            <span>FPS</span>
+                            <input class="form-control form-control-sm" type="number" min="1" max="60" @bind="_fps" @bind:after="OnLayoutFieldChangedAsync" />
+                        </label>
+                        <label class="sprite-loop-toggle">
+                            <input type="checkbox" @bind="_loop" @bind:after="OnLayoutFieldChangedAsync" />
+                            <span>Loop</span>
+                        </label>
+                    </div>
+
+                    <div class="selected-frame-readout">
+                        @if (SelectedFrame() is { } selected)
+                        {
+                            <span>@selected.Label</span>
+                            <span>X @selected.X</span>
+                            <span>Y @selected.Y</span>
+                            <span>W @selected.Width</span>
+                            <span>H @selected.Height</span>
+                        }
+                        else
+                        {
+                            <span>No frame selected</span>
+                        }
                     </div>
                 </div>
             </section>
 
-            <aside class="sprite-controls">
-                <div class="form-stack">
-                    <label>
-                        <span>Source image</span>
-                        <select class="form-select" value="@_selectedSourceAssetIdText" @onchange="OnSourceChangedAsync">
-                            @foreach (var asset in SourceAssets)
-                            {
-                                <option value="@asset.Id">@asset.Label</option>
-                            }
-                        </select>
-                    </label>
+            <aside class="sprite-side-panel">
+                <div class="sprite-canvas-panel sprite-animation-panel">
+                    <div class="section-title">Animation</div>
+                    <canvas class="sprite-animation-canvas" @ref="_animationCanvas"></canvas>
+                </div>
 
-                    @if (Workbench.SpriteSheets.Count > 0)
+                <div class="frame-list-head">
+                    <span>@_frames.Count frame(s)</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_frames.Count == 0)" @onclick="AttachAllFramesAsync">Attach all</button>
+                </div>
+
+                <div class="sprite-frame-list">
+                    @foreach (var frame in _frames)
                     {
-                        <label>
-                            <span>Saved sheet</span>
-                            <select class="form-select" value="@SelectedSpriteSheetText()" @onchange="OnSavedSheetChangedAsync">
-                                <option value="">New draft</option>
-                                @foreach (var sheet in Workbench.SpriteSheets)
+                        <div class="sprite-frame-row @(frame.Index == _selectedFrameIndex ? "is-selected" : "")">
+                            <button type="button" class="frame-thumb" @onclick="() => SelectFrameAsync(frame.Index)">
+                                @if (!string.IsNullOrWhiteSpace(frame.PreviewDataUrl))
                                 {
-                                    <option value="@sheet.Id">@sheet.Label</option>
+                                    <img src="@frame.PreviewDataUrl" alt="@frame.Label" />
                                 }
-                            </select>
-                        </label>
+                                else
+                                {
+                                    <span>@(frame.Index + 1)</span>
+                                }
+                            </button>
+                            <input class="form-control form-control-sm" @bind="frame.Label" @bind:after="OnFrameLabelChangedAsync" />
+                            <div class="frame-row-actions">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Move up" disabled="@(frame.Index == 0)" @onclick="() => MoveFrameAsync(frame.Index, -1)">Up</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Move down" disabled="@(frame.Index >= _frames.Count - 1)" @onclick="() => MoveFrameAsync(frame.Index, 1)">Down</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Attach frame" disabled="@(frame.Id is null)" @onclick="() => AttachFrameAsync(frame)">Attach</button>
+                            </div>
+                        </div>
                     }
-
-                    <label>
-                        <span>Label</span>
-                        <input class="form-control" @bind="_label" @bind:after="OnLayoutChangedAsync" />
-                    </label>
-
-                    <div class="sprite-grid-controls">
-                        <label>
-                            <span>Frames</span>
-                            <input class="form-control" type="number" min="1" max="128" @bind="_frameCount" @bind:after="OnFrameCountChangedAsync" />
-                        </label>
-                        <label>
-                            <span>Rows</span>
-                            <input class="form-control" type="number" min="1" max="32" @bind="_rows" @bind:after="OnGridChangedAsync" />
-                        </label>
-                        <label>
-                            <span>Columns</span>
-                            <input class="form-control" type="number" min="1" max="64" @bind="_columns" @bind:after="OnGridChangedAsync" />
-                        </label>
-                        <label>
-                            <span>FPS</span>
-                            <input class="form-control" type="number" min="1" max="60" @bind="_fps" @bind:after="OnLayoutChangedAsync" />
-                        </label>
-                    </div>
-
-                    <div class="sprite-grid-controls">
-                        <label>
-                            <span>Cell W</span>
-                            <input class="form-control" type="number" min="1" max="8192" @bind="_cellWidth" @bind:after="OnLayoutChangedAsync" />
-                        </label>
-                        <label>
-                            <span>Cell H</span>
-                            <input class="form-control" type="number" min="1" max="8192" @bind="_cellHeight" @bind:after="OnLayoutChangedAsync" />
-                        </label>
-                        <label>
-                            <span>Padding</span>
-                            <input class="form-control" type="number" min="0" max="2048" @bind="_padding" @bind:after="OnLayoutChangedAsync" />
-                        </label>
-                        <label>
-                            <span>Gutter</span>
-                            <input class="form-control" type="number" min="0" max="2048" @bind="_gutter" @bind:after="OnLayoutChangedAsync" />
-                        </label>
-                    </div>
-
-                    <label class="sprite-loop-toggle">
-                        <input type="checkbox" @bind="_loop" @bind:after="OnLayoutChangedAsync" />
-                        <span>Loop animation</span>
-                    </label>
-
-                    <div class="tool-button-row">
-                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_frames.Count == 0)" @onclick="FitCellsToFramesAsync">Fit Cells</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_frames.Count == 0)" @onclick="ResetOffsetsAsync">Reset Offsets</button>
-                    </div>
                 </div>
 
                 @if (!string.IsNullOrWhiteSpace(_status))
@@ -133,30 +134,6 @@
                 {
                     <div class="sprite-error">@_error</div>
                 }
-
-                <div class="sprite-frame-table">
-                    <div class="sprite-frame-table-head">
-                        <span>Frame</span>
-                        <span>X</span>
-                        <span>Y</span>
-                        <span>W</span>
-                        <span>H</span>
-                        <span>OX</span>
-                        <span>OY</span>
-                    </div>
-                    @foreach (var frame in _frames.Take(_frameCount))
-                    {
-                        <div class="sprite-frame-row @(frame.Index == _selectedFrameIndex ? "is-selected" : "")">
-                            <button type="button" @onclick="() => SelectFrameAsync(frame.Index)">@LabelForFrame(frame.Index)</button>
-                            <input class="form-control form-control-sm" type="number" min="0" @bind="frame.X" @bind:after="OnLayoutChangedAsync" />
-                            <input class="form-control form-control-sm" type="number" min="0" @bind="frame.Y" @bind:after="OnLayoutChangedAsync" />
-                            <input class="form-control form-control-sm" type="number" min="1" @bind="frame.Width" @bind:after="OnLayoutChangedAsync" />
-                            <input class="form-control form-control-sm" type="number" min="1" @bind="frame.Height" @bind:after="OnLayoutChangedAsync" />
-                            <input class="form-control form-control-sm" type="number" @bind="frame.OffsetX" @bind:after="OnLayoutChangedAsync" />
-                            <input class="form-control form-control-sm" type="number" @bind="frame.OffsetY" @bind:after="OnLayoutChangedAsync" />
-                        </div>
-                    }
-                </div>
             </aside>
         </div>
     }
@@ -167,25 +144,19 @@
     public WorkbenchView Workbench { get; set; } = null!;
 
     [Parameter]
-    public AssistantFormDraft? Draft { get; set; }
-
-    [Parameter]
-    public long DraftVersion { get; set; }
-
-    [Parameter]
     public EventCallback OnChanged { get; set; }
 
     [Parameter]
     public EventCallback<ArtAssetView> OnExportAsset { get; set; }
 
     private IJSObjectReference? _module;
+    private DotNetObjectReference<SpriteSheetWorkspace>? _dotNetRef;
     private ElementReference _sourceCanvas;
-    private ElementReference _previewCanvas;
     private ElementReference _animationCanvas;
+    private CancellationTokenSource? _autosaveCts;
 
-    private string _selectedSourceAssetIdText = string.Empty;
-    private string _label = string.Empty;
-    private int _frameCount = 1;
+    private Guid? _loadedSpriteSheetId;
+    private string _workingImageDataUrl = string.Empty;
     private int _rows = 1;
     private int _columns = 1;
     private int _cellWidth = 128;
@@ -194,58 +165,39 @@
     private int _gutter = 16;
     private int _fps = 8;
     private bool _loop = true;
-    private int _selectedFrameIndex;
-    private bool _dirty;
-    private Guid? _loadedDefinitionId;
-    private long _appliedDraftVersion = -1;
+    private int _selectedFrameIndex = -1;
+    private SpriteEditTool _tool = SpriteEditTool.Select;
     private string _status = string.Empty;
     private string? _error;
     private readonly List<SpriteSheetEditorFrame> _frames = [];
 
-    private IReadOnlyList<ArtAssetView> SourceAssets =>
-        Workbench.Assets
-            .Where(asset => asset.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(asset => asset.CreatedAt)
-            .ToList();
-
-    private ArtAssetView? CurrentSourceAsset() =>
-        Guid.TryParse(_selectedSourceAssetIdText, out var assetId)
-            ? Workbench.Assets.FirstOrDefault(asset => asset.Id == assetId)
-            : null;
-
-    private bool CanAutoDetect => CurrentSourceAsset() is not null && _module is not null;
-    private bool CanApply => CurrentSourceAsset() is not null && _frames.Count > 0 && _frameCount > 0 && _module is not null;
+    private bool HasActiveSheet => Workbench.ActiveSpriteSheet is not null && CurrentWorkingAsset() is not null;
 
     protected override void OnParametersSet()
     {
-        if (DraftVersion != _appliedDraftVersion && Draft?.Target == AssistantFormDraftTarget.SpriteSheet)
-        {
-            _appliedDraftVersion = DraftVersion;
-            ApplySpriteDraft(Draft);
-            return;
-        }
-
-        if (!SourceAssets.Any())
-        {
-            _selectedSourceAssetIdText = string.Empty;
-            return;
-        }
-
         var active = Workbench.ActiveSpriteSheet;
-        if (!_dirty && active is not null && active.Id != _loadedDefinitionId)
+        if (active is null || CurrentWorkingAsset(active) is not { } working)
         {
-            LoadDefinition(active);
+            _loadedSpriteSheetId = null;
+            _workingImageDataUrl = string.Empty;
+            _frames.Clear();
+            _selectedFrameIndex = -1;
             return;
         }
 
-        if (CurrentSourceAsset() is null)
-            SelectSource(SourceAssets[0], resetFrames: true);
+        if (_loadedSpriteSheetId == active.Id && _workingImageDataUrl == working.PreviewDataUrl)
+            return;
+
+        LoadSheet(active, working);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
+        {
             _module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Sprites/SpriteSheetWorkspace.razor.js");
+            _dotNetRef = DotNetObjectReference.Create(this);
+        }
 
         await DrawAsync();
     }
@@ -256,7 +208,7 @@
             return;
 
         _error = null;
-        _status = "Importing sprite source...";
+        _status = "Importing sprite sheet source...";
         try
         {
             await using var stream = args.File.OpenReadStream(50 * 1024 * 1024);
@@ -267,7 +219,7 @@
                 args.File.ContentType,
                 memory.ToArray(),
                 Path.GetFileNameWithoutExtension(args.File.Name)));
-            SelectSource(asset, resetFrames: true);
+            await Workflow.StartSpriteSheetEditAsync(Workbench.Project.Id, asset.Id);
             _status = $"Imported {asset.Label}.";
             await OnChanged.InvokeAsync();
         }
@@ -278,54 +230,19 @@
         }
     }
 
-    private async Task OnSourceChangedAsync(ChangeEventArgs args)
-    {
-        var selected = args.Value?.ToString() ?? string.Empty;
-        var asset = Guid.TryParse(selected, out var assetId)
-            ? Workbench.Assets.FirstOrDefault(item => item.Id == assetId)
-            : null;
-        if (asset is null)
-            return;
-
-        SelectSource(asset, resetFrames: true);
-        await DrawAsync();
-    }
-
-    private async Task OnSavedSheetChangedAsync(ChangeEventArgs args)
-    {
-        var selected = args.Value?.ToString() ?? string.Empty;
-        if (!Guid.TryParse(selected, out var sheetId))
-        {
-            _loadedDefinitionId = null;
-            _dirty = true;
-            return;
-        }
-
-        var sheet = Workbench.SpriteSheets.FirstOrDefault(item => item.Id == sheetId);
-        if (sheet is null)
-            return;
-
-        LoadDefinition(sheet);
-        await Workflow.SelectSpriteSheetAsync(Workbench.Project.Id, sheet.Id);
-        await OnChanged.InvokeAsync();
-        await DrawAsync();
-    }
-
     private async Task AutoDetectAsync()
     {
-        var source = CurrentSourceAsset();
-        if (source is null || _module is null)
+        if (_module is null || CurrentWorkingAsset() is not { } working)
             return;
 
         _error = null;
         _status = "Detecting sprite frames...";
         try
         {
-            var expected = _frameCount > 1 ? _frameCount : (int?)null;
             var detection = await _module.InvokeAsync<BrowserSpriteDetectionResult>(
                 "detectSpriteSheetFrames",
-                source.PreviewDataUrl,
-                expected,
+                working.PreviewDataUrl,
+                null,
                 "rows",
                 "auto");
             if (detection.Frames.Count == 0)
@@ -333,22 +250,22 @@
 
             _rows = Math.Max(1, detection.Rows);
             _columns = Math.Max(1, detection.Columns);
-            _frameCount = detection.Frames.Count;
             _frames.Clear();
             _frames.AddRange(detection.Frames
                 .OrderBy(frame => frame.Index)
-                .Select(frame => new SpriteSheetEditorFrame(
-                    frame.Index,
-                    frame.SourceRect.X,
-                    frame.SourceRect.Y,
-                    frame.SourceRect.Width,
-                    frame.SourceRect.Height)));
+                .Select(frame => new SpriteSheetEditorFrame
+                {
+                    Index = frame.Index,
+                    Label = $"Frame {frame.Index + 1}",
+                    X = frame.SourceRect.X,
+                    Y = frame.SourceRect.Y,
+                    Width = frame.SourceRect.Width,
+                    Height = frame.SourceRect.Height,
+                }));
             FitCellsToFrames();
-            _selectedFrameIndex = 0;
-            _dirty = true;
-            _loadedDefinitionId = null;
-            _status = $"Detected {_frameCount} frame(s).";
-            await DrawAsync();
+            _selectedFrameIndex = _frames.Count > 0 ? 0 : -1;
+            await AutosaveNowAsync();
+            _status = $"Detected {_frames.Count} frame(s).";
         }
         catch (Exception ex)
         {
@@ -357,27 +274,170 @@
         }
     }
 
-    private async Task ApplySheetAsync()
+    private async Task ResetToOriginalAsync()
     {
-        var source = CurrentSourceAsset();
-        if (source is null || _module is null)
+        var active = Workbench.ActiveSpriteSheet;
+        if (active is null)
             return;
 
         _error = null;
-        _status = "Rendering normalized sprite sheet...";
+        _status = "Resetting sprite sheet...";
         try
         {
-            NormalizeLayout();
+            var reset = await Workflow.ResetSpriteSheetToOriginalAsync(Workbench.Project.Id, active.Id);
+            _loadedSpriteSheetId = null;
+            _frames.Clear();
+            _selectedFrameIndex = -1;
+            _status = $"{reset.Label} reset.";
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+    }
+
+    private async Task ExportWorkingAsync()
+    {
+        if (CurrentWorkingAsset() is { } asset)
+            await OnExportAsset.InvokeAsync(asset);
+    }
+
+    private async Task SetToolAsync(SpriteEditTool tool)
+    {
+        _tool = tool;
+        await DrawAsync();
+    }
+
+    private async Task SelectFrameAsync(int index)
+    {
+        _selectedFrameIndex = index;
+        await DrawAsync();
+    }
+
+    private async Task DeleteSelectedFrameAsync()
+    {
+        var frame = SelectedFrame();
+        if (frame is null)
+            return;
+
+        _frames.Remove(frame);
+        ReindexFrames();
+        _selectedFrameIndex = _frames.Count == 0 ? -1 : Math.Clamp(frame.Index, 0, _frames.Count - 1);
+        await AutosaveNowAsync();
+    }
+
+    private async Task MoveFrameAsync(int index, int delta)
+    {
+        var target = index + delta;
+        if (index < 0 || index >= _frames.Count || target < 0 || target >= _frames.Count)
+            return;
+
+        (_frames[index], _frames[target]) = (_frames[target], _frames[index]);
+        ReindexFrames();
+        _selectedFrameIndex = target;
+        await AutosaveNowAsync();
+    }
+
+    private async Task AttachFrameAsync(SpriteSheetEditorFrame frame)
+    {
+        if (Workbench.ActiveSpriteSheet is null || frame.Id is not Guid frameId)
+            return;
+
+        await Workflow.AttachSpriteSheetFramesAsync(Workbench.Project.Id, Workbench.ActiveSpriteSheet.Id, [frameId]);
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task AttachAllFramesAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is null || _frames.Count == 0)
+            return;
+
+        await Workflow.AttachSpriteSheetFramesAsync(Workbench.Project.Id, Workbench.ActiveSpriteSheet.Id);
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task OnLayoutFieldChangedAsync()
+    {
+        NormalizeLayout();
+        if (_frames.Count > 0 && _rows * _columns < _frames.Count)
+            _columns = Math.Max(1, (int)Math.Ceiling(_frames.Count / (double)_rows));
+        await DrawAsync();
+        ScheduleAutosave();
+    }
+
+    private async Task OnFrameLabelChangedAsync()
+    {
+        await DrawAsync();
+        ScheduleAutosave();
+    }
+
+    [JSInvokable]
+    public async Task OnSpriteBoxesChanged(SpriteCanvasChange change)
+    {
+        _frames.Clear();
+        _frames.AddRange(change.Frames
+            .OrderBy(frame => frame.Index)
+            .Select(frame => new SpriteSheetEditorFrame
+            {
+                Index = frame.Index,
+                Label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label,
+                X = Math.Max(0, frame.SourceRect.X),
+                Y = Math.Max(0, frame.SourceRect.Y),
+                Width = Math.Max(1, frame.SourceRect.Width),
+                Height = Math.Max(1, frame.SourceRect.Height),
+            }));
+        ReindexFrames();
+        _selectedFrameIndex = change.SelectedIndex;
+        FitCellsToFrames(onlyWhenTooSmall: true);
+        await AutosaveNowAsync();
+    }
+
+    [JSInvokable]
+    public async Task OnSpriteBoxSelected(int selectedIndex)
+    {
+        _selectedFrameIndex = selectedIndex;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void ScheduleAutosave()
+    {
+        _autosaveCts?.Cancel();
+        _autosaveCts?.Dispose();
+        _autosaveCts = new CancellationTokenSource();
+        var token = _autosaveCts.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(600, token);
+                await InvokeAsync(AutosaveNowAsync);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }, token);
+    }
+
+    private async Task AutosaveNowAsync()
+    {
+        if (_module is null || Workbench.ActiveSpriteSheet is not { } active || string.IsNullOrWhiteSpace(_workingImageDataUrl))
+            return;
+
+        _autosaveCts?.Cancel();
+        NormalizeLayout();
+        try
+        {
             var output = await _module.InvokeAsync<SpriteSheetRenderOutput>(
-                "renderSpriteSheetOutput",
-                source.PreviewDataUrl,
+                "renderSpriteSheetAutosave",
+                _workingImageDataUrl,
                 BuildLayoutPayload());
             if (string.IsNullOrWhiteSpace(output.DataUrl))
                 throw new InvalidOperationException("Sprite sheet render did not produce a PNG.");
 
-            var saved = await Workflow.SaveSpriteSheetAsync(Workbench.Project.Id, new SaveSpriteSheetRequest(
-                source.Id,
-                _label,
+            var saved = await Workflow.AutosaveSpriteSheetAsync(Workbench.Project.Id, new AutosaveSpriteSheetRequest(
+                active.Id,
                 output.DataUrl,
                 _rows,
                 _columns,
@@ -388,9 +448,26 @@
                 _fps,
                 _loop,
                 output.Frames));
-            _loadedDefinitionId = saved.Id;
-            _dirty = false;
-            _status = $"Created {saved.Label}.";
+            _workingImageDataUrl = output.DataUrl;
+            LoadSheet(saved, new ArtAssetView(
+                saved.WorkingAssetId ?? Guid.Empty,
+                saved.Label,
+                "sprite-sheet.png",
+                ArtAssetKind.SpriteSheet,
+                "image/png",
+                output.DataUrl,
+                output.Width,
+                output.Height,
+                saved.SourceAssetId,
+                null,
+                null,
+                null,
+                false,
+                string.Empty,
+                string.Empty,
+                DateTime.UtcNow));
+            _status = "Autosaved.";
+            _error = null;
             await OnChanged.InvokeAsync();
         }
         catch (Exception ex)
@@ -400,247 +477,56 @@
         }
     }
 
-    private async Task ExportDerivativeAsync()
+    private void LoadSheet(SpriteSheetDefinitionView sheet, ArtAssetView working)
     {
-        var output = CurrentOutputAsset();
-        if (output is null)
-            return;
-
-        await OnExportAsset.InvokeAsync(output);
-    }
-
-    private async Task FitCellsToFramesAsync()
-    {
-        FitCellsToFrames();
-        _dirty = true;
-        _loadedDefinitionId = null;
-        await DrawAsync();
-    }
-
-    private async Task ResetOffsetsAsync()
-    {
-        foreach (var frame in _frames)
-        {
-            frame.OffsetX = 0;
-            frame.OffsetY = 0;
-        }
-
-        _dirty = true;
-        _loadedDefinitionId = null;
-        await DrawAsync();
-    }
-
-    private async Task OnFrameCountChangedAsync()
-    {
-        NormalizeLayout();
-        EnsureFrameCount();
-        _dirty = true;
-        _loadedDefinitionId = null;
-        await DrawAsync();
-    }
-
-    private async Task OnGridChangedAsync()
-    {
-        NormalizeLayout();
-        if (_rows * _columns < _frameCount)
-            _columns = Math.Max(1, (int)Math.Ceiling(_frameCount / (double)_rows));
-        _dirty = true;
-        _loadedDefinitionId = null;
-        await DrawAsync();
-    }
-
-    private async Task OnLayoutChangedAsync()
-    {
-        NormalizeLayout();
-        _dirty = true;
-        _loadedDefinitionId = null;
-        await DrawAsync();
-    }
-
-    private async Task SelectFrameAsync(int index)
-    {
-        _selectedFrameIndex = index;
-        await DrawAsync();
-    }
-
-    private void ApplySpriteDraft(AssistantFormDraft draft)
-    {
-        var source = draft.SourceAssetId is Guid sourceId
-            ? Workbench.Assets.FirstOrDefault(asset => asset.Id == sourceId)
-            : null;
-        if (source is null)
-        {
-            _error = "The drafted sprite source asset was not found.";
-            return;
-        }
-
-        SelectSource(source, resetFrames: false);
-        _rows = Math.Clamp(draft.Rows ?? _rows, 1, 32);
-        _columns = Math.Clamp(draft.Columns ?? _columns, 1, 64);
-        _padding = Math.Clamp(draft.Padding ?? _padding, 0, 2048);
-        _gutter = Math.Clamp(draft.Gutter ?? _gutter, 0, 2048);
-        _fps = Math.Clamp(draft.Fps ?? _fps, 1, 60);
-        _loop = draft.Loop ?? _loop;
-        if (draft.CellWidth is int cellWidth)
-            _cellWidth = Math.Clamp(cellWidth, 1, 8192);
-        if (draft.CellHeight is int cellHeight)
-            _cellHeight = Math.Clamp(cellHeight, 1, 8192);
-
-        if (draft.SpriteFrames is { Count: > 0 } spriteFrames)
-        {
-            _frames.Clear();
-            _frames.AddRange(spriteFrames
-                .OrderBy(frame => frame.Index)
-                .Select(frame => new SpriteSheetEditorFrame(
-                    Math.Max(0, frame.Index),
-                    Math.Max(0, frame.SourceRect.X),
-                    Math.Max(0, frame.SourceRect.Y),
-                    Math.Max(1, frame.SourceRect.Width),
-                    Math.Max(1, frame.SourceRect.Height),
-                    frame.OffsetX,
-                    frame.OffsetY)));
-            _frameCount = _frames.Count;
-            if (draft.CellWidth is null || draft.CellHeight is null)
-                FitCellsToFrames();
-        }
-        else
-        {
-            _frameCount = Math.Max(1, _rows * _columns);
-            EnsureFrameCount();
-        }
-
-        if (_rows * _columns < _frameCount)
-            _columns = Math.Max(1, (int)Math.Ceiling(_frameCount / (double)_rows));
-        _selectedFrameIndex = 0;
-        _dirty = true;
-        _loadedDefinitionId = null;
-        _status = "Assistant sprite layout draft applied.";
-        _error = null;
-    }
-
-    private void SelectSource(ArtAssetView asset, bool resetFrames)
-    {
-        _selectedSourceAssetIdText = asset.Id.ToString();
-        _label = string.IsNullOrWhiteSpace(_label) || resetFrames
-            ? $"{asset.Label} sprite sheet"
-            : _label;
-        if (!resetFrames)
-            return;
-
-        _rows = 1;
-        _columns = 1;
-        _frameCount = 1;
-        _padding = 8;
-        _gutter = 16;
-        _fps = 8;
-        _loop = true;
-        _frames.Clear();
-        var width = Math.Max(1, asset.Width ?? 128);
-        var height = Math.Max(1, asset.Height ?? 128);
-        _frames.Add(new SpriteSheetEditorFrame(0, 0, 0, width, height));
-        FitCellsToFrames();
-        _selectedFrameIndex = 0;
-        _loadedDefinitionId = null;
-        _dirty = true;
-    }
-
-    private void LoadDefinition(SpriteSheetDefinitionView sheet)
-    {
-        var source = Workbench.Assets.FirstOrDefault(asset => asset.Id == sheet.SourceAssetId);
-        if (source is null)
-            return;
-
-        _selectedSourceAssetIdText = source.Id.ToString();
-        _label = sheet.Label;
-        _rows = sheet.Rows;
-        _columns = sheet.Columns;
-        _cellWidth = sheet.CellWidth;
-        _cellHeight = sheet.CellHeight;
-        _padding = sheet.Padding;
-        _gutter = sheet.Gutter;
-        _fps = sheet.Fps;
+        _loadedSpriteSheetId = sheet.Id;
+        _workingImageDataUrl = working.PreviewDataUrl;
+        _rows = Math.Max(1, sheet.Rows);
+        _columns = Math.Max(1, sheet.Columns);
+        _cellWidth = Math.Max(1, sheet.CellWidth);
+        _cellHeight = Math.Max(1, sheet.CellHeight);
+        _padding = Math.Max(0, sheet.Padding);
+        _gutter = Math.Max(0, sheet.Gutter);
+        _fps = Math.Clamp(sheet.Fps, 1, 60);
         _loop = sheet.Loop;
         _frames.Clear();
         _frames.AddRange(sheet.Frames
             .OrderBy(frame => frame.Index)
-            .Select(frame => new SpriteSheetEditorFrame(
-                frame.Index,
-                frame.SourceRect.X,
-                frame.SourceRect.Y,
-                frame.SourceRect.Width,
-                frame.SourceRect.Height,
-                frame.OffsetX,
-                frame.OffsetY)));
-        _frameCount = Math.Max(1, _frames.Count);
-        EnsureFrameCount();
-        _selectedFrameIndex = 0;
-        _loadedDefinitionId = sheet.Id;
-        _dirty = false;
-        _status = string.Empty;
+            .Select(frame => new SpriteSheetEditorFrame
+            {
+                Id = frame.Id,
+                Index = frame.Index,
+                Label = frame.Label,
+                X = frame.SourceRect.X,
+                Y = frame.SourceRect.Y,
+                Width = frame.SourceRect.Width,
+                Height = frame.SourceRect.Height,
+                PreviewDataUrl = frame.PreviewDataUrl,
+            }));
+        ReindexFrames();
+        if (_frames.Count == 0)
+            _selectedFrameIndex = -1;
+        else if (_selectedFrameIndex < 0 || _selectedFrameIndex >= _frames.Count)
+            _selectedFrameIndex = 0;
         _error = null;
-    }
-
-    private void NormalizeLayout()
-    {
-        _frameCount = Math.Clamp(_frameCount, 1, 128);
-        _rows = Math.Clamp(_rows, 1, 32);
-        _columns = Math.Clamp(_columns, 1, 64);
-        _cellWidth = Math.Clamp(_cellWidth, 1, 8192);
-        _cellHeight = Math.Clamp(_cellHeight, 1, 8192);
-        _padding = Math.Clamp(_padding, 0, 2048);
-        _gutter = Math.Clamp(_gutter, 0, 2048);
-        _fps = Math.Clamp(_fps, 1, 60);
-    }
-
-    private void EnsureFrameCount()
-    {
-        var source = CurrentSourceAsset();
-        var sourceWidth = Math.Max(1, source?.Width ?? _cellWidth);
-        var sourceHeight = Math.Max(1, source?.Height ?? _cellHeight);
-        while (_frames.Count < _frameCount)
-        {
-            var index = _frames.Count;
-            var fallbackWidth = Math.Max(1, sourceWidth / Math.Max(1, _frameCount));
-            _frames.Add(new SpriteSheetEditorFrame(
-                index,
-                Math.Min(sourceWidth - 1, index * fallbackWidth),
-                0,
-                fallbackWidth,
-                sourceHeight));
-        }
-
-        if (_frames.Count > _frameCount)
-            _frames.RemoveRange(_frameCount, _frames.Count - _frameCount);
-
-        for (var index = 0; index < _frames.Count; index++)
-            _frames[index].Index = index;
-    }
-
-    private void FitCellsToFrames()
-    {
-        var visibleFrames = _frames.Take(Math.Max(1, _frameCount)).ToList();
-        if (visibleFrames.Count == 0)
-            return;
-
-        _cellWidth = visibleFrames.Max(frame => Math.Max(1, frame.Width)) + (_padding * 2);
-        _cellHeight = visibleFrames.Max(frame => Math.Max(1, frame.Height)) + (_padding * 2);
     }
 
     private async Task DrawAsync()
     {
-        if (_module is null || CurrentSourceAsset() is not { } source || _frames.Count == 0)
+        if (_module is null || _dotNetRef is null || !HasActiveSheet || string.IsNullOrWhiteSpace(_workingImageDataUrl))
             return;
 
         try
         {
             await _module.InvokeVoidAsync(
-                "drawSpriteSheetCanvases",
+                "drawSpriteBoxEditor",
                 _sourceCanvas,
-                _previewCanvas,
                 _animationCanvas,
-                source.PreviewDataUrl,
+                _dotNetRef,
+                _workingImageDataUrl,
                 BuildLayoutPayload(),
-                _selectedFrameIndex);
+                _selectedFrameIndex,
+                _tool.ToString().ToLowerInvariant());
         }
         catch (JSDisconnectedException)
         {
@@ -650,104 +536,129 @@
     private object BuildLayoutPayload()
     {
         NormalizeLayout();
-        EnsureFrameCount();
         return new
         {
             Rows = _rows,
             Columns = _columns,
-            FrameCount = _frameCount,
+            FrameCount = _frames.Count,
             CellWidth = _cellWidth,
             CellHeight = _cellHeight,
             Padding = _padding,
             Gutter = _gutter,
             Fps = _fps,
             Loop = _loop,
-            Anchor = "bottom-center",
             Frames = _frames
-                .Take(_frameCount)
+                .OrderBy(frame => frame.Index)
                 .Select(frame => new
                 {
                     frame.Index,
-                    SourceRect = new { frame.X, frame.Y, frame.Width, frame.Height },
-                    frame.OffsetX,
-                    frame.OffsetY,
+                    frame.Label,
+                    SourceRect = new { X = frame.X, Y = frame.Y, Width = frame.Width, Height = frame.Height },
                 })
                 .ToList(),
         };
     }
 
-    private ArtAssetView? CurrentOutputAsset()
+    private void NormalizeLayout()
     {
-        var source = CurrentSourceAsset();
-        if (source is null)
-            return null;
-
-        var sheet = Workbench.SpriteSheets
-            .Where(item => item.SourceAssetId == source.Id && item.OutputAssetId is not null)
-            .OrderByDescending(item => item.UpdatedAt)
-            .FirstOrDefault();
-        return sheet?.OutputAssetId is Guid outputId
-            ? Workbench.Assets.FirstOrDefault(asset => asset.Id == outputId)
-            : null;
+        _rows = Math.Clamp(_rows, 1, 32);
+        _columns = Math.Clamp(_columns, 1, 64);
+        _cellWidth = Math.Clamp(_cellWidth, 1, 8192);
+        _cellHeight = Math.Clamp(_cellHeight, 1, 8192);
+        _padding = Math.Clamp(_padding, 0, 2048);
+        _gutter = Math.Clamp(_gutter, 0, 2048);
+        _fps = Math.Clamp(_fps, 1, 60);
     }
+
+    private void FitCellsToFrames(bool onlyWhenTooSmall = false)
+    {
+        if (_frames.Count == 0)
+            return;
+
+        var width = _frames.Max(frame => Math.Max(1, frame.Width)) + (_padding * 2);
+        var height = _frames.Max(frame => Math.Max(1, frame.Height)) + (_padding * 2);
+        if (!onlyWhenTooSmall || _cellWidth < width)
+            _cellWidth = width;
+        if (!onlyWhenTooSmall || _cellHeight < height)
+            _cellHeight = height;
+    }
+
+    private void ReindexFrames()
+    {
+        for (var index = 0; index < _frames.Count; index++)
+        {
+            _frames[index].Index = index;
+            if (string.IsNullOrWhiteSpace(_frames[index].Label))
+                _frames[index].Label = $"Frame {index + 1}";
+        }
+
+        if (_frames.Count > 0 && _rows * _columns < _frames.Count)
+            _columns = Math.Max(1, (int)Math.Ceiling(_frames.Count / (double)_rows));
+    }
+
+    private SpriteSheetEditorFrame? SelectedFrame() =>
+        _selectedFrameIndex >= 0 && _selectedFrameIndex < _frames.Count ? _frames[_selectedFrameIndex] : null;
+
+    private ArtAssetView? CurrentWorkingAsset() =>
+        Workbench.ActiveSpriteSheet is { } active ? CurrentWorkingAsset(active) : null;
+
+    private ArtAssetView? CurrentWorkingAsset(SpriteSheetDefinitionView active) =>
+        active.WorkingAssetId is Guid assetId
+            ? Workbench.Assets.FirstOrDefault(asset => asset.Id == assetId)
+            : null;
 
     private string HeaderSummary()
     {
-        var source = CurrentSourceAsset();
-        if (source is null)
-            return "Select a source image";
+        if (Workbench.ActiveSpriteSheet is null)
+            return "No sprite sheet selected";
 
+        var source = Workbench.Assets.FirstOrDefault(asset => asset.Id == Workbench.ActiveSpriteSheet.SourceAssetId);
         var outputSize = $"{_columns * _cellWidth + Math.Max(0, _columns - 1) * _gutter} x {_rows * _cellHeight + Math.Max(0, _rows - 1) * _gutter}";
-        return $"{source.Label} / {_frameCount} frame(s) / {outputSize}";
+        return $"{source?.Label ?? Workbench.ActiveSpriteSheet.Label} / {_frames.Count} frame(s) / {outputSize}";
     }
 
-    private string SelectedSpriteSheetText() =>
-        _loadedDefinitionId?.ToString() ?? string.Empty;
-
-    private static string LabelForFrame(int index) =>
-        (index + 1).ToString("N0", CultureInfo.InvariantCulture);
+    private string ToolButtonClass(SpriteEditTool tool) =>
+        _tool == tool ? "btn btn-sm btn-primary" : "btn btn-sm btn-outline-secondary";
 
     public async ValueTask DisposeAsync()
     {
+        _autosaveCts?.Cancel();
+        _autosaveCts?.Dispose();
         if (_module is not null)
         {
             try
             {
-                await _module.InvokeVoidAsync("disposeSpriteSheetCanvases", _animationCanvas);
+                await _module.InvokeVoidAsync("disposeSpriteBoxEditor", _sourceCanvas, _animationCanvas);
                 await _module.DisposeAsync();
             }
             catch (JSDisconnectedException)
             {
             }
         }
+
+        _dotNetRef?.Dispose();
+    }
+
+    private enum SpriteEditTool
+    {
+        Select,
+        Draw
     }
 
     private sealed class SpriteSheetEditorFrame
     {
-        public SpriteSheetEditorFrame(int index, int x, int y, int width, int height, int offsetX = 0, int offsetY = 0)
-        {
-            Index = index;
-            X = x;
-            Y = y;
-            Width = width;
-            Height = height;
-            OffsetX = offsetX;
-            OffsetY = offsetY;
-        }
-
+        public Guid? Id { get; set; }
         public int Index { get; set; }
+        public string Label { get; set; } = string.Empty;
         public int X { get; set; }
         public int Y { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
-        public int OffsetX { get; set; }
-        public int OffsetY { get; set; }
+        public string PreviewDataUrl { get; set; } = string.Empty;
     }
 
     private sealed class BrowserSpriteDetectionResult
     {
-        public int ImageWidth { get; set; }
-        public int ImageHeight { get; set; }
         public int Rows { get; set; }
         public int Columns { get; set; }
         public List<BrowserSpriteFrameDetection> Frames { get; set; } = [];
@@ -765,5 +676,18 @@
         public int Width { get; set; }
         public int Height { get; set; }
         public List<SpriteSheetFrameView> Frames { get; set; } = [];
+    }
+
+    public sealed class SpriteCanvasChange
+    {
+        public int SelectedIndex { get; set; }
+        public List<SpriteCanvasFrame> Frames { get; set; } = [];
+    }
+
+    public sealed class SpriteCanvasFrame
+    {
+        public int Index { get; set; }
+        public string Label { get; set; } = string.Empty;
+        public SpriteSheetRect SourceRect { get; set; } = new(0, 0, 1, 1);
     }
 }

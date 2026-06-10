@@ -53,7 +53,7 @@ public sealed record ArtAssetExportView(
 public sealed record SpriteSheetDefinitionView(
     Guid Id,
     Guid SourceAssetId,
-    Guid? OutputAssetId,
+    Guid? WorkingAssetId,
     string Label,
     int Rows,
     int Columns,
@@ -63,20 +63,30 @@ public sealed record SpriteSheetDefinitionView(
     int Gutter,
     int Fps,
     bool Loop,
-    IReadOnlyList<SpriteSheetFrameView> Frames,
+    IReadOnlyList<SpriteSheetFrameRecordView> Frames,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
-public sealed record SpriteSheetFrameView(
+public sealed record SpriteSheetFrameRecordView(
+    Guid Id,
+    Guid SpriteSheetId,
     int Index,
+    string Label,
     SpriteSheetRect SourceRect,
     SpriteSheetRect CellRect,
     SpriteSheetRect SpriteRect,
-    int OffsetX,
-    int OffsetY,
-    double PivotX,
-    double PivotY,
+    string PreviewDataUrl,
+    int PreviewWidth,
+    int PreviewHeight,
     double Duration);
+
+public sealed record SpriteSheetFrameView(
+    int Index,
+    string Label,
+    SpriteSheetRect SourceRect,
+    SpriteSheetRect CellRect,
+    SpriteSheetRect SpriteRect,
+    string PreviewPngDataUrl);
 
 public sealed record SpriteSheetRect(
     int X,
@@ -102,10 +112,9 @@ public sealed record SpriteSheetFrameDetectionView(
     int Index,
     SpriteSheetRect SourceRect);
 
-public sealed record SaveSpriteSheetRequest(
-    Guid SourceAssetId,
-    string Label,
-    string SpriteSheetPngDataUrl,
+public sealed record AutosaveSpriteSheetRequest(
+    Guid SpriteSheetId,
+    string WorkingPngDataUrl,
     int Rows,
     int Columns,
     int CellWidth,
@@ -115,6 +124,23 @@ public sealed record SaveSpriteSheetRequest(
     int Fps,
     bool Loop,
     IReadOnlyList<SpriteSheetFrameView> Frames);
+
+public sealed record UpdateSpriteSheetFramesRequest(
+    Guid SpriteSheetId,
+    int Rows,
+    int Columns,
+    int CellWidth,
+    int CellHeight,
+    int Padding,
+    int Gutter,
+    int Fps,
+    bool Loop,
+    IReadOnlyList<SpriteSheetFrameUpdateView> Frames);
+
+public sealed record SpriteSheetFrameUpdateView(
+    int Index,
+    string Label,
+    SpriteSheetRect SourceRect);
 
 public sealed record BackgroundRemovalExportCacheRequest(
     string RemovalMethod,

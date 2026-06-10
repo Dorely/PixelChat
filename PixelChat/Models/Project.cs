@@ -14,6 +14,7 @@ public class Project
     public ICollection<GenerationBatch> GenerationBatches { get; set; } = [];
     public ICollection<PromptRecipe> PromptRecipes { get; set; } = [];
     public ICollection<SpriteSheetDefinition> SpriteSheets { get; set; } = [];
+    public ICollection<SpriteSheetFrameRecord> SpriteSheetFrameRecords { get; set; } = [];
     public ICollection<ImageMask> Masks { get; set; } = [];
     public ICollection<ChatContextAttachment> ChatContextAttachments { get; set; } = [];
     public ICollection<AssistantConversation> AssistantConversations { get; set; } = [];

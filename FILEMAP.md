@@ -40,18 +40,18 @@
 
 | File | Description |
 |------|-------------|
-| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit chat attachment image context, Shellmate-style tool-call streaming/execution, form-draft updates, and transcript replay. |
+| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit asset/mask/sprite-frame image context, Shellmate-style tool-call streaming/execution, form-draft updates, and transcript replay. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, exposes live snapshots, finished-turn commits, and workspace/form side effects. |
-| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, form/sprite-sheet drafting, and immediate visible tool use. |
-| `AssistantToolModels.cs` | Persisted tool-call manifest records and form/sprite-sheet draft payloads used by chat/runtime/UI. |
-| `AssistantToolRegistry.cs` | Tool registry for workspace state, form and sprite-sheet drafting/detection, chat attachments, workspace mode switching, asset favorites/notes, and export actions. |
+| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, art guidance, form drafting, autosaved sprite-sheet edits, and immediate visible tool use. |
+| `AssistantToolModels.cs` | Persisted tool-call manifest records and form draft payloads used by chat/runtime/UI. |
+| `AssistantToolRegistry.cs` | Tool registry for workspace state, form drafting, sprite-sheet detection/update/reset/frame attachment, chat attachments, workspace mode switching, asset favorites/notes, and export actions. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, sprite-sheet definitions, export/step caches, streaming compare batches, masks, recipe CRUD, chat attachments, import, crop, generation prompt assembly, and masked edits. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, autosaved sprite-sheet working assets/frame records, export/step caches, streaming compare batches, masks, recipes, chat attachments, import, crop, prompt assembly, and masked edits. |
 | `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench, sprite-sheet editor, recipe management, and assistant tools. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns background generation/edit batches, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
@@ -62,6 +62,8 @@
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 | `SpriteSheetImageAnalyzer.cs` | Server-side PNG foreground analyzer used by assistant tools to detect row-major sprite frame bounding boxes. |
+| `SpriteSheetPngCodec.cs` | Minimal PNG RGBA decoder/encoder used by server-side sprite-sheet rendering. |
+| `SpriteSheetServerRenderer.cs` | Server-side normalizer that stitches current sprite boxes into an autosaved working PNG for assistant tool updates. |
 
 ### Components/
 
@@ -100,7 +102,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace for selecting source images, detecting/editing frame boxes, previewing normalized sheets and animation, applying derivative sprite-sheet assets, and rendering normalized PNG output. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with an Edit-like start flow, dominant interactive source-box canvas, autosaved working sheet normalization, frame thumbnails/attachments, reset, animation, and export. |
 
 ### Llm/
 
@@ -127,7 +129,8 @@
 | `ExportStepCache.cs` | EF entity for persisted applied export-step PNGs per source asset and source image hash. |
 | `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, output errors, lineage, and status. |
 | `PromptRecipe.cs` | EF entity for reusable visible prompt templates, style/avoid rules, examples, and preferred defaults. |
-| `SpriteSheetDefinition.cs` | EF entity for row-based sprite-sheet definitions, normalized output assets, frame manifests, layout settings, FPS, and loop defaults. |
+| `SpriteSheetDefinition.cs` | EF entity for row-based sprite-sheet definitions linking immutable source assets to mutable working sprite-sheet assets plus layout, FPS, and loop defaults. |
+| `SpriteSheetFrameRecord.cs` | EF entity for durable sprite frame records, current/source/cell/sprite rectangles, labels, previews, dimensions, and timestamps. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets. |
 | `ChatContextAttachment.cs` | EF entity for persistent visible chat attachments referencing assets, masks, crops, recipes, or batches. |
 | `AssistantConversation.cs` | EF entity for project-scoped persistent assistant conversations. |
@@ -159,6 +162,7 @@
 | `20260608232906_ExportStepCache.cs` / `.Designer.cs` | EF migration adding persisted applied export-step PNG cache records and indexes. |
 | `20260609011241_EditBatchSourceSnapshots.cs` / `.Designer.cs` | EF migration adding nullable edit-source PNG snapshot columns to generation batches. |
 | `20260609022859_SpriteSheetEditor.cs` / `.Designer.cs` | EF migration adding active sprite-sheet project state and persisted sprite-sheet definitions. |
+| `20260610192432_SpriteSheetSecondPass.cs` / `.Designer.cs` | EF corrective migration adding durable sprite-sheet frame records for autosaved working sheets. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/
