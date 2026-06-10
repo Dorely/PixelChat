@@ -63,6 +63,8 @@ public sealed record SpriteSheetDefinitionView(
     int Gutter,
     int Fps,
     bool Loop,
+    string HorizontalAnchor,
+    string VerticalAnchor,
     IReadOnlyList<SpriteSheetFrameRecordView> Frames,
     DateTime CreatedAt,
     DateTime UpdatedAt);
@@ -73,6 +75,7 @@ public sealed record SpriteSheetFrameRecordView(
     int Index,
     string Label,
     SpriteSheetRect SourceRect,
+    IReadOnlyList<SpriteSheetShapePath> ShapePaths,
     SpriteSheetRect CellRect,
     SpriteSheetRect SpriteRect,
     string PreviewDataUrl,
@@ -84,6 +87,7 @@ public sealed record SpriteSheetFrameView(
     int Index,
     string Label,
     SpriteSheetRect SourceRect,
+    IReadOnlyList<SpriteSheetShapePath> ShapePaths,
     SpriteSheetRect CellRect,
     SpriteSheetRect SpriteRect,
     string PreviewPngDataUrl);
@@ -93,6 +97,13 @@ public sealed record SpriteSheetRect(
     int Y,
     int Width,
     int Height);
+
+public sealed record SpriteSheetPoint(
+    int X,
+    int Y);
+
+public sealed record SpriteSheetShapePath(
+    IReadOnlyList<SpriteSheetPoint> Points);
 
 public sealed record SpriteSheetDetectionRequest(
     Guid SourceAssetId,
@@ -110,7 +121,8 @@ public sealed record SpriteSheetDetectionResult(
 
 public sealed record SpriteSheetFrameDetectionView(
     int Index,
-    SpriteSheetRect SourceRect);
+    SpriteSheetRect SourceRect,
+    IReadOnlyList<SpriteSheetShapePath> ShapePaths);
 
 public sealed record AutosaveSpriteSheetLayoutRequest(
     Guid SpriteSheetId,
@@ -122,6 +134,8 @@ public sealed record AutosaveSpriteSheetLayoutRequest(
     int Gutter,
     int Fps,
     bool Loop,
+    string HorizontalAnchor,
+    string VerticalAnchor,
     IReadOnlyList<SpriteSheetFrameView> Frames);
 
 public sealed record NormalizeSpriteSheetRequest(
@@ -135,6 +149,8 @@ public sealed record NormalizeSpriteSheetRequest(
     int Gutter,
     int Fps,
     bool Loop,
+    string HorizontalAnchor,
+    string VerticalAnchor,
     IReadOnlyList<SpriteSheetFrameView> Frames);
 
 public sealed record UpdateSpriteSheetFramesRequest(
@@ -147,12 +163,15 @@ public sealed record UpdateSpriteSheetFramesRequest(
     int Gutter,
     int Fps,
     bool Loop,
+    string HorizontalAnchor,
+    string VerticalAnchor,
     IReadOnlyList<SpriteSheetFrameUpdateView> Frames);
 
 public sealed record SpriteSheetFrameUpdateView(
     int Index,
     string Label,
-    SpriteSheetRect SourceRect);
+    SpriteSheetRect SourceRect,
+    IReadOnlyList<SpriteSheetShapePath> ShapePaths);
 
 public sealed record BackgroundRemovalExportCacheRequest(
     string RemovalMethod,

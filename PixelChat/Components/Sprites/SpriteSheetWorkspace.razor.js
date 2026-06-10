@@ -1,41 +1,6 @@
 const editorStates = new WeakMap();
 const animations = new WeakMap();
 
-export async function detectSpriteSheetFrames(imageUrl, expectedFrames, layoutHint, backgroundMode) {
-    const image = await loadImage(imageUrl);
-    const pixels = imagePixels(image);
-    const frames = detectFramesFromPixels(
-        pixels.data,
-        pixels.width,
-        pixels.height,
-        Number(expectedFrames) || null,
-        backgroundMode || "auto");
-
-    if (frames.length === 0) {
-        return gridFallback(pixels.width, pixels.height, Number(expectedFrames) || 1, layoutHint);
-    }
-
-    const rowCount = countRows(frames);
-    const columns = rowCount <= 1
-        ? frames.length
-        : Math.max(...groupFramesByRows(frames).map(row => row.length));
-    return {
-        ImageWidth: pixels.width,
-        ImageHeight: pixels.height,
-        Rows: Math.max(1, rowCount),
-        Columns: Math.max(1, columns),
-        Frames: frames.map((frame, index) => ({
-            Index: index,
-            SourceRect: {
-                X: frame.x,
-                Y: frame.y,
-                Width: frame.w,
-                Height: frame.h,
-            },
-        })),
-    };
-}
-
 export async function drawSpriteBoxEditor(sourceCanvas, animationCanvas, dotNetRef, imageUrl, payload, selectedIndex, tool) {
     const image = await loadImage(imageUrl);
     const layout = normalizeLayout(payload);
@@ -45,6 +10,11 @@ export async function drawSpriteBoxEditor(sourceCanvas, animationCanvas, dotNetR
     state.layout = layout;
     state.selectedIndex = Number.isFinite(Number(selectedIndex)) ? Number(selectedIndex) : -1;
     state.tool = String(tool || "select").toLowerCase();
+    if (state.tool !== "outline") {
+        state.outlineDraft = [];
+        state.hoverPoint = null;
+    }
+    updateCanvasToolClasses(sourceCanvas, state);
     drawSourceCanvas(sourceCanvas, state);
 
     const previews = buildFramePreviewCanvases(image, layout);
@@ -60,6 +30,7 @@ export async function renderSpriteFramePreviews(imageUrl, payload) {
             Index: frame.index,
             Label: frame.label,
             SourceRect: toDotNetRect(frame.sourceRect),
+            ShapePaths: toDotNetShapePaths(frame.shapePaths),
             CellRect: toDotNetRect(frame.cellRect),
             SpriteRect: toDotNetRect(frame.spriteRect),
             PreviewPngDataUrl: frame.previewCanvas.toDataURL("image/png"),
@@ -79,6 +50,7 @@ export async function renderSpriteSheetNormalize(imageUrl, payload) {
             Index: frame.index,
             Label: frame.label,
             SourceRect: toDotNetRect(frame.rebasedSourceRect),
+            ShapePaths: toDotNetShapePaths(frame.rebasedShapePaths),
             CellRect: toDotNetRect(frame.cellRect),
             SpriteRect: toDotNetRect(frame.spriteRect),
             PreviewPngDataUrl: frame.previewCanvas.toDataURL("image/png"),
@@ -107,6 +79,8 @@ function ensureEditorState(canvas, dotNetRef) {
         tool: "select",
         viewport: null,
         drag: null,
+        outlineDraft: [],
+        hoverPoint: null,
     };
     editorStates.set(canvas, state);
 
@@ -115,9 +89,23 @@ function ensureEditorState(canvas, dotNetRef) {
     canvas.addEventListener("pointerup", event => onPointerUp(canvas, state, event));
     canvas.addEventListener("pointercancel", event => onPointerUp(canvas, state, event));
     canvas.addEventListener("pointerleave", event => {
-        if (state.drag) onPointerUp(canvas, state, event);
+        if (state.drag) {
+            onPointerUp(canvas, state, event);
+        } else if (state.hoverPoint) {
+            state.hoverPoint = null;
+            drawSourceCanvas(canvas, state);
+        }
     });
     return state;
+}
+
+function updateCanvasToolClasses(canvas, state) {
+    if (!canvas) return;
+
+    canvas.classList.toggle("is-select-tool", state.tool === "select");
+    canvas.classList.toggle("is-draw-tool", state.tool === "draw");
+    canvas.classList.toggle("is-outline-tool", state.tool === "outline");
+    canvas.classList.toggle("is-dragging-frame", Boolean(state.drag));
 }
 
 function onPointerDown(canvas, state, event) {
@@ -127,6 +115,38 @@ function onPointerDown(canvas, state, event) {
     event.preventDefault();
     canvas.setPointerCapture?.(event.pointerId);
 
+    if (state.tool === "outline") {
+        const draft = state.outlineDraft || [];
+        if (draft.length >= 3 && distance(point, draft[0]) <= outlineCloseDistance(state)) {
+            const shapePaths = [{ points: draft.map(p => ({ x: p.x, y: p.y })) }];
+            const sourceRect = rectFromShapePaths(shapePaths, imageWidth(state.image), imageHeight(state.image));
+            const index = state.layout.frames.length;
+            const label = `Frame ${index + 1}`;
+            state.layout.frames.push({ index, label, sourceRect, shapePaths });
+            state.layout.frameCount = state.layout.frames.length;
+            state.selectedIndex = index;
+            state.outlineDraft = [];
+            state.hoverPoint = null;
+            reindexLayoutFrames(state.layout);
+            drawSourceCanvas(canvas, state);
+            state.dotNetRef?.invokeMethodAsync("OnSpriteBoxesChanged", {
+                SelectedIndex: state.selectedIndex,
+                Frames: state.layout.frames.map(frame => ({
+                    Index: frame.index,
+                    Label: frame.label,
+                    SourceRect: toDotNetRect(frame.sourceRect),
+                    ShapePaths: toDotNetShapePaths(frame.shapePaths),
+                })),
+            });
+            return;
+        }
+
+        state.outlineDraft = [...draft, point];
+        state.hoverPoint = null;
+        drawSourceCanvas(canvas, state);
+        return;
+    }
+
     if (state.tool === "draw") {
         const index = state.layout.frames.length;
         const label = `Frame ${index + 1}`;
@@ -134,11 +154,13 @@ function onPointerDown(canvas, state, event) {
             index,
             label,
             sourceRect: { x: point.x, y: point.y, w: 1, h: 1 },
+            shapePaths: [],
         };
         state.layout.frames.push(frame);
         state.layout.frameCount = state.layout.frames.length;
         state.selectedIndex = index;
         state.drag = { type: "draw", index, start: point };
+        updateCanvasToolClasses(canvas, state);
         drawSourceCanvas(canvas, state);
         return;
     }
@@ -155,18 +177,34 @@ function onPointerDown(canvas, state, event) {
     state.dotNetRef?.invokeMethodAsync("OnSpriteBoxSelected", hit.index);
     const frame = state.layout.frames[hit.index];
     state.drag = {
-        type: hit.handle ? "resize" : "move",
+        type: hit.vertex ? "vertex" : (hit.handle ? "resize" : "move"),
         index: hit.index,
         handle: hit.handle,
+        vertex: hit.vertex,
         start: point,
         original: { ...frame.sourceRect },
+        originalShapePaths: cloneShapePaths(frame.shapePaths),
     };
+    updateCanvasToolClasses(canvas, state);
     drawSourceCanvas(canvas, state);
 }
 
 function onPointerMove(canvas, state, event) {
-    if (!state.drag || !state.layout || !state.viewport) return;
+    if (!state.layout || !state.viewport) return;
     const point = eventToImagePoint(canvas, state, event);
+    if (!state.drag) {
+        if (state.tool === "outline") {
+            if (!samePoint(state.hoverPoint, point)) {
+                state.hoverPoint = point;
+                drawSourceCanvas(canvas, state);
+            }
+        } else if (state.hoverPoint) {
+            state.hoverPoint = null;
+            drawSourceCanvas(canvas, state);
+        }
+        return;
+    }
+
     if (!point) return;
     event.preventDefault();
 
@@ -178,14 +216,27 @@ function onPointerMove(canvas, state, event) {
     } else if (state.drag.type === "move") {
         const dx = point.x - state.drag.start.x;
         const dy = point.y - state.drag.start.y;
-        frame.sourceRect = clampRect({
-            x: Math.round(state.drag.original.x + dx),
-            y: Math.round(state.drag.original.y + dy),
-            w: state.drag.original.w,
-            h: state.drag.original.h,
-        }, imageWidth(state.image), imageHeight(state.image));
+        if (frame.shapePaths?.length) {
+            frame.shapePaths = offsetShapePaths(state.drag.originalShapePaths, dx, dy, imageWidth(state.image), imageHeight(state.image));
+            frame.sourceRect = rectFromShapePaths(frame.shapePaths, imageWidth(state.image), imageHeight(state.image));
+        } else {
+            frame.sourceRect = clampRect({
+                x: Math.round(state.drag.original.x + dx),
+                y: Math.round(state.drag.original.y + dy),
+                w: state.drag.original.w,
+                h: state.drag.original.h,
+            }, imageWidth(state.image), imageHeight(state.image));
+        }
     } else if (state.drag.type === "resize") {
         frame.sourceRect = resizeRect(state.drag.original, state.drag.handle, point, imageWidth(state.image), imageHeight(state.image));
+    } else if (state.drag.type === "vertex") {
+        frame.shapePaths = moveShapeVertex(
+            state.drag.originalShapePaths,
+            state.drag.vertex,
+            point,
+            imageWidth(state.image),
+            imageHeight(state.image));
+        frame.sourceRect = rectFromShapePaths(frame.shapePaths, imageWidth(state.image), imageHeight(state.image));
     }
 
     drawSourceCanvas(canvas, state);
@@ -197,7 +248,12 @@ function onPointerUp(canvas, state, event) {
 
     const frame = state.layout.frames[state.drag.index];
     if (frame) {
-        frame.sourceRect = clampRect(frame.sourceRect, imageWidth(state.image), imageHeight(state.image));
+        if (frame.shapePaths?.length) {
+            frame.shapePaths = normalizeShapePaths(frame.shapePaths, imageWidth(state.image), imageHeight(state.image));
+            frame.sourceRect = rectFromShapePaths(frame.shapePaths, imageWidth(state.image), imageHeight(state.image));
+        } else {
+            frame.sourceRect = clampRect(frame.sourceRect, imageWidth(state.image), imageHeight(state.image));
+        }
         if (frame.sourceRect.w < 3 || frame.sourceRect.h < 3) {
             state.layout.frames.splice(state.drag.index, 1);
             state.selectedIndex = -1;
@@ -211,6 +267,7 @@ function onPointerUp(canvas, state, event) {
         : (state.layout.frames.length > 0 ? 0 : -1);
     state.selectedIndex = selectedIndex;
     state.drag = null;
+    updateCanvasToolClasses(canvas, state);
     drawSourceCanvas(canvas, state);
     state.dotNetRef?.invokeMethodAsync("OnSpriteBoxesChanged", {
         SelectedIndex: selectedIndex,
@@ -218,6 +275,7 @@ function onPointerUp(canvas, state, event) {
             Index: frame.index,
             Label: frame.label,
             SourceRect: toDotNetRect(frame.sourceRect),
+            ShapePaths: toDotNetShapePaths(frame.shapePaths),
         })),
     });
 }
@@ -249,8 +307,15 @@ function drawSourceCanvas(canvas, state) {
         const selected = frame.index === state.selectedIndex;
         ctx.strokeStyle = selected ? "#f59f00" : "#1f6feb";
         ctx.fillStyle = selected ? "rgba(245,159,0,0.16)" : "rgba(31,111,235,0.12)";
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeRect(x, y, w, h);
+        if (frame.shapePaths?.length) {
+            drawShapeOverlay(ctx, frame.shapePaths, viewport, scaleX, scaleY, selected);
+            ctx.setLineDash([5 * deviceScale(), 4 * deviceScale()]);
+            ctx.strokeRect(x, y, w, h);
+            ctx.setLineDash([]);
+        } else {
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeRect(x, y, w, h);
+        }
 
         const label = frame.label || `Frame ${frame.index + 1}`;
         const labelWidth = Math.min(ctx.measureText(label).width + 10 * deviceScale(), Math.max(28 * deviceScale(), w));
@@ -259,8 +324,15 @@ function drawSourceCanvas(canvas, state) {
         ctx.fillStyle = "#ffffff";
         ctx.fillText(label, x + 5 * deviceScale(), y + 3 * deviceScale(), labelWidth - 8 * deviceScale());
 
-        if (selected) drawHandles(ctx, x, y, w, h);
+        if (selected) {
+            if (frame.shapePaths?.length) {
+                drawVertexHandles(ctx, frame.shapePaths, viewport, scaleX, scaleY);
+            } else {
+                drawHandles(ctx, x, y, w, h);
+            }
+        }
     }
+    drawOutlineDraft(ctx, state, viewport, scaleX, scaleY);
     ctx.restore();
 }
 
@@ -280,12 +352,100 @@ function drawHandles(ctx, x, y, w, h) {
     }
 }
 
+function drawShapeOverlay(ctx, shapePaths, viewport, scaleX, scaleY, selected) {
+    ctx.save();
+    ctx.lineWidth = Math.max(selected ? 3 : 2, (selected ? 3 : 2) * deviceScale());
+    ctx.beginPath();
+    for (const path of shapePaths) {
+        const points = path.points || [];
+        if (points.length < 3) continue;
+        ctx.moveTo(viewport.x + points[0].x * scaleX, viewport.y + points[0].y * scaleY);
+        for (let index = 1; index < points.length; index++) {
+            ctx.lineTo(viewport.x + points[index].x * scaleX, viewport.y + points[index].y * scaleY);
+        }
+        ctx.closePath();
+    }
+
+    ctx.fillStyle = selected ? "rgba(22,163,74,0.18)" : "rgba(22,163,74,0.11)";
+    ctx.strokeStyle = "#16a34a";
+    ctx.fill("evenodd");
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawVertexHandles(ctx, shapePaths, viewport, scaleX, scaleY) {
+    const points = shapePaths.flatMap(path => path.points || []);
+
+    const radius = 4.5 * deviceScale();
+    ctx.lineWidth = Math.max(1.5, 1.5 * deviceScale());
+    for (const point of points) {
+        const x = viewport.x + point.x * scaleX;
+        const y = viewport.y + point.y * scaleY;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "#f59f00";
+        ctx.fill();
+        ctx.stroke();
+    }
+}
+
+function drawOutlineDraft(ctx, state, viewport, scaleX, scaleY) {
+    const draft = state.outlineDraft || [];
+    if (state.tool !== "outline" || draft.length === 0) return;
+    const hover = state.hoverPoint;
+    const canClose = hover && draft.length >= 3 && distance(hover, draft[0]) <= outlineCloseDistance(state);
+
+    ctx.save();
+    ctx.lineWidth = Math.max(2, 2 * deviceScale());
+    ctx.beginPath();
+    ctx.moveTo(viewport.x + draft[0].x * scaleX, viewport.y + draft[0].y * scaleY);
+    for (let index = 1; index < draft.length; index++) {
+        ctx.lineTo(viewport.x + draft[index].x * scaleX, viewport.y + draft[index].y * scaleY);
+    }
+    if (hover) {
+        const target = canClose ? draft[0] : hover;
+        ctx.lineTo(viewport.x + target.x * scaleX, viewport.y + target.y * scaleY);
+    }
+    if (canClose) {
+        ctx.closePath();
+        ctx.fillStyle = "rgba(245,159,0,0.14)";
+        ctx.fill();
+    }
+    ctx.strokeStyle = canClose ? "#f59f00" : "#16a34a";
+    ctx.stroke();
+
+    for (let index = 0; index < draft.length; index++) {
+        const point = draft[index];
+        const x = viewport.x + point.x * scaleX;
+        const y = viewport.y + point.y * scaleY;
+        const radius = (canClose && index === 0 ? 6.5 : 4.5) * deviceScale();
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = canClose && index === 0 ? "#f59f00" : "#16a34a";
+        ctx.strokeStyle = "#ffffff";
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    if (hover && !canClose) {
+        const x = viewport.x + hover.x * scaleX;
+        const y = viewport.y + hover.y * scaleY;
+        ctx.beginPath();
+        ctx.arc(x, y, 3.5 * deviceScale(), 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(22,163,74,0.42)";
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
 function buildFramePreviewCanvases(image, layout) {
     const frames = [];
     const frameCount = Math.min(layout.frameCount, layout.frames.length, layout.rows * layout.columns);
     for (let index = 0; index < frameCount; index++) {
         const frame = layout.frames[index];
         const sourceRect = clampRect(frame.sourceRect, imageWidth(image), imageHeight(image));
+        const shapePaths = normalizeShapePaths(frame.shapePaths, imageWidth(image), imageHeight(image));
         const row = Math.floor(index / layout.columns);
         const column = index % layout.columns;
         const cellRect = {
@@ -294,34 +454,19 @@ function buildFramePreviewCanvases(image, layout) {
             w: layout.cellWidth,
             h: layout.cellHeight,
         };
-        const destX = Math.round(cellRect.x + ((layout.cellWidth - sourceRect.w) / 2));
-        const baseline = cellRect.y + layout.cellHeight - layout.padding;
-        const destY = Math.round(baseline - sourceRect.h);
+        const { x: destX, y: destY } = alignedDestination(cellRect, sourceRect, layout);
         const spriteRect = {
             x: destX,
             y: destY,
             w: sourceRect.w,
             h: sourceRect.h,
         };
-        const previewCanvas = document.createElement("canvas");
-        previewCanvas.width = sourceRect.w;
-        previewCanvas.height = sourceRect.h;
-        const previewCtx = previewCanvas.getContext("2d");
-        previewCtx.imageSmoothingEnabled = false;
-        previewCtx.drawImage(
-            image,
-            sourceRect.x,
-            sourceRect.y,
-            sourceRect.w,
-            sourceRect.h,
-            0,
-            0,
-            sourceRect.w,
-            sourceRect.h);
+        const previewCanvas = renderMaskedCrop(image, sourceRect, shapePaths);
         frames.push({
             index,
             label: frame.label || `Frame ${index + 1}`,
             sourceRect,
+            shapePaths,
             cellRect,
             spriteRect,
             previewCanvas,
@@ -361,6 +506,7 @@ function renderOutputCanvas(image, layout) {
     for (let index = 0; index < frameCount; index++) {
         const frame = layout.frames[index];
         const sourceRect = clampRect(frame.sourceRect, imageWidth(image), imageHeight(image));
+        const shapePaths = normalizeShapePaths(frame.shapePaths, imageWidth(image), imageHeight(image));
         const row = Math.floor(index / layout.columns);
         const column = index % layout.columns;
         const cellRect = {
@@ -369,9 +515,7 @@ function renderOutputCanvas(image, layout) {
             w: layout.cellWidth,
             h: layout.cellHeight,
         };
-        const destX = Math.round(cellRect.x + ((layout.cellWidth - sourceRect.w) / 2));
-        const baseline = cellRect.y + layout.cellHeight - layout.padding;
-        const destY = Math.round(baseline - sourceRect.h);
+        const { x: destX, y: destY } = alignedDestination(cellRect, sourceRect, layout);
         const spriteRect = {
             x: destX,
             y: destY,
@@ -379,18 +523,11 @@ function renderOutputCanvas(image, layout) {
             h: sourceRect.h,
         };
 
-        ctx.drawImage(
-            image,
-            sourceRect.x,
-            sourceRect.y,
-            sourceRect.w,
-            sourceRect.h,
-            destX,
-            destY,
-            sourceRect.w,
-            sourceRect.h);
+        const spriteCanvas = renderMaskedCrop(image, sourceRect, shapePaths);
+        ctx.drawImage(spriteCanvas, destX, destY);
 
         const rebasedSourceRect = intersectRect(spriteRect, width, height);
+        const rebasedShapePaths = rebaseShapePaths(shapePaths, sourceRect, destX, destY, width, height);
         const previewCanvas = document.createElement("canvas");
         previewCanvas.width = cellRect.w;
         previewCanvas.height = cellRect.h;
@@ -401,14 +538,86 @@ function renderOutputCanvas(image, layout) {
             index,
             label: frame.label || `Frame ${index + 1}`,
             sourceRect,
+            shapePaths,
             cellRect,
             spriteRect,
             rebasedSourceRect,
+            rebasedShapePaths,
             previewCanvas,
         });
     }
 
     return { canvas, frames };
+}
+
+function renderMaskedCrop(image, sourceRect, shapePaths) {
+    const canvas = document.createElement("canvas");
+    canvas.width = sourceRect.w;
+    canvas.height = sourceRect.h;
+    const ctx = canvas.getContext("2d", { willReadFrequently: shapePaths.length > 0 });
+    ctx.imageSmoothingEnabled = false;
+    if (shapePaths.length === 0) {
+        ctx.drawImage(
+            image,
+            sourceRect.x,
+            sourceRect.y,
+            sourceRect.w,
+            sourceRect.h,
+            0,
+            0,
+            sourceRect.w,
+            sourceRect.h);
+        return canvas;
+    }
+
+    const pixels = imagePixels(image);
+    const output = ctx.createImageData(sourceRect.w, sourceRect.h);
+    for (let y = 0; y < sourceRect.h; y++) {
+        const sourceY = sourceRect.y + y;
+        if (sourceY < 0 || sourceY >= pixels.height) continue;
+
+        for (let x = 0; x < sourceRect.w; x++) {
+            const sourceX = sourceRect.x + x;
+            if (sourceX < 0 || sourceX >= pixels.width) continue;
+
+            const sourceIndex = ((sourceY * pixels.width) + sourceX) * 4;
+            if (!isForeground(pixels.data[sourceIndex], pixels.data[sourceIndex + 1], pixels.data[sourceIndex + 2], pixels.data[sourceIndex + 3], "auto")
+                || !pointInShapePaths(shapePaths, sourceX + 0.5, sourceY + 0.5)) {
+                continue;
+            }
+
+            const targetIndex = ((y * sourceRect.w) + x) * 4;
+            output.data[targetIndex] = pixels.data[sourceIndex];
+            output.data[targetIndex + 1] = pixels.data[sourceIndex + 1];
+            output.data[targetIndex + 2] = pixels.data[sourceIndex + 2];
+            output.data[targetIndex + 3] = pixels.data[sourceIndex + 3];
+        }
+    }
+
+    ctx.putImageData(output, 0, 0);
+    return canvas;
+}
+
+function alignedDestination(cellRect, sourceRect, layout) {
+    let x;
+    if (layout.horizontalAnchor === "left") {
+        x = cellRect.x + layout.padding;
+    } else if (layout.horizontalAnchor === "right") {
+        x = cellRect.x + cellRect.w - layout.padding - sourceRect.w;
+    } else {
+        x = cellRect.x + ((cellRect.w - sourceRect.w) / 2);
+    }
+
+    let y;
+    if (layout.verticalAnchor === "top") {
+        y = cellRect.y + layout.padding;
+    } else if (layout.verticalAnchor === "middle") {
+        y = cellRect.y + ((cellRect.h - sourceRect.h) / 2);
+    } else {
+        y = cellRect.y + cellRect.h - layout.padding - sourceRect.h;
+    }
+
+    return { x: Math.round(x), y: Math.round(y) };
 }
 
 function startAnimation(canvas, frames, layout) {
@@ -465,8 +674,14 @@ function drawAnimationFrame(canvas, state) {
 function hitTest(state, point) {
     for (let index = state.layout.frames.length - 1; index >= 0; index--) {
         const frame = state.layout.frames[index];
-        const handle = hitHandle(frame.sourceRect, point, state);
+        const vertex = hitShapeVertex(frame.shapePaths, point, state);
+        if (vertex) return { index, vertex };
+        const handle = frame.shapePaths?.length ? null : hitHandle(frame.sourceRect, point, state);
         if (handle) return { index, handle };
+        if (frame.shapePaths?.length && pointInShapePaths(frame.shapePaths, point.x, point.y)) {
+            return { index, handle: null };
+        }
+
         const rect = frame.sourceRect;
         if (point.x >= rect.x && point.x <= rect.x + rect.w && point.y >= rect.y && point.y <= rect.y + rect.h) {
             return { index, handle: null };
@@ -534,11 +749,141 @@ function rectFromPoints(a, b) {
     };
 }
 
+function rectFromShapePaths(shapePaths, width, height) {
+    const points = (shapePaths || []).flatMap(path => path.points || []);
+    if (points.length === 0) return { x: 0, y: 0, w: 1, h: 1 };
+
+    const minX = Math.max(0, Math.min(...points.map(point => point.x)));
+    const minY = Math.max(0, Math.min(...points.map(point => point.y)));
+    const maxX = Math.min(width, Math.max(...points.map(point => point.x)));
+    const maxY = Math.min(height, Math.max(...points.map(point => point.y)));
+    return clampRect({
+        x: minX,
+        y: minY,
+        w: Math.max(1, maxX - minX),
+        h: Math.max(1, maxY - minY),
+    }, width, height);
+}
+
+function normalizeShapePaths(value, width, height) {
+    const paths = Array.isArray(value) ? value : [];
+    return paths
+        .map(path => {
+            const points = read(path, "Points", "points") || [];
+            return {
+                points: (Array.isArray(points) ? points : [])
+                    .map(point => ({
+                        x: clampInt(read(point, "X", "x"), 0, width, 0),
+                        y: clampInt(read(point, "Y", "y"), 0, height, 0),
+                    })),
+            };
+        })
+        .filter(path => path.points.length >= 3);
+}
+
+function cloneShapePaths(shapePaths) {
+    return (shapePaths || []).map(path => ({
+        points: (path.points || []).map(point => ({ x: point.x, y: point.y })),
+    }));
+}
+
+function offsetShapePaths(shapePaths, dx, dy, width, height) {
+    return normalizeShapePaths((shapePaths || []).map(path => ({
+        points: (path.points || []).map(point => ({
+            x: point.x + dx,
+            y: point.y + dy,
+        })),
+    })), width, height);
+}
+
+function moveShapeVertex(shapePaths, vertex, point, width, height) {
+    const moved = cloneShapePaths(shapePaths);
+    const path = moved[vertex.pathIndex];
+    if (!path?.points?.[vertex.pointIndex]) return moved;
+
+    path.points[vertex.pointIndex] = {
+        x: clampInt(point.x, 0, width, 0),
+        y: clampInt(point.y, 0, height, 0),
+    };
+    return normalizeShapePaths(moved, width, height);
+}
+
+function rebaseShapePaths(shapePaths, sourceRect, destX, destY, width, height) {
+    return normalizeShapePaths((shapePaths || []).map(path => ({
+        points: (path.points || []).map(point => ({
+            x: destX + point.x - sourceRect.x,
+            y: destY + point.y - sourceRect.y,
+        })),
+    })), width, height);
+}
+
+function hitShapeVertex(shapePaths, point, state) {
+    const totalPoints = (shapePaths || []).reduce((sum, path) => sum + (path.points?.length || 0), 0);
+    if (totalPoints === 0 || !state.viewport || !state.image) return null;
+
+    const handleSize = 10 / Math.max(0.001, state.viewport.w / imageWidth(state.image));
+    for (let pathIndex = 0; pathIndex < shapePaths.length; pathIndex++) {
+        const points = shapePaths[pathIndex].points || [];
+        for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
+            const candidate = points[pointIndex];
+            if (Math.abs(point.x - candidate.x) <= handleSize && Math.abs(point.y - candidate.y) <= handleSize) {
+                return { pathIndex, pointIndex };
+            }
+        }
+    }
+
+    return null;
+}
+
+function pointInShapePaths(shapePaths, x, y) {
+    let inside = false;
+    for (const path of shapePaths || []) {
+        if (pointInPath(path.points || [], x, y)) inside = !inside;
+    }
+    return inside;
+}
+
+function pointInPath(points, x, y) {
+    if (points.length < 3) return false;
+
+    let inside = false;
+    let previous = points.length - 1;
+    for (let current = 0; current < points.length; current++) {
+        const a = points[current];
+        const b = points[previous];
+        const denominator = b.y - a.y;
+        if (Math.abs(denominator) > 0.0001
+            && (a.y > y) !== (b.y > y)
+            && x < ((b.x - a.x) * (y - a.y) / denominator) + a.x) {
+            inside = !inside;
+        }
+        previous = current;
+    }
+
+    return inside;
+}
+
+function outlineCloseDistance(state) {
+    if (!state.viewport || !state.image) return 8;
+    return 12 / Math.max(0.001, state.viewport.w / imageWidth(state.image));
+}
+
+function distance(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function samePoint(a, b) {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return a.x === b.x && a.y === b.y;
+}
+
 function normalizeLayout(payload) {
     const rows = clampInt(read(payload, "Rows", "rows"), 1, 32, 1);
     let columns = clampInt(read(payload, "Columns", "columns"), 1, 64, 1);
     const frames = (read(payload, "Frames", "frames") || []).map((frame, fallbackIndex) => {
         const rect = read(frame, "SourceRect", "sourceRect") || {};
+        const shapePaths = normalizeShapePaths(read(frame, "ShapePaths", "shapePaths"), 32767, 32767);
         return {
             index: clampInt(read(frame, "Index", "index"), 0, 127, fallbackIndex),
             label: String(read(frame, "Label", "label") || `Frame ${fallbackIndex + 1}`),
@@ -548,6 +893,7 @@ function normalizeLayout(payload) {
                 w: clampInt(read(rect, "Width", "width", "W", "w"), 1, 32767, 1),
                 h: clampInt(read(rect, "Height", "height", "H", "h"), 1, 32767, 1),
             },
+            shapePaths,
         };
     });
 
@@ -568,8 +914,23 @@ function normalizeLayout(payload) {
         gutter: clampInt(read(payload, "Gutter", "gutter"), 0, 2048, 16),
         fps: clampInt(read(payload, "Fps", "fps"), 1, 60, 8),
         loop: Boolean(read(payload, "Loop", "loop") ?? true),
+        horizontalAnchor: normalizeHorizontalAnchor(read(payload, "HorizontalAnchor", "horizontalAnchor")),
+        verticalAnchor: normalizeVerticalAnchor(read(payload, "VerticalAnchor", "verticalAnchor")),
         frames,
     };
+}
+
+function normalizeHorizontalAnchor(value) {
+    const token = String(value || "center").toLowerCase();
+    if (token === "left" || token === "right") return token;
+    return "center";
+}
+
+function normalizeVerticalAnchor(value) {
+    const token = String(value || "bottom").toLowerCase();
+    if (token === "top") return "top";
+    if (token === "middle" || token === "center") return "middle";
+    return "bottom";
 }
 
 function reindexLayoutFrames(layout) {
@@ -581,152 +942,6 @@ function reindexFrames(frames) {
         frame.index = index;
         if (!frame.label) frame.label = `Frame ${index + 1}`;
     });
-}
-
-function detectFramesFromPixels(data, width, height, expectedFrames, backgroundMode) {
-    const foreground = new Uint8Array(width * height);
-    let foregroundCount = 0;
-    for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-            const offset = ((y * width) + x) * 4;
-            const value = isForeground(data[offset], data[offset + 1], data[offset + 2], data[offset + 3], backgroundMode) ? 1 : 0;
-            foreground[(y * width) + x] = value;
-            foregroundCount += value;
-        }
-    }
-
-    if (foregroundCount === 0) return [];
-
-    const rowCounts = new Array(height).fill(0);
-    for (let y = 0; y < height; y++) {
-        let count = 0;
-        const rowOffset = y * width;
-        for (let x = 0; x < width; x++) count += foreground[rowOffset + x];
-        rowCounts[y] = count;
-    }
-
-    const rowBands = buildBands(rowCounts, Math.max(2, Math.ceil(width * 0.01)), Math.max(4, Math.floor(height / 160)), Math.max(3, Math.floor(height / 160)));
-    const frames = [];
-    for (const rowBand of rowBands) {
-        const bandHeight = rowBand.end - rowBand.start + 1;
-        const columnCounts = new Array(width).fill(0);
-        for (let x = 0; x < width; x++) {
-            let count = 0;
-            for (let y = rowBand.start; y <= rowBand.end; y++) count += foreground[(y * width) + x];
-            columnCounts[x] = count;
-        }
-
-        const columnBands = buildBands(columnCounts, Math.max(2, Math.ceil(bandHeight * 0.01)), Math.max(4, Math.floor(width / 240)), Math.max(3, Math.floor(width / 256)));
-        for (const columnBand of columnBands) {
-            const rect = tightRect(foreground, width, rowBand, columnBand);
-            if (rect) frames.push(rect);
-        }
-    }
-
-    frames.sort((left, right) => left.y - right.y || left.x - right.x);
-    let normalized = frames.map((frame, index) => ({ ...frame, index }));
-    if (expectedFrames && normalized.length > expectedFrames) {
-        normalized = normalized
-            .sort((left, right) => (right.w * right.h) - (left.w * left.h))
-            .slice(0, expectedFrames)
-            .sort((left, right) => left.y - right.y || left.x - right.x)
-            .map((frame, index) => ({ ...frame, index }));
-    }
-    return normalized;
-}
-
-function tightRect(foreground, width, rowBand, columnBand) {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (let y = rowBand.start; y <= rowBand.end; y++) {
-        for (let x = columnBand.start; x <= columnBand.end; x++) {
-            if (!foreground[(y * width) + x]) continue;
-            minX = Math.min(minX, x);
-            minY = Math.min(minY, y);
-            maxX = Math.max(maxX, x);
-            maxY = Math.max(maxY, y);
-        }
-    }
-
-    if (!Number.isFinite(minX)) return null;
-    return { x: minX, y: minY, w: Math.max(1, maxX - minX + 1), h: Math.max(1, maxY - minY + 1) };
-}
-
-function buildBands(counts, threshold, minSize, gapTolerance) {
-    const bands = [];
-    let start = -1;
-    let end = -1;
-    let gap = 0;
-    for (let index = 0; index < counts.length; index++) {
-        if (counts[index] >= threshold) {
-            if (start < 0) start = index;
-            end = index;
-            gap = 0;
-        } else if (start >= 0) {
-            gap++;
-            if (gap > gapTolerance) {
-                if (end - start + 1 >= minSize) bands.push({ start, end });
-                start = -1;
-                end = -1;
-                gap = 0;
-            }
-        }
-    }
-
-    if (start >= 0 && end - start + 1 >= minSize) bands.push({ start, end });
-    return bands;
-}
-
-function countRows(frames) {
-    return groupFramesByRows(frames).length;
-}
-
-function groupFramesByRows(frames) {
-    if (frames.length === 0) return [];
-    const heights = frames.map(frame => frame.h).sort((left, right) => left - right);
-    const tolerance = Math.max(8, Math.floor(heights[Math.floor(heights.length / 2)] / 3));
-    const rows = [];
-    for (const frame of [...frames].sort((left, right) => left.y - right.y)) {
-        let row = rows.find(item => Math.abs(item.y - frame.y) <= tolerance);
-        if (!row) {
-            row = { y: frame.y, frames: [] };
-            rows.push(row);
-        }
-        row.frames.push(frame);
-    }
-
-    return rows.map(row => row.frames);
-}
-
-function gridFallback(width, height, expectedFrames, layoutHint) {
-    const count = Math.max(1, expectedFrames || 1);
-    let rows = 1;
-    let columns = count;
-    if (layoutHint && String(layoutHint).toLowerCase().includes("multi") && count > 4) {
-        rows = Math.max(1, Math.floor(Math.sqrt(count)));
-        columns = Math.max(1, Math.ceil(count / rows));
-    }
-
-    const cellWidth = Math.max(1, Math.floor(width / columns));
-    const cellHeight = Math.max(1, Math.floor(height / rows));
-    const frames = [];
-    for (let index = 0; index < count; index++) {
-        const row = Math.floor(index / columns);
-        const column = index % columns;
-        frames.push({
-            Index: index,
-            SourceRect: {
-                X: column * cellWidth,
-                Y: row * cellHeight,
-                Width: cellWidth,
-                Height: cellHeight,
-            },
-        });
-    }
-
-    return { ImageWidth: width, ImageHeight: height, Rows: rows, Columns: columns, Frames: frames };
 }
 
 function isForeground(r, g, b, a, backgroundMode) {
@@ -808,6 +1023,17 @@ function toDotNetRect(rect) {
         Width: Math.round(rect.w),
         Height: Math.round(rect.h),
     };
+}
+
+function toDotNetShapePaths(shapePaths) {
+    return (shapePaths || [])
+        .filter(path => (path.points || []).length >= 3)
+        .map(path => ({
+            Points: path.points.map(point => ({
+                X: Math.round(point.x),
+                Y: Math.round(point.y),
+            })),
+        }));
 }
 
 function read(value, ...names) {

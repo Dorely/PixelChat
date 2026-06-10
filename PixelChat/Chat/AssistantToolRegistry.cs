@@ -82,7 +82,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 string? layoutHint = null,
                 string? backgroundMode = null) => DetectSpriteSheetFramesAsync(projectId, sourceAssetId, expectedFrames, layoutHint, backgroundMode),
             name: "detect_sprite_sheet_frames",
-            description: "Read-only sprite-sheet image analysis for an existing source asset. Detects foreground frame bounding boxes using alpha or magenta key-color background and returns row-major pixel boxes."),
+            description: "Read-only sprite-sheet image analysis for an existing source asset. Detects connected foreground objects using alpha or magenta key-color background and returns row-major boxes plus editable shape paths."),
 
         AIFunctionFactory.Create(
             method: (
@@ -95,14 +95,16 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 int? gutter = null,
                 int? fps = null,
                 bool? loop = null,
-                SpriteSheetFrameUpdateView[]? frames = null) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, padding, gutter, fps, loop, frames),
+                string? horizontalAnchor = null,
+                string? verticalAnchor = null,
+                SpriteSheetFrameUpdateView[]? frames = null) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, padding, gutter, fps, loop, horizontalAnchor, verticalAnchor, frames),
             name: "update_sprite_sheet_frames",
-            description: "Update the visible Sprites workspace frame boxes and layout settings without changing the working image bytes. Use detected boxes or user-requested box adjustments."),
+            description: "Update the visible Sprites workspace frame boxes, optional shape paths, sheet-wide alignment anchors, and layout settings without changing the working image bytes. Use detected boxes/shapes or user-requested adjustments."),
 
         AIFunctionFactory.Create(
             method: (Guid spriteSheetId) => NormalizeSpriteSheetAsync(projectId, spriteSheetId),
             name: "normalize_sprite_sheet",
-            description: "Normalize the selected sprite sheet by cropping the saved boxes, applying padding/gutter/grid settings, stitching a new working PNG, and rebasing frame boxes."),
+            description: "Normalize the selected sprite sheet by cropping saved boxes/shapes, applying padding/gutter/grid/alignment settings, stitching a new working PNG, and rebasing frame boxes/shapes."),
 
         AIFunctionFactory.Create(
             method: (Guid spriteSheetId) => ResetSpriteSheetToOriginalAsync(projectId, spriteSheetId),
@@ -233,6 +235,8 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         int? gutter,
         int? fps,
         bool? loop,
+        string? horizontalAnchor,
+        string? verticalAnchor,
         SpriteSheetFrameUpdateView[]? frames)
     {
         var saved = await workflow.UpdateSpriteSheetFramesAsync(projectId, new UpdateSpriteSheetFramesRequest(
@@ -245,6 +249,8 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             gutter is int gutterValue ? Math.Clamp(gutterValue, 0, 4096) : 16,
             fps is int fpsValue ? Math.Clamp(fpsValue, 1, 60) : 8,
             loop ?? true,
+            NormalizeHorizontalAnchor(horizontalAnchor),
+            NormalizeVerticalAnchor(verticalAnchor),
             frames ?? []));
         return JsonSerializer.Serialize(saved);
     }
@@ -322,6 +328,22 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
         value.Trim().Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
 
     private static int ClampCount(int count) => Math.Clamp(count <= 0 ? 1 : count, 1, 4);
+
+    private static string NormalizeHorizontalAnchor(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "left" => "left",
+            "right" => "right",
+            _ => "center",
+        };
+
+    private static string NormalizeVerticalAnchor(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "top" => "top",
+            "middle" or "center" => "middle",
+            _ => "bottom",
+        };
 
     private static string? NormalizeBackground(string? value) =>
         value?.Trim().ToLowerInvariant() switch

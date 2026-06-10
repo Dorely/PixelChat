@@ -61,9 +61,9 @@
 | `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, parallelism, retry, timeout, partial previews, and reference defaults. |
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
-| `SpriteSheetImageAnalyzer.cs` | Server-side PNG foreground analyzer used by assistant tools to detect row-major sprite frame bounding boxes. |
+| `SpriteSheetImageAnalyzer.cs` | Server-side PNG foreground analyzer that detects connected sprite objects, row-major frame boxes, and shape outlines. |
 | `SpriteSheetPngCodec.cs` | Minimal PNG RGBA decoder/encoder used by server-side sprite-sheet rendering. |
-| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization renderer used by assistant tools for frame previews and explicit working-PNG stitching. |
+| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization renderer with shape-masked copying and sheet-wide alignment anchors. |
 
 ### Components/
 
@@ -102,7 +102,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with non-destructive interactive source-box editing, metadata autosave, explicit Normalize Sheet stitching, frame thumbnails/attachments, crop animation preview, reset, and export. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with non-destructive box/outline editing, anchor controls, metadata autosave, explicit Normalize Sheet stitching, frame thumbnails/attachments, animation preview, reset, and export. |
 
 ### Llm/
 
@@ -163,6 +163,7 @@
 | `20260609011241_EditBatchSourceSnapshots.cs` / `.Designer.cs` | EF migration adding nullable edit-source PNG snapshot columns to generation batches. |
 | `20260609022859_SpriteSheetEditor.cs` / `.Designer.cs` | EF migration adding active sprite-sheet project state and persisted sprite-sheet definitions. |
 | `20260610192432_SpriteSheetSecondPass.cs` / `.Designer.cs` | EF corrective migration adding durable sprite-sheet frame records for autosaved working sheets. |
+| `20260610204025_SpriteSheetSmartSeparation.cs` / `.Designer.cs` | EF migration adding sprite frame shape JSON plus sheet-wide horizontal and vertical normalization anchors. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

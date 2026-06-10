@@ -1,5 +1,3 @@
-using System.IO.Compression;
-
 namespace PixelChat.Art;
 
 internal static class SpriteSheetImageAnalyzer
@@ -14,7 +12,7 @@ internal static class SpriteSheetImageAnalyzer
         string? layoutHint,
         string? backgroundMode)
     {
-        if (!TryReadPngRgba(data, out var width, out var height, out var rgba))
+        if (!SpriteSheetPngCodec.TryReadRgba(data, out var width, out var height, out var rgba))
         {
             var fallbackWidth = knownWidth.GetValueOrDefault(1);
             var fallbackHeight = knownHeight.GetValueOrDefault(1);
@@ -79,134 +77,242 @@ internal static class SpriteSheetImageAnalyzer
         if (foregroundCount == 0)
             return [];
 
-        var rowCounts = new int[height];
-        for (var y = 0; y < height; y++)
-        {
-            var count = 0;
-            var rowOffset = y * width;
-            for (var x = 0; x < width; x++)
-            {
-                if (foreground[rowOffset + x])
-                    count++;
-            }
-
-            rowCounts[y] = count;
-        }
-
-        var rowThreshold = Math.Max(2, (int)Math.Ceiling(width * 0.01));
-        var rowBands = BuildBands(rowCounts, rowThreshold, minSize: Math.Max(4, height / 160), gapTolerance: Math.Max(3, height / 160));
-        if (rowBands.Count == 0)
+        var components = FindComponents(foreground, width, height, foregroundCount);
+        if (components.Count == 0)
             return [];
 
-        var frames = new List<SpriteSheetFrameDetectionView>();
-        foreach (var rowBand in rowBands)
-        {
-            var bandHeight = rowBand.End - rowBand.Start + 1;
-            var columnCounts = new int[width];
-            for (var x = 0; x < width; x++)
-            {
-                var count = 0;
-                for (var y = rowBand.Start; y <= rowBand.End; y++)
-                {
-                    if (foreground[(y * width) + x])
-                        count++;
-                }
+        var groups = BuildComponentGroups(components, foregroundCount, width, height, expectedFrames);
+        if (groups.Count == 0)
+            return [];
 
-                columnCounts[x] = count;
-            }
-
-            var columnThreshold = Math.Max(2, (int)Math.Ceiling(bandHeight * 0.01));
-            var columnBands = BuildBands(columnCounts, columnThreshold, minSize: Math.Max(4, width / 240), gapTolerance: Math.Max(3, width / 256));
-            foreach (var columnBand in columnBands)
-            {
-                if (TryTightRect(foreground, width, rowBand, columnBand, out var rect))
-                    frames.Add(new SpriteSheetFrameDetectionView(frames.Count, rect));
-            }
-        }
-
-        return frames
+        return groups
+            .Select((group, index) => new SpriteSheetFrameDetectionView(index, group.Rect, BuildShapePaths(group.Pixels, width, height, group.Rect)))
             .OrderBy(frame => frame.SourceRect.Y)
             .ThenBy(frame => frame.SourceRect.X)
             .Select((frame, index) => frame with { Index = index })
             .ToList();
     }
 
-    private static bool TryTightRect(
-        bool[] foreground,
-        int width,
-        Band rowBand,
-        Band columnBand,
-        out SpriteSheetRect rect)
+    private static List<Component> FindComponents(bool[] foreground, int width, int height, int foregroundCount)
     {
-        var minX = int.MaxValue;
-        var minY = int.MaxValue;
-        var maxX = int.MinValue;
-        var maxY = int.MinValue;
-        for (var y = rowBand.Start; y <= rowBand.End; y++)
-        {
-            for (var x = columnBand.Start; x <= columnBand.End; x++)
-            {
-                if (!foreground[(y * width) + x])
-                    continue;
+        var visited = new bool[foreground.Length];
+        var components = new List<Component>();
+        var queue = new Queue<int>(Math.Min(foregroundCount, 4096));
+        var minArea = Math.Max(4, (int)Math.Ceiling(width * height * 0.00001d));
 
-                minX = Math.Min(minX, x);
-                minY = Math.Min(minY, y);
-                maxX = Math.Max(maxX, x);
-                maxY = Math.Max(maxY, y);
+        for (var index = 0; index < foreground.Length; index++)
+        {
+            if (!foreground[index] || visited[index])
+                continue;
+
+            var component = new Component();
+            visited[index] = true;
+            queue.Enqueue(index);
+            while (queue.Count > 0)
+            {
+                var current = queue.Dequeue();
+                var x = current % width;
+                var y = current / width;
+                component.Add(current, x, y);
+
+                for (var dy = -1; dy <= 1; dy++)
+                {
+                    var ny = y + dy;
+                    if (ny < 0 || ny >= height)
+                        continue;
+
+                    for (var dx = -1; dx <= 1; dx++)
+                    {
+                        if (dx == 0 && dy == 0)
+                            continue;
+
+                        var nx = x + dx;
+                        if (nx < 0 || nx >= width)
+                            continue;
+
+                        var neighbor = (ny * width) + nx;
+                        if (!foreground[neighbor] || visited[neighbor])
+                            continue;
+
+                        visited[neighbor] = true;
+                        queue.Enqueue(neighbor);
+                    }
+                }
+            }
+
+            if (component.Area >= minArea)
+                components.Add(component);
+        }
+
+        return components;
+    }
+
+    private static List<ComponentGroup> BuildComponentGroups(
+        List<Component> components,
+        int foregroundCount,
+        int width,
+        int height,
+        int? expectedFrames)
+    {
+        var ordered = components.OrderByDescending(component => component.Area).ToList();
+        var primaryAreaThreshold = Math.Max(64, (int)Math.Ceiling(foregroundCount * 0.01d));
+        var primaryComponents = expectedFrames is > 0
+            ? ordered.Take(expectedFrames.Value).ToList()
+            : ordered.Where(component => component.Area >= primaryAreaThreshold).ToList();
+        if (primaryComponents.Count == 0 && ordered.Count > 0)
+            primaryComponents.Add(ordered[0]);
+
+        var primarySet = primaryComponents.ToHashSet();
+        var groups = primaryComponents.Select(component => new ComponentGroup(component)).ToList();
+        var mergeDistance = Math.Max(12, Math.Min(width, height) / 32);
+        foreach (var component in ordered.Where(component => !primarySet.Contains(component)))
+        {
+            var nearest = groups
+                .Select(group => new { Group = group, Distance = RectDistance(component.Rect, group.Rect) })
+                .OrderBy(item => item.Distance)
+                .FirstOrDefault();
+            if (nearest is null)
+                continue;
+
+            if (expectedFrames is > 0 || nearest.Distance <= mergeDistance || component.Area >= primaryAreaThreshold)
+            {
+                nearest.Group.Add(component);
             }
         }
 
-        if (minX == int.MaxValue)
-        {
-            rect = new SpriteSheetRect(0, 0, 0, 0);
-            return false;
-        }
-
-        rect = new SpriteSheetRect(
-            minX,
-            minY,
-            Math.Max(1, maxX - minX + 1),
-            Math.Max(1, maxY - minY + 1));
-        return true;
+        return groups
+            .Where(group => group.Area > 0)
+            .OrderBy(group => group.Rect.Y)
+            .ThenBy(group => group.Rect.X)
+            .ToList();
     }
 
-    private static List<Band> BuildBands(int[] counts, int threshold, int minSize, int gapTolerance)
+    private static int RectDistance(SpriteSheetRect left, SpriteSheetRect right)
     {
-        var bands = new List<Band>();
-        var start = -1;
-        var end = -1;
-        var gap = 0;
-        for (var index = 0; index < counts.Length; index++)
+        var leftRight = left.X + left.Width;
+        var rightRight = right.X + right.Width;
+        var leftBottom = left.Y + left.Height;
+        var rightBottom = right.Y + right.Height;
+        var dx = Math.Max(0, Math.Max(right.X - leftRight, left.X - rightRight));
+        var dy = Math.Max(0, Math.Max(right.Y - leftBottom, left.Y - rightBottom));
+        return Math.Max(dx, dy);
+    }
+
+    private static IReadOnlyList<SpriteSheetShapePath> BuildShapePaths(
+        IReadOnlyList<int> pixels,
+        int width,
+        int height,
+        SpriteSheetRect fallbackRect)
+    {
+        if (pixels.Count == 0)
+            return [RectPath(fallbackRect)];
+
+        var pixelSet = pixels.ToHashSet();
+        var edges = new HashSet<Edge>();
+        foreach (var index in pixels)
         {
-            if (counts[index] >= threshold)
+            var x = index % width;
+            var y = index / width;
+            if (y == 0 || !pixelSet.Contains(((y - 1) * width) + x))
+                edges.Add(new Edge(new EdgePoint(x, y), new EdgePoint(x + 1, y)));
+            if (x == width - 1 || !pixelSet.Contains((y * width) + x + 1))
+                edges.Add(new Edge(new EdgePoint(x + 1, y), new EdgePoint(x + 1, y + 1)));
+            if (y == height - 1 || !pixelSet.Contains(((y + 1) * width) + x))
+                edges.Add(new Edge(new EdgePoint(x + 1, y + 1), new EdgePoint(x, y + 1)));
+            if (x == 0 || !pixelSet.Contains((y * width) + x - 1))
+                edges.Add(new Edge(new EdgePoint(x, y + 1), new EdgePoint(x, y)));
+        }
+
+        if (edges.Count == 0)
+            return [RectPath(fallbackRect)];
+
+        var outgoing = edges
+            .GroupBy(edge => edge.Start)
+            .ToDictionary(group => group.Key, group => group.OrderBy(edge => edge.End.Y).ThenBy(edge => edge.End.X).ToList());
+        var paths = new List<SpriteSheetShapePath>();
+        var guardLimit = Math.Max(16, edges.Count + 1);
+        while (edges.Count > 0)
+        {
+            var edge = edges
+                .OrderBy(item => item.Start.Y)
+                .ThenBy(item => item.Start.X)
+                .ThenBy(item => item.End.Y)
+                .ThenBy(item => item.End.X)
+                .First();
+            var start = edge.Start;
+            var current = edge.End;
+            var points = new List<EdgePoint> { start };
+            edges.Remove(edge);
+
+            var guard = 0;
+            while (current != start && guard++ < guardLimit)
             {
-                if (start < 0)
-                    start = index;
-                end = index;
-                gap = 0;
+                points.Add(current);
+                if (!outgoing.TryGetValue(current, out var candidates))
+                    break;
+
+                var next = candidates.FirstOrDefault(edges.Contains);
+                if (next == default)
+                    break;
+
+                edges.Remove(next);
+                current = next.End;
+            }
+
+            var simplified = SimplifyPath(points);
+            if (current == start && simplified.Count >= 3)
+            {
+                paths.Add(new SpriteSheetShapePath(
+                    simplified
+                        .Select(point => new SpriteSheetPoint(point.X, point.Y))
+                        .ToList()));
+            }
+        }
+
+        return paths.Count == 0 ? [RectPath(fallbackRect)] : paths;
+    }
+
+    private static List<EdgePoint> SimplifyPath(List<EdgePoint> points)
+    {
+        if (points.Count <= 3)
+            return points;
+
+        var withoutDuplicates = new List<EdgePoint>();
+        foreach (var point in points)
+        {
+            if (withoutDuplicates.Count == 0 || withoutDuplicates[^1] != point)
+                withoutDuplicates.Add(point);
+        }
+
+        if (withoutDuplicates.Count <= 3)
+            return withoutDuplicates;
+
+        var simplified = new List<EdgePoint>();
+        for (var index = 0; index < withoutDuplicates.Count; index++)
+        {
+            var previous = withoutDuplicates[(index - 1 + withoutDuplicates.Count) % withoutDuplicates.Count];
+            var current = withoutDuplicates[index];
+            var next = withoutDuplicates[(index + 1) % withoutDuplicates.Count];
+            if ((previous.X == current.X && current.X == next.X)
+                || (previous.Y == current.Y && current.Y == next.Y))
+            {
                 continue;
             }
 
-            if (start >= 0)
-            {
-                gap++;
-                if (gap <= gapTolerance)
-                    continue;
-
-                var closedEnd = end;
-                if (closedEnd - start + 1 >= minSize)
-                    bands.Add(new Band(start, closedEnd));
-                start = -1;
-                end = -1;
-                gap = 0;
-            }
+            simplified.Add(current);
         }
 
-        if (start >= 0 && end - start + 1 >= minSize)
-            bands.Add(new Band(start, end));
-
-        return bands;
+        return simplified.Count >= 3 ? simplified : withoutDuplicates;
     }
+
+    private static SpriteSheetShapePath RectPath(SpriteSheetRect rect) =>
+        new(
+        [
+            new SpriteSheetPoint(rect.X, rect.Y),
+            new SpriteSheetPoint(rect.X + rect.Width, rect.Y),
+            new SpriteSheetPoint(rect.X + rect.Width, rect.Y + rect.Height),
+            new SpriteSheetPoint(rect.X, rect.Y + rect.Height),
+        ]);
 
     private static bool IsForeground(byte r, byte g, byte b, byte a, string? backgroundMode)
     {
@@ -252,7 +358,8 @@ internal static class SpriteSheetImageAnalyzer
             var column = index % columns;
             frames.Add(new SpriteSheetFrameDetectionView(
                 index,
-                new SpriteSheetRect(column * cellWidth, row * cellHeight, cellWidth, cellHeight)));
+                new SpriteSheetRect(column * cellWidth, row * cellHeight, cellWidth, cellHeight),
+                []));
         }
 
         return new SpriteSheetDetectionResult(sourceAssetId, width, height, rows, columns, frames);
@@ -302,170 +409,49 @@ internal static class SpriteSheetImageAnalyzer
         return orderedRows.Count;
     }
 
-    private static bool TryReadPngRgba(byte[] data, out int width, out int height, out byte[] rgba)
+    private sealed class Component
     {
-        width = 0;
-        height = 0;
-        rgba = [];
-        if (data.Length < 33
-            || data[0] != 0x89
-            || data[1] != 0x50
-            || data[2] != 0x4E
-            || data[3] != 0x47)
+        public List<int> Pixels { get; } = [];
+        public int MinX { get; private set; } = int.MaxValue;
+        public int MinY { get; private set; } = int.MaxValue;
+        public int MaxX { get; private set; } = int.MinValue;
+        public int MaxY { get; private set; } = int.MinValue;
+        public int Area => Pixels.Count;
+        public SpriteSheetRect Rect => new(MinX, MinY, Math.Max(1, MaxX - MinX + 1), Math.Max(1, MaxY - MinY + 1));
+
+        public void Add(int index, int x, int y)
         {
-            return false;
-        }
-
-        var bitDepth = 0;
-        var colorType = 0;
-        var interlace = 0;
-        using var idat = new MemoryStream();
-        var offset = 8;
-        while (offset + 8 <= data.Length)
-        {
-            var length = ReadBigEndianInt32(data.AsSpan(offset, 4));
-            if (length < 0 || offset + 12 + length > data.Length)
-                return false;
-
-            var typeOffset = offset + 4;
-            var chunkOffset = offset + 8;
-            if (ChunkTypeEquals(data, typeOffset, (byte)'I', (byte)'H', (byte)'D', (byte)'R'))
-            {
-                width = ReadBigEndianInt32(data.AsSpan(chunkOffset, 4));
-                height = ReadBigEndianInt32(data.AsSpan(chunkOffset + 4, 4));
-                bitDepth = data[chunkOffset + 8];
-                colorType = data[chunkOffset + 9];
-                interlace = data[chunkOffset + 12];
-            }
-            else if (ChunkTypeEquals(data, typeOffset, (byte)'I', (byte)'D', (byte)'A', (byte)'T'))
-            {
-                idat.Write(data, chunkOffset, length);
-            }
-            else if (ChunkTypeEquals(data, typeOffset, (byte)'I', (byte)'E', (byte)'N', (byte)'D'))
-            {
-                break;
-            }
-
-            offset = chunkOffset + length + 4;
-        }
-
-        if (width <= 0 || height <= 0 || bitDepth != 8 || interlace != 0 || idat.Length == 0)
-            return false;
-
-        var bytesPerPixel = colorType switch
-        {
-            0 => 1,
-            2 => 3,
-            4 => 2,
-            6 => 4,
-            _ => 0,
-        };
-        if (bytesPerPixel == 0)
-            return false;
-
-        try
-        {
-            idat.Position = 0;
-            using var zlib = new ZLibStream(idat, CompressionMode.Decompress);
-            using var raw = new MemoryStream();
-            zlib.CopyTo(raw);
-            var inflated = raw.ToArray();
-            var rowBytes = checked(width * bytesPerPixel);
-            var requiredBytes = checked((rowBytes + 1) * height);
-            if (inflated.Length < requiredBytes)
-                return false;
-
-            rgba = new byte[checked(width * height * 4)];
-            var previous = new byte[rowBytes];
-            var current = new byte[rowBytes];
-            var index = 0;
-            for (var y = 0; y < height; y++)
-            {
-                var filter = inflated[index++];
-                for (var x = 0; x < rowBytes; x++)
-                {
-                    var value = inflated[index++];
-                    var left = x >= bytesPerPixel ? current[x - bytesPerPixel] : 0;
-                    var up = previous[x];
-                    var upperLeft = x >= bytesPerPixel ? previous[x - bytesPerPixel] : 0;
-                    current[x] = filter switch
-                    {
-                        0 => value,
-                        1 => unchecked((byte)(value + left)),
-                        2 => unchecked((byte)(value + up)),
-                        3 => unchecked((byte)(value + ((left + up) / 2))),
-                        4 => unchecked((byte)(value + PaethPredictor(left, up, upperLeft))),
-                        _ => throw new InvalidOperationException("Unsupported PNG row filter."),
-                    };
-                }
-
-                CopyRowToRgba(current, colorType, width, y, rgba);
-                (previous, current) = (current, previous);
-                Array.Clear(current);
-            }
-
-            return true;
-        }
-        catch
-        {
-            width = 0;
-            height = 0;
-            rgba = [];
-            return false;
+            Pixels.Add(index);
+            MinX = Math.Min(MinX, x);
+            MinY = Math.Min(MinY, y);
+            MaxX = Math.Max(MaxX, x);
+            MaxY = Math.Max(MaxY, y);
         }
     }
 
-    private static void CopyRowToRgba(byte[] row, int colorType, int width, int y, byte[] rgba)
+    private sealed class ComponentGroup
     {
-        for (var x = 0; x < width; x++)
+        public ComponentGroup(Component component) => Add(component);
+
+        public List<int> Pixels { get; } = [];
+        public int MinX { get; private set; } = int.MaxValue;
+        public int MinY { get; private set; } = int.MaxValue;
+        public int MaxX { get; private set; } = int.MinValue;
+        public int MaxY { get; private set; } = int.MinValue;
+        public int Area => Pixels.Count;
+        public SpriteSheetRect Rect => new(MinX, MinY, Math.Max(1, MaxX - MinX + 1), Math.Max(1, MaxY - MinY + 1));
+
+        public void Add(Component component)
         {
-            var target = ((y * width) + x) * 4;
-            switch (colorType)
-            {
-                case 0:
-                    rgba[target] = row[x];
-                    rgba[target + 1] = row[x];
-                    rgba[target + 2] = row[x];
-                    rgba[target + 3] = byte.MaxValue;
-                    break;
-                case 2:
-                    rgba[target] = row[x * 3];
-                    rgba[target + 1] = row[(x * 3) + 1];
-                    rgba[target + 2] = row[(x * 3) + 2];
-                    rgba[target + 3] = byte.MaxValue;
-                    break;
-                case 4:
-                    rgba[target] = row[x * 2];
-                    rgba[target + 1] = row[x * 2];
-                    rgba[target + 2] = row[x * 2];
-                    rgba[target + 3] = row[(x * 2) + 1];
-                    break;
-                case 6:
-                    rgba[target] = row[x * 4];
-                    rgba[target + 1] = row[(x * 4) + 1];
-                    rgba[target + 2] = row[(x * 4) + 2];
-                    rgba[target + 3] = row[(x * 4) + 3];
-                    break;
-            }
+            Pixels.AddRange(component.Pixels);
+            MinX = Math.Min(MinX, component.MinX);
+            MinY = Math.Min(MinY, component.MinY);
+            MaxX = Math.Max(MaxX, component.MaxX);
+            MaxY = Math.Max(MaxY, component.MaxY);
         }
     }
 
-    private static bool ChunkTypeEquals(byte[] data, int offset, byte a, byte b, byte c, byte d) =>
-        data[offset] == a && data[offset + 1] == b && data[offset + 2] == c && data[offset + 3] == d;
+    private readonly record struct EdgePoint(int X, int Y);
 
-    private static int PaethPredictor(int left, int up, int upperLeft)
-    {
-        var estimate = left + up - upperLeft;
-        var distanceLeft = Math.Abs(estimate - left);
-        var distanceUp = Math.Abs(estimate - up);
-        var distanceUpperLeft = Math.Abs(estimate - upperLeft);
-        if (distanceLeft <= distanceUp && distanceLeft <= distanceUpperLeft)
-            return left;
-        return distanceUp <= distanceUpperLeft ? up : upperLeft;
-    }
-
-    private static int ReadBigEndianInt32(ReadOnlySpan<byte> bytes) =>
-        (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
-
-    private sealed record Band(int Start, int End);
+    private readonly record struct Edge(EdgePoint Start, EdgePoint End);
 }

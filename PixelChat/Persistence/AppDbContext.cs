@@ -199,6 +199,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => new { e.ProjectId, e.UpdatedAt });
             entity.HasIndex(e => e.SourceAssetId);
             entity.HasIndex(e => e.OutputAssetId);
+            entity.Property(e => e.HorizontalAnchor).HasDefaultValue("center");
+            entity.Property(e => e.VerticalAnchor).HasDefaultValue("bottom");
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.SpriteSheets)
@@ -220,6 +222,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
         {
             entity.HasIndex(e => new { e.ProjectId, e.SpriteSheetDefinitionId, e.Index }).IsUnique();
             entity.HasIndex(e => e.SpriteSheetDefinitionId);
+            entity.Property(e => e.ShapeJson).HasDefaultValue("[]");
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.SpriteSheetFrameRecords)

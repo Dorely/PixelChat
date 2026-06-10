@@ -17,6 +17,7 @@ public class SpriteSheetFrameRecord
     public int SourceY { get; set; }
     public int SourceWidth { get; set; }
     public int SourceHeight { get; set; }
+    public string ShapeJson { get; set; } = "[]";
 
     public int CellX { get; set; }
     public int CellY { get; set; }

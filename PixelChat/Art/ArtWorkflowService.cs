@@ -391,6 +391,8 @@ public sealed class ArtWorkflowService(
             Gutter = 16,
             Fps = 8,
             Loop = true,
+            HorizontalAnchor = "center",
+            VerticalAnchor = "bottom",
             FramesJson = "[]",
             CreatedAt = now,
             UpdatedAt = now,
@@ -434,7 +436,7 @@ public sealed class ArtWorkflowService(
         var definition = await db.SpriteSheetDefinitions
             .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == request.SpriteSheetId, cancellationToken)
             ?? throw new InvalidOperationException("Sprite sheet was not found.");
-        UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop);
+        UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop, request.HorizontalAnchor, request.VerticalAnchor);
         await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, request.Frames, cancellationToken);
 
         var project = await GetProjectAsync(projectId, cancellationToken);
@@ -460,7 +462,7 @@ public sealed class ArtWorkflowService(
             .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == workingAssetId, cancellationToken)
             ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
         var parsed = ParsePngDataUrl(request.WorkingPngDataUrl, "Sprite sheet working image must be a PNG data URL.");
-        UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop);
+        UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop, request.HorizontalAnchor, request.VerticalAnchor);
         UpdateWorkingSpriteAsset(working, parsed, definition, DateTime.UtcNow);
         await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, request.Frames, cancellationToken);
 
@@ -496,7 +498,8 @@ public sealed class ArtWorkflowService(
             .Select(frame => new SpriteSheetFrameUpdateView(
                 frame.Index,
                 frame.Label,
-                RectView(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight)))
+                RectView(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
+                DeserializeShapePaths(frame.ShapeJson)))
             .ToList();
         var layout = SpriteSheetServerRenderer.Render(
             rgba,
@@ -509,6 +512,8 @@ public sealed class ArtWorkflowService(
             definition.Padding,
             definition.Gutter,
             definition.Fps,
+            definition.HorizontalAnchor,
+            definition.VerticalAnchor,
             updates);
         var parsed = new ImagePayload("image/png", layout.PngData, layout.Width, layout.Height);
         UpdateWorkingSpriteAsset(working, parsed, definition, DateTime.UtcNow);
@@ -547,8 +552,10 @@ public sealed class ArtWorkflowService(
             request.Padding,
             request.Gutter,
             request.Fps,
+            request.HorizontalAnchor,
+            request.VerticalAnchor,
             request.Frames);
-        UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop);
+        UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop, request.HorizontalAnchor, request.VerticalAnchor);
         await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, layout.Frames, cancellationToken);
 
         var project = await GetProjectAsync(projectId, cancellationToken);
@@ -587,6 +594,8 @@ public sealed class ArtWorkflowService(
         definition.Gutter = 16;
         definition.Fps = 8;
         definition.Loop = true;
+        definition.HorizontalAnchor = "center";
+        definition.VerticalAnchor = "bottom";
         definition.FramesJson = "[]";
         definition.UpdatedAt = now;
 
@@ -695,6 +704,8 @@ public sealed class ArtWorkflowService(
             definition.Gutter,
             fps = definition.Fps,
             loop = definition.Loop,
+            horizontalAnchor = NormalizeHorizontalAnchor(definition.HorizontalAnchor),
+            verticalAnchor = NormalizeVerticalAnchor(definition.VerticalAnchor),
             frames = frames.Select(frame => new
             {
                 frame.Index,
@@ -702,7 +713,12 @@ public sealed class ArtWorkflowService(
                 sourceRect = RectView(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
                 cellRect = RectView(frame.CellX, frame.CellY, frame.CellWidth, frame.CellHeight),
                 spriteRect = RectView(frame.SpriteX, frame.SpriteY, frame.SpriteWidth, frame.SpriteHeight),
-                pivot = new { x = 0.5, y = 1.0 },
+                shapePaths = DeserializeShapePaths(frame.ShapeJson),
+                pivot = new
+                {
+                    x = PivotForHorizontalAnchor(definition.HorizontalAnchor),
+                    y = PivotForVerticalAnchor(definition.VerticalAnchor),
+                },
                 duration = FrameDuration(definition.Fps),
             }),
         };
@@ -1904,7 +1920,9 @@ public sealed class ArtWorkflowService(
         int padding,
         int gutter,
         int fps,
-        bool loop)
+        bool loop,
+        string? horizontalAnchor,
+        string? verticalAnchor)
     {
         definition.Rows = Math.Clamp(rows, 1, 32);
         definition.Columns = Math.Clamp(columns, 1, 64);
@@ -1914,6 +1932,8 @@ public sealed class ArtWorkflowService(
         definition.Gutter = Math.Clamp(gutter, 0, 4096);
         definition.Fps = Math.Clamp(fps, 1, 60);
         definition.Loop = loop;
+        definition.HorizontalAnchor = NormalizeHorizontalAnchor(horizontalAnchor);
+        definition.VerticalAnchor = NormalizeVerticalAnchor(verticalAnchor);
         definition.UpdatedAt = DateTime.UtcNow;
     }
 
@@ -1939,6 +1959,8 @@ public sealed class ArtWorkflowService(
             definition.Columns,
             definition.CellWidth,
             definition.CellHeight,
+            definition.HorizontalAnchor,
+            definition.VerticalAnchor,
             frameCount = definition.FrameRecords.Count,
         }, JsonOptions);
     }
@@ -1955,6 +1977,7 @@ public sealed class ArtWorkflowService(
             frame.Index,
             frame.Label,
             frame.SourceRect,
+            frame.ShapePaths,
             frame.CellRect,
             frame.SpriteRect,
         }), JsonOptions);
@@ -1997,6 +2020,7 @@ public sealed class ArtWorkflowService(
             record.SourceY = frame.SourceRect.Y;
             record.SourceWidth = frame.SourceRect.Width;
             record.SourceHeight = frame.SourceRect.Height;
+            record.ShapeJson = JsonSerializer.Serialize(frame.ShapePaths, JsonOptions);
             record.CellX = frame.CellRect.X;
             record.CellY = frame.CellRect.Y;
             record.CellWidth = frame.CellRect.Width;
@@ -2254,6 +2278,8 @@ public sealed class ArtWorkflowService(
             spriteSheet.Gutter,
             spriteSheet.Fps,
             spriteSheet.Loop,
+            NormalizeHorizontalAnchor(spriteSheet.HorizontalAnchor),
+            NormalizeVerticalAnchor(spriteSheet.VerticalAnchor),
             frames
                 .OrderBy(frame => frame.Index)
                 .Select(frame => FrameRecordView(spriteSheet, frame))
@@ -2329,6 +2355,7 @@ public sealed class ArtWorkflowService(
                     index,
                     string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label.Trim(),
                     NormalizeSpriteRect(frame.SourceRect),
+                    NormalizeShapePaths(frame.ShapePaths),
                     NormalizeSpriteRect(frame.CellRect, fallbackCell),
                     NormalizeSpriteRect(frame.SpriteRect, fallbackCell),
                     frame.PreviewPngDataUrl);
@@ -2345,6 +2372,69 @@ public sealed class ArtWorkflowService(
 
     private static SpriteSheetRect NormalizeSpriteRect(SpriteSheetRect rect, SpriteSheetRect fallback) =>
         rect.Width <= 0 || rect.Height <= 0 ? fallback : NormalizeSpriteRect(rect);
+
+    private static IReadOnlyList<SpriteSheetShapePath> NormalizeShapePaths(IReadOnlyList<SpriteSheetShapePath>? paths)
+    {
+        if (paths is null || paths.Count == 0)
+            return [];
+
+        return paths
+            .Select(path => new SpriteSheetShapePath(
+                (path.Points ?? [])
+                .Select(point => new SpriteSheetPoint(
+                    Math.Clamp(point.X, 0, 32767),
+                    Math.Clamp(point.Y, 0, 32767)))
+                .ToList()))
+            .Where(path => path.Points.Count >= 3)
+            .ToList();
+    }
+
+    private static IReadOnlyList<SpriteSheetShapePath> DeserializeShapePaths(string? shapeJson)
+    {
+        if (string.IsNullOrWhiteSpace(shapeJson))
+            return [];
+
+        try
+        {
+            return NormalizeShapePaths(JsonSerializer.Deserialize<List<SpriteSheetShapePath>>(shapeJson, JsonOptions));
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static string NormalizeHorizontalAnchor(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "left" => "left",
+            "right" => "right",
+            _ => "center",
+        };
+
+    private static string NormalizeVerticalAnchor(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "top" => "top",
+            "middle" or "center" => "middle",
+            _ => "bottom",
+        };
+
+    private static double PivotForHorizontalAnchor(string? value) =>
+        NormalizeHorizontalAnchor(value) switch
+        {
+            "left" => 0d,
+            "right" => 1d,
+            _ => 0.5d,
+        };
+
+    private static double PivotForVerticalAnchor(string? value) =>
+        NormalizeVerticalAnchor(value) switch
+        {
+            "top" => 0d,
+            "middle" => 0.5d,
+            _ => 1d,
+        };
 
     private static string NormalizeCacheString(string? value, string fallback) =>
         string.IsNullOrWhiteSpace(value) ? fallback : value.Trim().ToLowerInvariant();
@@ -2450,6 +2540,7 @@ public sealed class ArtWorkflowService(
             frame.Index,
             string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label,
             RectView(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
+            DeserializeShapePaths(frame.ShapeJson),
             RectView(frame.CellX, frame.CellY, frame.CellWidth, frame.CellHeight),
             RectView(frame.SpriteX, frame.SpriteY, frame.SpriteWidth, frame.SpriteHeight),
             DataUrl.ToDataUrl(frame.PreviewContentType, frame.PreviewData),

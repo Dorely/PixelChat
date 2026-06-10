@@ -13,6 +13,8 @@ internal static class SpriteSheetServerRenderer
         int padding,
         int gutter,
         int fps,
+        string? horizontalAnchor,
+        string? verticalAnchor,
         IReadOnlyList<SpriteSheetFrameUpdateView> inputFrames)
     {
         rows = Math.Clamp(rows, 1, 32);
@@ -35,6 +37,7 @@ internal static class SpriteSheetServerRenderer
         foreach (var input in frames)
         {
             var sourceRect = ClampRect(input.SourceRect, sourceWidth, sourceHeight);
+            var shapePaths = NormalizeShapePaths(input.ShapePaths, sourceWidth, sourceHeight);
             var row = input.Index / columns;
             var column = input.Index % columns;
             var cellRect = new SpriteSheetRect(
@@ -42,16 +45,15 @@ internal static class SpriteSheetServerRenderer
                 row * (cellHeight + gutter),
                 cellWidth,
                 cellHeight);
-            var destX = (int)Math.Round((double)cellRect.X + ((cellWidth - sourceRect.Width) / 2d));
-            var baseline = cellRect.Y + cellHeight - padding;
-            var destY = baseline - sourceRect.Height;
+            var (destX, destY) = AlignedDestination(cellRect, sourceRect, padding, horizontalAnchor, verticalAnchor);
             var spriteRect = new SpriteSheetRect(destX, destY, sourceRect.Width, sourceRect.Height);
-            var previewRgba = CropRect(sourceRgba, sourceWidth, sourceHeight, sourceRect);
+            var previewRgba = CropRect(sourceRgba, sourceWidth, sourceHeight, sourceRect, shapePaths);
             var previewDataUrl = DataUrl.ToDataUrl("image/png", SpriteSheetPngCodec.EncodeRgba(sourceRect.Width, sourceRect.Height, previewRgba));
             savedFrames.Add(new SpriteSheetFrameView(
                 input.Index,
                 string.IsNullOrWhiteSpace(input.Label) ? $"Frame {input.Index + 1}" : input.Label.Trim(),
                 sourceRect,
+                shapePaths,
                 cellRect,
                 spriteRect,
                 previewDataUrl));
@@ -71,6 +73,8 @@ internal static class SpriteSheetServerRenderer
         int padding,
         int gutter,
         int fps,
+        string? horizontalAnchor,
+        string? verticalAnchor,
         IReadOnlyList<SpriteSheetFrameUpdateView> inputFrames)
     {
         rows = Math.Clamp(rows, 1, 32);
@@ -99,6 +103,7 @@ internal static class SpriteSheetServerRenderer
         foreach (var input in frames)
         {
             var sourceRect = ClampRect(input.SourceRect, sourceWidth, sourceHeight);
+            var shapePaths = NormalizeShapePaths(input.ShapePaths, sourceWidth, sourceHeight);
             var row = input.Index / columns;
             var column = input.Index % columns;
             var cellRect = new SpriteSheetRect(
@@ -106,21 +111,21 @@ internal static class SpriteSheetServerRenderer
                 row * (cellHeight + gutter),
                 cellWidth,
                 cellHeight);
-            var destX = (int)Math.Round((double)cellRect.X + ((cellWidth - sourceRect.Width) / 2d));
-            var baseline = cellRect.Y + cellHeight - padding;
-            var destY = baseline - sourceRect.Height;
-            CopySprite(sourceRgba, sourceWidth, sourceHeight, sourceRect, outputRgba, outputWidth, outputHeight, destX, destY);
+            var (destX, destY) = AlignedDestination(cellRect, sourceRect, padding, horizontalAnchor, verticalAnchor);
+            CopySprite(sourceRgba, sourceWidth, sourceHeight, sourceRect, shapePaths, outputRgba, outputWidth, outputHeight, destX, destY);
 
             var spriteRect = IntersectRect(new SpriteSheetRect(destX, destY, sourceRect.Width, sourceRect.Height), outputWidth, outputHeight);
             var rebasedSourceRect = spriteRect.Width > 0 && spriteRect.Height > 0
                 ? spriteRect
                 : new SpriteSheetRect(cellRect.X, cellRect.Y, 1, 1);
+            var rebasedShapePaths = RebaseShapePaths(shapePaths, sourceRect, destX, destY, outputWidth, outputHeight);
             var previewRgba = CropRect(outputRgba, outputWidth, outputHeight, cellRect);
             var previewDataUrl = DataUrl.ToDataUrl("image/png", SpriteSheetPngCodec.EncodeRgba(cellRect.Width, cellRect.Height, previewRgba));
             savedFrames.Add(new SpriteSheetFrameView(
                 input.Index,
                 string.IsNullOrWhiteSpace(input.Label) ? $"Frame {input.Index + 1}" : input.Label.Trim(),
                 rebasedSourceRect,
+                rebasedShapePaths,
                 cellRect,
                 spriteRect,
                 previewDataUrl));
@@ -153,11 +158,35 @@ internal static class SpriteSheetServerRenderer
         return new SpriteSheetRect(x1, y1, Math.Max(0, x2 - x1), Math.Max(0, y2 - y1));
     }
 
+    private static (int X, int Y) AlignedDestination(
+        SpriteSheetRect cellRect,
+        SpriteSheetRect sourceRect,
+        int padding,
+        string? horizontalAnchor,
+        string? verticalAnchor)
+    {
+        var x = NormalizeHorizontalAnchor(horizontalAnchor) switch
+        {
+            "left" => cellRect.X + padding,
+            "right" => cellRect.X + cellRect.Width - padding - sourceRect.Width,
+            _ => (int)Math.Round(cellRect.X + ((cellRect.Width - sourceRect.Width) / 2d)),
+        };
+        var y = NormalizeVerticalAnchor(verticalAnchor) switch
+        {
+            "top" => cellRect.Y + padding,
+            "middle" => (int)Math.Round(cellRect.Y + ((cellRect.Height - sourceRect.Height) / 2d)),
+            _ => cellRect.Y + cellRect.Height - padding - sourceRect.Height,
+        };
+
+        return (x, y);
+    }
+
     private static void CopySprite(
         byte[] source,
         int sourceWidth,
         int sourceHeight,
         SpriteSheetRect sourceRect,
+        IReadOnlyList<SpriteSheetShapePath> shapePaths,
         byte[] target,
         int targetWidth,
         int targetHeight,
@@ -185,6 +214,13 @@ internal static class SpriteSheetServerRenderer
                     continue;
 
                 var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
+                if (shapePaths.Count > 0
+                    && (!IsForeground(source[sourceIndex], source[sourceIndex + 1], source[sourceIndex + 2], source[sourceIndex + 3])
+                        || !ContainsShape(shapePaths, sourceX + 0.5d, sourceY + 0.5d)))
+                {
+                    continue;
+                }
+
                 var targetIndex = ((targetY * targetWidth) + targetX) * 4;
                 target[targetIndex] = source[sourceIndex];
                 target[targetIndex + 1] = source[sourceIndex + 1];
@@ -194,8 +230,14 @@ internal static class SpriteSheetServerRenderer
         }
     }
 
-    private static byte[] CropRect(byte[] source, int sourceWidth, int sourceHeight, SpriteSheetRect rect)
+    private static byte[] CropRect(
+        byte[] source,
+        int sourceWidth,
+        int sourceHeight,
+        SpriteSheetRect rect,
+        IReadOnlyList<SpriteSheetShapePath>? shapePaths = null)
     {
+        shapePaths ??= [];
         var output = new byte[checked(rect.Width * rect.Height * 4)];
         for (var y = 0; y < rect.Height; y++)
         {
@@ -210,6 +252,13 @@ internal static class SpriteSheetServerRenderer
                     continue;
 
                 var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
+                if (shapePaths.Count > 0
+                    && (!IsForeground(source[sourceIndex], source[sourceIndex + 1], source[sourceIndex + 2], source[sourceIndex + 3])
+                        || !ContainsShape(shapePaths, sourceX + 0.5d, sourceY + 0.5d)))
+                {
+                    continue;
+                }
+
                 var targetIndex = ((y * rect.Width) + x) * 4;
                 output[targetIndex] = source[sourceIndex];
                 output[targetIndex + 1] = source[sourceIndex + 1];
@@ -220,6 +269,106 @@ internal static class SpriteSheetServerRenderer
 
         return output;
     }
+
+    private static IReadOnlyList<SpriteSheetShapePath> NormalizeShapePaths(
+        IReadOnlyList<SpriteSheetShapePath>? paths,
+        int sourceWidth,
+        int sourceHeight)
+    {
+        if (paths is null || paths.Count == 0)
+            return [];
+
+        return paths
+            .Select(path => new SpriteSheetShapePath(
+                (path.Points ?? [])
+                .Select(point => new SpriteSheetPoint(
+                    Math.Clamp(point.X, 0, sourceWidth),
+                    Math.Clamp(point.Y, 0, sourceHeight)))
+                .ToList()))
+            .Where(path => path.Points.Count >= 3)
+            .ToList();
+    }
+
+    private static IReadOnlyList<SpriteSheetShapePath> RebaseShapePaths(
+        IReadOnlyList<SpriteSheetShapePath> paths,
+        SpriteSheetRect sourceRect,
+        int destX,
+        int destY,
+        int outputWidth,
+        int outputHeight)
+    {
+        if (paths.Count == 0)
+            return [];
+
+        return paths
+            .Select(path => new SpriteSheetShapePath(
+                path.Points
+                    .Select(point => new SpriteSheetPoint(
+                        Math.Clamp(destX + point.X - sourceRect.X, 0, outputWidth),
+                        Math.Clamp(destY + point.Y - sourceRect.Y, 0, outputHeight)))
+                    .ToList()))
+            .Where(path => path.Points.Count >= 3)
+            .ToList();
+    }
+
+    private static bool ContainsShape(IReadOnlyList<SpriteSheetShapePath> paths, double x, double y)
+    {
+        var inside = false;
+        foreach (var path in paths)
+        {
+            if (PointInPath(path.Points, x, y))
+                inside = !inside;
+        }
+
+        return inside;
+    }
+
+    private static bool PointInPath(IReadOnlyList<SpriteSheetPoint> points, double x, double y)
+    {
+        if (points.Count < 3)
+            return false;
+
+        var inside = false;
+        var previous = points.Count - 1;
+        for (var current = 0; current < points.Count; current++)
+        {
+            var currentPoint = points[current];
+            var previousPoint = points[previous];
+            var denominator = previousPoint.Y - currentPoint.Y;
+            if (Math.Abs(denominator) > 0.0001d
+                && (currentPoint.Y > y) != (previousPoint.Y > y)
+                && x < ((previousPoint.X - currentPoint.X) * (y - currentPoint.Y) / denominator) + currentPoint.X)
+            {
+                inside = !inside;
+            }
+
+            previous = current;
+        }
+
+        return inside;
+    }
+
+    private static bool IsForeground(byte r, byte g, byte b, byte a) =>
+        a > 16 && !IsMagentaKeyColor(r, g, b);
+
+    private static bool IsMagentaKeyColor(byte r, byte g, byte b) =>
+        r >= 210 && b >= 210 && g <= 80;
+
+    private static string NormalizeHorizontalAnchor(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "left" => "left",
+            "right" => "right",
+            _ => "center",
+        };
+
+    private static string NormalizeVerticalAnchor(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "top" => "top",
+            "middle" or "center" => "middle",
+            _ => "bottom",
+        };
 }
 
 internal sealed record SpriteSheetServerRenderResult(

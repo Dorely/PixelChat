@@ -22,6 +22,8 @@ public class SpriteSheetDefinition
     public int Gutter { get; set; }
     public int Fps { get; set; }
     public bool Loop { get; set; } = true;
+    public string HorizontalAnchor { get; set; } = "center";
+    public string VerticalAnchor { get; set; } = "bottom";
     public string FramesJson { get; set; } = "[]";
 
     public ICollection<SpriteSheetFrameRecord> FrameRecords { get; set; } = [];

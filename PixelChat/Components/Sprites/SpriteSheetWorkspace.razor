@@ -28,14 +28,15 @@
         <div class="sprite-editor-grid">
             <section class="sprite-editor-main">
                 <div class="sprite-canvas-panel">
-                    <div class="section-title">Source Boxes</div>
+                    <div class="section-title">Source Frames</div>
                     <canvas class="sprite-source-canvas" @ref="_sourceCanvas"></canvas>
                 </div>
 
                 <div class="sprite-tool-strip">
                     <div class="tool-button-row">
-                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Select)" @onclick="() => SetToolAsync(SpriteEditTool.Select)">Select</button>
-                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Draw)" @onclick="() => SetToolAsync(SpriteEditTool.Draw)">Draw</button>
+                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Select)" title="@ToolTitle(SpriteEditTool.Select)" aria-pressed="@(_tool == SpriteEditTool.Select)" @onclick="() => SetToolAsync(SpriteEditTool.Select)">Select</button>
+                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Draw)" title="@ToolTitle(SpriteEditTool.Draw)" aria-pressed="@(_tool == SpriteEditTool.Draw)" @onclick="() => SetToolAsync(SpriteEditTool.Draw)">Draw Box</button>
+                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Outline)" title="@ToolTitle(SpriteEditTool.Outline)" aria-pressed="@(_tool == SpriteEditTool.Outline)" @onclick="() => SetToolAsync(SpriteEditTool.Outline)">Outline</button>
                         <button type="button" class="btn btn-sm btn-primary" disabled="@(_frames.Count == 0)" @onclick="NormalizeSheetAsync">Normalize Sheet</button>
                         <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_selectedFrameIndex < 0 || _frames.Count == 0)" @onclick="DeleteSelectedFrameAsync">Delete</button>
                     </div>
@@ -44,6 +45,7 @@
                         @if (SelectedFrame() is { } selected)
                         {
                             <span>@selected.Label</span>
+                            <span class="@GeometryReadoutClass(selected)">@FrameGeometryLabel(selected)</span>
                             <span>X @selected.X</span>
                             <span>Y @selected.Y</span>
                             <span>W @selected.Width</span>
@@ -98,6 +100,22 @@
                             <input type="checkbox" @bind="_loop" @bind:after="OnLayoutFieldChangedAsync" />
                             <span>Loop</span>
                         </label>
+                        <label>
+                            <span>H Anchor</span>
+                            <select class="form-select form-select-sm" @bind="_horizontalAnchor" @bind:after="OnLayoutFieldChangedAsync">
+                                <option value="left">Left</option>
+                                <option value="center">Center</option>
+                                <option value="right">Right</option>
+                            </select>
+                        </label>
+                        <label>
+                            <span>V Anchor</span>
+                            <select class="form-select form-select-sm" @bind="_verticalAnchor" @bind:after="OnLayoutFieldChangedAsync">
+                                <option value="top">Top</option>
+                                <option value="middle">Middle</option>
+                                <option value="bottom">Bottom</option>
+                            </select>
+                        </label>
                     </div>
                 </div>
 
@@ -119,6 +137,7 @@
                                 {
                                     <span>@(frame.Index + 1)</span>
                                 }
+                                <span class="@FrameMarkerClass(frame)" title="@FrameGeometryLabel(frame)" aria-hidden="true"></span>
                             </button>
                             <input class="form-control form-control-sm" @bind="frame.Label" @bind:after="OnFrameLabelChangedAsync" />
                             <div class="frame-row-actions">
@@ -170,6 +189,8 @@
     private int _gutter = 16;
     private int _fps = 8;
     private bool _loop = true;
+    private string _horizontalAnchor = "center";
+    private string _verticalAnchor = "bottom";
     private int _selectedFrameIndex = -1;
     private SpriteEditTool _tool = SpriteEditTool.Select;
     private string _status = string.Empty;
@@ -238,19 +259,16 @@
 
     private async Task AutoDetectAsync()
     {
-        if (_module is null || CurrentWorkingAsset() is not { } working)
+        if (CurrentWorkingAsset() is not { } working)
             return;
 
         _error = null;
         _status = "Detecting sprite frames...";
         try
         {
-            var detection = await _module.InvokeAsync<BrowserSpriteDetectionResult>(
-                "detectSpriteSheetFrames",
-                working.PreviewDataUrl,
-                null,
-                "rows",
-                "auto");
+            var detection = await Workflow.DetectSpriteSheetFramesAsync(
+                Workbench.Project.Id,
+                new SpriteSheetDetectionRequest(working.Id, null, "rows", "auto"));
             if (detection.Frames.Count == 0)
                 throw new InvalidOperationException("No foreground frames were detected.");
 
@@ -267,6 +285,7 @@
                     Y = frame.SourceRect.Y,
                     Width = frame.SourceRect.Width,
                     Height = frame.SourceRect.Height,
+                    ShapePaths = frame.ShapePaths.ToList(),
                 }));
             FitCellsToFrames();
             _selectedFrameIndex = _frames.Count > 0 ? 0 : -1;
@@ -339,6 +358,8 @@
                 _gutter,
                 _fps,
                 _loop,
+                _horizontalAnchor,
+                _verticalAnchor,
                 output.Frames));
             _workingImageDataUrl = output.DataUrl;
             LoadSheet(saved, new ArtAssetView(
@@ -451,6 +472,7 @@
                 Y = Math.Max(0, frame.SourceRect.Y),
                 Width = Math.Max(1, frame.SourceRect.Width),
                 Height = Math.Max(1, frame.SourceRect.Height),
+                ShapePaths = frame.ShapePaths.ToList(),
             }));
         ReindexFrames();
         _selectedFrameIndex = change.SelectedIndex;
@@ -508,6 +530,8 @@
                 _gutter,
                 _fps,
                 _loop,
+                _horizontalAnchor,
+                _verticalAnchor,
                 output.Frames));
             LoadSheet(saved, new ArtAssetView(
                 saved.WorkingAssetId ?? Guid.Empty,
@@ -550,6 +574,8 @@
         _gutter = Math.Max(0, sheet.Gutter);
         _fps = Math.Clamp(sheet.Fps, 1, 60);
         _loop = sheet.Loop;
+        _horizontalAnchor = NormalizeHorizontalAnchor(sheet.HorizontalAnchor);
+        _verticalAnchor = NormalizeVerticalAnchor(sheet.VerticalAnchor);
         _frames.Clear();
         _frames.AddRange(sheet.Frames
             .OrderBy(frame => frame.Index)
@@ -562,6 +588,7 @@
                 Y = frame.SourceRect.Y,
                 Width = frame.SourceRect.Width,
                 Height = frame.SourceRect.Height,
+                ShapePaths = frame.ShapePaths.ToList(),
                 PreviewDataUrl = frame.PreviewDataUrl,
             }));
         ReindexFrames();
@@ -608,6 +635,8 @@
             Gutter = _gutter,
             Fps = _fps,
             Loop = _loop,
+            HorizontalAnchor = _horizontalAnchor,
+            VerticalAnchor = _verticalAnchor,
             Frames = _frames
                 .OrderBy(frame => frame.Index)
                 .Select(frame => new
@@ -615,6 +644,7 @@
                     frame.Index,
                     frame.Label,
                     SourceRect = new { X = frame.X, Y = frame.Y, Width = frame.Width, Height = frame.Height },
+                    frame.ShapePaths,
                 })
                 .ToList(),
         };
@@ -629,6 +659,8 @@
         _padding = Math.Clamp(_padding, 0, 2048);
         _gutter = Math.Clamp(_gutter, 0, 2048);
         _fps = Math.Clamp(_fps, 1, 60);
+        _horizontalAnchor = NormalizeHorizontalAnchor(_horizontalAnchor);
+        _verticalAnchor = NormalizeVerticalAnchor(_verticalAnchor);
     }
 
     private void FitCellsToFrames(bool onlyWhenTooSmall = false)
@@ -679,7 +711,34 @@
     }
 
     private string ToolButtonClass(SpriteEditTool tool) =>
-        _tool == tool ? "btn btn-sm btn-primary" : "btn btn-sm btn-outline-secondary";
+        _tool == tool
+            ? "btn btn-sm btn-primary sprite-tool-button is-active"
+            : "btn btn-sm btn-outline-secondary sprite-tool-button";
+
+    private static string ToolTitle(SpriteEditTool tool) =>
+        tool switch
+        {
+            SpriteEditTool.Select => "Select, move, resize, or edit frame vertices.",
+            SpriteEditTool.Draw => "Draw a rectangular sprite frame.",
+            SpriteEditTool.Outline => "Click polygon points, then click near the first point to close an outline frame.",
+            _ => string.Empty,
+        };
+
+    private static bool HasOutline(SpriteSheetEditorFrame frame) =>
+        frame.ShapePaths.Any(path => path.Points.Count >= 3);
+
+    private static string FrameGeometryLabel(SpriteSheetEditorFrame frame) =>
+        HasOutline(frame) ? "Outline" : "Box";
+
+    private static string FrameMarkerClass(SpriteSheetEditorFrame frame) =>
+        HasOutline(frame)
+            ? "frame-geometry-marker is-outline"
+            : "frame-geometry-marker is-box";
+
+    private static string GeometryReadoutClass(SpriteSheetEditorFrame frame) =>
+        HasOutline(frame)
+            ? "frame-geometry-readout is-outline"
+            : "frame-geometry-readout is-box";
 
     public async ValueTask DisposeAsync()
     {
@@ -703,7 +762,8 @@
     private enum SpriteEditTool
     {
         Select,
-        Draw
+        Draw,
+        Outline
     }
 
     private sealed class SpriteSheetEditorFrame
@@ -715,20 +775,8 @@
         public int Y { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
+        public List<SpriteSheetShapePath> ShapePaths { get; set; } = [];
         public string PreviewDataUrl { get; set; } = string.Empty;
-    }
-
-    private sealed class BrowserSpriteDetectionResult
-    {
-        public int Rows { get; set; }
-        public int Columns { get; set; }
-        public List<BrowserSpriteFrameDetection> Frames { get; set; } = [];
-    }
-
-    private sealed class BrowserSpriteFrameDetection
-    {
-        public int Index { get; set; }
-        public SpriteSheetRect SourceRect { get; set; } = new(0, 0, 1, 1);
     }
 
     private sealed class SpriteSheetRenderOutput
@@ -755,5 +803,22 @@
         public int Index { get; set; }
         public string Label { get; set; } = string.Empty;
         public SpriteSheetRect SourceRect { get; set; } = new(0, 0, 1, 1);
+        public List<SpriteSheetShapePath> ShapePaths { get; set; } = [];
     }
+
+    private static string NormalizeHorizontalAnchor(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "left" => "left",
+            "right" => "right",
+            _ => "center",
+        };
+
+    private static string NormalizeVerticalAnchor(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "top" => "top",
+            "middle" or "center" => "middle",
+            _ => "bottom",
+        };
 }

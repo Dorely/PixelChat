@@ -55,7 +55,21 @@
 .sprite-source-canvas {
     min-height: 460px;
     height: clamp(460px, 62vh, 760px);
+    cursor: default;
+}
+
+.sprite-source-canvas.is-draw-tool,
+.sprite-source-canvas.is-outline-tool {
     cursor: crosshair;
+}
+
+.sprite-source-canvas.is-outline-tool {
+    border-color: #16a34a;
+    box-shadow: inset 0 0 0 2px rgba(22, 163, 74, 0.12);
+}
+
+.sprite-source-canvas.is-dragging-frame {
+    cursor: grabbing;
 }
 
 .sprite-side-panel {
@@ -85,6 +99,22 @@
     border: 1px solid #d7dee8;
     border-radius: 8px;
     background: #ffffff;
+}
+
+.tool-button-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.sprite-tool-button {
+    min-width: 74px;
+}
+
+.sprite-tool-button.is-active {
+    font-weight: 700;
+    box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.18);
 }
 
 .sprite-settings-panel {
@@ -143,6 +173,22 @@
     background: #f8fafc;
 }
 
+.selected-frame-readout .frame-geometry-readout {
+    font-weight: 700;
+}
+
+.selected-frame-readout .frame-geometry-readout.is-box {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.selected-frame-readout .frame-geometry-readout.is-outline {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+    color: #15803d;
+}
+
 .frame-list-head {
     display: flex;
     justify-content: space-between;
@@ -177,6 +223,7 @@
 }
 
 .frame-thumb {
+    position: relative;
     display: grid;
     place-items: center;
     width: 58px;
@@ -193,6 +240,27 @@
     height: 100%;
     object-fit: contain;
     image-rendering: pixelated;
+}
+
+.frame-geometry-marker {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 13px;
+    height: 13px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.18), 0 1px 2px rgba(15, 23, 42, 0.18);
+    pointer-events: none;
+}
+
+.frame-geometry-marker.is-box {
+    border: 2px solid #1f6feb;
+    border-radius: 2px;
+}
+
+.frame-geometry-marker.is-outline {
+    background: #16a34a;
+    clip-path: polygon(50% 0, 100% 34%, 82% 100%, 18% 100%, 0 34%);
 }
 
 .frame-row-actions {
