@@ -8,6 +8,7 @@ using PixelChat.Art;
 using PixelChat.Llm;
 using PixelChat.Models;
 using PixelChat.Persistence.Repositories;
+using PixelChat.Tokens;
 
 namespace PixelChat.Chat;
 
@@ -17,6 +18,7 @@ public sealed class AssistantChatService(
     IChatClientFactory chatClientFactory,
     AssistantToolRegistry toolRegistry,
     IArtWorkflowService workflow,
+    IChatTokenEstimator tokenEstimator,
     IOptions<AgentOptions> agentOptions,
     ILogger<AssistantChatService> logger) : IAssistantChatService
 {
@@ -55,6 +57,17 @@ public sealed class AssistantChatService(
 
     public async Task<IReadOnlyList<AssistantMessage>> LoadMessagesAsync(Guid conversationId, CancellationToken cancellationToken = default) =>
         await conversations.LoadMessagesAsync(conversationId, cancellationToken);
+
+    public async Task<TokenContextEstimate?> EstimateNextRequestTokensAsync(Guid projectId, CancellationToken cancellationToken = default)
+    {
+        var providerAvailability = await providerService.GetDefaultChatProviderAvailabilityAsync(cancellationToken);
+        if (!providerAvailability.IsAvailable || providerAvailability.Provider is null)
+            return null;
+
+        var conversation = await GetOrCreateAsync(projectId, cancellationToken);
+        var history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
+        return tokenEstimator.Count(await BuildIdleModelMessagesAsync(history, projectId, cancellationToken), providerAvailability.Provider.ModelId);
+    }
 
     public async Task ResetAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
@@ -131,6 +144,8 @@ public sealed class AssistantChatService(
         var history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
         var messages = new List<ChatMessage> { new(ChatRole.System, AssistantPromptBuilder.Build()) };
         messages.AddRange(await BuildModelHistoryAsync(history, userMessage.Id, projectId, cancellationToken));
+        var modelName = providerAvailability.Provider.ModelId;
+        yield return BuildTokenCountUpdate(messages, modelName);
 
         var maxIterations = Math.Max(1, agentOptions.Value.MaxToolIterations);
         for (var iteration = 0; iteration < maxIterations; iteration++)
@@ -181,6 +196,7 @@ public sealed class AssistantChatService(
                         break;
 
                     var updatesToYield = new List<AssistantTurnUpdate>();
+                    var tokenContextChanged = false;
                     try
                     {
                         var contents = enumerator.Current?.Contents;
@@ -193,6 +209,7 @@ public sealed class AssistantChatService(
                             {
                                 textBuilder.Append(textContent.Text);
                                 updatesToYield.Add(new AssistantTextDelta(textContent.Text));
+                                tokenContextChanged = true;
                                 continue;
                             }
 
@@ -222,6 +239,7 @@ public sealed class AssistantChatService(
                                             ready.ToolName,
                                             ready.ArgumentsJson,
                                             ready.TextOffset));
+                                        tokenContextChanged = true;
                                         break;
                                 }
                             }
@@ -237,6 +255,9 @@ public sealed class AssistantChatService(
 
                     foreach (var updateToYield in updatesToYield)
                         yield return updateToYield;
+
+                    if (tokenContextChanged)
+                        yield return BuildTokenCountUpdate(BuildAssistantPreviewMessages(messages, textBuilder.ToString(), pendingCalls), modelName);
                 }
             }
             finally
@@ -264,6 +285,7 @@ public sealed class AssistantChatService(
                 activeAssistant.ErrorMessage = "Cancelled by user.";
                 await SafePersistAsync(activeAssistant);
                 yield return new AssistantMessagePersisted(activeAssistant.Id);
+                yield return await BuildIdleTokenCountUpdateAsync(conversation.Id, projectId, modelName, CancellationToken.None);
                 yield return new AssistantTurnError("Cancelled.", Cancelled: true);
                 yield break;
             }
@@ -275,6 +297,7 @@ public sealed class AssistantChatService(
                 activeAssistant.ErrorMessage = streamError;
                 await SafePersistAsync(activeAssistant);
                 yield return new AssistantMessagePersisted(activeAssistant.Id);
+                yield return await BuildIdleTokenCountUpdateAsync(conversation.Id, projectId, modelName, CancellationToken.None);
                 yield return new AssistantTurnError(streamError ?? "Assistant streaming failed.", Cancelled: false);
                 yield break;
             }
@@ -287,6 +310,7 @@ public sealed class AssistantChatService(
                 conversation.UpdatedAt = DateTime.UtcNow;
                 await conversations.SaveChangesAsync(CancellationToken.None);
                 yield return new AssistantMessagePersisted(activeAssistant.Id);
+                yield return await BuildIdleTokenCountUpdateAsync(conversation.Id, projectId, modelName, CancellationToken.None);
                 yield break;
             }
 
@@ -307,6 +331,7 @@ public sealed class AssistantChatService(
             yield return new AssistantMessagePersisted(activeAssistant.Id);
 
             messages.Add(new ChatMessage(ChatRole.Assistant, BuildAssistantContents(textBuilder.ToString(), manifest)));
+            yield return BuildTokenCountUpdate(messages, modelName);
 
             var resultContents = new List<AIContent>();
             var modelOnlyContents = new List<AIContent>();
@@ -343,6 +368,7 @@ public sealed class AssistantChatService(
                     outcome.Result,
                     outcome.Error,
                     outcome.DurationMs);
+                yield return BuildTokenCountUpdate(BuildToolPreviewMessages(messages, resultContents, modelOnlyContents), modelName);
 
                 if (outcome.Error is null && TryReadFormDraft(pendingCall.Name, outcome.Result, out var draft))
                     yield return new AssistantFormDraftProposed(draft);
@@ -357,6 +383,7 @@ public sealed class AssistantChatService(
 
             if (iteration == maxIterations - 1)
             {
+                yield return await BuildIdleTokenCountUpdateAsync(conversation.Id, projectId, modelName, CancellationToken.None);
                 yield return new AssistantTurnError(
                     $"Assistant tool-call loop hit cap of {maxIterations} iterations without producing a final response.",
                     Cancelled: false);
@@ -393,13 +420,93 @@ public sealed class AssistantChatService(
         return messages;
     }
 
+    private async Task<AssistantTokenCountUpdated> BuildIdleTokenCountUpdateAsync(
+        Guid conversationId,
+        Guid projectId,
+        string modelName,
+        CancellationToken cancellationToken)
+    {
+        var history = await conversations.LoadMessagesAsync(conversationId, cancellationToken);
+        return BuildTokenCountUpdate(await BuildIdleModelMessagesAsync(history, projectId, cancellationToken), modelName);
+    }
+
+    private AssistantTokenCountUpdated BuildTokenCountUpdate(IReadOnlyList<ChatMessage> messages, string modelName) =>
+        new(tokenEstimator.Count(messages, modelName));
+
+    private async Task<List<ChatMessage>> BuildIdleModelMessagesAsync(
+        IReadOnlyList<AssistantMessage> history,
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        var messages = BuildPersistedModelMessages(history);
+        var workbench = await workflow.GetWorkbenchAsync(projectId, cancellationToken);
+        if (workbench.Attachments.Count > 0)
+            messages.Add(BuildCurrentUserMessage(string.Empty, workbench));
+
+        return messages;
+    }
+
+    private static List<ChatMessage> BuildPersistedModelMessages(IReadOnlyList<AssistantMessage> history)
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.System, AssistantPromptBuilder.Build()) };
+        foreach (var message in history)
+        {
+            if (message.Role == AssistantMessageRole.System)
+                continue;
+
+            var chatMessage = ToChatMessage(message);
+            if (chatMessage is not null)
+                messages.Add(chatMessage);
+        }
+
+        return messages;
+    }
+
+    private static List<ChatMessage> BuildAssistantPreviewMessages(
+        IReadOnlyList<ChatMessage> baseMessages,
+        string assistantText,
+        IReadOnlyList<PendingToolCall> pendingCalls)
+    {
+        var messages = new List<ChatMessage>(baseMessages);
+        if (!string.IsNullOrEmpty(assistantText) || pendingCalls.Count > 0)
+        {
+            var calls = pendingCalls
+                .Select(ToPersistedToolCall)
+                .ToList();
+            messages.Add(new ChatMessage(ChatRole.Assistant, calls.Count == 0
+                ? BuildTextOnlyAssistantContents(assistantText)
+                : BuildAssistantContents(assistantText, calls)));
+        }
+
+        return messages;
+    }
+
+    private static List<ChatMessage> BuildToolPreviewMessages(
+        IReadOnlyList<ChatMessage> baseMessages,
+        IReadOnlyList<AIContent> resultContents,
+        IReadOnlyList<AIContent> modelOnlyContents)
+    {
+        var messages = new List<ChatMessage>(baseMessages);
+        if (resultContents.Count > 0)
+            messages.Add(new ChatMessage(ChatRole.Tool, resultContents.ToList()));
+        if (modelOnlyContents.Count > 0)
+            messages.Add(new ChatMessage(ChatRole.User, modelOnlyContents.ToList()));
+
+        return messages;
+    }
+
+    private static PersistedToolCall ToPersistedToolCall(PendingToolCall pendingCall) =>
+        new(
+            pendingCall.CallId,
+            pendingCall.Name,
+            pendingCall.ArgumentsJson,
+            pendingCall.TextOffset);
+
     private static ChatMessage BuildCurrentUserMessage(string text, WorkbenchView workbench)
     {
         var contents = new List<AIContent>();
         var contextSummary = BuildVisibleContextSummary(workbench);
-        contents.Add(new TextContent(string.IsNullOrWhiteSpace(contextSummary)
-            ? text
-            : $"{text}\n\nVisible PixelChat chat attachments:\n{contextSummary}"));
+        contents.Add(new TextContent(BuildUserTextWithVisibleContext(text, contextSummary)));
 
         var includedAssetIds = new HashSet<Guid>();
 
@@ -446,6 +553,16 @@ public sealed class AssistantChatService(
         }
 
         return new ChatMessage(ChatRole.User, contents);
+    }
+
+    private static string BuildUserTextWithVisibleContext(string text, string contextSummary)
+    {
+        if (string.IsNullOrWhiteSpace(contextSummary))
+            return text;
+
+        return string.IsNullOrWhiteSpace(text)
+            ? $"Visible PixelChat chat attachments:\n{contextSummary}"
+            : $"{text}\n\nVisible PixelChat chat attachments:\n{contextSummary}";
     }
 
     private static string BuildVisibleContextSummary(WorkbenchView workbench)

@@ -1,4 +1,5 @@
 using PixelChat.Components.Chat;
+using PixelChat.Tokens;
 
 namespace PixelChat.Chat;
 
@@ -20,6 +21,7 @@ public sealed record WorkspaceChatRuntimeSnapshot(
     bool Running,
     ChatLiveTurn? Live,
     string? PendingUserText,
+    TokenContextEstimate? TokenCount,
     string? Error);
 
 public sealed record WorkspaceChatTurnFinished(

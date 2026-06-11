@@ -120,6 +120,15 @@
 | `ToolCallArguments.cs` | Parser/normalizer for JSON and SDK tool-call arguments before `AIFunction` invocation. |
 | `StreamingToolCallTracker.cs` | Normalizes provider function-call start/delta/final content into app-level streaming tool updates. |
 
+### Tokens/
+
+| File | Description |
+|------|-------------|
+| `ITokenCounter.cs` / `TiktokenTokenCounter.cs` / `CharEstimateTokenCounter.cs` / `CompositeTokenCounter.cs` | Local text token counting abstractions and tiktoken-first implementation with character fallback. |
+| `TokenCountRequest.cs` / `TokenCountResult.cs` / `TokenCountingOptions.cs` | Token counting request/result records and model-to-encoding defaults. |
+| `ImageTokenEstimator.cs` | Local image token estimator using OpenAI-style patch and tile formulas by model family. |
+| `ChatTokenEstimator.cs` | Counts a model-facing `ChatMessage` context across text, tool calls/results, and image content. |
+
 ### Models/
 
 | File | Description |

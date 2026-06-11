@@ -6,6 +6,7 @@
 @using PixelChat.Chat
 @using PixelChat.Llm
 @using PixelChat.Models
+@using PixelChat.Tokens
 @using Microsoft.Extensions.Options
 @rendermode InteractiveServer
 @implements IAsyncDisposable
@@ -64,7 +65,7 @@ else
         <section class="workbench-main">
             <aside class="chat-pane">
                 <ChatSurface Title="Assistant"
-                             Subtitle="@_providerSubtitle"
+                             Subtitle="@ChatSubtitle"
                              Loading="@_loadingChat"
                              Messages="@_messages"
                              Live="@_live"
@@ -156,6 +157,7 @@ else
     private string _input = string.Empty;
     private string? _error;
     private string _providerSubtitle = "Checking provider status...";
+    private TokenContextEstimate? _tokenCount;
     private bool _loadingChat = true;
     private bool _running;
     private bool _hasWorkingProvider;
@@ -164,6 +166,10 @@ else
     private int _forceScrollKey;
     private int _scrollKey;
     private int _resetComposerKey;
+
+    private string ChatSubtitle => _tokenCount is null
+        ? _providerSubtitle
+        : $"{_providerSubtitle} - {FormatTokenCount(_tokenCount)}";
 
     private string _busyText = string.Empty;
     private string _generatePrompt = string.Empty;
@@ -289,6 +295,9 @@ else
         _providerSubtitle = _hasWorkingProvider
             ? $"{availability.Provider!.DisplayName ?? availability.Provider.Name} / {availability.Provider.ModelId}"
             : availability.Message;
+        _tokenCount = _hasWorkingProvider
+            ? await ChatService.EstimateNextRequestTokensAsync(_workbench.Project.Id)
+            : null;
 
         _loadingChat = false;
         _forceScrollKey++;
@@ -2812,7 +2821,15 @@ else
         _running = snapshot.Running;
         _live = snapshot.Live;
         _pendingUserText = snapshot.PendingUserText;
+        if (snapshot.TokenCount is not null || snapshot.Running)
+            _tokenCount = snapshot.TokenCount;
         _error = snapshot.Error;
+    }
+
+    private static string FormatTokenCount(TokenContextEstimate estimate)
+    {
+        var prefix = estimate.IsExact ? string.Empty : "~";
+        return $"{prefix}{estimate.TokenCount.ToString("N0", CultureInfo.InvariantCulture)} tokens";
     }
 
     private void CommitFinishedTurn(WorkspaceChatTurnFinished turn)

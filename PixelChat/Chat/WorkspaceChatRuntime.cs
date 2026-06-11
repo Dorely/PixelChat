@@ -1,4 +1,5 @@
 using PixelChat.Components.Chat;
+using PixelChat.Tokens;
 
 namespace PixelChat.Chat;
 
@@ -10,6 +11,7 @@ public sealed class WorkspaceChatRuntime(
     private ChatLiveTurn? _live;
     private CancellationTokenSource? _turnCts;
     private string? _pendingUserText;
+    private TokenContextEstimate? _tokenCount;
     private string? _error;
     private bool _running;
 
@@ -35,6 +37,7 @@ public sealed class WorkspaceChatRuntime(
                 _running,
                 _live?.Clone(),
                 _pendingUserText,
+                _tokenCount,
                 _error);
         }
     }
@@ -55,6 +58,7 @@ public sealed class WorkspaceChatRuntime(
             _running = true;
             _live = new ChatLiveTurn();
             _pendingUserText = text;
+            _tokenCount = null;
             _error = null;
             _turnCts = new CancellationTokenSource();
             turnCts = _turnCts;
@@ -85,6 +89,7 @@ public sealed class WorkspaceChatRuntime(
 
             _live = null;
             _pendingUserText = null;
+            _tokenCount = null;
             _error = null;
         }
 
@@ -236,6 +241,10 @@ public sealed class WorkspaceChatRuntime(
 
                 case AssistantWorkspaceMutated:
                     notifyWorkspaceChanged = true;
+                    break;
+
+                case AssistantTokenCountUpdated tokenCount:
+                    _tokenCount = tokenCount.Estimate;
                     break;
 
                 case AssistantTurnError error:

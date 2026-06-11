@@ -1,3 +1,5 @@
+using PixelChat.Tokens;
+
 namespace PixelChat.Chat;
 
 public abstract record AssistantTurnUpdate;
@@ -17,5 +19,7 @@ public sealed record AssistantFormDraftProposed(AssistantFormDraft Draft) : Assi
 public sealed record AssistantMessagePersisted(Guid MessageId) : AssistantTurnUpdate;
 
 public sealed record AssistantWorkspaceMutated : AssistantTurnUpdate;
+
+public sealed record AssistantTokenCountUpdated(TokenContextEstimate Estimate) : AssistantTurnUpdate;
 
 public sealed record AssistantTurnError(string Message, bool Cancelled) : AssistantTurnUpdate;
