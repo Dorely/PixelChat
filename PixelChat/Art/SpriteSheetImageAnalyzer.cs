@@ -2,6 +2,36 @@ namespace PixelChat.Art;
 
 internal static class SpriteSheetImageAnalyzer
 {
+    internal static SpriteAnimationMetricsView ComputeMotionMetrics(
+        IReadOnlyList<SpriteAnimationFramePixels> frames,
+        bool loop)
+    {
+        var ordered = frames.OrderBy(frame => frame.Index).ToList();
+        if (ordered.Count < 2)
+            return new SpriteAnimationMetricsView([], 0, 0, 0);
+
+        var stats = ordered.Select(BuildFrameStats).ToList();
+        var pairs = new List<SpriteAnimationFramePairMetricsView>();
+        for (var index = 0; index < stats.Count - 1; index++)
+            pairs.Add(BuildPairMetrics(stats[index], stats[index + 1], loopSeam: false));
+
+        if (loop && stats.Count > 1)
+            pairs.Add(BuildPairMetrics(stats[^1], stats[0], loopSeam: true));
+
+        var meanCentroidDrift = pairs.Count == 0 ? 0 : pairs.Average(pair => pair.CentroidDistance);
+        var maxCentroidDrift = pairs.Count == 0 ? 0 : pairs.Max(pair => pair.CentroidDistance);
+        var meanArea = stats.Average(stat => stat.Area);
+        var areaVariancePercent = meanArea <= 0
+            ? 0
+            : Math.Sqrt(stats.Average(stat => Math.Pow(stat.Area - meanArea, 2))) / meanArea * 100d;
+
+        return new SpriteAnimationMetricsView(
+            pairs,
+            RoundMetric(meanCentroidDrift),
+            RoundMetric(maxCentroidDrift),
+            RoundMetric(areaVariancePercent));
+    }
+
     public static SpriteSheetDetectionResult Detect(
         Guid sourceAssetId,
         byte[] data,
@@ -47,6 +77,106 @@ internal static class SpriteSheetImageAnalyzer
             Math.Max(1, columnCount),
             frames);
     }
+
+    private static FrameForegroundStats BuildFrameStats(SpriteAnimationFramePixels frame)
+    {
+        var foreground = new bool[frame.Width * frame.Height];
+        var area = 0;
+        var minX = int.MaxValue;
+        var minY = int.MaxValue;
+        var maxX = int.MinValue;
+        var maxY = int.MinValue;
+        double sumX = 0;
+        double sumY = 0;
+
+        for (var y = 0; y < frame.Height; y++)
+        {
+            for (var x = 0; x < frame.Width; x++)
+            {
+                var pixel = (y * frame.Width) + x;
+                var offset = pixel * 4;
+                var isForeground = IsForeground(
+                    frame.Rgba[offset],
+                    frame.Rgba[offset + 1],
+                    frame.Rgba[offset + 2],
+                    frame.Rgba[offset + 3],
+                    "auto");
+                foreground[pixel] = isForeground;
+                if (!isForeground)
+                    continue;
+
+                area++;
+                minX = Math.Min(minX, x);
+                minY = Math.Min(minY, y);
+                maxX = Math.Max(maxX, x);
+                maxY = Math.Max(maxY, y);
+                sumX += x + 0.5d;
+                sumY += y + 0.5d;
+            }
+        }
+
+        var bounds = area == 0
+            ? new SpriteSheetRect(0, 0, 0, 0)
+            : new SpriteSheetRect(minX, minY, maxX - minX + 1, maxY - minY + 1);
+        return new FrameForegroundStats(
+            frame.Index,
+            frame.Width,
+            frame.Height,
+            foreground,
+            area,
+            area == 0 ? 0 : sumX / area,
+            area == 0 ? 0 : sumY / area,
+            bounds);
+    }
+
+    private static SpriteAnimationFramePairMetricsView BuildPairMetrics(
+        FrameForegroundStats from,
+        FrameForegroundStats to,
+        bool loopSeam)
+    {
+        var centroidDeltaX = to.CentroidX - from.CentroidX;
+        var centroidDeltaY = to.CentroidY - from.CentroidY;
+        var centroidDistance = Math.Sqrt((centroidDeltaX * centroidDeltaX) + (centroidDeltaY * centroidDeltaY));
+        var areaChangePercent = Math.Abs(to.Area - from.Area) / (double)Math.Max(1, Math.Max(from.Area, to.Area)) * 100d;
+        var pixelDiffPercent = ForegroundPixelDiffPercent(from, to);
+
+        return new SpriteAnimationFramePairMetricsView(
+            from.Index,
+            to.Index,
+            loopSeam,
+            RoundMetric(centroidDeltaX),
+            RoundMetric(centroidDeltaY),
+            RoundMetric(centroidDistance),
+            to.Bounds.Width - from.Bounds.Width,
+            to.Bounds.Height - from.Bounds.Height,
+            RoundMetric(areaChangePercent),
+            RoundMetric(pixelDiffPercent));
+    }
+
+    private static double ForegroundPixelDiffPercent(FrameForegroundStats from, FrameForegroundStats to)
+    {
+        var width = Math.Min(from.Width, to.Width);
+        var height = Math.Min(from.Height, to.Height);
+        var changed = 0;
+        var union = 0;
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var fromForeground = from.Foreground[(y * from.Width) + x];
+                var toForeground = to.Foreground[(y * to.Width) + x];
+                if (fromForeground || toForeground)
+                    union++;
+                if (fromForeground != toForeground)
+                    changed++;
+            }
+        }
+
+        return union == 0 ? 0 : changed / (double)union * 100d;
+    }
+
+    private static double RoundMetric(double value) =>
+        Math.Round(value, 3, MidpointRounding.AwayFromZero);
 
     private static List<SpriteSheetFrameDetectionView> DetectFramesFromPixels(
         byte[] rgba,
@@ -454,4 +584,21 @@ internal static class SpriteSheetImageAnalyzer
     private readonly record struct EdgePoint(int X, int Y);
 
     private readonly record struct Edge(EdgePoint Start, EdgePoint End);
+
+    private sealed record FrameForegroundStats(
+        int Index,
+        int Width,
+        int Height,
+        bool[] Foreground,
+        int Area,
+        double CentroidX,
+        double CentroidY,
+        SpriteSheetRect Bounds);
 }
+
+internal sealed record SpriteAnimationFramePixels(
+    int Index,
+    string Label,
+    int Width,
+    int Height,
+    byte[] Rgba);

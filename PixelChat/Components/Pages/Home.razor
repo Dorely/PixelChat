@@ -174,6 +174,10 @@ else
     private string _generateRecipeText = string.Empty;
     private string _editRecipeText = string.Empty;
     private Guid? _editingRecipeId;
+    private IReadOnlyList<PromptRecipeVersionView> _recipeVersions = [];
+    private string _loadedRecipeSnapshot = string.Empty;
+    private bool _recipeEditorDirty;
+    private bool _recipeChangedExternally;
     private string _recipeName = string.Empty;
     private string _recipeAssetType = "sprite";
     private string _recipePromptTemplate = string.Empty;
@@ -263,6 +267,7 @@ else
             ResetExportModal();
         _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
         _recipeExampleAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
+        await RefreshRecipeEditorAfterWorkbenchReloadAsync();
         PublishVisibleState();
     }
 
@@ -286,6 +291,32 @@ else
 
         _loadingChat = false;
         _forceScrollKey++;
+    }
+
+    private async Task RefreshRecipeEditorAfterWorkbenchReloadAsync()
+    {
+        if (_workbench is null || _editingRecipeId is not Guid recipeId)
+            return;
+
+        var recipe = _workbench.Recipes.FirstOrDefault(item => item.Id == recipeId);
+        if (recipe is null)
+        {
+            ClearRecipeEditor();
+            return;
+        }
+
+        var currentSnapshot = RecipeSnapshot(recipe);
+        if (_recipeEditorDirty)
+        {
+            if (!string.Equals(currentSnapshot, _loadedRecipeSnapshot, StringComparison.Ordinal))
+                _recipeChangedExternally = true;
+        }
+        else if (!string.Equals(currentSnapshot, _loadedRecipeSnapshot, StringComparison.Ordinal))
+        {
+            LoadRecipeEditor(recipe);
+        }
+
+        await LoadRecipeVersionsAsync(recipeId);
     }
 
     private async Task ChangeProjectAsync(ChangeEventArgs args)
@@ -651,7 +682,7 @@ else
                             {
                                 <button type="button"
                                         class="recipe-row @(recipe.Id == _editingRecipeId ? "is-active" : "")"
-                                        @onclick="() => LoadRecipeEditor(recipe)">
+                                        @onclick="() => LoadRecipeEditorAsync(recipe)">
                                     <span>@recipe.Name</span>
                                     <small>@(string.IsNullOrWhiteSpace(recipe.AssetType) ? "Unspecified" : recipe.AssetType)</small>
                                 </button>
@@ -665,15 +696,15 @@ else
                         <div class="form-grid recipe-management-grid">
                             <label>
                                 <span>Name</span>
-                                <input class="form-control" @bind="_recipeName" />
+                                <input class="form-control" @bind="_recipeName" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty" />
                             </label>
                             <label>
                                 <span>Use Case</span>
-                                <input class="form-control" @bind="_recipeAssetType" />
+                                <input class="form-control" @bind="_recipeAssetType" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty" />
                             </label>
                             <label>
                                 <span>Preferred Size</span>
-                                <select class="form-select" @bind="_recipePreferredSize">
+                                <select class="form-select" @bind="_recipePreferredSize" @bind:after="MarkRecipeEditorDirty">
                                     <option value="auto">Auto</option>
                                     <option value="1024x1024">1024 x 1024</option>
                                     <option value="1024x1536">1024 x 1536</option>
@@ -682,19 +713,19 @@ else
                             </label>
                             <label class="recipe-template-field">
                                 <span>Recipe Prompt</span>
-                                <textarea class="form-control" rows="6" @bind="_recipePromptTemplate"></textarea>
+                                <textarea class="form-control" rows="6" @bind="_recipePromptTemplate" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
                             </label>
                             <label>
                                 <span>Reusable Rules</span>
-                                <textarea class="form-control" rows="5" @bind="_recipeStyleRules"></textarea>
+                                <textarea class="form-control" rows="5" @bind="_recipeStyleRules" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
                             </label>
                             <label>
                                 <span>Avoid Rules</span>
-                                <textarea class="form-control" rows="5" @bind="_recipeAvoidRules"></textarea>
+                                <textarea class="form-control" rows="5" @bind="_recipeAvoidRules" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
                             </label>
                             <label class="recipe-notes">
                                 <span>Notes</span>
-                                <textarea class="form-control" rows="4" @bind="_recipeNotes"></textarea>
+                                <textarea class="form-control" rows="4" @bind="_recipeNotes" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
                             </label>
                         </div>
 
@@ -713,6 +744,41 @@ else
                     </div>
 
                     <div class="recipe-related-layout">
+                        @if (_editingRecipeId is not null)
+                        {
+                            <section>
+                                <div class="section-title">Version History</div>
+                                @if (_recipeChangedExternally)
+                                {
+                                    <div class="recipe-external-change">
+                                        <span>Recipe changed externally.</span>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ReloadRecipeEditorFromCurrentAsync">Reload</button>
+                                    </div>
+                                }
+                                @if (_recipeVersions.Count == 0)
+                                {
+                                    <div class="empty-context">No versions saved yet.</div>
+                                }
+                                else
+                                {
+                                    <div class="recipe-version-list">
+                                        @foreach (var version in _recipeVersions)
+                                        {
+                                            <div class="recipe-version-row">
+                                                <div>
+                                                    <strong>v@version.Version</strong>
+                                                    <span class="recipe-version-date">@version.CreatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)</span>
+                                                    <span class="recipe-source-badge recipe-source-@version.Source">@version.Source</span>
+                                                </div>
+                                                <p>@(string.IsNullOrWhiteSpace(version.ChangeSummary) ? "Saved." : version.ChangeSummary)</p>
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => RestoreRecipeVersionAsync(version.Version)">Restore</button>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </section>
+                        }
+
                         <section>
                             <div class="section-title">Example Images</div>
                             @if (_workbench.Assets.Count == 0)
@@ -1253,11 +1319,13 @@ else
                     request.PreferredSize,
                     request.Notes));
                 LoadRecipeEditor(updated);
+                await LoadRecipeVersionsAsync(updated.Id);
             }
             else
             {
                 var created = await Workflow.SavePromptRecipeAsync(_workbench.Project.Id, request);
                 LoadRecipeEditor(created);
+                await LoadRecipeVersionsAsync(created.Id);
             }
         });
     }
@@ -1270,6 +1338,7 @@ else
         _recipePreferredSize = string.IsNullOrWhiteSpace(_generateSize) ? "auto" : _generateSize;
         foreach (var assetId in CurrentReferenceAssetIds())
             _recipeExampleAssetIds.Add(assetId);
+        MarkRecipeEditorDirty();
     }
 
     private void ClearRecipeEditor()
@@ -1283,6 +1352,16 @@ else
         _recipeNotes = string.Empty;
         _recipePreferredSize = "auto";
         _recipeExampleAssetIds.Clear();
+        _recipeVersions = [];
+        _loadedRecipeSnapshot = string.Empty;
+        _recipeEditorDirty = false;
+        _recipeChangedExternally = false;
+    }
+
+    private async Task LoadRecipeEditorAsync(PromptRecipeView recipe)
+    {
+        LoadRecipeEditor(recipe);
+        await LoadRecipeVersionsAsync(recipe.Id);
     }
 
     private void LoadRecipeEditor(PromptRecipeView recipe)
@@ -1298,6 +1377,41 @@ else
         _recipeExampleAssetIds.Clear();
         foreach (var assetId in recipe.ExampleAssetIds)
             _recipeExampleAssetIds.Add(assetId);
+        _loadedRecipeSnapshot = RecipeSnapshot(recipe);
+        _recipeEditorDirty = false;
+        _recipeChangedExternally = false;
+    }
+
+    private async Task LoadRecipeVersionsAsync(Guid recipeId)
+    {
+        if (_workbench is null)
+            return;
+
+        _recipeVersions = await Workflow.ListPromptRecipeVersionsAsync(_workbench.Project.Id, recipeId);
+    }
+
+    private async Task ReloadRecipeEditorFromCurrentAsync()
+    {
+        if (_workbench is null || _editingRecipeId is not Guid recipeId)
+            return;
+
+        var recipe = _workbench.Recipes.FirstOrDefault(item => item.Id == recipeId);
+        if (recipe is not null)
+            await LoadRecipeEditorAsync(recipe);
+    }
+
+    private async Task RestoreRecipeVersionAsync(int version)
+    {
+        if (_workbench is null || _editingRecipeId is not Guid recipeId)
+            return;
+
+        await RunWorkflowAsync($"Restoring recipe v{version}...", async () =>
+        {
+            var restored = await Workflow.RevertPromptRecipeAsync(_workbench.Project.Id, recipeId, version, "user");
+            await ReloadWorkbenchAsync();
+            LoadRecipeEditor(restored);
+            await LoadRecipeVersionsAsync(restored.Id);
+        });
     }
 
     private async Task DuplicateRecipeAsync()
@@ -1310,6 +1424,7 @@ else
         {
             var duplicate = await Workflow.DuplicatePromptRecipeAsync(_workbench.Project.Id, recipeId, duplicateName);
             LoadRecipeEditor(duplicate);
+            await LoadRecipeVersionsAsync(duplicate.Id);
         });
     }
 
@@ -1327,7 +1442,7 @@ else
 
     private async Task UseRecipeInGenerate(PromptRecipeView recipe)
     {
-        LoadRecipeEditor(recipe);
+        await LoadRecipeEditorAsync(recipe);
         _generateRecipeText = recipe.Id.ToString();
         ApplySelectedGenerateRecipeDefaults();
         await SetModeAsync(WorkspaceMode.Generate);
@@ -2831,6 +2946,9 @@ else
                 _recipeNotes = draft.Notes ?? string.Empty;
                 _recipePreferredSize = NormalizeDraftSize(draft.PreferredSize ?? draft.Size, _recipePreferredSize);
                 SetRecipeExamples(draft.ReferenceAssetIds);
+                _recipeEditorDirty = true;
+                _recipeChangedExternally = false;
+                _loadedRecipeSnapshot = string.Empty;
                 await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Recipes);
                 await ReloadWorkbenchAsync();
                 break;
@@ -3346,7 +3464,26 @@ else
             _recipeExampleAssetIds.Add(assetId);
         else
             _recipeExampleAssetIds.Remove(assetId);
+        MarkRecipeEditorDirty();
     }
+
+    private void MarkRecipeEditorDirty()
+    {
+        _recipeEditorDirty = true;
+    }
+
+    private static string RecipeSnapshot(PromptRecipeView recipe) =>
+        string.Join('\u001f',
+            recipe.Name,
+            recipe.AssetType,
+            recipe.PromptTemplate,
+            string.Join('\u001e', recipe.StyleRules),
+            string.Join('\u001e', recipe.AvoidRules),
+            string.Join('\u001e', recipe.ExampleAssetIds),
+            recipe.PreferredProvider,
+            recipe.PreferredModel,
+            recipe.PreferredSize,
+            recipe.Notes);
 
     private string RecipePromptTemplateForSave()
     {

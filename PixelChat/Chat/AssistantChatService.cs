@@ -120,7 +120,8 @@ public sealed class AssistantChatService(
             yield break;
         }
 
-        var aiTools = toolRegistry.Build(projectId);
+        var generationBudget = new AssistantTurnGenerationBudget(agentOptions.Value.MaxGenerationRoundsPerTurn);
+        var aiTools = toolRegistry.Build(projectId, generationBudget);
         var chatOptions = new ChatOptions
         {
             Tools = aiTools,
@@ -556,7 +557,7 @@ public sealed class AssistantChatService(
                 ToolCallArguments.Create(pendingCall.Content.Arguments, pendingCall.ArgumentsJson),
                 cancellationToken);
             var result = invokeResult?.ToString() ?? string.Empty;
-            var modelOnlyContents = await BuildModelOnlyToolContentsAsync(pendingCall, projectId, cancellationToken);
+            var modelOnlyContents = await BuildModelOnlyToolContentsAsync(pendingCall, projectId, result, cancellationToken);
             stopwatch.Stop();
             return new ToolInvocationOutcome(result, Error: null, Cancelled: false, stopwatch.Elapsed.TotalMilliseconds, modelOnlyContents);
         }
@@ -576,23 +577,109 @@ public sealed class AssistantChatService(
     private async Task<IReadOnlyList<AIContent>> BuildModelOnlyToolContentsAsync(
         PendingToolCall pendingCall,
         Guid projectId,
+        string toolResult,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(pendingCall.Name, "read_asset", StringComparison.Ordinal)
-            || ReadGuidArgument(pendingCall, "assetId") is not Guid assetId)
+        try
+        {
+            if (string.Equals(pendingCall.Name, "read_asset", StringComparison.Ordinal)
+                && ReadGuidArgument(pendingCall, "assetId") is Guid assetId)
+            {
+                var asset = await workflow.GetAssetForExportAsync(projectId, assetId, cancellationToken);
+                return
+                [
+                    new TextContent($"Model-only image returned by read_asset for asset '{asset.Label}' ({asset.Id}). This image is not attached to visible chat context."),
+                    new DataContent(asset.DataUrl, asset.ContentType)
+                    {
+                        Name = asset.FileName,
+                    },
+                ];
+            }
+
+            if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal))
+                return await BuildGenerationRoundModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
+
+            if (string.Equals(pendingCall.Name, "review_sprite_animation", StringComparison.Ordinal))
+                return await BuildSpriteAnimationReviewModelOnlyContentsAsync(pendingCall, projectId, toolResult, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Could not build model-only contents for tool '{Tool}'.", pendingCall.Name);
+        }
+
+        return Array.Empty<AIContent>();
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildGenerationRoundModelOnlyContentsAsync(
+        Guid projectId,
+        string toolResult,
+        CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(toolResult);
+        var root = document.RootElement;
+        if (!root.TryGetProperty("batch", out var batch)
+            || !batch.TryGetProperty("outputAssetIds", out var outputAssetIds)
+            || outputAssetIds.ValueKind != JsonValueKind.Array)
         {
             return Array.Empty<AIContent>();
         }
 
-        var asset = await workflow.GetAssetForExportAsync(projectId, assetId, cancellationToken);
-        return
-        [
-            new TextContent($"Model-only image returned by read_asset for asset '{asset.Label}' ({asset.Id}). This image is not attached to visible chat context."),
-            new DataContent(asset.DataUrl, asset.ContentType)
+        var maxImages = Math.Clamp(agentOptions.Value.MaxImagesPerGenerationRound <= 0 ? 2 : agentOptions.Value.MaxImagesPerGenerationRound, 1, 2);
+        var batchId = batch.TryGetProperty("id", out var batchIdElement) ? batchIdElement.GetString() : null;
+        var round = root.TryGetProperty("round", out var roundElement) && roundElement.TryGetInt32(out var roundValue)
+            ? roundValue
+            : 0;
+        var contents = new List<AIContent>
+        {
+            new TextContent($"Model-only images: outputs of generation round {round}, batch {batchId ?? "unknown"}. These images are not attached to visible chat context."),
+        };
+        foreach (var item in outputAssetIds.EnumerateArray().Take(maxImages))
+        {
+            if (item.ValueKind != JsonValueKind.String || !Guid.TryParse(item.GetString(), out var assetId))
+                continue;
+
+            var asset = await workflow.GetAssetForExportAsync(projectId, assetId, cancellationToken);
+            contents.Add(new DataContent(asset.DataUrl, asset.ContentType)
             {
                 Name = asset.FileName,
-            },
-        ];
+            });
+        }
+
+        return contents.Count > 1 ? contents : Array.Empty<AIContent>();
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildSpriteAnimationReviewModelOnlyContentsAsync(
+        PendingToolCall pendingCall,
+        Guid projectId,
+        string toolResult,
+        CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(toolResult);
+        if (!document.RootElement.TryGetProperty("spriteSheetId", out var spriteSheetElement)
+            || spriteSheetElement.ValueKind != JsonValueKind.String
+            || !Guid.TryParse(spriteSheetElement.GetString(), out var spriteSheetId))
+        {
+            return Array.Empty<AIContent>();
+        }
+
+        var review = await workflow.BuildSpriteAnimationReviewAsync(
+            projectId,
+            spriteSheetId,
+            ReadIntArgument(pendingCall, "maxFrames") ?? 12,
+            cancellationToken);
+        var contents = new List<AIContent>
+        {
+            new TextContent($"Model-only images: sprite animation review for sprite sheet {spriteSheetId}. Frames are ordered by index; filmstrip is left-to-right frames 1..N. These images are not attached to visible chat context."),
+        };
+        foreach (var image in review.Images)
+        {
+            contents.Add(new DataContent(image.DataUrl, image.ContentType)
+            {
+                Name = image.FileName,
+            });
+        }
+
+        return contents;
     }
 
     private static Guid? ReadGuidArgument(PendingToolCall pendingCall, string name)
@@ -606,6 +693,23 @@ public sealed class AssistantChatService(
             Guid guid => guid,
             string text when Guid.TryParse(text, out var guid) => guid,
             JsonElement { ValueKind: JsonValueKind.String } element when Guid.TryParse(element.GetString(), out var guid) => guid,
+            _ => null,
+        };
+    }
+
+    private static int? ReadIntArgument(PendingToolCall pendingCall, string name)
+    {
+        var arguments = ToolCallArguments.ParseObjectOrNull(pendingCall.ArgumentsJson) ?? pendingCall.Content.Arguments;
+        if (arguments is null || !arguments.TryGetValue(name, out var value))
+            return null;
+
+        return value switch
+        {
+            int intValue => intValue,
+            long longValue when longValue >= int.MinValue && longValue <= int.MaxValue => (int)longValue,
+            string text when int.TryParse(text, out var intValue) => intValue,
+            JsonElement { ValueKind: JsonValueKind.Number } element when element.TryGetInt32(out var intValue) => intValue,
+            JsonElement { ValueKind: JsonValueKind.String } element when int.TryParse(element.GetString(), out var intValue) => intValue,
             _ => null,
         };
     }

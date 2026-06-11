@@ -13,6 +13,7 @@ public class Project
     public ICollection<ArtAsset> Assets { get; set; } = [];
     public ICollection<GenerationBatch> GenerationBatches { get; set; } = [];
     public ICollection<PromptRecipe> PromptRecipes { get; set; } = [];
+    public ICollection<PromptRecipeVersion> PromptRecipeVersions { get; set; } = [];
     public ICollection<SpriteSheetDefinition> SpriteSheets { get; set; } = [];
     public ICollection<SpriteSheetFrameRecord> SpriteSheetFrameRecords { get; set; } = [];
     public ICollection<ImageMask> Masks { get; set; } = [];

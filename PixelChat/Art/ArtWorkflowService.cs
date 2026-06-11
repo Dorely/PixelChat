@@ -351,6 +351,63 @@ public sealed class ArtWorkflowService(
         return JsonSerializer.Serialize(CompactSpriteSheet(sheet), JsonOptions);
     }
 
+    public async Task<SpriteAnimationReviewView> BuildSpriteAnimationReviewAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        int maxFrames = 12,
+        CancellationToken cancellationToken = default)
+    {
+        var sheet = await db.SpriteSheetDefinitions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite sheet was not found.");
+        var frameLimit = Math.Clamp(maxFrames <= 0 ? 12 : maxFrames, 1, 24);
+        var frames = await db.SpriteSheetFrameRecords
+            .AsNoTracking()
+            .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == spriteSheetId)
+            .OrderBy(frame => frame.Index)
+            .Take(frameLimit)
+            .ToListAsync(cancellationToken);
+        if (frames.Count == 0)
+            throw new InvalidOperationException("No sprite frames were found to review.");
+
+        var frameWidth = Math.Max(1, frames.Max(frame => Math.Max(frame.CellWidth, frame.PreviewWidth)));
+        var frameHeight = Math.Max(1, frames.Max(frame => Math.Max(frame.CellHeight, frame.PreviewHeight)));
+        var canvases = frames
+            .Select(frame => BuildAnimationReviewFrameCanvas(frame, frameWidth, frameHeight))
+            .ToList();
+        var metrics = SpriteSheetImageAnalyzer.ComputeMotionMetrics(canvases, sheet.Loop);
+        var composites = SpriteSheetServerRenderer.BuildAnimationReviewComposites(canvases);
+        var images = canvases
+            .Select(frame => new SpriteAnimationReviewImageView(
+                frame.Label,
+                $"sprite-frame-{frame.Index + 1}.png",
+                "image/png",
+                DataUrl.ToDataUrl("image/png", SpriteSheetPngCodec.EncodeRgba(frame.Width, frame.Height, frame.Rgba))))
+            .ToList();
+
+        images.Add(new SpriteAnimationReviewImageView(
+            "Onion-skin overlay",
+            "sprite-animation-onion-skin.png",
+            "image/png",
+            DataUrl.ToDataUrl("image/png", composites.OnionSkinPngData)));
+        images.Add(new SpriteAnimationReviewImageView(
+            "Filmstrip, left-to-right frames 1..N",
+            "sprite-animation-filmstrip.png",
+            "image/png",
+            DataUrl.ToDataUrl("image/png", composites.FilmstripPngData)));
+
+        return new SpriteAnimationReviewView(
+            sheet.Id,
+            frames.Count,
+            sheet.Rows,
+            sheet.Columns,
+            sheet.Fps,
+            sheet.Loop,
+            metrics,
+            images);
+    }
+
     public async Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(
         Guid projectId,
         Guid assetId,
@@ -1655,6 +1712,7 @@ public sealed class ArtWorkflowService(
         };
         ApplyRecipeRequest(recipe, request);
         await db.PromptRecipes.AddAsync(recipe, cancellationToken);
+        await AppendPromptRecipeVersionAsync(recipe, request.Source, request.ChangeSummary, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return RecipeView(recipe);
     }
@@ -1670,6 +1728,7 @@ public sealed class ArtWorkflowService(
 
         ApplyRecipeRequest(recipe, request);
         recipe.UpdatedAt = DateTime.UtcNow;
+        await AppendPromptRecipeVersionAsync(recipe, request.Source, request.ChangeSummary, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return RecipeView(recipe);
     }
@@ -1678,29 +1737,87 @@ public sealed class ArtWorkflowService(
         Guid projectId,
         Guid recipeId,
         string? name = null,
+        string source = "user",
+        string changeSummary = "",
         CancellationToken cancellationToken = default)
     {
-        var source = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+        var sourceRecipe = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
             ?? throw new InvalidOperationException("Prompt recipe was not found.");
 
         var duplicate = new PromptRecipe
         {
             ProjectId = projectId,
-            Name = string.IsNullOrWhiteSpace(name) ? $"{source.Name} Copy" : name.Trim(),
-            AssetType = source.AssetType,
-            PromptTemplate = source.PromptTemplate,
-            StyleRulesJson = source.StyleRulesJson,
-            AvoidRulesJson = source.AvoidRulesJson,
-            ExampleAssetIdsJson = source.ExampleAssetIdsJson,
-            PreferredProvider = source.PreferredProvider,
-            PreferredModel = source.PreferredModel,
-            PreferredSize = source.PreferredSize,
-            ExportDefaultsJson = source.ExportDefaultsJson,
-            Notes = source.Notes,
+            Name = string.IsNullOrWhiteSpace(name) ? $"{sourceRecipe.Name} Copy" : name.Trim(),
+            AssetType = sourceRecipe.AssetType,
+            PromptTemplate = sourceRecipe.PromptTemplate,
+            StyleRulesJson = sourceRecipe.StyleRulesJson,
+            AvoidRulesJson = sourceRecipe.AvoidRulesJson,
+            ExampleAssetIdsJson = sourceRecipe.ExampleAssetIdsJson,
+            PreferredProvider = sourceRecipe.PreferredProvider,
+            PreferredModel = sourceRecipe.PreferredModel,
+            PreferredSize = sourceRecipe.PreferredSize,
+            ExportDefaultsJson = sourceRecipe.ExportDefaultsJson,
+            Notes = sourceRecipe.Notes,
         };
         await db.PromptRecipes.AddAsync(duplicate, cancellationToken);
+        await AppendPromptRecipeVersionAsync(
+            duplicate,
+            source,
+            string.IsNullOrWhiteSpace(changeSummary) ? $"Duplicated from recipe '{sourceRecipe.Name}'." : changeSummary,
+            cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return RecipeView(duplicate);
+    }
+
+    public async Task<IReadOnlyList<PromptRecipeVersionView>> ListPromptRecipeVersionsAsync(
+        Guid projectId,
+        Guid recipeId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!await db.PromptRecipes.AnyAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken))
+            throw new InvalidOperationException("Prompt recipe was not found.");
+
+        var versions = await db.PromptRecipeVersions
+            .AsNoTracking()
+            .Where(v => v.ProjectId == projectId && v.RecipeId == recipeId)
+            .OrderByDescending(v => v.Version)
+            .ToListAsync(cancellationToken);
+        return versions.Select(PromptRecipeVersionView).ToList();
+    }
+
+    public async Task<string> ListPromptRecipeVersionsJsonAsync(
+        Guid projectId,
+        Guid recipeId,
+        CancellationToken cancellationToken = default)
+    {
+        var versions = await ListPromptRecipeVersionsAsync(projectId, recipeId, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            recipeId,
+            versions,
+            returned = versions.Count,
+        }, JsonOptions);
+    }
+
+    public async Task<PromptRecipeView> RevertPromptRecipeAsync(
+        Guid projectId,
+        Guid recipeId,
+        int version,
+        string source,
+        CancellationToken cancellationToken = default)
+    {
+        var recipe = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+            ?? throw new InvalidOperationException("Prompt recipe was not found.");
+        var snapshot = await db.PromptRecipeVersions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(v => v.ProjectId == projectId && v.RecipeId == recipeId && v.Version == version, cancellationToken)
+            ?? throw new InvalidOperationException("Prompt recipe version was not found.");
+
+        ApplyRecipeSnapshot(recipe, snapshot);
+        recipe.UpdatedAt = DateTime.UtcNow;
+        await AppendPromptRecipeVersionAsync(recipe, source, $"Reverted to version {version}.", cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return RecipeView(recipe);
     }
 
     public async Task DeletePromptRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default)
@@ -2413,6 +2530,67 @@ public sealed class ArtWorkflowService(
         recipe.Notes = Clean(request.Notes);
     }
 
+    private async Task AppendPromptRecipeVersionAsync(
+        PromptRecipe recipe,
+        string? source,
+        string? changeSummary,
+        CancellationToken cancellationToken)
+    {
+        var latestVersion = await db.PromptRecipeVersions
+            .Where(version => version.RecipeId == recipe.Id)
+            .Select(version => (int?)version.Version)
+            .MaxAsync(cancellationToken)
+            ?? 0;
+        var normalizedSource = NormalizeRecipeVersionSource(source);
+        var normalizedSummary = string.IsNullOrWhiteSpace(changeSummary)
+            ? $"Saved by {normalizedSource}."
+            : changeSummary.Trim();
+
+        await db.PromptRecipeVersions.AddAsync(new PromptRecipeVersion
+        {
+            ProjectId = recipe.ProjectId,
+            RecipeId = recipe.Id,
+            Version = latestVersion + 1,
+            Name = recipe.Name,
+            AssetType = recipe.AssetType,
+            PromptTemplate = recipe.PromptTemplate,
+            StyleRulesJson = recipe.StyleRulesJson,
+            AvoidRulesJson = recipe.AvoidRulesJson,
+            ExampleAssetIdsJson = recipe.ExampleAssetIdsJson,
+            PreferredProvider = recipe.PreferredProvider,
+            PreferredModel = recipe.PreferredModel,
+            PreferredSize = recipe.PreferredSize,
+            ExportDefaultsJson = recipe.ExportDefaultsJson,
+            Notes = recipe.Notes,
+            Source = normalizedSource,
+            ChangeSummary = normalizedSummary,
+            CreatedAt = DateTime.UtcNow,
+        }, cancellationToken);
+    }
+
+    private static void ApplyRecipeSnapshot(PromptRecipe recipe, PromptRecipeVersion snapshot)
+    {
+        recipe.Name = snapshot.Name;
+        recipe.AssetType = snapshot.AssetType;
+        recipe.PromptTemplate = snapshot.PromptTemplate;
+        recipe.StyleRulesJson = snapshot.StyleRulesJson;
+        recipe.AvoidRulesJson = snapshot.AvoidRulesJson;
+        recipe.ExampleAssetIdsJson = snapshot.ExampleAssetIdsJson;
+        recipe.PreferredProvider = snapshot.PreferredProvider;
+        recipe.PreferredModel = snapshot.PreferredModel;
+        recipe.PreferredSize = snapshot.PreferredSize;
+        recipe.ExportDefaultsJson = snapshot.ExportDefaultsJson;
+        recipe.Notes = snapshot.Notes;
+    }
+
+    private static string NormalizeRecipeVersionSource(string? source) =>
+        source?.Trim().ToLowerInvariant() switch
+        {
+            "assistant" => "assistant",
+            "system" => "system",
+            _ => "user",
+        };
+
     private static ImageProviderReference ToProviderReference(ArtAsset asset) =>
         new(asset.FileName, asset.ContentType, asset.Data);
 
@@ -2855,6 +3033,16 @@ public sealed class ArtWorkflowService(
             recipe.Notes,
             recipe.CreatedAt);
 
+    private static PromptRecipeVersionView PromptRecipeVersionView(PromptRecipeVersion version) =>
+        new(
+            version.Id,
+            version.RecipeId,
+            version.Version,
+            version.Name,
+            version.Source,
+            version.ChangeSummary,
+            version.CreatedAt);
+
     private static ImageMaskView MaskView(ImageMask mask) =>
         new(
             mask.Id,
@@ -2900,6 +3088,49 @@ public sealed class ArtWorkflowService(
             frame.PreviewWidth,
             frame.PreviewHeight,
             FrameDuration(spriteSheet.Fps));
+
+    private static SpriteAnimationFramePixels BuildAnimationReviewFrameCanvas(
+        SpriteSheetFrameRecord frame,
+        int width,
+        int height)
+    {
+        var output = new byte[checked(width * height * 4)];
+        var label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label;
+        if (!SpriteSheetPngCodec.TryReadRgba(frame.PreviewData, out var previewWidth, out var previewHeight, out var previewRgba))
+            return new SpriteAnimationFramePixels(frame.Index, label, width, height, output);
+
+        var previewIsCell = previewWidth == frame.CellWidth && previewHeight == frame.CellHeight;
+        var destX = previewIsCell ? 0 : frame.SpriteX - frame.CellX;
+        var destY = previewIsCell ? 0 : frame.SpriteY - frame.CellY;
+        for (var y = 0; y < previewHeight; y++)
+        {
+            var targetY = destY + y;
+            if (targetY < 0 || targetY >= height)
+                continue;
+
+            for (var x = 0; x < previewWidth; x++)
+            {
+                var targetX = destX + x;
+                if (targetX < 0 || targetX >= width)
+                    continue;
+
+                var sourceIndex = ((y * previewWidth) + x) * 4;
+                if (!IsReviewForeground(previewRgba[sourceIndex], previewRgba[sourceIndex + 1], previewRgba[sourceIndex + 2], previewRgba[sourceIndex + 3]))
+                    continue;
+
+                var targetIndex = ((targetY * width) + targetX) * 4;
+                output[targetIndex] = previewRgba[sourceIndex];
+                output[targetIndex + 1] = previewRgba[sourceIndex + 1];
+                output[targetIndex + 2] = previewRgba[sourceIndex + 2];
+                output[targetIndex + 3] = previewRgba[sourceIndex + 3];
+            }
+        }
+
+        return new SpriteAnimationFramePixels(frame.Index, label, width, height, output);
+    }
+
+    private static bool IsReviewForeground(byte r, byte g, byte b, byte a) =>
+        a > 16 && !(r >= 210 && b >= 210 && g <= 80);
 
     private static SpriteSheetRect RectView(int x, int y, int width, int height) =>
         new(Math.Max(0, x), Math.Max(0, y), Math.Max(1, width), Math.Max(1, height));

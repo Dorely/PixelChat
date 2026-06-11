@@ -16,6 +16,7 @@ public interface IArtWorkflowService
     Task<string> ReadGenerationBatchJsonAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
     Task<string> ListSpriteSheetsJsonAsync(Guid projectId, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadSpriteSheetJsonAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
+    Task<SpriteAnimationReviewView> BuildSpriteAnimationReviewAsync(Guid projectId, Guid spriteSheetId, int maxFrames = 12, CancellationToken cancellationToken = default);
     Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, BackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
     Task<BackgroundRemovalExportCacheView> SaveBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, SaveBackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ExportStepCacheView>> GetExportStepCacheAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
@@ -49,7 +50,10 @@ public interface IArtWorkflowService
     Task ClearAssetMaskAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<PromptRecipeView> SavePromptRecipeAsync(Guid projectId, SavePromptRecipeRequest request, CancellationToken cancellationToken = default);
     Task<PromptRecipeView> UpdatePromptRecipeAsync(Guid projectId, Guid recipeId, UpdatePromptRecipeRequest request, CancellationToken cancellationToken = default);
-    Task<PromptRecipeView> DuplicatePromptRecipeAsync(Guid projectId, Guid recipeId, string? name = null, CancellationToken cancellationToken = default);
+    Task<PromptRecipeView> DuplicatePromptRecipeAsync(Guid projectId, Guid recipeId, string? name = null, string source = "user", string changeSummary = "", CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PromptRecipeVersionView>> ListPromptRecipeVersionsAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<string> ListPromptRecipeVersionsJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<PromptRecipeView> RevertPromptRecipeAsync(Guid projectId, Guid recipeId, int version, string source, CancellationToken cancellationToken = default);
     Task DeletePromptRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default);
     Task DeleteAssetAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);

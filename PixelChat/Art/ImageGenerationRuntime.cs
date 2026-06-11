@@ -10,6 +10,8 @@ public sealed class ImageGenerationRuntime(
 {
     private readonly object _lock = new();
     private readonly Dictionary<Guid, ImageGenerationBatchRuntimeView> _batches = [];
+    private readonly Dictionary<Guid, TaskCompletionSource<bool>> _batchCompletions = [];
+    private readonly HashSet<Guid> _reservedProjectStarts = [];
 
     public event EventHandler? StateChanged;
 
@@ -31,7 +33,8 @@ public sealed class ImageGenerationRuntime(
     {
         lock (_lock)
         {
-            return _batches.Values.Any(batch => batch.ProjectId == projectId && batch.IsRunning);
+            return _reservedProjectStarts.Contains(projectId)
+                || _batches.Values.Any(batch => batch.ProjectId == projectId && batch.IsRunning);
         }
     }
 
@@ -40,24 +43,22 @@ public sealed class ImageGenerationRuntime(
         GenerateImagesRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (HasRunningBatch(projectId))
-            throw new InvalidOperationException("An image generation batch is already running for this project.");
-
+        ReserveProjectStart(projectId);
         GenerationBatchView batch;
-        await using (var scope = scopeFactory.CreateAsyncScope())
+        try
         {
-            var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
-            batch = await workflow.StartGenerateImagesAsync(projectId, request, cancellationToken);
-        }
+            await using (var scope = scopeFactory.CreateAsyncScope())
+            {
+                var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
+                batch = await workflow.StartGenerateImagesAsync(projectId, request, cancellationToken);
+            }
 
-        var runtimeBatch = new ImageGenerationBatchRuntimeView(
-            projectId,
-            batch.Id,
-            IsRunning: true,
-            batch.OutputStates.Select(ToRuntimeOutput).ToList());
-        lock (_lock)
+            RegisterStartedBatch(projectId, batch);
+        }
+        catch
         {
-            _batches[batch.Id] = runtimeBatch;
+            ReleaseProjectStart(projectId);
+            throw;
         }
         NotifyStateChanged();
 
@@ -70,29 +71,53 @@ public sealed class ImageGenerationRuntime(
         EditImageRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (HasRunningBatch(projectId))
-            throw new InvalidOperationException("An image generation batch is already running for this project.");
-
+        ReserveProjectStart(projectId);
         GenerationBatchView batch;
-        await using (var scope = scopeFactory.CreateAsyncScope())
+        try
         {
-            var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
-            batch = await workflow.StartEditImageAsync(projectId, request, cancellationToken);
-        }
+            await using (var scope = scopeFactory.CreateAsyncScope())
+            {
+                var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
+                batch = await workflow.StartEditImageAsync(projectId, request, cancellationToken);
+            }
 
-        var runtimeBatch = new ImageGenerationBatchRuntimeView(
-            projectId,
-            batch.Id,
-            IsRunning: true,
-            batch.OutputStates.Select(ToRuntimeOutput).ToList());
-        lock (_lock)
+            RegisterStartedBatch(projectId, batch);
+        }
+        catch
         {
-            _batches[batch.Id] = runtimeBatch;
+            ReleaseProjectStart(projectId);
+            throw;
         }
         NotifyStateChanged();
 
         _ = Task.Run(() => RunGenerationBatchAsync(projectId, batch.Id, batch.Count, RuntimeBatchKind.Edit));
         return batch;
+    }
+
+    public async Task<bool> WaitForBatchCompletionAsync(
+        Guid batchId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        TaskCompletionSource<bool>? completion;
+        lock (_lock)
+        {
+            if (!_batches.TryGetValue(batchId, out var batch) || !batch.IsRunning)
+                return true;
+
+            if (!_batchCompletions.TryGetValue(batchId, out completion))
+                return true;
+        }
+
+        try
+        {
+            await completion.Task.WaitAsync(timeout, cancellationToken);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
     }
 
     public async Task ReconcileInterruptedBatchesAsync(CancellationToken cancellationToken = default)
@@ -101,6 +126,44 @@ public sealed class ImageGenerationRuntime(
         var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
         await workflow.ReconcileInterruptedGenerationBatchesAsync(cancellationToken);
         NotifyStateChanged();
+    }
+
+    private void ReserveProjectStart(Guid projectId)
+    {
+        lock (_lock)
+        {
+            if (_reservedProjectStarts.Contains(projectId)
+                || _batches.Values.Any(batch => batch.ProjectId == projectId && batch.IsRunning))
+            {
+                throw new InvalidOperationException("An image generation batch is already running for this project.");
+            }
+
+            _reservedProjectStarts.Add(projectId);
+        }
+    }
+
+    private void ReleaseProjectStart(Guid projectId)
+    {
+        lock (_lock)
+        {
+            _reservedProjectStarts.Remove(projectId);
+        }
+    }
+
+    private void RegisterStartedBatch(Guid projectId, GenerationBatchView batch)
+    {
+        var runtimeBatch = new ImageGenerationBatchRuntimeView(
+            projectId,
+            batch.Id,
+            IsRunning: true,
+            batch.OutputStates.Select(ToRuntimeOutput).ToList());
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_lock)
+        {
+            _reservedProjectStarts.Remove(projectId);
+            _batches[batch.Id] = runtimeBatch;
+            _batchCompletions[batch.Id] = completion;
+        }
     }
 
     private async Task RunGenerationBatchAsync(Guid projectId, Guid batchId, int count, RuntimeBatchKind kind)
@@ -130,6 +193,7 @@ public sealed class ImageGenerationRuntime(
         {
             await CompleteBatchAsync(projectId, batchId);
             MarkBatchNotRunning(batchId);
+            CompleteBatchWaiter(batchId);
             NotifyStateChanged();
             logger.LogDebug("Image generation runtime batch finished: projectId={ProjectId}, batchId={BatchId}", projectId, batchId);
         }
@@ -360,6 +424,18 @@ public sealed class ImageGenerationRuntime(
             if (_batches.TryGetValue(batchId, out var batch))
                 _batches[batchId] = batch with { IsRunning = false };
         }
+    }
+
+    private void CompleteBatchWaiter(Guid batchId)
+    {
+        TaskCompletionSource<bool>? completion;
+        lock (_lock)
+        {
+            if (!_batchCompletions.Remove(batchId, out completion))
+                return;
+        }
+
+        completion.TrySetResult(true);
     }
 
     private void NotifyStateChanged() => StateChanged?.Invoke(this, EventArgs.Empty);

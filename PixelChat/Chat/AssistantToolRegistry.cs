@@ -1,14 +1,18 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Options;
 using PixelChat.Art;
+using PixelChat.Llm;
 using PixelChat.Models;
 
 namespace PixelChat.Chat;
 
 public sealed class AssistantToolRegistry(
     IArtWorkflowService workflow,
-    IWorkspaceVisibleStateStore visibleState)
+    IWorkspaceVisibleStateStore visibleState,
+    IImageGenerationRuntime imageRuntime,
+    IOptions<AgentOptions> agentOptions)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -26,9 +30,14 @@ public sealed class AssistantToolRegistry(
         "normalize_sprite_sheet",
         "reset_sprite_sheet_to_original",
         "attach_sprite_sheet_frames",
+        "run_generation_round",
+        "save_prompt_recipe",
+        "revert_recipe_version",
+        "create_sprite_sheet",
+        "review_sprite_animation",
     };
 
-    public IList<AITool> Build(Guid projectId) =>
+    public IList<AITool> Build(Guid projectId, AssistantTurnGenerationBudget budget) =>
     [
         AIFunctionFactory.Create(
             method: () => ListWorkspaceStateAsync(projectId),
@@ -58,6 +67,33 @@ public sealed class AssistantToolRegistry(
             description: "Read a saved prompt recipe's full reusable guide, durable rules, avoid rules, notes, preferred defaults, and passive example ids. This is read-only."),
 
         AIFunctionFactory.Create(
+            method: (Guid? recipeId,
+                string name,
+                string promptTemplate,
+                string changeSummary,
+                string? assetType = null,
+                string[]? styleRules = null,
+                string[]? avoidRules = null,
+                Guid[]? exampleAssetIds = null,
+                string? preferredSize = null,
+                string? notes = null,
+                CancellationToken cancellationToken = default) =>
+                SavePromptRecipeToolAsync(projectId, recipeId, name, promptTemplate, changeSummary, assetType, styleRules, avoidRules, exampleAssetIds, preferredSize, notes, cancellationToken),
+            name: "save_prompt_recipe",
+            description: "Create or update a durable prompt recipe directly during autonomous iteration. Recipes are reusable style guides, not one-off task prompts. Always provide a meaningful changeSummary. Every save is versioned and revertible."),
+
+        AIFunctionFactory.Create(
+            method: (Guid recipeId) => workflow.ListPromptRecipeVersionsJsonAsync(projectId, recipeId),
+            name: "list_recipe_versions",
+            description: "List the append-only version history for a saved prompt recipe. This is read-only."),
+
+        AIFunctionFactory.Create(
+            method: (Guid recipeId, int version, CancellationToken cancellationToken = default) =>
+                RevertPromptRecipeToolAsync(projectId, recipeId, version, cancellationToken),
+            name: "revert_recipe_version",
+            description: "Restore an older prompt recipe snapshot as a new assistant-authored version. This is non-destructive and appends a new version entry."),
+
+        AIFunctionFactory.Create(
             method: (string? status = null, int? limit = null) =>
                 workflow.ListGenerationBatchesJsonAsync(projectId, status, limit),
             name: "list_batches",
@@ -69,6 +105,21 @@ public sealed class AssistantToolRegistry(
             description: "Read full metadata for one generation or edit batch. This is read-only and does not include image bytes."),
 
         AIFunctionFactory.Create(
+            method: (
+                string specificRequest,
+                string? negativePrompt = null,
+                string? size = null,
+                string? background = null,
+                int count = 2,
+                Guid[]? referenceAssetIds = null,
+                Guid? editSourceAssetId = null,
+                Guid? recipeId = null,
+                CancellationToken cancellationToken = default) =>
+                RunGenerationRoundAsync(projectId, budget, specificRequest, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId, recipeId, cancellationToken),
+            name: "run_generation_round",
+            description: "Run one autonomous generation or edit round and wait for completion. To test recipe changes, first save the recipe revision and pass recipeId. editSourceAssetId switches to image edit mode. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
+
+        AIFunctionFactory.Create(
             method: (int? limit = null) => workflow.ListSpriteSheetsJsonAsync(projectId, limit),
             name: "list_sprite_sheets",
             description: "List compact sprite-sheet definitions for the current project. Use read_sprite_sheet for layout and frame boxes."),
@@ -77,6 +128,18 @@ public sealed class AssistantToolRegistry(
             method: (Guid spriteSheetId) => workflow.ReadSpriteSheetJsonAsync(projectId, spriteSheetId),
             name: "read_sprite_sheet",
             description: "Read a sprite sheet's layout and frame boxes without returning preview image bytes. Use attach_sprite_sheet_frames when frame previews need to be visible image context."),
+
+        AIFunctionFactory.Create(
+            method: (Guid sourceAssetId, CancellationToken cancellationToken = default) =>
+                CreateSpriteSheetAsync(projectId, sourceAssetId, cancellationToken),
+            name: "create_sprite_sheet",
+            description: "Create or select a sprite-sheet definition from an existing generated or imported asset and switch the visible workspace to Sprites."),
+
+        AIFunctionFactory.Create(
+            method: (Guid spriteSheetId, int maxFrames = 12, CancellationToken cancellationToken = default) =>
+                ReviewSpriteAnimationAsync(projectId, spriteSheetId, maxFrames, cancellationToken),
+            name: "review_sprite_animation",
+            description: "Review a sprite animation from saved frame records. Returns motion metrics in JSON and supplies ordered frame, onion-skin, and filmstrip images as model-only content."),
 
         AIFunctionFactory.Create(
             method: (string type, Guid refId, string? label = null) => AttachContextAsync(projectId, type, refId, label),
@@ -215,6 +278,204 @@ public sealed class AssistantToolRegistry(
     {
         await workflow.SetWorkspaceModeAsync(projectId, ParseWorkspaceMode(mode));
         return $"Workspace mode switched to {mode}.";
+    }
+
+    private async Task<string> SavePromptRecipeToolAsync(
+        Guid projectId,
+        Guid? recipeId,
+        string name,
+        string promptTemplate,
+        string changeSummary,
+        string? assetType,
+        string[]? styleRules,
+        string[]? avoidRules,
+        Guid[]? exampleAssetIds,
+        string? preferredSize,
+        string? notes,
+        CancellationToken cancellationToken)
+    {
+        PromptRecipeView saved;
+        if (recipeId is Guid existingRecipeId)
+        {
+            saved = await workflow.UpdatePromptRecipeAsync(projectId, existingRecipeId, new UpdatePromptRecipeRequest(
+                name,
+                assetType ?? string.Empty,
+                promptTemplate,
+                styleRules ?? [],
+                avoidRules ?? [],
+                exampleAssetIds ?? [],
+                "openai-account",
+                string.Empty,
+                string.IsNullOrWhiteSpace(preferredSize) ? "auto" : preferredSize,
+                notes ?? string.Empty,
+                "assistant",
+                changeSummary), cancellationToken);
+        }
+        else
+        {
+            saved = await workflow.SavePromptRecipeAsync(projectId, new SavePromptRecipeRequest(
+                name,
+                assetType ?? string.Empty,
+                promptTemplate,
+                styleRules ?? [],
+                avoidRules ?? [],
+                exampleAssetIds ?? [],
+                "openai-account",
+                string.Empty,
+                string.IsNullOrWhiteSpace(preferredSize) ? "auto" : preferredSize,
+                notes ?? string.Empty,
+                "assistant",
+                changeSummary), cancellationToken);
+        }
+
+        var versions = await workflow.ListPromptRecipeVersionsAsync(projectId, saved.Id, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            recipeId = saved.Id,
+            recipeName = saved.Name,
+            version = versions.OrderByDescending(version => version.Version).FirstOrDefault()?.Version,
+            message = "Prompt recipe saved and versioned.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> RevertPromptRecipeToolAsync(
+        Guid projectId,
+        Guid recipeId,
+        int version,
+        CancellationToken cancellationToken)
+    {
+        var saved = await workflow.RevertPromptRecipeAsync(projectId, recipeId, version, "assistant", cancellationToken);
+        var versions = await workflow.ListPromptRecipeVersionsAsync(projectId, saved.Id, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            recipeId = saved.Id,
+            recipeName = saved.Name,
+            version = versions.OrderByDescending(item => item.Version).FirstOrDefault()?.Version,
+            revertedTo = version,
+            message = $"Prompt recipe reverted to version {version} as a new version.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> RunGenerationRoundAsync(
+        Guid projectId,
+        AssistantTurnGenerationBudget budget,
+        string specificRequest,
+        string? negativePrompt,
+        string? size,
+        string? background,
+        int count,
+        Guid[]? referenceAssetIds,
+        Guid? editSourceAssetId,
+        Guid? recipeId,
+        CancellationToken cancellationToken)
+    {
+        if (budget.IsExhausted)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                budgetExhausted = true,
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = 0,
+                message = "Stop iterating, present the best result so far, and summarize recipe changes.",
+            }, JsonOptions);
+        }
+
+        if (imageRuntime.HasRunningBatch(projectId))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "An image generation batch is already running for this project. Wait for it to finish before starting another generation round.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+            }, JsonOptions);
+        }
+
+        var round = budget.Consume();
+        var outputCount = ClampGenerationRoundCount(count);
+        var normalizedBackground = NormalizeBackground(background) ?? "auto";
+        var normalizedSize = string.IsNullOrWhiteSpace(size) ? "auto" : size.Trim();
+        var references = referenceAssetIds ?? [];
+        GenerationBatchView batch;
+        if (editSourceAssetId is Guid sourceAssetId)
+        {
+            batch = await imageRuntime.StartEditImageAsync(projectId, new EditImageRequest(
+                sourceAssetId,
+                specificRequest,
+                normalizedSize,
+                outputCount,
+                normalizedBackground,
+                recipeId,
+                null,
+                null,
+                references), cancellationToken);
+        }
+        else
+        {
+            batch = await imageRuntime.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
+                specificRequest,
+                negativePrompt ?? string.Empty,
+                normalizedSize,
+                outputCount,
+                normalizedBackground,
+                recipeId,
+                references,
+                ParentBatchId: null), cancellationToken);
+        }
+
+        var timeoutSeconds = agentOptions.Value.GenerationRoundWaitTimeoutSeconds <= 0
+            ? 600
+            : agentOptions.Value.GenerationRoundWaitTimeoutSeconds;
+        var completed = await imageRuntime.WaitForBatchCompletionAsync(batch.Id, TimeSpan.FromSeconds(timeoutSeconds), cancellationToken);
+        var batchJson = await workflow.ReadGenerationBatchJsonAsync(projectId, batch.Id, cancellationToken);
+        using var document = JsonDocument.Parse(batchJson);
+        return JsonSerializer.Serialize(new
+        {
+            round,
+            budget.RoundsUsed,
+            budget.MaxRounds,
+            roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            timedOut = !completed,
+            batch = document.RootElement.Clone(),
+        }, JsonOptions);
+    }
+
+    private async Task<string> CreateSpriteSheetAsync(
+        Guid projectId,
+        Guid sourceAssetId,
+        CancellationToken cancellationToken)
+    {
+        var sheet = await workflow.StartSpriteSheetEditAsync(projectId, sourceAssetId, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            spriteSheetId = sheet.Id,
+            sheet.SourceAssetId,
+            workingAssetId = sheet.WorkingAssetId,
+            sheet.Rows,
+            sheet.Columns,
+            frameCount = sheet.Frames.Count,
+            message = "Sprite sheet is active in the Sprites workspace.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> ReviewSpriteAnimationAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        int maxFrames,
+        CancellationToken cancellationToken)
+    {
+        var review = await workflow.BuildSpriteAnimationReviewAsync(projectId, spriteSheetId, maxFrames, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            review.SpriteSheetId,
+            review.FrameCount,
+            review.Rows,
+            review.Columns,
+            review.Fps,
+            review.Loop,
+            review.Metrics,
+            modelOnlyImages = review.Images.Select(image => new { image.Label, image.FileName, image.ContentType }).ToList(),
+        }, JsonOptions);
     }
 
     private static Task<string> DraftGenerateFormAsync(
@@ -397,6 +658,15 @@ public sealed class AssistantToolRegistry(
 
     private static string NormalizeToken(string value) =>
         value.Trim().Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+
+    private int ClampGenerationRoundCount(int count)
+    {
+        var configuredMax = agentOptions.Value.MaxImagesPerGenerationRound <= 0
+            ? 2
+            : agentOptions.Value.MaxImagesPerGenerationRound;
+        var max = Math.Clamp(configuredMax, 1, 2);
+        return Math.Clamp(count <= 0 ? max : count, 1, max);
+    }
 
     private static int ClampCount(int count) => Math.Clamp(count <= 0 ? 1 : count, 1, 4);
 

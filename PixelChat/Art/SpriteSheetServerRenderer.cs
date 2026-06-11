@@ -138,6 +138,107 @@ internal static class SpriteSheetServerRenderer
             savedFrames);
     }
 
+    internal static SpriteSheetAnimationReviewRenderResult BuildAnimationReviewComposites(
+        IReadOnlyList<SpriteAnimationFramePixels> frames)
+    {
+        var ordered = frames.OrderBy(frame => frame.Index).ToList();
+        if (ordered.Count == 0)
+            throw new InvalidOperationException("At least one sprite frame is required.");
+
+        var frameWidth = ordered.Max(frame => frame.Width);
+        var frameHeight = ordered.Max(frame => frame.Height);
+        if (frameWidth <= 0 || frameHeight <= 0 || frameWidth * (long)frameHeight * ordered.Count > 120_000_000)
+            throw new InvalidOperationException("Sprite animation review images are too large.");
+
+        var onion = BuildOnionSkin(ordered, frameWidth, frameHeight);
+        var filmstrip = BuildFilmstrip(ordered, frameWidth, frameHeight);
+        return new SpriteSheetAnimationReviewRenderResult(
+            SpriteSheetPngCodec.EncodeRgba(frameWidth, frameHeight, onion),
+            SpriteSheetPngCodec.EncodeRgba(checked((frameWidth * ordered.Count) + Math.Max(0, ordered.Count - 1)), frameHeight, filmstrip),
+            frameWidth,
+            frameHeight,
+            checked((frameWidth * ordered.Count) + Math.Max(0, ordered.Count - 1)),
+            frameHeight);
+    }
+
+    private static byte[] BuildOnionSkin(IReadOnlyList<SpriteAnimationFramePixels> frames, int width, int height)
+    {
+        var output = new byte[checked(width * height * 4)];
+        var overlayAlpha = Math.Clamp(180 / Math.Max(1, frames.Count), 28, 96);
+        foreach (var frame in frames)
+        {
+            for (var y = 0; y < Math.Min(height, frame.Height); y++)
+            {
+                for (var x = 0; x < Math.Min(width, frame.Width); x++)
+                {
+                    var sourceIndex = ((y * frame.Width) + x) * 4;
+                    if (!IsForeground(frame.Rgba[sourceIndex], frame.Rgba[sourceIndex + 1], frame.Rgba[sourceIndex + 2], frame.Rgba[sourceIndex + 3]))
+                        continue;
+
+                    var alpha = Math.Min(frame.Rgba[sourceIndex + 3], overlayAlpha);
+                    BlendPixel(output, ((y * width) + x) * 4, frame.Rgba[sourceIndex], frame.Rgba[sourceIndex + 1], frame.Rgba[sourceIndex + 2], (byte)alpha);
+                }
+            }
+        }
+
+        return output;
+    }
+
+    private static byte[] BuildFilmstrip(IReadOnlyList<SpriteAnimationFramePixels> frames, int frameWidth, int frameHeight)
+    {
+        var outputWidth = checked((frameWidth * frames.Count) + Math.Max(0, frames.Count - 1));
+        var output = new byte[checked(outputWidth * frameHeight * 4)];
+        for (var separator = 1; separator < frames.Count; separator++)
+        {
+            var x = (separator * frameWidth) + separator - 1;
+            for (var y = 0; y < frameHeight; y++)
+            {
+                var index = ((y * outputWidth) + x) * 4;
+                output[index] = 160;
+                output[index + 1] = 160;
+                output[index + 2] = 160;
+                output[index + 3] = byte.MaxValue;
+            }
+        }
+
+        for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
+        {
+            var frame = frames[frameIndex];
+            var destX = frameIndex * (frameWidth + 1);
+            for (var y = 0; y < Math.Min(frameHeight, frame.Height); y++)
+            {
+                for (var x = 0; x < Math.Min(frameWidth, frame.Width); x++)
+                {
+                    var sourceIndex = ((y * frame.Width) + x) * 4;
+                    if (!IsForeground(frame.Rgba[sourceIndex], frame.Rgba[sourceIndex + 1], frame.Rgba[sourceIndex + 2], frame.Rgba[sourceIndex + 3]))
+                        continue;
+
+                    var targetIndex = ((y * outputWidth) + destX + x) * 4;
+                    output[targetIndex] = frame.Rgba[sourceIndex];
+                    output[targetIndex + 1] = frame.Rgba[sourceIndex + 1];
+                    output[targetIndex + 2] = frame.Rgba[sourceIndex + 2];
+                    output[targetIndex + 3] = frame.Rgba[sourceIndex + 3];
+                }
+            }
+        }
+
+        return output;
+    }
+
+    private static void BlendPixel(byte[] target, int targetIndex, byte r, byte g, byte b, byte a)
+    {
+        var sourceAlpha = a / 255d;
+        var targetAlpha = target[targetIndex + 3] / 255d;
+        var outputAlpha = sourceAlpha + (targetAlpha * (1 - sourceAlpha));
+        if (outputAlpha <= 0)
+            return;
+
+        target[targetIndex] = (byte)Math.Round(((r * sourceAlpha) + (target[targetIndex] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
+        target[targetIndex + 1] = (byte)Math.Round(((g * sourceAlpha) + (target[targetIndex + 1] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
+        target[targetIndex + 2] = (byte)Math.Round(((b * sourceAlpha) + (target[targetIndex + 2] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
+        target[targetIndex + 3] = (byte)Math.Round(outputAlpha * 255);
+    }
+
     private static SpriteSheetRect ClampRect(SpriteSheetRect rect, int width, int height)
     {
         var x = Math.Clamp(rect.X, 0, Math.Max(0, width - 1));
@@ -379,3 +480,11 @@ internal sealed record SpriteSheetServerRenderResult(
 
 internal sealed record SpriteSheetServerPreviewResult(
     IReadOnlyList<SpriteSheetFrameView> Frames);
+
+internal sealed record SpriteSheetAnimationReviewRenderResult(
+    byte[] OnionSkinPngData,
+    byte[] FilmstripPngData,
+    int FrameWidth,
+    int FrameHeight,
+    int FilmstripWidth,
+    int FilmstripHeight);

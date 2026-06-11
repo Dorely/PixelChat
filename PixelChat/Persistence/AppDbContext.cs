@@ -17,6 +17,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<ExportStepCache> ExportStepCaches => Set<ExportStepCache>();
     public DbSet<GenerationBatch> GenerationBatches => Set<GenerationBatch>();
     public DbSet<PromptRecipe> PromptRecipes => Set<PromptRecipe>();
+    public DbSet<PromptRecipeVersion> PromptRecipeVersions => Set<PromptRecipeVersion>();
     public DbSet<SpriteSheetDefinition> SpriteSheetDefinitions => Set<SpriteSheetDefinition>();
     public DbSet<SpriteSheetFrameRecord> SpriteSheetFrameRecords => Set<SpriteSheetFrameRecord>();
     public DbSet<ImageMask> ImageMasks => Set<ImageMask>();
@@ -191,6 +192,22 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.PromptRecipes)
                 .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PromptRecipeVersion>(entity =>
+        {
+            entity.HasIndex(e => new { e.RecipeId, e.Version }).IsUnique();
+            entity.HasIndex(e => new { e.ProjectId, e.RecipeId });
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.PromptRecipeVersions)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Recipe)
+                .WithMany(r => r.Versions)
+                .HasForeignKey(e => e.RecipeId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

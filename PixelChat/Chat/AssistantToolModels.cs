@@ -32,3 +32,11 @@ public sealed record AssistantFormDraft(
     IReadOnlyList<string>? AvoidRules = null,
     string? Notes = null,
     string? PreferredSize = null);
+
+public sealed class AssistantTurnGenerationBudget(int maxRounds)
+{
+    public int MaxRounds { get; } = Math.Max(0, maxRounds);
+    public int RoundsUsed { get; private set; }
+    public bool IsExhausted => RoundsUsed >= MaxRounds;
+    public int Consume() => ++RoundsUsed;
+}

@@ -1,13 +1,17 @@
 namespace PixelChat.Models;
 
-public class PromptRecipe
+public class PromptRecipeVersion
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
     public Guid ProjectId { get; set; }
     public Project Project { get; set; } = null!;
 
-    public required string Name { get; set; }
+    public Guid RecipeId { get; set; }
+    public PromptRecipe Recipe { get; set; } = null!;
+
+    public int Version { get; set; }
+    public string Name { get; set; } = string.Empty;
     public string AssetType { get; set; } = string.Empty;
     public string PromptTemplate { get; set; } = string.Empty;
     public string StyleRulesJson { get; set; } = "[]";
@@ -18,7 +22,7 @@ public class PromptRecipe
     public string PreferredSize { get; set; } = string.Empty;
     public string ExportDefaultsJson { get; set; } = "{}";
     public string Notes { get; set; } = string.Empty;
-    public ICollection<PromptRecipeVersion> Versions { get; set; } = [];
+    public string Source { get; set; } = "user";
+    public string ChangeSummary { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

@@ -83,6 +83,40 @@ public sealed record SpriteSheetFrameRecordView(
     int PreviewHeight,
     double Duration);
 
+public sealed record SpriteAnimationReviewView(
+    Guid SpriteSheetId,
+    int FrameCount,
+    int Rows,
+    int Columns,
+    int Fps,
+    bool Loop,
+    SpriteAnimationMetricsView Metrics,
+    IReadOnlyList<SpriteAnimationReviewImageView> Images);
+
+public sealed record SpriteAnimationMetricsView(
+    IReadOnlyList<SpriteAnimationFramePairMetricsView> FramePairs,
+    double MeanCentroidDrift,
+    double MaxCentroidDrift,
+    double AreaVariancePercent);
+
+public sealed record SpriteAnimationFramePairMetricsView(
+    int FromFrame,
+    int ToFrame,
+    bool LoopSeam,
+    double CentroidDeltaX,
+    double CentroidDeltaY,
+    double CentroidDistance,
+    int BoundingBoxWidthDelta,
+    int BoundingBoxHeightDelta,
+    double SilhouetteAreaChangePercent,
+    double ForegroundPixelDiffPercent);
+
+public sealed record SpriteAnimationReviewImageView(
+    string Label,
+    string FileName,
+    string ContentType,
+    string DataUrl);
+
 public sealed record SpriteSheetFrameView(
     int Index,
     string Label,
@@ -377,7 +411,9 @@ public sealed record SavePromptRecipeRequest(
     string PreferredProvider,
     string PreferredModel,
     string PreferredSize,
-    string Notes);
+    string Notes,
+    string Source = "user",
+    string ChangeSummary = "");
 
 public sealed record UpdatePromptRecipeRequest(
     string Name,
@@ -389,4 +425,15 @@ public sealed record UpdatePromptRecipeRequest(
     string PreferredProvider,
     string PreferredModel,
     string PreferredSize,
-    string Notes);
+    string Notes,
+    string Source = "user",
+    string ChangeSummary = "");
+
+public sealed record PromptRecipeVersionView(
+    Guid Id,
+    Guid RecipeId,
+    int Version,
+    string Name,
+    string Source,
+    string ChangeSummary,
+    DateTime CreatedAt);
