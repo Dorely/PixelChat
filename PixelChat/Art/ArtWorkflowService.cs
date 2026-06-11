@@ -24,6 +24,10 @@ public sealed class ArtWorkflowService(
     };
 
     private sealed record ImagePayload(string ContentType, byte[] Data, int Width, int Height);
+    private sealed record RecipePromptGuidance(
+        string PromptTemplate,
+        string StyleRulesJson,
+        string AvoidRulesJson);
 
     public async Task<ProjectView> EnsureDefaultProjectAsync(CancellationToken cancellationToken = default)
     {
@@ -101,9 +105,12 @@ public sealed class ArtWorkflowService(
             .ThenBy(a => a.CreatedAt)
             .ToListAsync(cancellationToken);
 
+        var currentRecipeVersions = await LoadCurrentRecipeVersionsAsync(selected.Id, recipes.Select(recipe => recipe.Id).ToList(), cancellationToken);
         var assetViews = assets.Select(AssetView).ToList();
         var batchViews = batches.Select(batch => BatchView(batch, assets)).ToList();
-        var recipeViews = recipes.Select(RecipeView).ToList();
+        var recipeViews = recipes
+            .Select(recipe => RecipeView(recipe, currentRecipeVersions.GetValueOrDefault(recipe.Id)))
+            .ToList();
         var spriteSheetFramesBySheet = spriteSheetFrameRecords
             .GroupBy(frame => frame.SpriteSheetDefinitionId)
             .ToDictionary(group => group.Key, group => (IReadOnlyList<SpriteSheetFrameRecord>)group.ToList());
@@ -234,10 +241,11 @@ public sealed class ArtWorkflowService(
             .OrderBy(r => r.Name)
             .Take(max)
             .ToListAsync(cancellationToken);
+        var currentRecipeVersions = await LoadCurrentRecipeVersionsAsync(projectId, results.Select(recipe => recipe.Id).ToList(), cancellationToken);
 
         return JsonSerializer.Serialize(new
         {
-            recipes = results.Select(CompactRecipe),
+            recipes = results.Select(recipe => CompactRecipe(recipe, currentRecipeVersions.GetValueOrDefault(recipe.Id))),
             returned = results.Count,
             limit = max,
             note = "Use read_recipe with a recipe id for full reusable guidance.",
@@ -251,7 +259,8 @@ public sealed class ArtWorkflowService(
             .FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
             ?? throw new InvalidOperationException("Prompt recipe was not found.");
 
-        return JsonSerializer.Serialize(RecipeView(recipe), JsonOptions);
+        var currentVersion = await GetCurrentRecipeVersionAsync(recipe.Id, cancellationToken) ?? 0;
+        return JsonSerializer.Serialize(RecipeView(recipe, currentVersion), JsonOptions);
     }
 
     public async Task<string> ListGenerationBatchesJsonAsync(
@@ -675,6 +684,7 @@ public sealed class ArtWorkflowService(
             source.Id,
             source.SourceBatchId,
             source.SourcePromptRecipeId,
+            source.SourcePromptRecipeVersion,
             source.Prompt,
             new
             {
@@ -1019,14 +1029,20 @@ public sealed class ArtWorkflowService(
         var project = await GetProjectAsync(projectId, cancellationToken);
         var prompt = CleanRequired(request.Prompt, "Prompt is required.");
         var count = ClampCount(request.Count);
-        var references = await ResolveAssetsAsync(projectId, request.ReferenceAssetIds, cancellationToken);
-        if (references.Count > imageOptions.Value.MaxReferenceImages)
+        var explicitReferences = await ResolveAssetsAsync(projectId, request.ReferenceAssetIds, cancellationToken);
+        if (explicitReferences.Count > imageOptions.Value.MaxReferenceImages)
             throw new InvalidOperationException($"Select no more than {imageOptions.Value.MaxReferenceImages} reference images.");
 
         PromptRecipe? recipe = null;
+        int? promptRecipeVersion = null;
         if (request.PromptRecipeId is Guid recipeId)
+        {
             recipe = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
                 ?? throw new InvalidOperationException("Prompt recipe was not found.");
+            promptRecipeVersion = await GetCurrentRecipeVersionAsync(recipe.Id, cancellationToken);
+        }
+
+        var references = await MergeRecipeExampleReferenceAsync(projectId, recipe, explicitReferences, excludedAssetId: null, cancellationToken);
 
         var batch = new GenerationBatch
         {
@@ -1043,6 +1059,7 @@ public sealed class ArtWorkflowService(
             InputAssetIdsJson = SerializeIds(references.Select(a => a.Id)),
             ParentBatchId = request.ParentBatchId,
             PromptRecipeId = recipe?.Id,
+            PromptRecipeVersion = promptRecipeVersion,
             Status = GenerationBatchStatus.Running,
             OutputStatesJson = SerializeOutputStates(CreateInitialOutputStates(count)),
         };
@@ -1077,9 +1094,7 @@ public sealed class ArtWorkflowService(
         var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken)
             ?? throw new InvalidOperationException("Generation batch was not found.");
         var references = await ResolveAssetsAsync(projectId, DeserializeIds(batch.InputAssetIdsJson), cancellationToken);
-        var recipe = batch.PromptRecipeId is Guid recipeId
-            ? await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
-            : null;
+        var recipeGuidance = await LoadRecipePromptGuidanceForBatchAsync(projectId, batch, cancellationToken);
 
         logger.LogDebug(
             "Image generation output starting: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, promptChars={PromptChars}",
@@ -1096,7 +1111,7 @@ public sealed class ArtWorkflowService(
         try
         {
             providerResult = await imageProvider.GenerateAsync(new ImageProviderGenerateRequest(
-                BuildPrompt(batch.Prompt, batch.NegativePrompt, recipe, batch.Background),
+                BuildPrompt(batch.Prompt, batch.NegativePrompt, recipeGuidance, batch.Background),
                 Clean(batch.NegativePrompt),
                 batch.Size,
                 1,
@@ -1137,11 +1152,13 @@ public sealed class ArtWorkflowService(
             image.Data,
             parentAssetId: null,
             sourceBatchId: batch.Id,
-            promptRecipeId: recipe?.Id,
+            promptRecipeId: batch.PromptRecipeId,
+            promptRecipeVersion: batch.PromptRecipeVersion,
             prompt: batch.Prompt,
             metadata: new
             {
                 OutputIndex = outputIndex,
+                batch.PromptRecipeVersion,
                 image.RevisedPrompt,
                 image.ResponseId,
                 image.CallId,
@@ -1418,13 +1435,21 @@ public sealed class ArtWorkflowService(
         var referenceIds = request.ReferenceAssetIds
             .Where(id => id != sourceAsset.Id)
             .ToList();
-        var references = await ResolveAssetsAsync(projectId, referenceIds, cancellationToken);
+        var explicitReferences = await ResolveAssetsAsync(projectId, referenceIds, cancellationToken);
+        if (explicitReferences.Count > imageOptions.Value.MaxReferenceImages)
+            throw new InvalidOperationException($"Select no more than {imageOptions.Value.MaxReferenceImages} reference images.");
         var count = ClampCount(request.Count);
 
         PromptRecipe? recipe = null;
+        int? promptRecipeVersion = null;
         if (request.PromptRecipeId is Guid recipeId)
+        {
             recipe = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
                 ?? throw new InvalidOperationException("Prompt recipe was not found.");
+            promptRecipeVersion = await GetCurrentRecipeVersionAsync(recipe.Id, cancellationToken);
+        }
+
+        var references = await MergeRecipeExampleReferenceAsync(projectId, recipe, explicitReferences, sourceAsset.Id, cancellationToken);
 
         var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
         ImageMask? storedMask = null;
@@ -1459,6 +1484,7 @@ public sealed class ArtWorkflowService(
             EditSourceHeight = sourceImage.Height,
             ParentBatchId = sourceAsset.SourceBatchId,
             PromptRecipeId = recipe?.Id,
+            PromptRecipeVersion = promptRecipeVersion,
             Status = GenerationBatchStatus.Running,
             OutputStatesJson = SerializeOutputStates(CreateInitialOutputStates(count)),
         };
@@ -1506,9 +1532,7 @@ public sealed class ArtWorkflowService(
             ?? throw new InvalidOperationException("Source asset was not found.");
         var references = await ResolveAssetsAsync(projectId, inputAssetIds.Skip(1).ToList(), cancellationToken);
         var sourceImage = ResolveStoredEditSourceImage(batch, sourceAsset);
-        var recipe = batch.PromptRecipeId is Guid recipeId
-            ? await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
-            : null;
+        var recipeGuidance = await LoadRecipePromptGuidanceForBatchAsync(projectId, batch, cancellationToken);
 
         ImageMask? storedMask = null;
         var inputMaskId = DeserializeIds(batch.InputMaskIdsJson).FirstOrDefault();
@@ -1536,7 +1560,7 @@ public sealed class ArtWorkflowService(
         try
         {
             providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
-                BuildPrompt(batch.Prompt, string.Empty, recipe, batch.Background),
+                BuildPrompt(batch.Prompt, string.Empty, recipeGuidance, batch.Background),
                 batch.Size,
                 1,
                 batch.MainlineModel,
@@ -1578,11 +1602,13 @@ public sealed class ArtWorkflowService(
             image.Data,
             sourceAsset.Id,
             batch.Id,
-            recipe?.Id,
+            batch.PromptRecipeId,
+            batch.PromptRecipeVersion,
             batch.Prompt,
             new
             {
                 OutputIndex = outputIndex,
+                batch.PromptRecipeVersion,
                 image.RevisedPrompt,
                 image.ResponseId,
                 image.CallId,
@@ -1625,6 +1651,7 @@ public sealed class ArtWorkflowService(
             parentAssetId: null,
             sourceBatchId: null,
             promptRecipeId: null,
+            promptRecipeVersion: null,
             prompt: string.Empty,
             metadata: new { Source = "import" });
         await db.ArtAssets.AddAsync(asset, cancellationToken);
@@ -1649,6 +1676,7 @@ public sealed class ArtWorkflowService(
             parent.Id,
             parent.SourceBatchId,
             parent.SourcePromptRecipeId,
+            parent.SourcePromptRecipeVersion,
             parent.Prompt,
             new { ParentAssetId = parent.Id });
         await db.ArtAssets.AddAsync(asset, cancellationToken);
@@ -1705,6 +1733,7 @@ public sealed class ArtWorkflowService(
     public async Task<PromptRecipeView> SavePromptRecipeAsync(Guid projectId, SavePromptRecipeRequest request, CancellationToken cancellationToken = default)
     {
         _ = await GetProjectAsync(projectId, cancellationToken);
+        await ValidateRecipeExampleAssetAsync(projectId, request.ExampleAssetId, cancellationToken);
         var recipe = new PromptRecipe
         {
             ProjectId = projectId,
@@ -1712,9 +1741,9 @@ public sealed class ArtWorkflowService(
         };
         ApplyRecipeRequest(recipe, request);
         await db.PromptRecipes.AddAsync(recipe, cancellationToken);
-        await AppendPromptRecipeVersionAsync(recipe, request.Source, request.ChangeSummary, cancellationToken);
+        var version = await AppendPromptRecipeVersionAsync(recipe, request.Source, request.ChangeSummary, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-        return RecipeView(recipe);
+        return RecipeView(recipe, version);
     }
 
     public async Task<PromptRecipeView> UpdatePromptRecipeAsync(
@@ -1726,11 +1755,12 @@ public sealed class ArtWorkflowService(
         var recipe = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
             ?? throw new InvalidOperationException("Prompt recipe was not found.");
 
+        await ValidateRecipeExampleAssetAsync(projectId, request.ExampleAssetId, cancellationToken);
         ApplyRecipeRequest(recipe, request);
         recipe.UpdatedAt = DateTime.UtcNow;
-        await AppendPromptRecipeVersionAsync(recipe, request.Source, request.ChangeSummary, cancellationToken);
+        var version = await AppendPromptRecipeVersionAsync(recipe, request.Source, request.ChangeSummary, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-        return RecipeView(recipe);
+        return RecipeView(recipe, version);
     }
 
     public async Task<PromptRecipeView> DuplicatePromptRecipeAsync(
@@ -1743,6 +1773,12 @@ public sealed class ArtWorkflowService(
     {
         var sourceRecipe = await db.PromptRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
             ?? throw new InvalidOperationException("Prompt recipe was not found.");
+        var exampleAssetId = sourceRecipe.ExampleAssetId;
+        if (exampleAssetId is Guid sourceExampleAssetId
+            && !await db.ArtAssets.AnyAsync(a => a.ProjectId == projectId && a.Id == sourceExampleAssetId, cancellationToken))
+        {
+            exampleAssetId = null;
+        }
 
         var duplicate = new PromptRecipe
         {
@@ -1752,7 +1788,7 @@ public sealed class ArtWorkflowService(
             PromptTemplate = sourceRecipe.PromptTemplate,
             StyleRulesJson = sourceRecipe.StyleRulesJson,
             AvoidRulesJson = sourceRecipe.AvoidRulesJson,
-            ExampleAssetIdsJson = sourceRecipe.ExampleAssetIdsJson,
+            ExampleAssetId = exampleAssetId,
             PreferredProvider = sourceRecipe.PreferredProvider,
             PreferredModel = sourceRecipe.PreferredModel,
             PreferredSize = sourceRecipe.PreferredSize,
@@ -1760,13 +1796,13 @@ public sealed class ArtWorkflowService(
             Notes = sourceRecipe.Notes,
         };
         await db.PromptRecipes.AddAsync(duplicate, cancellationToken);
-        await AppendPromptRecipeVersionAsync(
+        var version = await AppendPromptRecipeVersionAsync(
             duplicate,
             source,
             string.IsNullOrWhiteSpace(changeSummary) ? $"Duplicated from recipe '{sourceRecipe.Name}'." : changeSummary,
             cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-        return RecipeView(duplicate);
+        return RecipeView(duplicate, version);
     }
 
     public async Task<IReadOnlyList<PromptRecipeVersionView>> ListPromptRecipeVersionsAsync(
@@ -1814,10 +1850,15 @@ public sealed class ArtWorkflowService(
             ?? throw new InvalidOperationException("Prompt recipe version was not found.");
 
         ApplyRecipeSnapshot(recipe, snapshot);
+        if (recipe.ExampleAssetId is Guid exampleAssetId
+            && !await db.ArtAssets.AnyAsync(a => a.ProjectId == projectId && a.Id == exampleAssetId, cancellationToken))
+        {
+            recipe.ExampleAssetId = null;
+        }
         recipe.UpdatedAt = DateTime.UtcNow;
-        await AppendPromptRecipeVersionAsync(recipe, source, $"Reverted to version {version}.", cancellationToken);
+        var newVersion = await AppendPromptRecipeVersionAsync(recipe, source, $"Reverted to version {version}.", cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-        return RecipeView(recipe);
+        return RecipeView(recipe, newVersion);
     }
 
     public async Task DeletePromptRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default)
@@ -1835,13 +1876,19 @@ public sealed class ArtWorkflowService(
             .Where(a => a.ProjectId == projectId && a.SourcePromptRecipeId == recipeId)
             .ToListAsync(cancellationToken);
         foreach (var asset in linkedAssets)
+        {
             asset.SourcePromptRecipeId = null;
+            asset.SourcePromptRecipeVersion = null;
+        }
 
         var linkedBatches = await db.GenerationBatches
             .Where(b => b.ProjectId == projectId && b.PromptRecipeId == recipeId)
             .ToListAsync(cancellationToken);
         foreach (var batch in linkedBatches)
+        {
             batch.PromptRecipeId = null;
+            batch.PromptRecipeVersion = null;
+        }
 
         db.PromptRecipes.Remove(recipe);
         await db.SaveChangesAsync(cancellationToken);
@@ -1880,10 +1927,9 @@ public sealed class ArtWorkflowService(
             .ToListAsync(cancellationToken);
         foreach (var recipe in recipes)
         {
-            var exampleIds = DeserializeIds(recipe.ExampleAssetIdsJson);
-            if (!exampleIds.Remove(assetId))
+            if (recipe.ExampleAssetId != assetId)
                 continue;
-            recipe.ExampleAssetIdsJson = SerializeIds(exampleIds);
+            recipe.ExampleAssetId = null;
             recipe.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -2384,6 +2430,101 @@ public sealed class ArtWorkflowService(
         await db.Projects.FirstOrDefaultAsync(p => p.Id == projectId, cancellationToken)
         ?? throw new InvalidOperationException("Project was not found.");
 
+    private async Task ValidateRecipeExampleAssetAsync(Guid projectId, Guid? exampleAssetId, CancellationToken cancellationToken)
+    {
+        if (exampleAssetId is not Guid assetId)
+            return;
+
+        if (!await db.ArtAssets.AnyAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken))
+            throw new InvalidOperationException("Recipe example image was not found in this project.");
+    }
+
+    private async Task<Dictionary<Guid, int>> LoadCurrentRecipeVersionsAsync(
+        Guid projectId,
+        IReadOnlyList<Guid> recipeIds,
+        CancellationToken cancellationToken)
+    {
+        if (recipeIds.Count == 0)
+            return [];
+
+        var ids = recipeIds.Distinct().ToList();
+        return await db.PromptRecipeVersions
+            .AsNoTracking()
+            .Where(version => version.ProjectId == projectId && ids.Contains(version.RecipeId))
+            .GroupBy(version => version.RecipeId)
+            .Select(group => new { RecipeId = group.Key, Version = group.Max(version => version.Version) })
+            .ToDictionaryAsync(item => item.RecipeId, item => item.Version, cancellationToken);
+    }
+
+    private async Task<int?> GetCurrentRecipeVersionAsync(Guid recipeId, CancellationToken cancellationToken) =>
+        await db.PromptRecipeVersions
+            .AsNoTracking()
+            .Where(version => version.RecipeId == recipeId)
+            .Select(version => (int?)version.Version)
+            .MaxAsync(cancellationToken);
+
+    private async Task<List<ArtAsset>> MergeRecipeExampleReferenceAsync(
+        Guid projectId,
+        PromptRecipe? recipe,
+        IReadOnlyList<ArtAsset> explicitReferences,
+        Guid? excludedAssetId,
+        CancellationToken cancellationToken)
+    {
+        var maxReferences = Math.Max(0, imageOptions.Value.MaxReferenceImages);
+        var references = new List<ArtAsset>();
+        if (maxReferences == 0)
+            return references;
+
+        if (recipe?.ExampleAssetId is Guid exampleAssetId && exampleAssetId != excludedAssetId)
+        {
+            var example = await db.ArtAssets
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == exampleAssetId, cancellationToken);
+            if (example is not null)
+                references.Add(example);
+        }
+
+        foreach (var reference in explicitReferences)
+        {
+            if (reference.Id == excludedAssetId || references.Any(existing => existing.Id == reference.Id))
+                continue;
+            references.Add(reference);
+            if (references.Count >= maxReferences)
+                break;
+        }
+
+        return references;
+    }
+
+    private async Task<RecipePromptGuidance?> LoadRecipePromptGuidanceForBatchAsync(
+        Guid projectId,
+        GenerationBatch batch,
+        CancellationToken cancellationToken)
+    {
+        if (batch.PromptRecipeId is not Guid recipeId)
+            return null;
+
+        if (batch.PromptRecipeVersion is int version)
+        {
+            var snapshot = await db.PromptRecipeVersions
+                .AsNoTracking()
+                .FirstOrDefaultAsync(v => v.ProjectId == projectId && v.RecipeId == recipeId && v.Version == version, cancellationToken);
+            if (snapshot is not null)
+                return RecipeGuidance(snapshot);
+        }
+
+        var recipe = await db.PromptRecipes
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken);
+        return recipe is null ? null : RecipeGuidance(recipe);
+    }
+
+    private static RecipePromptGuidance RecipeGuidance(PromptRecipe recipe) =>
+        new(recipe.PromptTemplate, recipe.StyleRulesJson, recipe.AvoidRulesJson);
+
+    private static RecipePromptGuidance RecipeGuidance(PromptRecipeVersion version) =>
+        new(version.PromptTemplate, version.StyleRulesJson, version.AvoidRulesJson);
+
     private async Task<List<ArtAsset>> ResolveAssetsAsync(Guid projectId, IReadOnlyList<Guid> assetIds, CancellationToken cancellationToken)
     {
         var ids = assetIds.Distinct().ToList();
@@ -2437,6 +2578,7 @@ public sealed class ArtWorkflowService(
         Guid? parentAssetId,
         Guid? sourceBatchId,
         Guid? promptRecipeId,
+        int? promptRecipeVersion,
         string prompt,
         object metadata)
     {
@@ -2454,12 +2596,13 @@ public sealed class ArtWorkflowService(
             ParentAssetId = parentAssetId,
             SourceBatchId = sourceBatchId,
             SourcePromptRecipeId = promptRecipeId,
+            SourcePromptRecipeVersion = promptRecipeVersion,
             Prompt = prompt,
             SourceMetadataJson = JsonSerializer.Serialize(metadata, JsonOptions),
         };
     }
 
-    private static string BuildPrompt(string prompt, string negativePrompt, PromptRecipe? recipe, string? background)
+    private static string BuildPrompt(string prompt, string negativePrompt, RecipePromptGuidance? recipe, string? background)
     {
         var parts = new List<string>();
         if (recipe is not null)
@@ -2509,7 +2652,7 @@ public sealed class ArtWorkflowService(
         recipe.PromptTemplate = CleanRequired(request.PromptTemplate, "Prompt template is required.");
         recipe.StyleRulesJson = SerializeStrings(request.StyleRules);
         recipe.AvoidRulesJson = SerializeStrings(request.AvoidRules);
-        recipe.ExampleAssetIdsJson = SerializeIds(request.ExampleAssetIds);
+        recipe.ExampleAssetId = request.ExampleAssetId;
         recipe.PreferredProvider = Clean(request.PreferredProvider);
         recipe.PreferredModel = Clean(request.PreferredModel);
         recipe.PreferredSize = Clean(request.PreferredSize);
@@ -2523,14 +2666,14 @@ public sealed class ArtWorkflowService(
         recipe.PromptTemplate = CleanRequired(request.PromptTemplate, "Prompt template is required.");
         recipe.StyleRulesJson = SerializeStrings(request.StyleRules);
         recipe.AvoidRulesJson = SerializeStrings(request.AvoidRules);
-        recipe.ExampleAssetIdsJson = SerializeIds(request.ExampleAssetIds);
+        recipe.ExampleAssetId = request.ExampleAssetId;
         recipe.PreferredProvider = Clean(request.PreferredProvider);
         recipe.PreferredModel = Clean(request.PreferredModel);
         recipe.PreferredSize = Clean(request.PreferredSize);
         recipe.Notes = Clean(request.Notes);
     }
 
-    private async Task AppendPromptRecipeVersionAsync(
+    private async Task<int> AppendPromptRecipeVersionAsync(
         PromptRecipe recipe,
         string? source,
         string? changeSummary,
@@ -2546,17 +2689,18 @@ public sealed class ArtWorkflowService(
             ? $"Saved by {normalizedSource}."
             : changeSummary.Trim();
 
+        var nextVersion = latestVersion + 1;
         await db.PromptRecipeVersions.AddAsync(new PromptRecipeVersion
         {
             ProjectId = recipe.ProjectId,
             RecipeId = recipe.Id,
-            Version = latestVersion + 1,
+            Version = nextVersion,
             Name = recipe.Name,
             AssetType = recipe.AssetType,
             PromptTemplate = recipe.PromptTemplate,
             StyleRulesJson = recipe.StyleRulesJson,
             AvoidRulesJson = recipe.AvoidRulesJson,
-            ExampleAssetIdsJson = recipe.ExampleAssetIdsJson,
+            ExampleAssetId = recipe.ExampleAssetId,
             PreferredProvider = recipe.PreferredProvider,
             PreferredModel = recipe.PreferredModel,
             PreferredSize = recipe.PreferredSize,
@@ -2566,6 +2710,7 @@ public sealed class ArtWorkflowService(
             ChangeSummary = normalizedSummary,
             CreatedAt = DateTime.UtcNow,
         }, cancellationToken);
+        return nextVersion;
     }
 
     private static void ApplyRecipeSnapshot(PromptRecipe recipe, PromptRecipeVersion snapshot)
@@ -2575,7 +2720,7 @@ public sealed class ArtWorkflowService(
         recipe.PromptTemplate = snapshot.PromptTemplate;
         recipe.StyleRulesJson = snapshot.StyleRulesJson;
         recipe.AvoidRulesJson = snapshot.AvoidRulesJson;
-        recipe.ExampleAssetIdsJson = snapshot.ExampleAssetIdsJson;
+        recipe.ExampleAssetId = snapshot.ExampleAssetId;
         recipe.PreferredProvider = snapshot.PreferredProvider;
         recipe.PreferredModel = snapshot.PreferredModel;
         recipe.PreferredSize = snapshot.PreferredSize;
@@ -2628,6 +2773,7 @@ public sealed class ArtWorkflowService(
         asset.SourceBatchId,
         batchOutputIndex = ReadBatchOutputIndex(asset),
         asset.SourcePromptRecipeId,
+        asset.SourcePromptRecipeVersion,
         asset.IsFavorite,
         asset.Notes,
         promptPreview = Preview(asset.Prompt, 240),
@@ -2647,6 +2793,7 @@ public sealed class ArtWorkflowService(
         asset.SourceBatchId,
         batchOutputIndex = ReadBatchOutputIndex(asset),
         asset.SourcePromptRecipeId,
+        asset.SourcePromptRecipeVersion,
         asset.IsFavorite,
         asset.Notes,
         asset.Prompt,
@@ -2655,15 +2802,16 @@ public sealed class ArtWorkflowService(
         asset.UpdatedAt,
     };
 
-    private static object CompactRecipe(PromptRecipe recipe) => new
+    private static object CompactRecipe(PromptRecipe recipe, int currentVersion) => new
     {
         recipe.Id,
         recipe.Name,
+        currentVersion,
         useCase = recipe.AssetType,
         promptPreview = Preview(recipe.PromptTemplate, 320),
         styleRuleCount = DeserializeStrings(recipe.StyleRulesJson).Count,
         avoidRuleCount = DeserializeStrings(recipe.AvoidRulesJson).Count,
-        exampleAssetIds = DeserializeIds(recipe.ExampleAssetIdsJson),
+        recipe.ExampleAssetId,
         recipe.PreferredProvider,
         recipe.PreferredModel,
         recipe.PreferredSize,
@@ -2685,6 +2833,7 @@ public sealed class ArtWorkflowService(
         outputAssetIds,
         batch.ParentBatchId,
         batch.PromptRecipeId,
+        batch.PromptRecipeVersion,
         promptPreview = Preview(batch.Prompt, 360),
         negativePromptPreview = Preview(batch.NegativePrompt, 220),
         batch.Error,
@@ -2721,6 +2870,8 @@ public sealed class ArtWorkflowService(
         asset.ParentAssetId,
         asset.SourceBatchId,
         asset.IsFavorite,
+        asset.SourcePromptRecipeId,
+        asset.SourcePromptRecipeVersion,
         asset.Notes,
     };
 
@@ -2777,6 +2928,7 @@ public sealed class ArtWorkflowService(
             asset.SourceBatchId,
             ReadBatchOutputIndex(asset),
             asset.SourcePromptRecipeId,
+            asset.SourcePromptRecipeVersion,
             asset.IsFavorite,
             asset.Notes,
             asset.Prompt,
@@ -3011,6 +3163,7 @@ public sealed class ArtWorkflowService(
             outputAssets.Select(a => a.Id).ToList(),
             batch.ParentBatchId,
             batch.PromptRecipeId,
+            batch.PromptRecipeVersion,
             batch.Status,
             displayError,
             outputStates,
@@ -3018,7 +3171,7 @@ public sealed class ArtWorkflowService(
             batch.CreatedAt);
     }
 
-    private static PromptRecipeView RecipeView(PromptRecipe recipe) =>
+    private static PromptRecipeView RecipeView(PromptRecipe recipe, int currentVersion) =>
         new(
             recipe.Id,
             recipe.Name,
@@ -3026,11 +3179,12 @@ public sealed class ArtWorkflowService(
             recipe.PromptTemplate,
             DeserializeStrings(recipe.StyleRulesJson),
             DeserializeStrings(recipe.AvoidRulesJson),
-            DeserializeIds(recipe.ExampleAssetIdsJson),
+            recipe.ExampleAssetId,
             recipe.PreferredProvider,
             recipe.PreferredModel,
             recipe.PreferredSize,
             recipe.Notes,
+            currentVersion,
             recipe.CreatedAt);
 
     private static PromptRecipeVersionView PromptRecipeVersionView(PromptRecipeVersion version) =>
@@ -3041,6 +3195,7 @@ public sealed class ArtWorkflowService(
             version.Name,
             version.Source,
             version.ChangeSummary,
+            version.ExampleAssetId,
             version.CreatedAt);
 
     private static ImageMaskView MaskView(ImageMask mask) =>

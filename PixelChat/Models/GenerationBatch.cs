@@ -27,6 +27,7 @@ public class GenerationBatch
     public ICollection<GenerationBatch> ChildBatches { get; set; } = [];
     public Guid? PromptRecipeId { get; set; }
     public PromptRecipe? PromptRecipe { get; set; }
+    public int? PromptRecipeVersion { get; set; }
     public GenerationBatchStatus Status { get; set; } = GenerationBatchStatus.Queued;
     public string Error { get; set; } = string.Empty;
     public string OutputErrorsJson { get; set; } = "[]";

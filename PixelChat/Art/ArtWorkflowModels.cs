@@ -35,6 +35,7 @@ public sealed record ArtAssetView(
     Guid? SourceBatchId,
     int? BatchOutputIndex,
     Guid? SourcePromptRecipeId,
+    int? SourcePromptRecipeVersion,
     bool IsFavorite,
     string Notes,
     string Prompt,
@@ -291,6 +292,7 @@ public sealed record GenerationBatchView(
     IReadOnlyList<Guid> OutputAssetIds,
     Guid? ParentBatchId,
     Guid? PromptRecipeId,
+    int? PromptRecipeVersion,
     GenerationBatchStatus Status,
     string Error,
     IReadOnlyList<GenerationOutputStateView> OutputStates,
@@ -341,11 +343,12 @@ public sealed record PromptRecipeView(
     string PromptTemplate,
     IReadOnlyList<string> StyleRules,
     IReadOnlyList<string> AvoidRules,
-    IReadOnlyList<Guid> ExampleAssetIds,
+    Guid? ExampleAssetId,
     string PreferredProvider,
     string PreferredModel,
     string PreferredSize,
     string Notes,
+    int CurrentVersion,
     DateTime CreatedAt);
 
 public sealed record ImageMaskView(
@@ -407,7 +410,7 @@ public sealed record SavePromptRecipeRequest(
     string PromptTemplate,
     IReadOnlyList<string> StyleRules,
     IReadOnlyList<string> AvoidRules,
-    IReadOnlyList<Guid> ExampleAssetIds,
+    Guid? ExampleAssetId,
     string PreferredProvider,
     string PreferredModel,
     string PreferredSize,
@@ -421,7 +424,7 @@ public sealed record UpdatePromptRecipeRequest(
     string PromptTemplate,
     IReadOnlyList<string> StyleRules,
     IReadOnlyList<string> AvoidRules,
-    IReadOnlyList<Guid> ExampleAssetIds,
+    Guid? ExampleAssetId,
     string PreferredProvider,
     string PreferredModel,
     string PreferredSize,
@@ -436,4 +439,5 @@ public sealed record PromptRecipeVersionView(
     string Name,
     string Source,
     string ChangeSummary,
+    Guid? ExampleAssetId,
     DateTime CreatedAt);

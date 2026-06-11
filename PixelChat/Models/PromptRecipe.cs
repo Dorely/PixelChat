@@ -12,7 +12,7 @@ public class PromptRecipe
     public string PromptTemplate { get; set; } = string.Empty;
     public string StyleRulesJson { get; set; } = "[]";
     public string AvoidRulesJson { get; set; } = "[]";
-    public string ExampleAssetIdsJson { get; set; } = "[]";
+    public Guid? ExampleAssetId { get; set; }
     public string PreferredProvider { get; set; } = string.Empty;
     public string PreferredModel { get; set; } = string.Empty;
     public string PreferredSize { get; set; } = string.Empty;

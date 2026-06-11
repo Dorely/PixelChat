@@ -59,12 +59,12 @@ public sealed class AssistantToolRegistry(
             method: (string? query = null, int? limit = null) =>
                 workflow.ListPromptRecipesJsonAsync(projectId, query, limit),
             name: "list_recipes",
-            description: "List compact saved prompt recipe summaries for the current project. Use read_recipe for full reusable style and production guidance."),
+            description: "List compact saved prompt recipe summaries for the current project, including current version and single example image id. Use read_recipe for full reusable style and production guidance."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId) => workflow.ReadPromptRecipeJsonAsync(projectId, recipeId),
             name: "read_recipe",
-            description: "Read a saved prompt recipe's full reusable guide, durable rules, avoid rules, notes, preferred defaults, and passive example ids. This is read-only."),
+            description: "Read a saved prompt recipe's full reusable guide, durable rules, avoid rules, notes, preferred defaults, current version, and single example image id. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (Guid? recipeId,
@@ -74,13 +74,13 @@ public sealed class AssistantToolRegistry(
                 string? assetType = null,
                 string[]? styleRules = null,
                 string[]? avoidRules = null,
-                Guid[]? exampleAssetIds = null,
+                Guid? exampleAssetId = null,
                 string? preferredSize = null,
                 string? notes = null,
                 CancellationToken cancellationToken = default) =>
-                SavePromptRecipeToolAsync(projectId, recipeId, name, promptTemplate, changeSummary, assetType, styleRules, avoidRules, exampleAssetIds, preferredSize, notes, cancellationToken),
+                SavePromptRecipeToolAsync(projectId, recipeId, name, promptTemplate, changeSummary, assetType, styleRules, avoidRules, exampleAssetId, preferredSize, notes, cancellationToken),
             name: "save_prompt_recipe",
-            description: "Create or update a durable prompt recipe directly during autonomous iteration. Recipes are reusable style guides, not one-off task prompts. Always provide a meaningful changeSummary. Every save is versioned and revertible."),
+            description: "Create or update a durable prompt recipe directly during autonomous iteration. Recipes are reusable style guides, not one-off task prompts. The optional exampleAssetId is automatically sent as a style reference whenever the recipe is used; when an iteration produces an accepted result, set the best output as the example. Always provide a meaningful changeSummary. Every save is versioned and revertible."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId) => workflow.ListPromptRecipeVersionsJsonAsync(projectId, recipeId),
@@ -117,7 +117,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 RunGenerationRoundAsync(projectId, budget, specificRequest, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId, recipeId, cancellationToken),
             name: "run_generation_round",
-            description: "Run one autonomous generation or edit round and wait for completion. To test recipe changes, first save the recipe revision and pass recipeId. editSourceAssetId switches to image edit mode. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
+            description: "Run one autonomous generation or edit round and wait for completion. To test recipe changes, first save the recipe revision and pass recipeId. The recipe's example image is auto-included as a reference; do not also pass it in referenceAssetIds. editSourceAssetId switches to image edit mode. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
 
         AIFunctionFactory.Create(
             method: (int? limit = null) => workflow.ListSpriteSheetsJsonAsync(projectId, limit),
@@ -185,11 +185,11 @@ public sealed class AssistantToolRegistry(
                 string? assetType = null,
                 string[]? styleRules = null,
                 string[]? avoidRules = null,
-                Guid[]? exampleAssetIds = null,
+                Guid? exampleAssetId = null,
                 string? preferredSize = null,
-                string? notes = null) => DraftPromptRecipeFormAsync(name, promptTemplate, assetType, styleRules, avoidRules, exampleAssetIds, preferredSize, notes),
+                string? notes = null) => DraftPromptRecipeFormAsync(name, promptTemplate, assetType, styleRules, avoidRules, exampleAssetId, preferredSize, notes),
             name: "draft_prompt_recipe_form",
-            description: "Draft values for the prompt recipe editor. Recipes are reusable style and production guides for repeatable asset classes, not specific one-off asset prompts. Keep promptTemplate and styleRules durable across many future requests, and put only reusable constraints in avoidRules. This does not save a recipe; the user reviews the form and clicks Save manually."),
+            description: "Draft values for the prompt recipe editor. Recipes are reusable style and production guides for repeatable asset classes, not specific one-off asset prompts. Use exampleAssetId for the single image that should anchor future recipe generations. Keep promptTemplate and styleRules durable across many future requests, and put only reusable constraints in avoidRules. This does not save a recipe; the user reviews the form and clicks Save manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -289,7 +289,7 @@ public sealed class AssistantToolRegistry(
         string? assetType,
         string[]? styleRules,
         string[]? avoidRules,
-        Guid[]? exampleAssetIds,
+        Guid? exampleAssetId,
         string? preferredSize,
         string? notes,
         CancellationToken cancellationToken)
@@ -303,7 +303,7 @@ public sealed class AssistantToolRegistry(
                 promptTemplate,
                 styleRules ?? [],
                 avoidRules ?? [],
-                exampleAssetIds ?? [],
+                exampleAssetId,
                 "openai-account",
                 string.Empty,
                 string.IsNullOrWhiteSpace(preferredSize) ? "auto" : preferredSize,
@@ -319,7 +319,7 @@ public sealed class AssistantToolRegistry(
                 promptTemplate,
                 styleRules ?? [],
                 avoidRules ?? [],
-                exampleAssetIds ?? [],
+                exampleAssetId,
                 "openai-account",
                 string.Empty,
                 string.IsNullOrWhiteSpace(preferredSize) ? "auto" : preferredSize,
@@ -328,12 +328,12 @@ public sealed class AssistantToolRegistry(
                 changeSummary), cancellationToken);
         }
 
-        var versions = await workflow.ListPromptRecipeVersionsAsync(projectId, saved.Id, cancellationToken);
         return JsonSerializer.Serialize(new
         {
             recipeId = saved.Id,
             recipeName = saved.Name,
-            version = versions.OrderByDescending(version => version.Version).FirstOrDefault()?.Version,
+            version = saved.CurrentVersion,
+            saved.ExampleAssetId,
             message = "Prompt recipe saved and versioned.",
         }, JsonOptions);
     }
@@ -345,12 +345,12 @@ public sealed class AssistantToolRegistry(
         CancellationToken cancellationToken)
     {
         var saved = await workflow.RevertPromptRecipeAsync(projectId, recipeId, version, "assistant", cancellationToken);
-        var versions = await workflow.ListPromptRecipeVersionsAsync(projectId, saved.Id, cancellationToken);
         return JsonSerializer.Serialize(new
         {
             recipeId = saved.Id,
             recipeName = saved.Name,
-            version = versions.OrderByDescending(item => item.Version).FirstOrDefault()?.Version,
+            version = saved.CurrentVersion,
+            saved.ExampleAssetId,
             revertedTo = version,
             message = $"Prompt recipe reverted to version {version} as a new version.",
         }, JsonOptions);
@@ -496,7 +496,7 @@ public sealed class AssistantToolRegistry(
             Count: count is int countValue ? ClampCount(countValue) : null,
             PromptRecipeId: recipeId,
             ReferenceAssetIds: referenceAssetIds);
-        return Task.FromResult(JsonSerializer.Serialize(draft));
+        return Task.FromResult(JsonSerializer.Serialize(draft, JsonOptions));
     }
 
     private static Task<string> DraftEditFormAsync(
@@ -513,7 +513,7 @@ public sealed class AssistantToolRegistry(
             Background: NormalizeBackground(background),
             Count: ClampCount(count),
             PromptRecipeId: recipeId);
-        return Task.FromResult(JsonSerializer.Serialize(draft));
+        return Task.FromResult(JsonSerializer.Serialize(draft, JsonOptions));
     }
 
     private static Task<string> DraftPromptRecipeFormAsync(
@@ -522,13 +522,13 @@ public sealed class AssistantToolRegistry(
         string? assetType,
         string[]? styleRules,
         string[]? avoidRules,
-        Guid[]? exampleAssetIds,
+        Guid? exampleAssetId,
         string? preferredSize,
         string? notes)
     {
         var draft = new AssistantFormDraft(
             AssistantFormDraftTarget.Recipe,
-            ReferenceAssetIds: exampleAssetIds ?? [],
+            RecipeExampleAssetId: exampleAssetId,
             RecipeName: name,
             AssetType: assetType ?? string.Empty,
             PromptTemplate: promptTemplate,
@@ -536,7 +536,7 @@ public sealed class AssistantToolRegistry(
             AvoidRules: avoidRules ?? [],
             Notes: notes ?? string.Empty,
             PreferredSize: preferredSize ?? "auto");
-        return Task.FromResult(JsonSerializer.Serialize(draft));
+        return Task.FromResult(JsonSerializer.Serialize(draft, JsonOptions));
     }
 
     private async Task<string> DetectSpriteSheetFramesAsync(

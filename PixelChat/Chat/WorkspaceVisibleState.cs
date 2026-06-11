@@ -88,8 +88,8 @@ public sealed record WorkspaceRecipeVisibleState(
     string AvoidRules,
     string Notes,
     string PreferredSize,
-    IReadOnlyList<Guid> ExampleAssetIds,
-    IReadOnlyList<WorkspaceAssetSummary> ExampleAssets);
+    Guid? ExampleAssetId,
+    WorkspaceAssetSummary? ExampleAsset);
 
 public sealed record WorkspaceAssetsVisibleState(
     string Organization,
@@ -106,6 +106,7 @@ public sealed record WorkspaceAssetSummary(
     Guid? SourceBatchId,
     int? BatchOutputIndex,
     Guid? SourcePromptRecipeId,
+    int? SourcePromptRecipeVersion,
     bool IsFavorite,
     string Notes,
     string PromptPreview,
@@ -119,6 +120,7 @@ public sealed record WorkspaceBatchSummary(
     string Background,
     int Count,
     Guid? PromptRecipeId,
+    int? PromptRecipeVersion,
     IReadOnlyList<Guid> InputAssetIds,
     IReadOnlyList<Guid> OutputAssetIds,
     Guid? ParentBatchId,

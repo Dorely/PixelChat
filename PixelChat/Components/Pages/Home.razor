@@ -138,7 +138,7 @@ else
 
     private readonly List<ChatRenderableMessage> _messages = [];
     private readonly HashSet<Guid> _draftReferenceAssetIds = [];
-    private readonly HashSet<Guid> _recipeExampleAssetIds = [];
+    private Guid? _recipeExampleAssetId;
     private WorkbenchView? _workbench;
     private ImageGenerationRuntimeSnapshot _generationRuntimeSnapshot = new([]);
     private ChatLiveTurn? _live;
@@ -266,7 +266,8 @@ else
         if (_exportAsset is { } exportAsset && !_workbench.Assets.Any(asset => asset.Id == exportAsset.Id))
             ResetExportModal();
         _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
-        _recipeExampleAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
+        if (_recipeExampleAssetId is Guid recipeExampleAssetId && !_workbench.Assets.Any(asset => asset.Id == recipeExampleAssetId))
+            _recipeExampleAssetId = null;
         await RefreshRecipeEditorAfterWorkbenchReloadAsync();
         PublishVisibleState();
     }
@@ -656,8 +657,8 @@ else
     private RenderFragment RenderRecipesWorkspace() => __builder =>
     {
         var selectedRecipe = SelectedRecipeForEditor();
-        var exampleAssets = RecipeExampleAssets().ToList();
-        var outputAssets = RecipeOutputAssets(selectedRecipe?.Id ?? _editingRecipeId).ToList();
+        var exampleAsset = RecipeExampleAsset();
+        var outputGroups = RecipeOutputGroups(selectedRecipe?.Id ?? _editingRecipeId);
         var relatedBatches = RecipeBatches(selectedRecipe?.Id ?? _editingRecipeId).ToList();
 
         <div class="workspace-panel recipes-panel">
@@ -780,59 +781,39 @@ else
                         }
 
                         <section>
-                            <div class="section-title">Example Images</div>
-                            @if (_workbench.Assets.Count == 0)
+                            <div class="section-title">Example Image</div>
+                            @if (exampleAsset is null)
                             {
-                                <div class="empty-context">No assets available.</div>
-                            }
-                            else
-                            {
-                                <div class="recipe-example-picker">
-                                    @foreach (var asset in _workbench.Assets.Take(24))
-                                    {
-                                        <label class="recipe-example-option @(IsRecipeExample(asset.Id) ? "is-selected" : "")">
-                                            <input type="checkbox"
-                                                   checked="@IsRecipeExample(asset.Id)"
-                                                   @onchange="args => ToggleRecipeExample(asset.Id, args)" />
-                                            <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
-                                            <span>@asset.Label</span>
-                                        </label>
-                                    }
-                                </div>
-                            }
-                        </section>
-
-                        <section>
-                            <div class="section-title">Passive Example Images</div>
-                            @if (exampleAssets.Count == 0)
-                            {
-                                <div class="empty-context">No example images selected.</div>
+                                <div class="empty-context">No example image selected.</div>
                             }
                             else
                             {
                                 <div class="recipe-image-grid">
-                                    @foreach (var asset in exampleAssets)
-                                    {
-                                        @RenderAssetCard(asset, compact: true)
-                                    }
+                                    @RenderAssetCard(exampleAsset, compact: true)
                                 </div>
                             }
                         </section>
 
                         <section>
                             <div class="section-title">Generated Outputs</div>
-                            @if (outputAssets.Count == 0)
+                            @if (outputGroups.Count == 0)
                             {
                                 <div class="empty-context">No generated or edited outputs linked to this recipe.</div>
                             }
                             else
                             {
-                                <div class="recipe-image-grid">
-                                    @foreach (var asset in outputAssets)
-                                    {
-                                        @RenderAssetCard(asset, compact: true)
-                                    }
-                                </div>
+                                @foreach (var group in outputGroups)
+                                {
+                                    <div class="recipe-output-group">
+                                        <div class="recipe-output-group-title">@group.Label</div>
+                                        <div class="recipe-image-grid">
+                                            @foreach (var asset in group.Assets)
+                                            {
+                                                @RenderAssetCard(asset, compact: true, canSetRecipeExample: true)
+                                            }
+                                        </div>
+                                    </div>
+                                }
                             }
                         </section>
 
@@ -849,7 +830,7 @@ else
                                     {
                                         <button type="button" class="batch-row" @onclick="() => SelectBatchAsync(batch.Id)">
                                             <span>@batch.Label</span>
-                                            <span>@batch.Status</span>
+                                            <span>@BatchRecipeVersionLabel(batch) / @batch.Status</span>
                                         </button>
                                     }
                                 </div>
@@ -951,7 +932,7 @@ else
         </div>
     };
 
-    private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact) => __builder =>
+    private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact, bool canSetRecipeExample = false) => __builder =>
     {
         <article class="asset-card @(compact ? "asset-card-compact" : "")">
             <button type="button"
@@ -978,6 +959,10 @@ else
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenSpriteSheetAsync(asset)">Sprite Sheet</button>
+                    @if (canSetRecipeExample && _editingRecipeId is not null)
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!CanSaveRecipe)" @onclick="() => SetRecipeExampleFromOutputAsync(asset.Id)">Set as example</button>
+                    }
                     <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => AskDeleteAsset(asset.Id)">Delete</button>
                     <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => OpenExportAsync(asset)">Export</button>
                 </div>
@@ -1297,7 +1282,7 @@ else
             RecipePromptTemplateForSave(),
             SplitLines(_recipeStyleRules),
             SplitLines(_recipeAvoidRules),
-            _recipeExampleAssetIds.ToList(),
+            _recipeExampleAssetId,
             "openai-account",
             string.Empty,
             _recipePreferredSize,
@@ -1313,7 +1298,7 @@ else
                     request.PromptTemplate,
                     request.StyleRules,
                     request.AvoidRules,
-                    request.ExampleAssetIds,
+                    request.ExampleAssetId,
                     request.PreferredProvider,
                     request.PreferredModel,
                     request.PreferredSize,
@@ -1330,14 +1315,40 @@ else
         });
     }
 
+    private async Task SetRecipeExampleFromOutputAsync(Guid assetId)
+    {
+        if (_workbench is null || _editingRecipeId is not Guid recipeId || !CanSaveRecipe)
+            return;
+
+        await RunWorkflowAsync("Setting recipe example...", async () =>
+        {
+            var updated = await Workflow.UpdatePromptRecipeAsync(_workbench.Project.Id, recipeId, new UpdatePromptRecipeRequest(
+                _recipeName,
+                _recipeAssetType,
+                RecipePromptTemplateForSave(),
+                SplitLines(_recipeStyleRules),
+                SplitLines(_recipeAvoidRules),
+                assetId,
+                "openai-account",
+                string.Empty,
+                _recipePreferredSize,
+                _recipeNotes,
+                "user",
+                "Set example image"));
+            LoadRecipeEditor(updated);
+            await LoadRecipeVersionsAsync(updated.Id);
+        });
+    }
+
     private void NewRecipeDraft()
     {
         ClearRecipeEditor();
         _recipePromptTemplate = string.IsNullOrWhiteSpace(_generatePrompt) ? string.Empty : _generatePrompt;
         _recipeAvoidRules = _negativePrompt;
         _recipePreferredSize = string.IsNullOrWhiteSpace(_generateSize) ? "auto" : _generateSize;
-        foreach (var assetId in CurrentReferenceAssetIds())
-            _recipeExampleAssetIds.Add(assetId);
+        _recipeExampleAssetId = CurrentReferenceAssetIds().FirstOrDefault();
+        if (_recipeExampleAssetId == Guid.Empty)
+            _recipeExampleAssetId = null;
         MarkRecipeEditorDirty();
     }
 
@@ -1351,7 +1362,7 @@ else
         _recipeAvoidRules = string.Empty;
         _recipeNotes = string.Empty;
         _recipePreferredSize = "auto";
-        _recipeExampleAssetIds.Clear();
+        _recipeExampleAssetId = null;
         _recipeVersions = [];
         _loadedRecipeSnapshot = string.Empty;
         _recipeEditorDirty = false;
@@ -1374,9 +1385,7 @@ else
         _recipeAvoidRules = string.Join('\n', recipe.AvoidRules);
         _recipeNotes = recipe.Notes;
         _recipePreferredSize = string.IsNullOrWhiteSpace(recipe.PreferredSize) ? "auto" : recipe.PreferredSize;
-        _recipeExampleAssetIds.Clear();
-        foreach (var assetId in recipe.ExampleAssetIds)
-            _recipeExampleAssetIds.Add(assetId);
+        _recipeExampleAssetId = recipe.ExampleAssetId;
         _loadedRecipeSnapshot = RecipeSnapshot(recipe);
         _recipeEditorDirty = false;
         _recipeChangedExternally = false;
@@ -2691,7 +2700,8 @@ else
         {
             await Workflow.DeleteAssetAsync(_workbench.Project.Id, assetId);
             _draftReferenceAssetIds.Remove(assetId);
-            _recipeExampleAssetIds.Remove(assetId);
+            if (_recipeExampleAssetId == assetId)
+                _recipeExampleAssetId = null;
             if (_editAssetId == assetId)
                 _editAssetId = null;
             _assetDeleteCandidateId = null;
@@ -2945,7 +2955,7 @@ else
                 _recipeAvoidRules = string.Join('\n', draft.AvoidRules ?? Array.Empty<string>());
                 _recipeNotes = draft.Notes ?? string.Empty;
                 _recipePreferredSize = NormalizeDraftSize(draft.PreferredSize ?? draft.Size, _recipePreferredSize);
-                SetRecipeExamples(draft.ReferenceAssetIds);
+                SetRecipeExample(draft.RecipeExampleAssetId);
                 _recipeEditorDirty = true;
                 _recipeChangedExternally = false;
                 _loadedRecipeSnapshot = string.Empty;
@@ -3179,8 +3189,8 @@ else
             _recipeAvoidRules,
             _recipeNotes,
             _recipePreferredSize,
-            _recipeExampleAssetIds.ToList(),
-            RecipeExampleAssets().Select(AssetSummary).ToList());
+            _recipeExampleAssetId,
+            RecipeExampleAsset() is { } exampleAsset ? AssetSummary(exampleAsset) : null);
 
     private WorkspaceAssetsVisibleState BuildAssetsVisibleState() =>
         new(
@@ -3211,6 +3221,7 @@ else
             asset.SourceBatchId,
             asset.BatchOutputIndex,
             asset.SourcePromptRecipeId,
+            asset.SourcePromptRecipeVersion,
             asset.IsFavorite,
             asset.Notes,
             Preview(asset.Prompt, 240),
@@ -3225,6 +3236,7 @@ else
             batch.Background,
             batch.Count,
             batch.PromptRecipeId,
+            batch.PromptRecipeVersion,
             batch.InputAssetIds,
             batch.OutputAssetIds,
             batch.ParentBatchId,
@@ -3275,15 +3287,14 @@ else
             _draftReferenceAssetIds.Add(assetId);
     }
 
-    private void SetRecipeExamples(IReadOnlyList<Guid>? assetIds)
+    private void SetRecipeExample(Guid? assetId)
     {
-        _recipeExampleAssetIds.Clear();
-        if (_workbench is null || assetIds is null)
+        _recipeExampleAssetId = null;
+        if (_workbench is null || assetId is not Guid id)
             return;
 
-        var validIds = _workbench.Assets.Select(asset => asset.Id).ToHashSet();
-        foreach (var assetId in assetIds.Where(validIds.Contains))
-            _recipeExampleAssetIds.Add(assetId);
+        if (_workbench.Assets.Any(asset => asset.Id == id))
+            _recipeExampleAssetId = id;
     }
 
     private Guid? ValidRecipeId(Guid? recipeId)
@@ -3442,30 +3453,34 @@ else
             ? _workbench?.Recipes.FirstOrDefault(recipe => recipe.Id == recipeId)
             : null;
 
-    private IEnumerable<ArtAssetView> RecipeExampleAssets() =>
-        _workbench?.Assets.Where(asset => _recipeExampleAssetIds.Contains(asset.Id)) ?? Enumerable.Empty<ArtAssetView>();
+    private ArtAssetView? RecipeExampleAsset() =>
+        _recipeExampleAssetId is Guid assetId
+            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId)
+            : null;
 
     private IEnumerable<ArtAssetView> RecipeOutputAssets(Guid? recipeId) =>
         recipeId is Guid id
             ? _workbench?.Assets.Where(asset => asset.SourcePromptRecipeId == id) ?? Enumerable.Empty<ArtAssetView>()
             : Enumerable.Empty<ArtAssetView>();
 
+    private IReadOnlyList<RecipeOutputGroup> RecipeOutputGroups(Guid? recipeId) =>
+        RecipeOutputAssets(recipeId)
+            .GroupBy(asset => asset.SourcePromptRecipeVersion)
+            .OrderByDescending(group => group.Key.HasValue)
+            .ThenByDescending(group => group.Key ?? 0)
+            .Select(group => new RecipeOutputGroup(
+                group.Key is int version ? $"v{version}" : "Earlier",
+                group.Key,
+                group.OrderByDescending(asset => asset.CreatedAt).ToList()))
+            .ToList();
+
     private IEnumerable<GenerationBatchView> RecipeBatches(Guid? recipeId) =>
         recipeId is Guid id
             ? _workbench?.Batches.Where(batch => batch.PromptRecipeId == id) ?? Enumerable.Empty<GenerationBatchView>()
             : Enumerable.Empty<GenerationBatchView>();
 
-    private bool IsRecipeExample(Guid assetId) => _recipeExampleAssetIds.Contains(assetId);
-
-    private void ToggleRecipeExample(Guid assetId, ChangeEventArgs args)
-    {
-        var enabled = args.Value is bool value && value;
-        if (enabled)
-            _recipeExampleAssetIds.Add(assetId);
-        else
-            _recipeExampleAssetIds.Remove(assetId);
-        MarkRecipeEditorDirty();
-    }
+    private static string BatchRecipeVersionLabel(GenerationBatchView batch) =>
+        batch.PromptRecipeVersion is int version ? $"v{version}" : "Earlier";
 
     private void MarkRecipeEditorDirty()
     {
@@ -3479,7 +3494,7 @@ else
             recipe.PromptTemplate,
             string.Join('\u001e', recipe.StyleRules),
             string.Join('\u001e', recipe.AvoidRules),
-            string.Join('\u001e', recipe.ExampleAssetIds),
+            recipe.ExampleAssetId?.ToString("N") ?? string.Empty,
             recipe.PreferredProvider,
             recipe.PreferredModel,
             recipe.PreferredSize,
@@ -3709,6 +3724,8 @@ else
         value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private sealed record AssetGroup(string Label, IReadOnlyList<ArtAssetView> Assets);
+
+    private sealed record RecipeOutputGroup(string Label, int? Version, IReadOnlyList<ArtAssetView> Assets);
 
     private sealed record ExportPreviewResult(
         bool RemoveBackground,
