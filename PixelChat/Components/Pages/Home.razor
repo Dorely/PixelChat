@@ -12,6 +12,7 @@
 @inject IArtWorkflowService Workflow
 @inject IAssistantChatService ChatService
 @inject IWorkspaceChatRuntime ChatRuntime
+@inject IWorkspaceVisibleStateStore VisibleState
 @inject IImageGenerationRuntime ImageRuntime
 @inject IBackgroundRemovalService BackgroundRemoval
 @inject ILlmProviderService ProviderService
@@ -262,6 +263,7 @@ else
             ResetExportModal();
         _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
         _recipeExampleAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
+        PublishVisibleState();
     }
 
     private async Task ReloadChatAsync()
@@ -2847,6 +2849,7 @@ else
         if (_workbench is null || _running || string.IsNullOrWhiteSpace(_input))
             return;
 
+        PublishVisibleState();
         var text = _input.Trim();
         _input = string.Empty;
         _resetComposerKey++;
@@ -2984,6 +2987,151 @@ else
         AssistantMessageStatus.Pending => ChatMessageStatus.Pending,
         _ => ChatMessageStatus.Completed
     };
+
+    private void PublishVisibleState()
+    {
+        if (_workbench is null)
+            return;
+
+        var mode = _workbench.Project.ActiveWorkspaceMode;
+        VisibleState.Publish(new WorkspaceVisibleStateSnapshot(
+            _workbench.Project.Id,
+            _workbench.Project.Name,
+            mode,
+            _workbench.ImageProviderStatus,
+            _workbench.Attachments,
+            mode == WorkspaceMode.Generate ? BuildGenerateVisibleState() : null,
+            mode == WorkspaceMode.Edit ? BuildEditVisibleState() : null,
+            mode == WorkspaceMode.Compare ? BuildCompareVisibleState() : null,
+            mode == WorkspaceMode.Sprites ? BuildSpritesVisibleState() : null,
+            mode == WorkspaceMode.Recipes ? BuildRecipeVisibleState() : null,
+            mode == WorkspaceMode.Assets ? BuildAssetsVisibleState() : null,
+            DateTime.UtcNow));
+    }
+
+    private WorkspaceGenerateVisibleState BuildGenerateVisibleState() =>
+        new(
+            _generatePrompt,
+            _negativePrompt,
+            _generateSize,
+            _generateBackground,
+            _generateCount,
+            SelectedGenerateRecipeIdOrNull(),
+            CurrentReferenceAssetIds(),
+            DraftReferenceAssets().Select(AssetSummary).ToList());
+
+    private WorkspaceEditVisibleState BuildEditVisibleState()
+    {
+        var sourceAsset = CurrentEditAsset();
+        var mask = CurrentEditMask();
+        var referenceAssets = DraftReferenceAssets()
+            .Where(asset => sourceAsset is null || asset.Id != sourceAsset.Id)
+            .ToList();
+
+        return new WorkspaceEditVisibleState(
+            sourceAsset is null ? null : AssetSummary(sourceAsset),
+            _editPrompt,
+            _editSize,
+            _editBackground,
+            _editCount,
+            SelectedEditRecipeIdOrNull(),
+            referenceAssets.Select(asset => asset.Id).ToList(),
+            referenceAssets.Select(AssetSummary).ToList(),
+            mask is not null,
+            mask?.Id,
+            _editorTool,
+            _brushSize);
+    }
+
+    private WorkspaceCompareVisibleState BuildCompareVisibleState() =>
+        new(
+            _workbench?.ActiveBatch is null ? null : BatchSummary(_workbench.ActiveBatch),
+            _workbench?.Batches.Take(8).Select(BatchSummary).ToList() ?? []);
+
+    private WorkspaceSpritesVisibleState BuildSpritesVisibleState() =>
+        new(_workbench?.ActiveSpriteSheet is null ? null : SpriteSheetSummary(_workbench.ActiveSpriteSheet));
+
+    private WorkspaceRecipeVisibleState BuildRecipeVisibleState() =>
+        new(
+            _editingRecipeId,
+            _recipeName,
+            _recipeAssetType,
+            _recipePromptTemplate,
+            _recipeStyleRules,
+            _recipeAvoidRules,
+            _recipeNotes,
+            _recipePreferredSize,
+            _recipeExampleAssetIds.ToList(),
+            RecipeExampleAssets().Select(AssetSummary).ToList());
+
+    private WorkspaceAssetsVisibleState BuildAssetsVisibleState() =>
+        new(
+            _assetOrganization,
+            VisibleAssetsForSnapshot().Select(AssetSummary).ToList());
+
+    private IReadOnlyList<ArtAssetView> VisibleAssetsForSnapshot()
+    {
+        if (_workbench is null)
+            return [];
+
+        return (_assetOrganization == "recipe"
+                ? AssetRecipeGroups().SelectMany(group => group.Assets)
+                : AssetsByLatest())
+            .Take(24)
+            .ToList();
+    }
+
+    private static WorkspaceAssetSummary AssetSummary(ArtAssetView asset) =>
+        new(
+            asset.Id,
+            asset.Label,
+            asset.Kind,
+            asset.ContentType,
+            asset.Width,
+            asset.Height,
+            asset.ParentAssetId,
+            asset.SourceBatchId,
+            asset.BatchOutputIndex,
+            asset.SourcePromptRecipeId,
+            asset.IsFavorite,
+            asset.Notes,
+            Preview(asset.Prompt, 240),
+            asset.CreatedAt);
+
+    private static WorkspaceBatchSummary BatchSummary(GenerationBatchView batch) =>
+        new(
+            batch.Id,
+            batch.Label,
+            batch.Status,
+            batch.Size,
+            batch.Background,
+            batch.Count,
+            batch.PromptRecipeId,
+            batch.InputAssetIds,
+            batch.OutputAssetIds,
+            batch.ParentBatchId,
+            Preview(batch.Prompt, 360),
+            batch.Error,
+            batch.CreatedAt);
+
+    private static WorkspaceSpriteSheetSummary SpriteSheetSummary(SpriteSheetDefinitionView spriteSheet) =>
+        new(
+            spriteSheet.Id,
+            spriteSheet.SourceAssetId,
+            spriteSheet.WorkingAssetId,
+            spriteSheet.Label,
+            spriteSheet.Rows,
+            spriteSheet.Columns,
+            spriteSheet.CellWidth,
+            spriteSheet.CellHeight,
+            spriteSheet.Padding,
+            spriteSheet.Gutter,
+            spriteSheet.Fps,
+            spriteSheet.Loop,
+            spriteSheet.HorizontalAnchor,
+            spriteSheet.VerticalAnchor,
+            spriteSheet.Frames.Count,
+            spriteSheet.UpdatedAt);
 
     private IReadOnlyList<Guid> CurrentReferenceAssetIds() =>
         _draftReferenceAssetIds
@@ -3239,6 +3387,15 @@ else
 
     private static Guid? ParseProjectIdOrNull(string value) =>
         Guid.TryParse(value, out var id) ? id : null;
+
+    private static string Preview(string? value, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxChars ? trimmed : trimmed[..maxChars] + "...";
+    }
 
     private static string FormatDimensions(ArtAssetView asset) =>
         asset.Width is int width && asset.Height is int height ? $"{width} x {height}" : "Unknown size";

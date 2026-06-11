@@ -46,6 +46,7 @@ builder.Services.AddScoped<IImageProvider, OpenAIAccountImageProvider>();
 builder.Services.AddScoped<IArtWorkflowService, ArtWorkflowService>();
 builder.Services.AddSingleton<IImageGenerationRuntime, ImageGenerationRuntime>();
 builder.Services.AddSingleton<IBackgroundRemovalService, RembgBackgroundRemovalService>();
+builder.Services.AddSingleton<IWorkspaceVisibleStateStore, WorkspaceVisibleStateStore>();
 builder.Services.AddScoped<AssistantToolRegistry>();
 builder.Services.AddScoped<IAssistantChatService, AssistantChatService>();
 builder.Services.AddSingleton<IWorkspaceChatRuntime, WorkspaceChatRuntime>();

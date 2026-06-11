@@ -308,6 +308,7 @@ public sealed class AssistantChatService(
             messages.Add(new ChatMessage(ChatRole.Assistant, BuildAssistantContents(textBuilder.ToString(), manifest)));
 
             var resultContents = new List<AIContent>();
+            var modelOnlyContents = new List<AIContent>();
             foreach (var pendingCall in pendingCalls)
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -316,7 +317,7 @@ public sealed class AssistantChatService(
                     yield break;
                 }
 
-                var outcome = await InvokeToolAsync(aiTools, pendingCall, cancellationToken);
+                var outcome = await InvokeToolAsync(aiTools, pendingCall, projectId, cancellationToken);
                 if (outcome.Cancelled)
                 {
                     yield return new AssistantTurnError("Cancelled.", Cancelled: true);
@@ -334,6 +335,7 @@ public sealed class AssistantChatService(
                 resultContents.Add(new FunctionResultContent(
                     pendingCall.CallId,
                     BuildToolResultForModel(pendingCall.Name, outcome.Result, EffectiveMaxToolResultCharsForModel())));
+                modelOnlyContents.AddRange(outcome.ModelOnlyContents);
                 yield return new AssistantToolCallCompleted(
                     pendingCall.CallId,
                     pendingCall.Name,
@@ -349,6 +351,8 @@ public sealed class AssistantChatService(
             }
 
             messages.Add(new ChatMessage(ChatRole.Tool, resultContents));
+            if (modelOnlyContents.Count > 0)
+                messages.Add(new ChatMessage(ChatRole.User, modelOnlyContents));
 
             if (iteration == maxIterations - 1)
             {
@@ -531,16 +535,18 @@ public sealed class AssistantChatService(
     private async Task<ToolInvocationOutcome> InvokeToolAsync(
         IList<AITool> aiTools,
         PendingToolCall pendingCall,
+        Guid projectId,
         CancellationToken cancellationToken)
     {
         var aiFunction = aiTools.OfType<AIFunction>().FirstOrDefault(function => function.Name == pendingCall.Name)
             ?? throw new InvalidOperationException($"Unknown tool '{pendingCall.Name}'.");
-        return await InvokeToolAsync(aiFunction, pendingCall, cancellationToken);
+        return await InvokeToolAsync(aiFunction, pendingCall, projectId, cancellationToken);
     }
 
     private async Task<ToolInvocationOutcome> InvokeToolAsync(
         AIFunction aiFunction,
         PendingToolCall pendingCall,
+        Guid projectId,
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
@@ -549,20 +555,59 @@ public sealed class AssistantChatService(
             var invokeResult = await aiFunction.InvokeAsync(
                 ToolCallArguments.Create(pendingCall.Content.Arguments, pendingCall.ArgumentsJson),
                 cancellationToken);
+            var result = invokeResult?.ToString() ?? string.Empty;
+            var modelOnlyContents = await BuildModelOnlyToolContentsAsync(pendingCall, projectId, cancellationToken);
             stopwatch.Stop();
-            return new ToolInvocationOutcome(invokeResult?.ToString() ?? string.Empty, Error: null, Cancelled: false, stopwatch.Elapsed.TotalMilliseconds);
+            return new ToolInvocationOutcome(result, Error: null, Cancelled: false, stopwatch.Elapsed.TotalMilliseconds, modelOnlyContents);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             stopwatch.Stop();
-            return new ToolInvocationOutcome(string.Empty, Error: null, Cancelled: true, stopwatch.Elapsed.TotalMilliseconds);
+            return new ToolInvocationOutcome(string.Empty, Error: null, Cancelled: true, stopwatch.Elapsed.TotalMilliseconds, Array.Empty<AIContent>());
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
             logger.LogWarning(ex, "Assistant tool '{Tool}' failed.", pendingCall.Name);
-            return new ToolInvocationOutcome($"Error: {ex.Message}", ex.Message, Cancelled: false, stopwatch.Elapsed.TotalMilliseconds);
+            return new ToolInvocationOutcome($"Error: {ex.Message}", ex.Message, Cancelled: false, stopwatch.Elapsed.TotalMilliseconds, Array.Empty<AIContent>());
         }
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildModelOnlyToolContentsAsync(
+        PendingToolCall pendingCall,
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(pendingCall.Name, "read_asset", StringComparison.Ordinal)
+            || ReadGuidArgument(pendingCall, "assetId") is not Guid assetId)
+        {
+            return Array.Empty<AIContent>();
+        }
+
+        var asset = await workflow.GetAssetForExportAsync(projectId, assetId, cancellationToken);
+        return
+        [
+            new TextContent($"Model-only image returned by read_asset for asset '{asset.Label}' ({asset.Id}). This image is not attached to visible chat context."),
+            new DataContent(asset.DataUrl, asset.ContentType)
+            {
+                Name = asset.FileName,
+            },
+        ];
+    }
+
+    private static Guid? ReadGuidArgument(PendingToolCall pendingCall, string name)
+    {
+        var arguments = ToolCallArguments.ParseObjectOrNull(pendingCall.ArgumentsJson) ?? pendingCall.Content.Arguments;
+        if (arguments is null || !arguments.TryGetValue(name, out var value))
+            return null;
+
+        return value switch
+        {
+            Guid guid => guid,
+            string text when Guid.TryParse(text, out var guid) => guid,
+            JsonElement { ValueKind: JsonValueKind.String } element when Guid.TryParse(element.GetString(), out var guid) => guid,
+            _ => null,
+        };
     }
 
     private async Task PersistToolResultAsync(
@@ -687,5 +732,6 @@ public sealed class AssistantChatService(
         string Result,
         string? Error,
         bool Cancelled,
-        double DurationMs);
+        double DurationMs,
+        IReadOnlyList<AIContent> ModelOnlyContents);
 }

@@ -42,16 +42,17 @@
 |------|-------------|
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit asset/mask/sprite-frame image context, Shellmate-style tool-call streaming/execution, form-draft updates, and transcript replay. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, exposes live snapshots, finished-turn commits, and workspace/form side effects. |
+| `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact active-tab state records used by assistant context tools. |
 | `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for visible context, reusable recipe guidance, form drafting, sprite-sheet box edits, explicit normalization, and immediate visible tool use. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records and form draft payloads used by chat/runtime/UI. |
-| `AssistantToolRegistry.cs` | Tool registry for workspace state, recipe-aware form drafting, sprite-sheet detection/box update/normalization/reset/frame attachment, chat attachments, workspace mode switching, asset favorites/notes, and export actions. |
+| `AssistantToolRegistry.cs` | Tool registry for visible workspace state, focused asset/recipe/batch/sprite-sheet reads, recipe-aware form drafting, sprite-sheet tools, chat attachments, workspace mode switching, favorites, and exports. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, sprite-sheet records, export caches, recipe-aware generation/edit prompt assembly, masks, chat attachments, import, crop, and masked edits. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, focused assistant reads, assets, sprite-sheet records, export caches, recipe-aware generation/edit prompt assembly, masks, chat attachments, import, crop, and masked edits. |
 | `ArtWorkflowModels.cs` | Request/result/view records used by the art workbench, sprite-sheet editor, recipe-aware generation/edit, recipe management, and assistant tools. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns background generation/edit batches, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |

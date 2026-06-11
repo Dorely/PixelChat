@@ -141,6 +141,216 @@ public sealed class ArtWorkflowService(
         return ExportAssetView(asset);
     }
 
+    public async Task<string> ListAssetsJsonAsync(
+        Guid projectId,
+        string? kind = null,
+        string? query = null,
+        bool? favorite = null,
+        int? limit = null,
+        CancellationToken cancellationToken = default)
+    {
+        var max = NormalizeToolLimit(limit, 12, 50);
+        var assets = db.ArtAssets
+            .AsNoTracking()
+            .Where(a => a.ProjectId == projectId);
+
+        if (TryParseAssetKind(kind, out var parsedKind))
+            assets = assets.Where(a => a.Kind == parsedKind);
+
+        if (favorite is bool favoriteValue)
+            assets = assets.Where(a => a.IsFavorite == favoriteValue);
+
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var pattern = $"%{query.Trim()}%";
+            assets = assets.Where(a =>
+                EF.Functions.Like(a.Label, pattern)
+                || EF.Functions.Like(a.FileName, pattern)
+                || EF.Functions.Like(a.Prompt, pattern)
+                || EF.Functions.Like(a.Notes, pattern));
+        }
+
+        var results = await assets
+            .OrderByDescending(a => a.IsFavorite)
+            .ThenByDescending(a => a.CreatedAt)
+            .Take(max)
+            .ToListAsync(cancellationToken);
+
+        return JsonSerializer.Serialize(new
+        {
+            assets = results.Select(CompactAsset),
+            returned = results.Count,
+            limit = max,
+            note = "Use read_asset with an asset id to inspect the full image. This list omits image bytes.",
+        }, JsonOptions);
+    }
+
+    public async Task<string> ReadAssetJsonAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+
+        return JsonSerializer.Serialize(new
+        {
+            asset = AssetDetail(asset),
+            image = new
+            {
+                availableToModel = true,
+                delivery = "model-only image content on this tool call",
+                contentType = asset.ContentType,
+                fileName = string.IsNullOrWhiteSpace(asset.FileName) ? $"asset-{asset.Id:N}.{ExtensionForContentType(asset.ContentType)}" : asset.FileName,
+                width = asset.Width,
+                height = asset.Height,
+                bytes = asset.Data.Length,
+                note = "Image bytes are intentionally omitted from JSON and are not attached to visible chat context.",
+            },
+        }, JsonOptions);
+    }
+
+    public async Task<string> ListPromptRecipesJsonAsync(
+        Guid projectId,
+        string? query = null,
+        int? limit = null,
+        CancellationToken cancellationToken = default)
+    {
+        var max = NormalizeToolLimit(limit, 20, 50);
+        var recipes = db.PromptRecipes
+            .AsNoTracking()
+            .Where(r => r.ProjectId == projectId);
+
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var pattern = $"%{query.Trim()}%";
+            recipes = recipes.Where(r =>
+                EF.Functions.Like(r.Name, pattern)
+                || EF.Functions.Like(r.AssetType, pattern)
+                || EF.Functions.Like(r.PromptTemplate, pattern)
+                || EF.Functions.Like(r.Notes, pattern));
+        }
+
+        var results = await recipes
+            .OrderBy(r => r.Name)
+            .Take(max)
+            .ToListAsync(cancellationToken);
+
+        return JsonSerializer.Serialize(new
+        {
+            recipes = results.Select(CompactRecipe),
+            returned = results.Count,
+            limit = max,
+            note = "Use read_recipe with a recipe id for full reusable guidance.",
+        }, JsonOptions);
+    }
+
+    public async Task<string> ReadPromptRecipeJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default)
+    {
+        var recipe = await db.PromptRecipes
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+            ?? throw new InvalidOperationException("Prompt recipe was not found.");
+
+        return JsonSerializer.Serialize(RecipeView(recipe), JsonOptions);
+    }
+
+    public async Task<string> ListGenerationBatchesJsonAsync(
+        Guid projectId,
+        string? status = null,
+        int? limit = null,
+        CancellationToken cancellationToken = default)
+    {
+        var max = NormalizeToolLimit(limit, 10, 30);
+        var batches = db.GenerationBatches
+            .AsNoTracking()
+            .Where(b => b.ProjectId == projectId);
+
+        if (TryParseBatchStatus(status, out var parsedStatus))
+            batches = batches.Where(b => b.Status == parsedStatus);
+
+        var results = await batches
+            .OrderByDescending(b => b.CreatedAt)
+            .Take(max)
+            .ToListAsync(cancellationToken);
+        var batchIds = results.Select(b => b.Id).ToList();
+        var outputAssets = batchIds.Count == 0
+            ? new List<ArtAsset>()
+            : await db.ArtAssets
+                .AsNoTracking()
+                .Where(a => a.ProjectId == projectId && a.SourceBatchId.HasValue && batchIds.Contains(a.SourceBatchId.Value))
+                .ToListAsync(cancellationToken);
+        var outputIdsByBatch = outputAssets
+            .GroupBy(a => a.SourceBatchId!.Value)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<Guid>)group
+                    .OrderBy(a => ReadBatchOutputIndex(a) ?? int.MaxValue)
+                    .ThenBy(a => a.CreatedAt)
+                    .Select(a => a.Id)
+                    .ToList());
+
+        return JsonSerializer.Serialize(new
+        {
+            batches = results.Select(batch => CompactBatch(
+                batch,
+                outputIdsByBatch.TryGetValue(batch.Id, out var outputIds) ? outputIds : Array.Empty<Guid>())),
+            returned = results.Count,
+            limit = max,
+            note = "Use read_batch with a batch id for full batch prompt, state, and output details.",
+        }, JsonOptions);
+    }
+
+    public async Task<string> ReadGenerationBatchJsonAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default)
+    {
+        var batch = await db.GenerationBatches
+            .AsNoTracking()
+            .FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken)
+            ?? throw new InvalidOperationException("Generation batch was not found.");
+        var outputAssets = await db.ArtAssets
+            .AsNoTracking()
+            .Where(a => a.ProjectId == projectId && a.SourceBatchId == batchId)
+            .ToListAsync(cancellationToken);
+
+        return JsonSerializer.Serialize(BatchView(batch, outputAssets), JsonOptions);
+    }
+
+    public async Task<string> ListSpriteSheetsJsonAsync(
+        Guid projectId,
+        int? limit = null,
+        CancellationToken cancellationToken = default)
+    {
+        var max = NormalizeToolLimit(limit, 12, 40);
+        var sheets = await db.SpriteSheetDefinitions
+            .AsNoTracking()
+            .Where(s => s.ProjectId == projectId)
+            .OrderByDescending(s => s.UpdatedAt)
+            .Take(max)
+            .ToListAsync(cancellationToken);
+        var sheetIds = sheets.Select(sheet => sheet.Id).ToList();
+        var frameCounts = sheetIds.Count == 0
+            ? new Dictionary<Guid, int>()
+            : await db.SpriteSheetFrameRecords
+                .AsNoTracking()
+                .Where(frame => frame.ProjectId == projectId && sheetIds.Contains(frame.SpriteSheetDefinitionId))
+                .GroupBy(frame => frame.SpriteSheetDefinitionId)
+                .Select(group => new { Id = group.Key, Count = group.Count() })
+                .ToDictionaryAsync(item => item.Id, item => item.Count, cancellationToken);
+
+        return JsonSerializer.Serialize(new
+        {
+            spriteSheets = sheets.Select(sheet => CompactSpriteSheet(sheet, frameCounts.GetValueOrDefault(sheet.Id))),
+            returned = sheets.Count,
+            limit = max,
+            note = "Use read_sprite_sheet with a sprite sheet id for layout and frame boxes.",
+        }, JsonOptions);
+    }
+
+    public async Task<string> ReadSpriteSheetJsonAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default)
+    {
+        var sheet = await LoadSpriteSheetViewAsync(projectId, spriteSheetId, cancellationToken);
+        return JsonSerializer.Serialize(CompactSpriteSheet(sheet), JsonOptions);
+    }
+
     public async Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(
         Guid projectId,
         Guid assetId,
@@ -1617,18 +1827,25 @@ public sealed class ArtWorkflowService(
 
     public async Task<string> GetWorkspaceStateJsonAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
-        var view = await GetWorkbenchAsync(projectId, cancellationToken);
+        var project = await db.Projects
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == projectId, cancellationToken)
+            ?? throw new InvalidOperationException("Project was not found.");
+        var attachments = await db.ChatContextAttachments
+            .AsNoTracking()
+            .Where(a => a.ProjectId == projectId)
+            .OrderBy(a => a.SortOrder)
+            .ThenBy(a => a.CreatedAt)
+            .ToListAsync(cancellationToken);
+        var providerStatus = await BuildProviderStatusAsync(cancellationToken);
+
         return JsonSerializer.Serialize(new
         {
-            project = view.Project,
-            activeBatch = view.ActiveBatch,
-            chatAttachments = view.Attachments,
-            recentAssets = view.Assets.Take(12).Select(CompactAsset),
-            recentBatches = view.Batches.Take(6),
-            recipes = view.Recipes.Take(12),
-            spriteSheets = view.SpriteSheets.Take(12).Select(CompactSpriteSheet),
-            activeSpriteSheet = view.ActiveSpriteSheet is null ? null : CompactSpriteSheet(view.ActiveSpriteSheet),
-            provider = view.ImageProviderStatus,
+            snapshotMissing = true,
+            note = "No live UI snapshot has been published. This fallback only includes persisted project, active ids, visible chat attachments, and provider status.",
+            project = ProjectView(project),
+            chatAttachments = attachments.Select(AttachmentView),
+            provider = providerStatus,
         }, JsonOptions);
     }
 
@@ -2199,6 +2416,123 @@ public sealed class ArtWorkflowService(
     private static ImageProviderReference ToProviderReference(ArtAsset asset) =>
         new(asset.FileName, asset.ContentType, asset.Data);
 
+    private static int NormalizeToolLimit(int? limit, int defaultValue, int maxValue) =>
+        Math.Clamp(limit is int value && value > 0 ? value : defaultValue, 1, maxValue);
+
+    private static bool TryParseAssetKind(string? kind, out ArtAssetKind assetKind)
+    {
+        assetKind = default;
+        if (string.IsNullOrWhiteSpace(kind))
+            return false;
+
+        return Enum.TryParse(kind.Trim().Replace("-", string.Empty, StringComparison.Ordinal).Replace("_", string.Empty, StringComparison.Ordinal), ignoreCase: true, out assetKind);
+    }
+
+    private static bool TryParseBatchStatus(string? status, out GenerationBatchStatus batchStatus)
+    {
+        batchStatus = default;
+        if (string.IsNullOrWhiteSpace(status))
+            return false;
+
+        return Enum.TryParse(status.Trim().Replace("-", string.Empty, StringComparison.Ordinal).Replace("_", string.Empty, StringComparison.Ordinal), ignoreCase: true, out batchStatus);
+    }
+
+    private static object CompactAsset(ArtAsset asset) => new
+    {
+        asset.Id,
+        asset.Label,
+        fileName = string.IsNullOrWhiteSpace(asset.FileName) ? $"asset-{asset.Id:N}.{ExtensionForContentType(asset.ContentType)}" : asset.FileName,
+        asset.Kind,
+        asset.ContentType,
+        asset.Width,
+        asset.Height,
+        asset.ParentAssetId,
+        asset.SourceBatchId,
+        batchOutputIndex = ReadBatchOutputIndex(asset),
+        asset.SourcePromptRecipeId,
+        asset.IsFavorite,
+        asset.Notes,
+        promptPreview = Preview(asset.Prompt, 240),
+        asset.CreatedAt,
+    };
+
+    private static object AssetDetail(ArtAsset asset) => new
+    {
+        asset.Id,
+        asset.Label,
+        fileName = string.IsNullOrWhiteSpace(asset.FileName) ? $"asset-{asset.Id:N}.{ExtensionForContentType(asset.ContentType)}" : asset.FileName,
+        asset.Kind,
+        asset.ContentType,
+        asset.Width,
+        asset.Height,
+        asset.ParentAssetId,
+        asset.SourceBatchId,
+        batchOutputIndex = ReadBatchOutputIndex(asset),
+        asset.SourcePromptRecipeId,
+        asset.IsFavorite,
+        asset.Notes,
+        asset.Prompt,
+        asset.SourceMetadataJson,
+        asset.CreatedAt,
+        asset.UpdatedAt,
+    };
+
+    private static object CompactRecipe(PromptRecipe recipe) => new
+    {
+        recipe.Id,
+        recipe.Name,
+        useCase = recipe.AssetType,
+        promptPreview = Preview(recipe.PromptTemplate, 320),
+        styleRuleCount = DeserializeStrings(recipe.StyleRulesJson).Count,
+        avoidRuleCount = DeserializeStrings(recipe.AvoidRulesJson).Count,
+        exampleAssetIds = DeserializeIds(recipe.ExampleAssetIdsJson),
+        recipe.PreferredProvider,
+        recipe.PreferredModel,
+        recipe.PreferredSize,
+        notesPreview = Preview(recipe.Notes, 220),
+        recipe.CreatedAt,
+    };
+
+    private static object CompactBatch(GenerationBatch batch, IReadOnlyList<Guid> outputAssetIds) => new
+    {
+        batch.Id,
+        batch.Label,
+        batch.Status,
+        batch.ImageModel,
+        batch.Size,
+        background = NormalizeBackground(batch.Background),
+        batch.Count,
+        inputAssetIds = DeserializeIds(batch.InputAssetIdsJson),
+        inputMaskIds = DeserializeIds(batch.InputMaskIdsJson),
+        outputAssetIds,
+        batch.ParentBatchId,
+        batch.PromptRecipeId,
+        promptPreview = Preview(batch.Prompt, 360),
+        negativePromptPreview = Preview(batch.NegativePrompt, 220),
+        batch.Error,
+        batch.CreatedAt,
+    };
+
+    private static object CompactSpriteSheet(SpriteSheetDefinition spriteSheet, int frameCount) => new
+    {
+        spriteSheet.Id,
+        spriteSheet.SourceAssetId,
+        workingAssetId = spriteSheet.OutputAssetId,
+        spriteSheet.Label,
+        spriteSheet.Rows,
+        spriteSheet.Columns,
+        spriteSheet.CellWidth,
+        spriteSheet.CellHeight,
+        spriteSheet.Padding,
+        spriteSheet.Gutter,
+        fps = spriteSheet.Fps,
+        loop = spriteSheet.Loop,
+        horizontalAnchor = NormalizeHorizontalAnchor(spriteSheet.HorizontalAnchor),
+        verticalAnchor = NormalizeVerticalAnchor(spriteSheet.VerticalAnchor),
+        frameCount,
+        spriteSheet.UpdatedAt,
+    };
+
     private static object CompactAsset(ArtAssetView asset) => new
     {
         asset.Id,
@@ -2238,6 +2572,15 @@ public sealed class ArtWorkflowService(
             frame.PreviewHeight,
         }),
     };
+
+    private static string Preview(string? value, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxChars ? trimmed : trimmed[..maxChars] + "...";
+    }
 
     private static ProjectView ProjectView(Project project) =>
         new(project.Id, project.Name, project.ActiveWorkspaceMode, project.ActiveBatchId, project.ActiveSpriteSheetId);

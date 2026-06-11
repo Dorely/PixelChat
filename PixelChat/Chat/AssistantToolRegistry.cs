@@ -1,12 +1,21 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 using PixelChat.Art;
 using PixelChat.Models;
 
 namespace PixelChat.Chat;
 
-public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
+public sealed class AssistantToolRegistry(
+    IArtWorkflowService workflow,
+    IWorkspaceVisibleStateStore visibleState)
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() },
+    };
+
     private static readonly HashSet<string> WorkspaceMutationTools = new(StringComparer.Ordinal)
     {
         "attach_chat_attachment",
@@ -22,9 +31,52 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
     public IList<AITool> Build(Guid projectId) =>
     [
         AIFunctionFactory.Create(
-            method: () => workflow.GetWorkspaceStateJsonAsync(projectId),
+            method: () => ListWorkspaceStateAsync(projectId),
             name: "list_workspace_state",
-            description: "Read the current PixelChat workspace state, including visible chat attachments, recent assets, batches, recipes, and provider status. This is read-only."),
+            description: "Read only the visible PixelChat UI state: project, active tab, provider status, visible chat attachments, and the active page's selected/draft form context. This intentionally omits broad libraries; use list/read asset, recipe, batch, or sprite-sheet tools for broader data. This is read-only."),
+
+        AIFunctionFactory.Create(
+            method: (string? kind = null, string? query = null, bool? favorite = null, int? limit = null) =>
+                workflow.ListAssetsJsonAsync(projectId, kind, query, favorite, limit),
+            name: "list_assets",
+            description: "List compact asset metadata for the current project. Optional kind values include generated, imported, edited, cropped, and spriteSheet. This omits image bytes; use read_asset to inspect an image."),
+
+        AIFunctionFactory.Create(
+            method: (Guid assetId) => workflow.ReadAssetJsonAsync(projectId, assetId),
+            name: "read_asset",
+            description: "Read an asset image for inspection. The JSON result returns metadata only, while the full image is delivered to the model as model-only image content for this tool call. This is read-only and does not attach the asset to visible chat context."),
+
+        AIFunctionFactory.Create(
+            method: (string? query = null, int? limit = null) =>
+                workflow.ListPromptRecipesJsonAsync(projectId, query, limit),
+            name: "list_recipes",
+            description: "List compact saved prompt recipe summaries for the current project. Use read_recipe for full reusable style and production guidance."),
+
+        AIFunctionFactory.Create(
+            method: (Guid recipeId) => workflow.ReadPromptRecipeJsonAsync(projectId, recipeId),
+            name: "read_recipe",
+            description: "Read a saved prompt recipe's full reusable guide, durable rules, avoid rules, notes, preferred defaults, and passive example ids. This is read-only."),
+
+        AIFunctionFactory.Create(
+            method: (string? status = null, int? limit = null) =>
+                workflow.ListGenerationBatchesJsonAsync(projectId, status, limit),
+            name: "list_batches",
+            description: "List compact generation/edit batch history for the current project. Use read_batch for full prompt, state, input, and output details."),
+
+        AIFunctionFactory.Create(
+            method: (Guid batchId) => workflow.ReadGenerationBatchJsonAsync(projectId, batchId),
+            name: "read_batch",
+            description: "Read full metadata for one generation or edit batch. This is read-only and does not include image bytes."),
+
+        AIFunctionFactory.Create(
+            method: (int? limit = null) => workflow.ListSpriteSheetsJsonAsync(projectId, limit),
+            name: "list_sprite_sheets",
+            description: "List compact sprite-sheet definitions for the current project. Use read_sprite_sheet for layout and frame boxes."),
+
+        AIFunctionFactory.Create(
+            method: (Guid spriteSheetId) => workflow.ReadSpriteSheetJsonAsync(projectId, spriteSheetId),
+            name: "read_sprite_sheet",
+            description: "Read a sprite sheet's layout and frame boxes without returning preview image bytes. Use attach_sprite_sheet_frames when frame previews need to be visible image context."),
 
         AIFunctionFactory.Create(
             method: (string type, Guid refId, string? label = null) => AttachContextAsync(projectId, type, refId, label),
@@ -131,10 +183,26 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
 
     public bool IsWorkspaceMutation(string toolName) => WorkspaceMutationTools.Contains(toolName);
 
+    private async Task<string> ListWorkspaceStateAsync(Guid projectId)
+    {
+        var snapshot = visibleState.Get(projectId);
+        if (snapshot is not null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                snapshotMissing = false,
+                note = "Only the active visible page section is populated. Use focused list/read tools for broader project data.",
+                state = snapshot,
+            }, JsonOptions);
+        }
+
+        return await workflow.GetWorkspaceStateJsonAsync(projectId);
+    }
+
     private async Task<string> AttachContextAsync(Guid projectId, string type, Guid refId, string? label)
     {
         var attachment = await workflow.AttachContextAsync(projectId, ParseAttachmentType(type), refId, label);
-        return JsonSerializer.Serialize(attachment);
+        return JsonSerializer.Serialize(attachment, JsonOptions);
     }
 
     private async Task<string> ClearContextAsync(Guid projectId)
@@ -224,7 +292,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
                 expectedFrames,
                 layoutHint,
                 backgroundMode));
-        return JsonSerializer.Serialize(result);
+        return JsonSerializer.Serialize(result, JsonOptions);
     }
 
     private async Task<string> UpdateSpriteSheetFramesAsync(
@@ -255,7 +323,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             NormalizeHorizontalAnchor(horizontalAnchor),
             NormalizeVerticalAnchor(verticalAnchor),
             frames ?? []));
-        return JsonSerializer.Serialize(saved);
+        return JsonSerializer.Serialize(saved, JsonOptions);
     }
 
     private async Task<string> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId)
@@ -267,7 +335,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             saved.WorkingAssetId,
             saved.SourceAssetId,
             message = "Sprite sheet reset to original image and frame records cleared.",
-        });
+        }, JsonOptions);
     }
 
     private async Task<string> NormalizeSpriteSheetAsync(Guid projectId, Guid spriteSheetId)
@@ -280,13 +348,13 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             saved.SourceAssetId,
             frameCount = saved.Frames.Count,
             message = "Sprite sheet normalized.",
-        });
+        }, JsonOptions);
     }
 
     private async Task<string> AttachSpriteSheetFramesAsync(Guid projectId, Guid spriteSheetId, Guid[]? frameIds)
     {
         var attachments = await workflow.AttachSpriteSheetFramesAsync(projectId, spriteSheetId, frameIds);
-        return JsonSerializer.Serialize(attachments);
+        return JsonSerializer.Serialize(attachments, JsonOptions);
     }
 
     private async Task<string> MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes)
@@ -301,7 +369,7 @@ public sealed class AssistantToolRegistry(IArtWorkflowService workflow)
             projectId,
             assetId,
             message = "Use the visible Export button for this asset to open export processing options.",
-        }));
+        }, JsonOptions));
 
     private static ChatContextAttachmentType ParseAttachmentType(string type) =>
         NormalizeToken(type) switch

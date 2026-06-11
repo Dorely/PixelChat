@@ -8,6 +8,14 @@ public interface IArtWorkflowService
     Task<ProjectView> CreateProjectAsync(string name, CancellationToken cancellationToken = default);
     Task<WorkbenchView> GetWorkbenchAsync(Guid? projectId = null, CancellationToken cancellationToken = default);
     Task<ArtAssetExportView> GetAssetForExportAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
+    Task<string> ListAssetsJsonAsync(Guid projectId, string? kind = null, string? query = null, bool? favorite = null, int? limit = null, CancellationToken cancellationToken = default);
+    Task<string> ReadAssetJsonAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
+    Task<string> ListPromptRecipesJsonAsync(Guid projectId, string? query = null, int? limit = null, CancellationToken cancellationToken = default);
+    Task<string> ReadPromptRecipeJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<string> ListGenerationBatchesJsonAsync(Guid projectId, string? status = null, int? limit = null, CancellationToken cancellationToken = default);
+    Task<string> ReadGenerationBatchJsonAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
+    Task<string> ListSpriteSheetsJsonAsync(Guid projectId, int? limit = null, CancellationToken cancellationToken = default);
+    Task<string> ReadSpriteSheetJsonAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, BackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
     Task<BackgroundRemovalExportCacheView> SaveBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, SaveBackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ExportStepCacheView>> GetExportStepCacheAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
