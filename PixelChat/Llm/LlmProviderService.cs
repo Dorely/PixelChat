@@ -68,6 +68,7 @@ public class LlmProviderService(
 
     public async Task<LlmProvider> CreateAsync(LlmProvider provider, string? apiKey = null, CancellationToken cancellationToken = default)
     {
+        NormalizeEditableValues(provider);
         provider.CreatedAt = DateTime.UtcNow;
         provider.UpdatedAt = DateTime.UtcNow;
         await providers.AddAsync(provider, cancellationToken);
@@ -81,6 +82,7 @@ public class LlmProviderService(
 
     public async Task<LlmProvider> UpdateAsync(LlmProvider provider, string? apiKey = null, CancellationToken cancellationToken = default)
     {
+        NormalizeEditableValues(provider);
         if (provider.LastChatTestSucceeded && !provider.HasCurrentChatTestSnapshot)
             provider.ClearChatReadiness("Provider settings changed. Run Test successfully before using this provider for chat.");
 
@@ -120,6 +122,7 @@ public class LlmProviderService(
 
     public async Task<LlmProvider> MarkChatTestSucceededAsync(LlmProvider provider, CancellationToken cancellationToken = default)
     {
+        NormalizeEditableValues(provider);
         var target = await ResolvePersistedProviderForTestAsync(provider, cancellationToken);
         target.MarkChatTestSucceeded(DateTime.UtcNow);
         if (target.Id == 0)
@@ -133,6 +136,7 @@ public class LlmProviderService(
 
     public async Task<LlmProvider> MarkChatTestFailedAsync(LlmProvider provider, string error, CancellationToken cancellationToken = default)
     {
+        NormalizeEditableValues(provider);
         var target = await ResolvePersistedProviderForTestAsync(provider, cancellationToken);
         target.MarkChatTestFailed(error, DateTime.UtcNow);
         if (target.Id == 0)
@@ -246,9 +250,15 @@ public class LlmProviderService(
         target.DisplayName = source.DisplayName;
         target.EndpointUrl = source.EndpointUrl;
         target.ModelId = source.ModelId;
+        target.ThinkingMode = ProviderThinkingModes.Normalize(source.ThinkingMode);
         target.AuthType = source.AuthType;
         target.IsDefault = source.IsDefault;
         target.CredentialSourceId = source.CredentialSourceId;
+    }
+
+    private static void NormalizeEditableValues(LlmProvider provider)
+    {
+        provider.ThinkingMode = ProviderThinkingModes.Normalize(provider.ThinkingMode);
     }
 
     private sealed record CredentialStatus(bool Available, string Message);

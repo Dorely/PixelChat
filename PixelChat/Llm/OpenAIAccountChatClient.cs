@@ -13,14 +13,21 @@ public sealed class OpenAIAccountChatClient : IChatClient
     private readonly HttpClient _httpClient;
     private readonly string _accessToken;
     private readonly string _model;
+    private readonly string? _thinkingMode;
     private readonly string _accountId;
     private readonly ILogger<OpenAIAccountChatClient> _logger;
 
-    public OpenAIAccountChatClient(HttpClient httpClient, string accessToken, string model, ILogger<OpenAIAccountChatClient> logger)
+    public OpenAIAccountChatClient(
+        HttpClient httpClient,
+        string accessToken,
+        string model,
+        string? thinkingMode,
+        ILogger<OpenAIAccountChatClient> logger)
     {
         _httpClient = httpClient;
         _accessToken = accessToken;
         _model = string.IsNullOrWhiteSpace(model) ? OpenAIAccountProvider.DefaultChatModel : model;
+        _thinkingMode = ProviderThinkingModes.Normalize(thinkingMode);
         _accountId = OpenAIAccountProvider.ExtractAccountId(accessToken);
         _logger = logger;
     }
@@ -403,6 +410,14 @@ public sealed class OpenAIAccountChatClient : IChatClient
                 ? string.Join("\n\n", instructions)
                 : "You are a helpful assistant."
         };
+
+        if (_thinkingMode is not null)
+        {
+            body["reasoning"] = new Dictionary<string, object>
+            {
+                ["effort"] = _thinkingMode
+            };
+        }
 
         if (options?.Tools is { Count: > 0 } tools)
         {

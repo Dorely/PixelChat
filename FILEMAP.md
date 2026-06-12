@@ -97,7 +97,7 @@
 | `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: chat attachments, recipe-aware Generate/Edit, version-grouped recipe outputs/example selection, Compare/Sprites/Recipes/Assets tabs, canvas helpers, and exports. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
-| `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, defaults, API-key updates, and child model rows. |
+| `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, thinking modes, defaults, API-key updates, and child model rows. |
 
 ### Components/Sprites/
 
@@ -110,11 +110,12 @@
 | File | Description |
 |------|-------------|
 | `AgentOptions.cs` | Configurable agent/chat options for OpenAI account timeout, tool-loop iterations, model-facing tool result limits, and autonomous generation-round budgets. |
-| `ChatClientFactory.cs` / `IChatClientFactory.cs` | Creates and tests Microsoft.Extensions.AI chat clients from persisted providers and effective credentials. |
+| `ChatClientFactory.cs` / `IChatClientFactory.cs` | Creates and tests Microsoft.Extensions.AI chat clients from persisted providers, credentials, and provider thinking-mode defaults. |
 | `OpenAIAccountAuthService.cs` / `IOpenAIAccountAuthService.cs` | OpenAI account OAuth PKCE flow, token refresh, revocation, and token secret persistence. |
 | `OpenAIAccountChatClient.cs` | Streaming `IChatClient` bridge to the OpenAI account Responses SSE endpoint with image inputs and function-call events. |
 | `OpenAIAccountProvider.cs` | Constants and helpers for the OpenAI account provider and JWT account-id extraction. |
 | `LlmProviderService.cs` / `ILlmProviderService.cs` | Provider CRUD, readiness snapshots, credential status, default-provider selection, and effective API-key/token resolution. |
+| `ProviderThinkingModes.cs` | Thinking-mode normalization, OpenAI mode constants/dropdown options, endpoint detection, and chat-option mapping. |
 | `SecretNames.cs` | Centralized secret key names for provider API keys and OAuth tokens. |
 | `ToolCallStreamingContent.cs` | `AIContent` records for provider-level function-call start and argument-delta streaming. |
 | `ToolCallArguments.cs` | Parser/normalizer for JSON and SDK tool-call arguments before `AIFunction` invocation. |
@@ -147,7 +148,7 @@
 | `AssistantConversation.cs` | EF entity for project-scoped persistent assistant conversations. |
 | `AssistantMessage.cs` | EF entity and enums for transcript messages, tool roles, tool-call manifests, roles, statuses, and errors. |
 | `AuthType.cs` | Enum for provider authentication modes: none, API key, or OAuth. |
-| `LlmProvider.cs` | EF entity for chat endpoint/model rows, default selection, child model credential inheritance, and readiness snapshots. |
+| `LlmProvider.cs` | EF entity for chat endpoint/model rows, thinking mode, default selection, child model credential inheritance, and readiness snapshots. |
 | `OAuthToken.cs` | EF entity for OAuth token metadata; token values are stored through `ISecretStore`. |
 | `StoredSecret.cs` | EF entity backing the first SQLite implementation of `ISecretStore`. |
 
@@ -179,6 +180,7 @@
 | `20260611181547_RecipeExampleImageAndVersionLinkage.cs` / `.Designer.cs` | EF migration replacing multi-example recipe JSON with one example image and adding recipe-version linkage to batches/assets. |
 | `20260611222045_SpriteSheetBackgroundFill.cs` / `.Designer.cs` | EF migration adding nullable sprite-sheet background fill metadata. |
 | `20260612071043_SpriteFrameWorkingImages.cs` / `.Designer.cs` | EF migration adding hidden per-frame working PNG state for sprite isolation, cleanup, and reassembly. |
+| `20260612154126_ProviderThinkingMode.cs` / `.Designer.cs` | EF migration adding nullable provider thinking mode and last-tested thinking snapshot fields. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

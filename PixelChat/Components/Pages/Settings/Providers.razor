@@ -62,6 +62,10 @@
                     <label class="form-label form-label-sm">Model</label>
                     <input type="text" class="form-control form-control-sm" @bind="_openAIAccountProvider.ModelId" />
                 </div>
+                <div class="provider-field codex-thinking-field">
+                    <label class="form-label form-label-sm">Thinking</label>
+                    @RenderThinkingField(_openAIAccountProvider)
+                </div>
                 <div class="provider-inline-actions">
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => SaveProviderAsync(_openAIAccountProvider)">Save</button>
                     <button type="button" class="btn btn-sm btn-outline-info"
@@ -96,6 +100,7 @@
                             <th class="provider-name-column">Name</th>
                             <th class="provider-endpoint-column">Endpoint</th>
                             <th class="provider-model-column">Model</th>
+                            <th class="provider-thinking-column">Thinking</th>
                             <th class="provider-auth-column">Auth</th>
                             <th class="provider-status-column">Status</th>
                             <th class="provider-default-column">Default</th>
@@ -115,6 +120,9 @@
                                 </td>
                                 <td class="provider-model-cell">
                                     <input class="form-control form-control-sm model-input" @bind="provider.ModelId" />
+                                </td>
+                                <td class="provider-thinking-cell">
+                                    @RenderThinkingField(provider)
                                 </td>
                                 <td class="provider-auth-cell">
                                     <div class="badge-stack">@RenderAuthCell(provider)</div>
@@ -164,6 +172,9 @@
                                         <td class="provider-model-cell">
                                             <input class="form-control form-control-sm model-input" @bind="child.ModelId" />
                                         </td>
+                                        <td class="provider-thinking-cell">
+                                            @RenderThinkingField(child)
+                                        </td>
                                         <td class="provider-auth-cell">
                                             <div class="badge-stack"><span class="badge text-bg-light inherited-badge">Inherited</span></div>
                                         </td>
@@ -190,7 +201,7 @@
                             @if (_childForms.TryGetValue(provider.Id, out var draft))
                             {
                                 <tr class="child-form-row">
-                                    <td colspan="7">
+                                    <td colspan="8">
                                         <div class="child-form">
                                             <div class="provider-field">
                                                 <label class="form-label form-label-sm">Display Name</label>
@@ -199,6 +210,22 @@
                                             <div class="provider-field">
                                                 <label class="form-label form-label-sm">Model ID</label>
                                                 <input type="text" class="form-control form-control-sm" placeholder="gpt-5-mini" @bind="draft.ModelId" />
+                                            </div>
+                                            <div class="provider-field">
+                                                <label class="form-label form-label-sm">Thinking</label>
+                                                @if (ProviderThinkingModes.IsOpenAIEndpoint(provider.EndpointUrl))
+                                                {
+                                                    <select class="form-select form-select-sm" @bind="draft.ThinkingMode">
+                                                        @foreach (var option in ProviderThinkingModes.OpenAIOptions)
+                                                        {
+                                                            <option value="@option.Value">@option.Label</option>
+                                                        }
+                                                    </select>
+                                                }
+                                                else
+                                                {
+                                                    <input type="text" class="form-control form-control-sm" placeholder="provider default" @bind="draft.ThinkingMode" />
+                                                }
                                             </div>
                                             <div class="child-form-actions">
                                                 <button type="button" class="btn btn-sm btn-primary" @onclick="() => AddChildModelAsync(provider, draft)">Add and Test</button>
@@ -239,6 +266,22 @@
             <div class="provider-field">
                 <label class="form-label form-label-sm">Model ID</label>
                 <input type="text" class="form-control form-control-sm" @bind="_newProvider.ModelId" placeholder="llama3" />
+            </div>
+            <div class="provider-field">
+                <label class="form-label form-label-sm">Thinking</label>
+                @if (ProviderThinkingModes.IsOpenAIEndpoint(_newProvider.EndpointUrl))
+                {
+                    <select class="form-select form-select-sm" @bind="_newProvider.ThinkingMode">
+                        @foreach (var option in ProviderThinkingModes.OpenAIOptions)
+                        {
+                            <option value="@option.Value">@option.Label</option>
+                        }
+                    </select>
+                }
+                else
+                {
+                    <input type="text" class="form-control form-control-sm" @bind="_newProvider.ThinkingMode" placeholder="provider default" />
+                }
             </div>
             <div class="provider-field">
                 <label class="form-label form-label-sm">Auth</label>
@@ -543,6 +586,7 @@
             DisplayName = displayName,
             EndpointUrl = parent.EndpointUrl,
             ModelId = modelId,
+            ThinkingMode = ProviderThinkingModes.Normalize(draft.ThinkingMode),
             AuthType = parent.AuthType,
             CredentialSourceId = parent.Id
         };
@@ -598,6 +642,25 @@
         }
 
         <span class="badge text-bg-secondary">None</span>
+    };
+
+    private RenderFragment RenderThinkingField(LlmProvider provider) => __builder =>
+    {
+        if (ProviderThinkingModes.UsesOpenAIThinkingDropdown(provider))
+        {
+            <select class="form-select form-select-sm thinking-input" @bind="provider.ThinkingMode">
+                @foreach (var option in ProviderThinkingModes.OpenAIOptions)
+                {
+                    <option value="@option.Value">@option.Label</option>
+                }
+            </select>
+            return;
+        }
+
+        <input type="text"
+               class="form-control form-control-sm thinking-input"
+               placeholder="provider default"
+               @bind="provider.ThinkingMode" />
     };
 
     private RenderFragment RenderChatStatus(LlmProvider provider) => __builder =>
@@ -665,6 +728,7 @@
             DisplayName = string.IsNullOrWhiteSpace(_newProvider.DisplayName) ? null : _newProvider.DisplayName.Trim(),
             EndpointUrl = endpoint,
             ModelId = model,
+            ThinkingMode = ProviderThinkingModes.Normalize(_newProvider.ThinkingMode),
             AuthType = _newProvider.AuthType,
             IsDefault = _newProvider.IsDefault
         };
@@ -674,6 +738,7 @@
         new(
             (_newProvider.EndpointUrl ?? string.Empty).Trim(),
             (_newProvider.ModelId ?? string.Empty).Trim(),
+            ProviderThinkingModes.Normalize(_newProvider.ThinkingMode) ?? string.Empty,
             _newProvider.AuthType,
             _newProvider.AuthType == AuthType.ApiKey ? (_newProvider.ApiKey ?? string.Empty).Trim() : string.Empty);
 
@@ -700,6 +765,7 @@
         public string? DisplayName { get; set; }
         public string? EndpointUrl { get; set; }
         public string? ModelId { get; set; }
+        public string? ThinkingMode { get; set; }
         public AuthType AuthType { get; set; } = AuthType.None;
         public string? ApiKey { get; set; }
         public bool IsDefault { get; set; }
@@ -708,6 +774,7 @@
     private sealed record NewProviderConnectionSnapshot(
         string EndpointUrl,
         string ModelId,
+        string ThinkingMode,
         AuthType AuthType,
         string ApiKey);
 
@@ -715,5 +782,6 @@
     {
         public string? DisplayName { get; set; }
         public string? ModelId { get; set; }
+        public string? ThinkingMode { get; set; }
     }
 }

@@ -64,7 +64,12 @@ public class ChatClientFactory(
             var httpClient = httpClientFactory.CreateClient();
             var timeoutSeconds = Math.Clamp(agentOptions.Value.OpenAIAccountRequestTimeoutSeconds, 1, 3600);
             httpClient.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
-            return new OpenAIAccountChatClient(httpClient, apiKey, provider.ModelId, loggerFactory.CreateLogger<OpenAIAccountChatClient>());
+            return new OpenAIAccountChatClient(
+                httpClient,
+                apiKey,
+                provider.ModelId,
+                provider.ThinkingMode,
+                loggerFactory.CreateLogger<OpenAIAccountChatClient>());
         }
 
         if (effectiveAuthType != AuthType.None && apiKey is null)
@@ -78,7 +83,10 @@ public class ChatClientFactory(
 
         var credential = new ApiKeyCredential(apiKey ?? "local-provider");
         var client = new OpenAIClient(credential, options);
-        return client.GetChatClient(provider.ModelId).AsIChatClient();
+        var chatClient = client.GetChatClient(provider.ModelId).AsIChatClient();
+        return new ConfigureOptionsChatClient(
+            chatClient,
+            options => ProviderThinkingModes.ApplyToChatOptions(options, provider.ThinkingMode));
     }
 
     private static async Task TestChatClientAsync(IChatClient chatClient, CancellationToken cancellationToken)

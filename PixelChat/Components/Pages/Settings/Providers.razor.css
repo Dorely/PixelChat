@@ -118,6 +118,10 @@
     width: min(22rem, 100%);
 }
 
+.codex-thinking-field {
+    width: min(12rem, 100%);
+}
+
 .provider-inline-actions {
     padding-bottom: 0.05rem;
 }
@@ -146,7 +150,7 @@
 }
 
 .provider-table {
-    min-width: 1080px;
+    min-width: 1240px;
     table-layout: fixed;
 }
 
@@ -169,19 +173,23 @@
 }
 
 .provider-name-column {
-    width: 14%;
+    width: 13%;
 }
 
 .provider-endpoint-column {
-    width: 24%;
+    width: 22%;
 }
 
 .provider-model-column {
-    width: 12%;
+    width: 11%;
+}
+
+.provider-thinking-column {
+    width: 10%;
 }
 
 .provider-auth-column {
-    width: 11%;
+    width: 10%;
 }
 
 .provider-status-column {
@@ -193,12 +201,13 @@
 }
 
 .provider-actions-column {
-    width: 25%;
+    width: 20%;
 }
 
 .provider-name-cell,
 .provider-endpoint-cell,
-.provider-model-cell {
+.provider-model-cell,
+.provider-thinking-cell {
     min-width: 0;
 }
 
@@ -208,7 +217,8 @@
 
 .provider-name-input,
 .endpoint-input,
-.model-input {
+.model-input,
+.thinking-input {
     min-width: 0;
 }
 
@@ -273,7 +283,7 @@
 
 .child-form {
     display: grid;
-    grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) auto;
+    grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) minmax(9rem, 0.8fr) auto;
     align-items: end;
     gap: 0.75rem;
 }

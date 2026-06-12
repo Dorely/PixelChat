@@ -7,6 +7,7 @@ public class LlmProvider
     public string? DisplayName { get; set; }
     public required string EndpointUrl { get; set; }
     public required string ModelId { get; set; }
+    public string? ThinkingMode { get; set; }
     public AuthType AuthType { get; set; }
     public bool IsDefault { get; set; }
     public bool LastChatTestSucceeded { get; set; }
@@ -14,6 +15,7 @@ public class LlmProvider
     public string? LastChatTestError { get; set; }
     public string? LastChatTestEndpointUrl { get; set; }
     public string? LastChatTestModelId { get; set; }
+    public string? LastChatTestThinkingMode { get; set; }
     public AuthType? LastChatTestAuthType { get; set; }
     public int? LastChatTestCredentialSourceId { get; set; }
 
@@ -32,6 +34,7 @@ public class LlmProvider
         LastChatTestSucceeded
         && string.Equals(LastChatTestEndpointUrl, EndpointUrl, StringComparison.Ordinal)
         && string.Equals(LastChatTestModelId, ModelId, StringComparison.Ordinal)
+        && string.Equals(LastChatTestThinkingMode, ThinkingMode, StringComparison.Ordinal)
         && LastChatTestAuthType == AuthType
         && LastChatTestCredentialSourceId == CredentialSourceId;
 
@@ -42,6 +45,7 @@ public class LlmProvider
         LastChatTestError = null;
         LastChatTestEndpointUrl = EndpointUrl;
         LastChatTestModelId = ModelId;
+        LastChatTestThinkingMode = ThinkingMode;
         LastChatTestAuthType = AuthType;
         LastChatTestCredentialSourceId = CredentialSourceId;
     }
@@ -53,6 +57,7 @@ public class LlmProvider
         LastChatTestError = error;
         LastChatTestEndpointUrl = EndpointUrl;
         LastChatTestModelId = ModelId;
+        LastChatTestThinkingMode = ThinkingMode;
         LastChatTestAuthType = AuthType;
         LastChatTestCredentialSourceId = CredentialSourceId;
     }
