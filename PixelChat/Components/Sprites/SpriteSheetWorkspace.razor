@@ -13,8 +13,8 @@
         </div>
         <div class="sprite-head-actions">
             <InputFile OnChange="ImportSourceAsync" accept="image/png,image/jpeg" />
-            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet)" @onclick="AutoDetectAsync">Auto Detect</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(!HasActiveSheet)" @onclick="ResetToOriginalAsync">Reset</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet || _framePersistenceRunning)" @onclick="AutoDetectAsync">Auto Detect</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(!HasActiveSheet || _framePersistenceRunning)" @onclick="ResetToOriginalAsync">Reset</button>
             <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(CurrentWorkingAsset() is null)" @onclick="ExportWorkingAsync">Export...</button>
         </div>
     </div>
@@ -37,9 +37,9 @@
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Select)" title="@ToolTitle(SpriteEditTool.Select)" aria-pressed="@(_tool == SpriteEditTool.Select)" @onclick="() => SetToolAsync(SpriteEditTool.Select)">Select</button>
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Draw)" title="@ToolTitle(SpriteEditTool.Draw)" aria-pressed="@(_tool == SpriteEditTool.Draw)" @onclick="() => SetToolAsync(SpriteEditTool.Draw)">Draw Box</button>
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Outline)" title="@ToolTitle(SpriteEditTool.Outline)" aria-pressed="@(_tool == SpriteEditTool.Outline)" @onclick="() => SetToolAsync(SpriteEditTool.Outline)">Outline</button>
-                        <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_frames.Count == 0)" @onclick="ExpandToCellsAsync">Expand to Cells</button>
-                        <button type="button" class="btn btn-sm btn-primary" disabled="@(_frames.Count == 0 || _frameEditRunning)" @onclick="ReassembleSheetAsync">Reassemble</button>
-                        <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_selectedFrameIndex < 0 || _frames.Count == 0)" @onclick="DeleteSelectedFrameAsync">Delete</button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_frames.Count == 0 || _framePersistenceRunning)" @onclick="ExpandToCellsAsync">Expand to Cells</button>
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@(_frames.Count == 0 || _frameEditRunning || _framePersistenceRunning)" @onclick="ReassembleSheetAsync">Reassemble</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_selectedFrameIndex < 0 || _frames.Count == 0 || _framePersistenceRunning)" @onclick="DeleteSelectedFrameAsync">Delete</button>
                     </div>
 
                     <div class="selected-frame-readout">
@@ -58,6 +58,14 @@
                             <span>No frame selected</span>
                         }
                     </div>
+                    @if (!string.IsNullOrWhiteSpace(_status))
+                    {
+                        <div class="sprite-status">@_status</div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_error))
+                    {
+                        <div class="sprite-error">@_error</div>
+                    }
                 </div>
             </section>
 
@@ -183,14 +191,6 @@
                     }
                 </div>
 
-                @if (!string.IsNullOrWhiteSpace(_status))
-                {
-                    <div class="sprite-status">@_status</div>
-                }
-                @if (!string.IsNullOrWhiteSpace(_error))
-                {
-                    <div class="sprite-error">@_error</div>
-                }
             </aside>
         </div>
     }
@@ -238,6 +238,7 @@
     private DateTime? _loadedFrameWorkUpdatedAt;
     private string _frameEditPrompt = string.Empty;
     private bool _frameEditRunning;
+    private bool _framePersistenceRunning;
     private FrameWorkEraseMode _frameEraseMode = FrameWorkEraseMode.None;
     private readonly List<SpriteSheetEditorFrame> _frames = [];
 
@@ -380,11 +381,14 @@
     private async Task ResetToOriginalAsync()
     {
         var active = Workbench.ActiveSpriteSheet;
-        if (active is null)
+        if (active is null || _framePersistenceRunning)
             return;
 
         _error = null;
         _status = "Resetting sprite sheet...";
+        _framePersistenceRunning = true;
+        _autosaveCts?.Cancel();
+        await Task.Yield();
         try
         {
             var reset = await Workflow.ResetSpriteSheetToOriginalAsync(Workbench.Project.Id, active.Id);
@@ -392,6 +396,12 @@
             _loadedSpriteSheetUpdatedAt = null;
             _frames.Clear();
             _selectedFrameIndex = -1;
+            _loadedFrameWorkIndex = null;
+            _loadedFrameWorkUpdatedAt = null;
+            _frameWorkImageDataUrl = string.Empty;
+            _frameWorkImageWidth = 0;
+            _frameWorkImageHeight = 0;
+            ResetFrameEraseMode();
             _status = $"{reset.Label} reset.";
             await OnChanged.InvokeAsync();
         }
@@ -399,6 +409,10 @@
         {
             _error = ex.Message;
             _status = string.Empty;
+        }
+        finally
+        {
+            _framePersistenceRunning = false;
         }
     }
 
@@ -511,14 +525,46 @@
     private async Task DeleteSelectedFrameAsync()
     {
         var frame = SelectedFrame();
-        if (frame is null)
+        if (frame is null || _framePersistenceRunning)
             return;
+        if (Workbench.ActiveSpriteSheet is not { } active || frame.Id is not Guid frameId)
+        {
+            _error = "Frame must finish saving before it can be deleted.";
+            return;
+        }
 
-        _frames.Remove(frame);
-        ReindexFrames();
-        _selectedFrameIndex = _frames.Count == 0 ? -1 : Math.Clamp(frame.Index, 0, _frames.Count - 1);
-        ResetFrameEraseMode();
-        await AutosaveLayoutNowAsync();
+        _error = null;
+        _status = "Deleting sprite frame...";
+        _framePersistenceRunning = true;
+        _autosaveCts?.Cancel();
+        await Task.Yield();
+        try
+        {
+            var deletedIndex = frame.Index;
+            await Workflow.DeleteSpriteSheetFrameAsync(Workbench.Project.Id, active.Id, frameId);
+            _frames.Remove(frame);
+            ReindexFrames();
+            _selectedFrameIndex = _frames.Count == 0 ? -1 : Math.Clamp(deletedIndex, 0, _frames.Count - 1);
+            _loadedSpriteSheetId = null;
+            _loadedSpriteSheetUpdatedAt = null;
+            _loadedFrameWorkIndex = null;
+            _loadedFrameWorkUpdatedAt = null;
+            _frameWorkImageDataUrl = string.Empty;
+            _frameWorkImageWidth = 0;
+            _frameWorkImageHeight = 0;
+            ResetFrameEraseMode();
+            _status = "Sprite frame deleted.";
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+        finally
+        {
+            _framePersistenceRunning = false;
+        }
     }
 
     private async Task MoveFrameAsync(int index, int delta)
@@ -779,7 +825,7 @@
 
     private async Task AutosaveLayoutNowAsync()
     {
-        if (_disposed || Workbench.ActiveSpriteSheet is not { } active || string.IsNullOrWhiteSpace(_workingImageDataUrl))
+        if (_disposed || _framePersistenceRunning || Workbench.ActiveSpriteSheet is not { } active || string.IsNullOrWhiteSpace(_workingImageDataUrl))
             return;
 
         _autosaveCts?.Cancel();

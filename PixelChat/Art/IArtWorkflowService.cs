@@ -36,6 +36,7 @@ public interface IArtWorkflowService
     Task<SpriteSheetDefinitionView> NormalizeSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> ExpandSpriteSheetFramesToCellAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> UpdateSpriteSheetFramesAsync(Guid projectId, UpdateSpriteSheetFramesRequest request, CancellationToken cancellationToken = default);
+    Task<SpriteSheetDefinitionView> DeleteSpriteSheetFrameAsync(Guid projectId, Guid spriteSheetId, Guid frameId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteAnimationReviewImageView> BuildSpriteSheetRepairAnnotatedSheetAsync(Guid projectId, RepairSpriteSheetFramesResult repair, CancellationToken cancellationToken = default);
     Task<SpriteFrameWorkingView> IsolateSpriteFrameAsync(Guid projectId, Guid spriteSheetId, int frameIndex, int? margin = null, CancellationToken cancellationToken = default);
