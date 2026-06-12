@@ -451,9 +451,52 @@ public sealed class ArtWorkflowService(
             image.ToFrame);
     }
 
+    public async Task<SpriteAnimationReviewImageView> BuildSpriteSheetRepairAnnotatedSheetAsync(
+        Guid projectId,
+        RepairSpriteSheetFramesResult repair,
+        CancellationToken cancellationToken = default)
+    {
+        var imageAssetId = repair.WorkingAssetId ?? repair.SourceAssetId;
+        var source = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == imageAssetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite-sheet repair image was not found.");
+        if (!SpriteSheetPngCodec.TryReadRgba(source.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Sprite-sheet repair annotation requires a PNG image.");
+
+        var image = SpriteSheetServerRenderer.BuildRepairAnnotatedSheetView(
+            rgba,
+            width,
+            height,
+            repair.Rows,
+            repair.Columns,
+            repair.CellWidth,
+            repair.CellHeight,
+            repair.Gutter,
+            repair.Background,
+            repair.Frames,
+            repair.RejectedSegments);
+        return new SpriteAnimationReviewImageView(
+            image.Label,
+            image.FileName,
+            "image/png",
+            DataUrl.ToDataUrl("image/png", image.PngData),
+            image.Kind,
+            image.FrameIndex,
+            image.FromFrame,
+            image.ToFrame);
+    }
+
+    public Task<SpriteAnimationReviewImageView> BuildSpriteSheetAnnotatedSheetAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        CancellationToken cancellationToken = default) =>
+        BuildSpriteSheetAnnotatedSheetAsync(projectId, spriteSheetId, Array.Empty<SpriteSheetRejectedSegmentView>(), cancellationToken);
+
     public async Task<SpriteAnimationReviewImageView> BuildSpriteSheetAnnotatedSheetAsync(
         Guid projectId,
         Guid spriteSheetId,
+        IReadOnlyList<SpriteSheetRejectedSegmentView> rejectedSegments,
         CancellationToken cancellationToken = default)
     {
         var sheet = await db.SpriteSheetDefinitions
@@ -485,7 +528,10 @@ public sealed class ArtWorkflowService(
                     frame.Index,
                     RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
                     DeserializeShapePaths(frame.ShapeJson)))
-                .ToList());
+                .ToList())
+        {
+            RejectedSegments = rejectedSegments,
+        };
         var image = SpriteSheetServerRenderer.BuildDetectionAnnotatedSheetView(rgba, width, height, detection);
         return new SpriteAnimationReviewImageView(
             image.Label,
@@ -711,6 +757,87 @@ public sealed class ArtWorkflowService(
             request.ExpectedFrames,
             request.LayoutHint,
             request.BackgroundMode);
+    }
+
+    public async Task<RepairSpriteSheetFramesResult> RepairSpriteSheetFramesAsync(
+        Guid projectId,
+        RepairSpriteSheetFramesRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var definition = await db.SpriteSheetDefinitions
+            .Include(s => s.SourceAsset)
+            .Include(s => s.OutputAsset)
+            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == request.SpriteSheetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite sheet was not found.");
+        var working = definition.OutputAsset ?? definition.SourceAsset;
+        if (!working.ContentType.Equals("image/png", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Sprite-sheet frame repair requires a PNG working image.");
+
+        var background = BackgroundFromDefinition(definition);
+        var analysis = SpriteSheetImageAnalyzer.Repair(
+            definition.SourceAssetId,
+            working.Data,
+            working.ContentType,
+            Math.Clamp(request.ExpectedFrames, 1, 256),
+            request.LayoutHint,
+            background is null
+                ? definition.BackgroundColor
+                : (background.Mode.Equals("color", StringComparison.OrdinalIgnoreCase) ? BackgroundColor(background) : "alpha"));
+
+        var frames = MergeTargetedRepairFrames(
+            await db.SpriteSheetFrameRecords
+                .AsNoTracking()
+                .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == definition.Id)
+                .OrderBy(frame => frame.Index)
+                .ToListAsync(cancellationToken),
+            analysis.Frames,
+            request.TargetFrameNumbers);
+        var warnings = analysis.Warnings.ToList();
+        if (request.TargetFrameNumbers is { Count: > 0 })
+            warnings.Add($"{(request.Apply ? "Applied" : "Prepared")} repair candidates only for requested frame number(s): {string.Join(", ", request.TargetFrameNumbers.Order())}.");
+
+        SpriteSheetDefinitionView? saved = null;
+        if (request.Apply)
+        {
+            var (rows, columns) = GridCapacity(analysis.Rows, analysis.Columns, frames.Count);
+            saved = await UpdateSpriteSheetFramesAsync(projectId, new UpdateSpriteSheetFramesRequest(
+                definition.Id,
+                rows,
+                columns,
+                Math.Max(1, frames.Max(frame => frame.SourceRect.Width)),
+                Math.Max(1, frames.Max(frame => frame.SourceRect.Height)),
+                Padding: 0,
+                Gutter: 0,
+                definition.Fps,
+                definition.Loop,
+                definition.HorizontalAnchor,
+                definition.VerticalAnchor,
+                frames), cancellationToken);
+        }
+
+        return new RepairSpriteSheetFramesResult(
+            definition.Id,
+            definition.SourceAssetId,
+            definition.OutputAssetId,
+            request.Apply,
+            analysis.ImageWidth,
+            analysis.ImageHeight,
+            analysis.Rows,
+            analysis.Columns,
+            Math.Max(1, frames.Max(frame => frame.SourceRect.Width)),
+            Math.Max(1, frames.Max(frame => frame.SourceRect.Height)),
+            request.Apply ? 0 : definition.Padding,
+            request.Apply ? 0 : definition.Gutter,
+            definition.Fps,
+            definition.Loop,
+            NormalizeHorizontalAnchor(definition.HorizontalAnchor),
+            NormalizeVerticalAnchor(definition.VerticalAnchor),
+            analysis.Background,
+            frames,
+            warnings.Distinct(StringComparer.Ordinal).ToList(),
+            analysis.RejectedSegments,
+            analysis.FrameQuality,
+            saved);
     }
 
     public async Task<SpriteSheetDefinitionView> StartSpriteSheetEditAsync(
@@ -2542,6 +2669,44 @@ public sealed class ArtWorkflowService(
             RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
             DeserializeShapePaths(frame.ShapeJson));
 
+    private static IReadOnlyList<SpriteSheetFrameUpdateView> MergeTargetedRepairFrames(
+        IReadOnlyList<SpriteSheetFrameRecord> existingRecords,
+        IReadOnlyList<SpriteSheetFrameUpdateView> repairFrames,
+        IReadOnlyList<int>? targetFrameNumbers)
+    {
+        if (targetFrameNumbers is not { Count: > 0 } || existingRecords.Count == 0)
+            return ReindexFrameUpdates(repairFrames);
+
+        var repairByIndex = repairFrames.ToDictionary(frame => frame.Index);
+        var merged = existingRecords
+            .OrderBy(frame => frame.Index)
+            .Select(FrameUpdateFromRecord)
+            .ToList();
+        foreach (var frameNumber in targetFrameNumbers.Distinct().Order())
+        {
+            var index = frameNumber - 1;
+            if (index < 0 || !repairByIndex.TryGetValue(index, out var repairFrame))
+                continue;
+
+            if (index < merged.Count)
+                merged[index] = repairFrame;
+            else
+                merged.Add(repairFrame);
+        }
+
+        return ReindexFrameUpdates(merged);
+    }
+
+    private static IReadOnlyList<SpriteSheetFrameUpdateView> ReindexFrameUpdates(IReadOnlyList<SpriteSheetFrameUpdateView> frames) =>
+        frames
+            .OrderBy(frame => frame.Index)
+            .Select((frame, index) => frame with
+            {
+                Index = index,
+                Label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label,
+            })
+            .ToList();
+
     private static SpriteSheetRect ExpandRectToCell(
         SpriteSheetRect rect,
         int cellWidth,
@@ -3211,10 +3376,24 @@ public sealed class ArtWorkflowService(
             frame.SourceRect,
             frame.CellRect,
             frame.SpriteRect,
+            hasShapePaths = HasShapePaths(frame.ShapePaths),
+            shapePathCount = ShapePathCount(frame.ShapePaths),
+            shapePointCount = ShapePointCount(frame.ShapePaths),
             frame.PreviewWidth,
             frame.PreviewHeight,
         }),
     };
+
+    private static bool HasShapePaths(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
+        ShapePathCount(shapePaths) > 0;
+
+    private static int ShapePathCount(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
+        shapePaths.Count(path => path.Points.Count >= 3);
+
+    private static int ShapePointCount(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
+        shapePaths
+            .Where(path => path.Points.Count >= 3)
+            .Sum(path => path.Points.Count);
 
     private static string Preview(string? value, int maxChars)
     {

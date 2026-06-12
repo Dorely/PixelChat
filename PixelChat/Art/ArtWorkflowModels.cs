@@ -165,12 +165,61 @@ public sealed record SpriteSheetDetectionResult(
     int Rows,
     int Columns,
     SpriteSheetBackground Background,
-    IReadOnlyList<SpriteSheetFrameDetectionView> Frames);
+    IReadOnlyList<SpriteSheetFrameDetectionView> Frames)
+{
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+    public IReadOnlyList<SpriteSheetRejectedSegmentView> RejectedSegments { get; init; } = [];
+    public IReadOnlyList<SpriteSheetFrameQualityView> FrameQuality { get; init; } = [];
+}
 
 public sealed record SpriteSheetFrameDetectionView(
     int Index,
     SpriteSheetRect SourceRect,
     IReadOnlyList<SpriteSheetShapePath> ShapePaths);
+
+public sealed record SpriteSheetRejectedSegmentView(
+    int Index,
+    SpriteSheetRect Rect,
+    string Reason);
+
+public sealed record SpriteSheetFrameQualityView(
+    int FrameNumber,
+    int Index,
+    SpriteSheetRect SourceRect,
+    int ForegroundPixelCount,
+    double ForegroundCoveragePercent,
+    IReadOnlyList<string> Warnings);
+
+public sealed record RepairSpriteSheetFramesRequest(
+    Guid SpriteSheetId,
+    int ExpectedFrames,
+    string? LayoutHint,
+    IReadOnlyList<int>? TargetFrameNumbers,
+    bool Apply);
+
+public sealed record RepairSpriteSheetFramesResult(
+    Guid SpriteSheetId,
+    Guid SourceAssetId,
+    Guid? WorkingAssetId,
+    bool Applied,
+    int ImageWidth,
+    int ImageHeight,
+    int Rows,
+    int Columns,
+    int CellWidth,
+    int CellHeight,
+    int Padding,
+    int Gutter,
+    int Fps,
+    bool Loop,
+    string HorizontalAnchor,
+    string VerticalAnchor,
+    SpriteSheetBackground Background,
+    IReadOnlyList<SpriteSheetFrameUpdateView> Frames,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<SpriteSheetRejectedSegmentView> RejectedSegments,
+    IReadOnlyList<SpriteSheetFrameQualityView> FrameQuality,
+    SpriteSheetDefinitionView? SavedSheet);
 
 public sealed record AutosaveSpriteSheetLayoutRequest(
     Guid SpriteSheetId,

@@ -446,7 +446,7 @@ public sealed class AssistantChatService(
         return messages;
     }
 
-    private static List<ChatMessage> BuildPersistedModelMessages(IReadOnlyList<AssistantMessage> history)
+    private List<ChatMessage> BuildPersistedModelMessages(IReadOnlyList<AssistantMessage> history)
     {
         var messages = new List<ChatMessage> { new(ChatRole.System, AssistantPromptBuilder.Build()) };
         foreach (var message in history)
@@ -579,11 +579,13 @@ public sealed class AssistantChatService(
         return string.Join('\n', lines);
     }
 
-    private static ChatMessage? ToChatMessage(AssistantMessage message) => message.Role switch
+    private ChatMessage? ToChatMessage(AssistantMessage message) => message.Role switch
     {
         AssistantMessageRole.User => new ChatMessage(ChatRole.User, message.Content),
         AssistantMessageRole.Assistant => BuildAssistantReplay(message),
-        AssistantMessageRole.Tool => new ChatMessage(ChatRole.Tool, [new FunctionResultContent(message.ToolCallId ?? string.Empty, message.Content)]),
+        AssistantMessageRole.Tool => new ChatMessage(ChatRole.Tool, [new FunctionResultContent(
+            message.ToolCallId ?? string.Empty,
+            BuildToolResultForModel(message.ToolName ?? "tool", message.Content, EffectiveMaxToolResultCharsForModel()))]),
         _ => null
     };
 
@@ -719,8 +721,14 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "review_sprite_animation", StringComparison.Ordinal))
                 return await BuildSpriteAnimationReviewModelOnlyContentsAsync(pendingCall, projectId, toolResult, cancellationToken);
 
+            if (string.Equals(pendingCall.Name, "repair_sprite_sheet_frames", StringComparison.Ordinal))
+                return await BuildSpriteMutationModelOnlyContentsAsync(pendingCall.Name, projectId, toolResult, cancellationToken);
+
             if (string.Equals(pendingCall.Name, "detect_sprite_sheet_frames", StringComparison.Ordinal))
                 return await BuildSpriteSheetDetectionModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
+
+            if (IsSpriteMutationFeedbackTool(pendingCall.Name))
+                return await BuildSpriteMutationModelOnlyContentsAsync(pendingCall.Name, projectId, toolResult, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -811,18 +819,39 @@ public sealed class AssistantChatService(
         var root = document.RootElement;
         if (TryReadGuidProperty(root, "spriteSheetId", out var spriteSheetId))
         {
-            var image = await workflow.BuildSpriteSheetAnnotatedSheetAsync(projectId, spriteSheetId, cancellationToken);
+            var image = await workflow.BuildSpriteSheetAnnotatedSheetAsync(
+                projectId,
+                spriteSheetId,
+                ReadSpriteSheetRejectedSegments(root),
+                cancellationToken);
             var frameCount = TryReadIntProperty(root, "frameCount", out var parsedFrameCount)
                 ? parsedFrameCount
                 : 0;
-            return
-            [
-                new TextContent($"Model-only image: annotated sprite-sheet detection view for sprite sheet {spriteSheetId}. Each detected frame is labeled with a 1-based number matching the tool result frameNumber values. Exact shape outlines are drawn visually and are not attached to visible chat context. Detected frames: {frameCount}."),
+            var contents = new List<AIContent>
+            {
+                new TextContent($"Model-only images: compact sprite-sheet detection feedback for sprite sheet {spriteSheetId}. The annotated sheet labels frames with 1-based numbers matching the tool result frameNumber values; compact filmstrip/contact imagery is included when frame previews exist. These images are not attached to visible chat context. Detected frames: {frameCount}."),
                 new DataContent(image.DataUrl, image.ContentType)
                 {
                     Name = image.FileName,
                 },
-            ];
+            };
+            try
+            {
+                var review = await workflow.BuildSpriteAnimationReviewAsync(projectId, spriteSheetId, 12, cancellationToken);
+                foreach (var reviewImage in SelectCompactMutationReviewImages(review, includeSheetView: false))
+                {
+                    contents.Add(new DataContent(reviewImage.DataUrl, reviewImage.ContentType)
+                    {
+                        Name = reviewImage.FileName,
+                    });
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogDebug(ex, "Could not build detection review images for sprite sheet {SpriteSheetId}.", spriteSheetId);
+            }
+
+            return contents;
         }
 
         var detection = JsonSerializer.Deserialize<SpriteSheetDetectionResult>(toolResult, JsonOptions);
@@ -840,6 +869,191 @@ public sealed class AssistantChatService(
         ];
     }
 
+    private async Task<IReadOnlyList<AIContent>> BuildSpriteMutationModelOnlyContentsAsync(
+        string toolName,
+        Guid projectId,
+        string toolResult,
+        CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(toolResult);
+        var root = document.RootElement;
+        if (!TryReadGuidProperty(root, "spriteSheetId", out var spriteSheetId)
+            && !TryReadGuidProperty(root, "id", out spriteSheetId))
+        {
+            return Array.Empty<AIContent>();
+        }
+
+        var contents = new List<AIContent>
+        {
+            new TextContent($"Model-only images: compact result of {toolName} for sprite sheet {spriteSheetId}. Inspect the annotated sheet and filmstrip/contact image before deciding whether frame boxes/polygons are acceptable. These images are not attached to visible chat context."),
+        };
+
+        var hasAnnotatedSheet = false;
+        if (string.Equals(toolName, "repair_sprite_sheet_frames", StringComparison.Ordinal)
+            && TryBuildRepairResultFromToolJson(root, out var repair))
+        {
+            try
+            {
+                var repairImage = repair.Applied
+                    ? await workflow.BuildSpriteSheetAnnotatedSheetAsync(projectId, spriteSheetId, repair.RejectedSegments, cancellationToken)
+                    : await workflow.BuildSpriteSheetRepairAnnotatedSheetAsync(projectId, repair, cancellationToken);
+                contents.Add(new DataContent(repairImage.DataUrl, repairImage.ContentType)
+                {
+                    Name = repairImage.FileName,
+                });
+                hasAnnotatedSheet = true;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogDebug(ex, "Could not build repair annotation image for sprite sheet {SpriteSheetId}.", spriteSheetId);
+            }
+        }
+
+        try
+        {
+            var review = await workflow.BuildSpriteAnimationReviewAsync(projectId, spriteSheetId, 12, cancellationToken);
+            foreach (var image in SelectCompactMutationReviewImages(review, includeSheetView: !hasAnnotatedSheet))
+            {
+                contents.Add(new DataContent(image.DataUrl, image.ContentType)
+                {
+                    Name = image.FileName,
+                });
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Could not build sprite mutation review images for sprite sheet {SpriteSheetId}.", spriteSheetId);
+            if (TryReadGuidProperty(root, "workingAssetId", out var workingAssetId))
+            {
+                try
+                {
+                    var asset = await workflow.GetAssetForExportAsync(projectId, workingAssetId, cancellationToken);
+                    contents.Add(new DataContent(asset.DataUrl, asset.ContentType)
+                    {
+                        Name = asset.FileName,
+                    });
+                }
+                catch (Exception assetEx) when (assetEx is not OperationCanceledException)
+                {
+                    logger.LogDebug(assetEx, "Could not build fallback sprite mutation image for working asset {AssetId}.", workingAssetId);
+                }
+            }
+        }
+
+        return contents.Count > 1 ? contents : Array.Empty<AIContent>();
+    }
+
+    private static IEnumerable<SpriteAnimationReviewImageView> SelectCompactMutationReviewImages(
+        SpriteAnimationReviewView review,
+        bool includeSheetView)
+    {
+        foreach (var image in review.Images)
+        {
+            if (string.Equals(image.Kind, "filmstrip", StringComparison.Ordinal)
+                || (includeSheetView && string.Equals(image.Kind, "sheet-view", StringComparison.Ordinal)))
+            {
+                yield return image;
+            }
+        }
+    }
+
+    private static bool IsSpriteMutationFeedbackTool(string toolName) =>
+        toolName is "update_sprite_sheet_frames"
+            or "expand_sprite_sheet_frames_to_cells"
+            or "normalize_sprite_sheet"
+            or "reset_sprite_sheet_to_original";
+
+    private static bool TryBuildRepairResultFromToolJson(JsonElement root, out RepairSpriteSheetFramesResult repair)
+    {
+        repair = null!;
+        if (!TryReadGuidProperty(root, "spriteSheetId", out var spriteSheetId)
+            || !TryReadGuidProperty(root, "sourceAssetId", out var sourceAssetId))
+        {
+            return false;
+        }
+
+        TryReadGuidProperty(root, "workingAssetId", out var workingAssetId);
+        var hasWorkingAsset = workingAssetId != default;
+        var background = root.TryGetProperty("background", out var backgroundElement)
+            ? JsonSerializer.Deserialize<SpriteSheetBackground>(backgroundElement.GetRawText(), JsonOptions) ?? new SpriteSheetBackground("alpha", 0, 0, 0, 0)
+            : new SpriteSheetBackground("alpha", 0, 0, 0, 0);
+        var frames = ReadSpriteSheetFrameUpdates(root);
+        var warnings = root.TryGetProperty("warnings", out var warningsElement)
+            ? JsonSerializer.Deserialize<List<string>>(warningsElement.GetRawText(), JsonOptions) ?? []
+            : [];
+        var rejectedSegments = ReadSpriteSheetRejectedSegments(root);
+        var frameQuality = root.TryGetProperty("frameQuality", out var qualityElement)
+            ? JsonSerializer.Deserialize<List<SpriteSheetFrameQualityView>>(qualityElement.GetRawText(), JsonOptions) ?? []
+            : [];
+
+        repair = new RepairSpriteSheetFramesResult(
+            spriteSheetId,
+            sourceAssetId,
+            hasWorkingAsset ? workingAssetId : null,
+            TryReadBoolProperty(root, "applied", out var applied) && applied,
+            TryReadIntProperty(root, "imageWidth", out var imageWidth) ? imageWidth : 1,
+            TryReadIntProperty(root, "imageHeight", out var imageHeight) ? imageHeight : 1,
+            TryReadIntProperty(root, "rows", out var rows) ? rows : 1,
+            TryReadIntProperty(root, "columns", out var columns) ? columns : Math.Max(1, frames.Count),
+            TryReadIntProperty(root, "cellWidth", out var cellWidth) ? cellWidth : Math.Max(1, frames.Select(frame => frame.SourceRect.Width).DefaultIfEmpty(1).Max()),
+            TryReadIntProperty(root, "cellHeight", out var cellHeight) ? cellHeight : Math.Max(1, frames.Select(frame => frame.SourceRect.Height).DefaultIfEmpty(1).Max()),
+            TryReadIntProperty(root, "padding", out var padding) ? padding : 0,
+            TryReadIntProperty(root, "gutter", out var gutter) ? gutter : 0,
+            TryReadIntProperty(root, "fps", out var fps) ? fps : 8,
+            TryReadBoolProperty(root, "loop", out var loop) ? loop : true,
+            TryReadStringProperty(root, "horizontalAnchor") ?? "center",
+            TryReadStringProperty(root, "verticalAnchor") ?? "bottom",
+            background,
+            frames,
+            warnings,
+            rejectedSegments,
+            frameQuality,
+            SavedSheet: null);
+        return true;
+    }
+
+    private static IReadOnlyList<SpriteSheetRejectedSegmentView> ReadSpriteSheetRejectedSegments(JsonElement root) =>
+        root.TryGetProperty("rejectedSegments", out var rejectedElement)
+            && rejectedElement.ValueKind == JsonValueKind.Array
+            ? JsonSerializer.Deserialize<List<SpriteSheetRejectedSegmentView>>(rejectedElement.GetRawText(), JsonOptions) ?? []
+            : [];
+
+    private static IReadOnlyList<SpriteSheetFrameUpdateView> ReadSpriteSheetFrameUpdates(JsonElement root)
+    {
+        if (!root.TryGetProperty("frames", out var framesElement)
+            || framesElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var frames = new List<SpriteSheetFrameUpdateView>();
+        foreach (var frameElement in framesElement.EnumerateArray())
+        {
+            if (frameElement.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var index = TryReadIntProperty(frameElement, "index", out var indexValue)
+                ? indexValue
+                : TryReadIntProperty(frameElement, "frameNumber", out var frameNumber)
+                    ? Math.Max(0, frameNumber - 1)
+                    : frames.Count;
+            var label = TryReadStringProperty(frameElement, "label");
+            if (string.IsNullOrWhiteSpace(label))
+                label = $"Frame {index + 1}";
+            var sourceRect = frameElement.TryGetProperty("sourceRect", out var rectElement)
+                ? JsonSerializer.Deserialize<SpriteSheetRect>(rectElement.GetRawText(), JsonOptions) ?? new SpriteSheetRect(0, 0, 1, 1)
+                : new SpriteSheetRect(0, 0, 1, 1);
+            var shapePaths = frameElement.TryGetProperty("shapePaths", out var shapeElement)
+                && shapeElement.ValueKind == JsonValueKind.Array
+                ? JsonSerializer.Deserialize<List<SpriteSheetShapePath>>(shapeElement.GetRawText(), JsonOptions) ?? []
+                : [];
+
+            frames.Add(new SpriteSheetFrameUpdateView(index, label, sourceRect, shapePaths));
+        }
+
+        return frames;
+    }
+
     private static bool TryReadGuidProperty(JsonElement root, string name, out Guid value)
     {
         value = default;
@@ -855,6 +1069,24 @@ public sealed class AssistantChatService(
             && element.ValueKind == JsonValueKind.Number
             && element.TryGetInt32(out value);
     }
+
+    private static bool TryReadBoolProperty(JsonElement root, string name, out bool value)
+    {
+        value = default;
+        if (!root.TryGetProperty(name, out var element)
+            || (element.ValueKind != JsonValueKind.True && element.ValueKind != JsonValueKind.False))
+        {
+            return false;
+        }
+
+        value = element.GetBoolean();
+        return true;
+    }
+
+    private static string? TryReadStringProperty(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var element) && element.ValueKind == JsonValueKind.String
+            ? element.GetString()
+            : null;
 
     private static Guid? ReadGuidArgument(PendingToolCall pendingCall, string name)
     {

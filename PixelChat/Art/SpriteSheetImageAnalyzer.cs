@@ -51,6 +51,34 @@ internal static class SpriteSheetImageAnalyzer
         if (frames.Count == 0)
             return GridFallback(sourceAssetId, width, height, expectedFrames, layoutHint, background);
 
+        if (expectedFrames is > 0 && ShouldPreferExpectedFrameRepair(frames, expectedFrames.Value))
+        {
+            var repair = RepairFramesFromPixels(
+                sourceAssetId,
+                rgba,
+                width,
+                height,
+                expectedFrames.Value,
+                layoutHint,
+                background,
+                frames);
+            return new SpriteSheetDetectionResult(
+                sourceAssetId,
+                width,
+                height,
+                repair.Rows,
+                repair.Columns,
+                background,
+                repair.Frames
+                    .Select(frame => new SpriteSheetFrameDetectionView(frame.Index, frame.SourceRect, frame.ShapePaths))
+                    .ToList())
+            {
+                Warnings = repair.Warnings,
+                RejectedSegments = repair.RejectedSegments,
+                FrameQuality = repair.FrameQuality,
+            };
+        }
+
         if (expectedFrames is > 0 && frames.Count > expectedFrames.Value)
         {
             frames = frames
@@ -67,6 +95,14 @@ internal static class SpriteSheetImageAnalyzer
             ? frames.Count
             : frames.GroupBy(frame => RowBucket(frame.SourceRect.Y, frames)).Max(group => group.Count());
 
+        var warnings = BuildDetectionWarnings(frames, expectedFrames);
+        var rejectedSegments = BuildRejectedSegments(frames, expectedFrames);
+        var quality = BuildFrameQuality(rgba, width, height, frames.Select(frame => new SpriteSheetFrameUpdateView(
+            frame.Index,
+            $"Frame {frame.Index + 1}",
+            frame.SourceRect,
+            frame.ShapePaths)).ToList(), background);
+
         return new SpriteSheetDetectionResult(
             sourceAssetId,
             width,
@@ -74,7 +110,28 @@ internal static class SpriteSheetImageAnalyzer
             Math.Max(1, rowCount),
             Math.Max(1, columnCount),
             background,
-            frames);
+            frames)
+        {
+            Warnings = warnings,
+            RejectedSegments = rejectedSegments,
+            FrameQuality = quality,
+        };
+    }
+
+    public static SpriteSheetRepairAnalysis Repair(
+        Guid sourceAssetId,
+        byte[] data,
+        string contentType,
+        int expectedFrames,
+        string? layoutHint,
+        string? backgroundMode)
+    {
+        if (!SpriteSheetPngCodec.TryReadRgba(data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Sprite-sheet frame repair requires a PNG source image.");
+
+        var background = ResolveBackground(rgba, width, height, backgroundMode);
+        var componentFrames = DetectFramesFromPixels(rgba, width, height, expectedFrames, background);
+        return RepairFramesFromPixels(sourceAssetId, rgba, width, height, expectedFrames, layoutHint, background, componentFrames);
     }
 
     public static SpriteSheetBackground ResolveBackground(byte[] rgba, int width, int height, string? hint = null)
@@ -266,6 +323,351 @@ internal static class SpriteSheetImageAnalyzer
 
     private static double RoundMetric(double value) =>
         Math.Round(value, 3, MidpointRounding.AwayFromZero);
+
+    private static bool ShouldPreferExpectedFrameRepair(
+        IReadOnlyList<SpriteSheetFrameDetectionView> frames,
+        int expectedFrames)
+    {
+        if (expectedFrames <= 0)
+            return false;
+        if (frames.Count != expectedFrames)
+            return true;
+
+        var areas = frames
+            .Select(frame => (double)frame.SourceRect.Width * frame.SourceRect.Height)
+            .Where(area => area > 0)
+            .Order()
+            .ToList();
+        if (areas.Count < 2)
+            return false;
+
+        var median = areas[areas.Count / 2];
+        if (median <= 0)
+            return false;
+
+        return areas.Any(area => area < median * 0.18d || area > median * 2.8d);
+    }
+
+    private static SpriteSheetRepairAnalysis RepairFramesFromPixels(
+        Guid sourceAssetId,
+        byte[] rgba,
+        int width,
+        int height,
+        int expectedFrames,
+        string? layoutHint,
+        SpriteSheetBackground background,
+        IReadOnlyList<SpriteSheetFrameDetectionView> componentFrames)
+    {
+        expectedFrames = Math.Clamp(expectedFrames, 1, 256);
+        var (rows, columns) = InferExpectedGrid(expectedFrames, layoutHint, width, height);
+        var cellWidth = Math.Max(1, (int)Math.Ceiling(width / (double)columns));
+        var cellHeight = Math.Max(1, (int)Math.Ceiling(height / (double)rows));
+        var warnings = new List<string>();
+        var rejectedSegments = BuildRejectedSegments(componentFrames, expectedFrames);
+
+        if (componentFrames.Count != expectedFrames)
+        {
+            warnings.Add($"Connected-component detection found {componentFrames.Count} segment(s), but {expectedFrames} frame(s) were expected. A grid-guided repair candidate was used instead.");
+        }
+        else if (ShouldPreferExpectedFrameRepair(componentFrames, expectedFrames))
+        {
+            warnings.Add("Connected-component detection had severe frame-size outliers. A grid-guided repair candidate was used instead.");
+        }
+
+        if (rejectedSegments.Count > 0)
+            warnings.Add($"{rejectedSegments.Count} connected-component segment(s) were marked as rejected/outlier annotations for follow-up.");
+
+        var rowForegroundBounds = BuildRowForegroundBounds(rgba, width, height, rows, cellHeight, background);
+        var frames = new List<SpriteSheetFrameUpdateView>();
+        for (var index = 0; index < expectedFrames; index++)
+        {
+            var row = index / columns;
+            var column = index % columns;
+            var cellX = column * cellWidth;
+            var cellY = row * cellHeight;
+            var actualCellWidth = Math.Max(1, Math.Min(cellWidth, width - cellX));
+            var actualCellHeight = Math.Max(1, Math.Min(cellHeight, height - cellY));
+            var ownershipRect = new SpriteSheetRect(cellX, cellY, actualCellWidth, actualCellHeight);
+            var sourceRect = BuildRepairSourceRect(
+                ownershipRect,
+                rowForegroundBounds[Math.Clamp(row, 0, rowForegroundBounds.Count - 1)],
+                width,
+                height);
+            var shapePaths = BuildForegroundShapePaths(rgba, width, height, ownershipRect, background);
+            if (shapePaths.Count == 0)
+                warnings.Add($"Frame {index + 1} has no foreground pixels in its expected grid cell.");
+
+            frames.Add(new SpriteSheetFrameUpdateView(
+                index,
+                $"Frame {index + 1}",
+                sourceRect,
+                shapePaths));
+        }
+
+        var quality = BuildFrameQuality(rgba, width, height, frames, background);
+        warnings.AddRange(quality
+            .SelectMany(frame => frame.Warnings.Select(warning => $"Frame {frame.FrameNumber}: {warning}"))
+            .Distinct(StringComparer.Ordinal));
+
+        return new SpriteSheetRepairAnalysis(
+            sourceAssetId,
+            width,
+            height,
+            rows,
+            columns,
+            cellWidth,
+            Math.Max(1, frames.Max(frame => frame.SourceRect.Height)),
+            background,
+            frames,
+            warnings.Distinct(StringComparer.Ordinal).ToList(),
+            rejectedSegments,
+            quality);
+    }
+
+    private static (int Rows, int Columns) InferExpectedGrid(int expectedFrames, string? layoutHint, int width, int height)
+    {
+        var normalizedHint = layoutHint?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (normalizedHint.Contains("horizontal", StringComparison.Ordinal)
+            || normalizedHint.Contains("row", StringComparison.Ordinal)
+            || normalizedHint.Contains("left-to-right", StringComparison.Ordinal))
+        {
+            return (1, expectedFrames);
+        }
+
+        if (normalizedHint.Contains("vertical", StringComparison.Ordinal)
+            || normalizedHint.Contains("column", StringComparison.Ordinal)
+            || normalizedHint.Contains("top-to-bottom", StringComparison.Ordinal))
+        {
+            return (expectedFrames, 1);
+        }
+
+        if (width >= height * 1.75d)
+            return (1, expectedFrames);
+        if (height >= width * 1.75d)
+            return (expectedFrames, 1);
+
+        var columns = (int)Math.Ceiling(Math.Sqrt(expectedFrames * (width / (double)Math.Max(1, height))));
+        columns = Math.Clamp(columns, 1, expectedFrames);
+        var rows = (int)Math.Ceiling(expectedFrames / (double)columns);
+        return (Math.Max(1, rows), Math.Max(1, columns));
+    }
+
+    private static List<SpriteSheetRect> BuildRowForegroundBounds(
+        byte[] rgba,
+        int width,
+        int height,
+        int rows,
+        int cellHeight,
+        SpriteSheetBackground background)
+    {
+        var result = new List<SpriteSheetRect>();
+        for (var row = 0; row < rows; row++)
+        {
+            var startY = row * cellHeight;
+            var endY = Math.Min(height, startY + cellHeight);
+            var minY = int.MaxValue;
+            var maxY = int.MinValue;
+            for (var y = startY; y < endY; y++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    var offset = ((y * width) + x) * 4;
+                    if (!IsForeground(rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3], background))
+                        continue;
+
+                    minY = Math.Min(minY, y);
+                    maxY = Math.Max(maxY, y);
+                }
+            }
+
+            if (minY == int.MaxValue)
+                result.Add(new SpriteSheetRect(0, startY, width, Math.Max(1, endY - startY)));
+            else
+            {
+                const int VerticalMargin = 24;
+                var y = Math.Max(startY, minY - VerticalMargin);
+                var bottom = Math.Min(endY, maxY + VerticalMargin + 1);
+                result.Add(new SpriteSheetRect(0, y, width, Math.Max(1, bottom - y)));
+            }
+        }
+
+        return result;
+    }
+
+    private static SpriteSheetRect BuildRepairSourceRect(
+        SpriteSheetRect ownershipRect,
+        SpriteSheetRect rowForegroundBounds,
+        int imageWidth,
+        int imageHeight)
+    {
+        var horizontalMargin = Math.Clamp(ownershipRect.Width / 8, 8, 32);
+        var x = Math.Max(0, ownershipRect.X - horizontalMargin);
+        var right = Math.Min(imageWidth, ownershipRect.X + ownershipRect.Width + horizontalMargin);
+        var y = Math.Clamp(rowForegroundBounds.Y, 0, Math.Max(0, imageHeight - 1));
+        var bottom = Math.Min(imageHeight, rowForegroundBounds.Y + rowForegroundBounds.Height);
+        return new SpriteSheetRect(
+            x,
+            y,
+            Math.Max(1, right - x),
+            Math.Max(1, bottom - y));
+    }
+
+    private static IReadOnlyList<SpriteSheetShapePath> BuildForegroundShapePaths(
+        byte[] rgba,
+        int width,
+        int height,
+        SpriteSheetRect ownershipRect,
+        SpriteSheetBackground background)
+    {
+        var pixels = new List<int>();
+        var startX = Math.Clamp(ownershipRect.X, 0, width);
+        var endX = Math.Clamp(ownershipRect.X + ownershipRect.Width, 0, width);
+        var startY = Math.Clamp(ownershipRect.Y, 0, height);
+        var endY = Math.Clamp(ownershipRect.Y + ownershipRect.Height, 0, height);
+        for (var y = startY; y < endY; y++)
+        {
+            for (var x = startX; x < endX; x++)
+            {
+                var offset = ((y * width) + x) * 4;
+                if (IsForeground(rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3], background))
+                    pixels.Add((y * width) + x);
+            }
+        }
+
+        return BuildShapePaths(pixels, width, height, ownershipRect);
+    }
+
+    public static IReadOnlyList<SpriteSheetFrameQualityView> BuildFrameQuality(
+        byte[] rgba,
+        int width,
+        int height,
+        IReadOnlyList<SpriteSheetFrameUpdateView> frames,
+        SpriteSheetBackground background)
+    {
+        var raw = frames.Select(frame => BuildFrameQualityItem(rgba, width, height, frame, background)).ToList();
+        var foregroundCounts = raw
+            .Select(item => item.ForegroundPixelCount)
+            .Where(count => count > 0)
+            .Order()
+            .ToList();
+        var medianForeground = foregroundCounts.Count == 0 ? 0 : foregroundCounts[foregroundCounts.Count / 2];
+        return raw
+            .Select(item =>
+            {
+                var warnings = item.Warnings.ToList();
+                if (medianForeground > 0 && item.ForegroundPixelCount < medianForeground * 0.25d)
+                    warnings.Add("foreground area is a small outlier");
+                if (medianForeground > 0 && item.ForegroundPixelCount > medianForeground * 2.75d)
+                    warnings.Add("foreground area is a large/merged outlier");
+                return item with { Warnings = warnings.Distinct(StringComparer.Ordinal).ToList() };
+            })
+            .ToList();
+    }
+
+    private static SpriteSheetFrameQualityView BuildFrameQualityItem(
+        byte[] rgba,
+        int width,
+        int height,
+        SpriteSheetFrameUpdateView frame,
+        SpriteSheetBackground background)
+    {
+        var rect = frame.SourceRect;
+        var startX = Math.Clamp(rect.X, 0, width);
+        var startY = Math.Clamp(rect.Y, 0, height);
+        var endX = Math.Clamp(rect.X + rect.Width, 0, width);
+        var endY = Math.Clamp(rect.Y + rect.Height, 0, height);
+        var foreground = 0;
+        var touchesLeft = false;
+        var touchesRight = false;
+        var touchesTop = false;
+        var touchesBottom = false;
+        for (var y = startY; y < endY; y++)
+        {
+            for (var x = startX; x < endX; x++)
+            {
+                var offset = ((y * width) + x) * 4;
+                if (!IsForeground(rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3], background))
+                    continue;
+
+                foreground++;
+                touchesLeft |= x <= startX + 1;
+                touchesRight |= x >= endX - 2;
+                touchesTop |= y <= startY + 1;
+                touchesBottom |= y >= endY - 2;
+            }
+        }
+
+        var warnings = new List<string>();
+        if (foreground == 0)
+            warnings.Add("no foreground pixels found");
+        if (touchesLeft)
+            warnings.Add("foreground touches left edge; inspect for clipping or overlap");
+        if (touchesRight)
+            warnings.Add("foreground touches right edge; inspect for clipping or overlap");
+        if (touchesTop)
+            warnings.Add("foreground touches top edge; inspect for clipping");
+        if (touchesBottom)
+            warnings.Add("foreground touches bottom edge; inspect for clipping");
+        if (frame.ShapePaths.Count == 0)
+            warnings.Add("no polygon shape path is available for overlap separation");
+
+        var rectArea = Math.Max(1, rect.Width * rect.Height);
+        return new SpriteSheetFrameQualityView(
+            frame.Index + 1,
+            frame.Index,
+            rect,
+            foreground,
+            RoundMetric(foreground / (double)rectArea * 100d),
+            warnings);
+    }
+
+    private static IReadOnlyList<string> BuildDetectionWarnings(
+        IReadOnlyList<SpriteSheetFrameDetectionView> frames,
+        int? expectedFrames)
+    {
+        var warnings = new List<string>();
+        if (expectedFrames is > 0 && frames.Count != expectedFrames.Value)
+            warnings.Add($"Detected {frames.Count} frame(s), but {expectedFrames.Value} were expected.");
+        if (BuildRejectedSegments(frames, expectedFrames).Count > 0)
+            warnings.Add("Detected frame boxes include size outliers. Inspect rejectedSegments and model-only annotated imagery.");
+        return warnings;
+    }
+
+    private static IReadOnlyList<SpriteSheetRejectedSegmentView> BuildRejectedSegments(
+        IReadOnlyList<SpriteSheetFrameDetectionView> frames,
+        int? expectedFrames)
+    {
+        if (frames.Count == 0)
+            return [];
+
+        var areas = frames
+            .Select(frame => (double)frame.SourceRect.Width * frame.SourceRect.Height)
+            .Where(area => area > 0)
+            .Order()
+            .ToList();
+        if (areas.Count == 0)
+            return [];
+
+        var median = areas[areas.Count / 2];
+        var rejected = new List<SpriteSheetRejectedSegmentView>();
+        for (var index = 0; index < frames.Count; index++)
+        {
+            var frame = frames[index];
+            var area = frame.SourceRect.Width * (double)frame.SourceRect.Height;
+            string? reason = null;
+            if (area <= 16 || frame.SourceRect.Width <= 4 || frame.SourceRect.Height <= 4)
+                reason = "tiny foreground fragment";
+            else if (median > 0 && area < median * 0.18d)
+                reason = "small size outlier";
+            else if (expectedFrames is > 0 && frames.Count != expectedFrames.Value && median > 0 && area > median * 1.75d)
+                reason = "large merged connected-component segment not used as a final frame";
+
+            if (reason is not null)
+                rejected.Add(new SpriteSheetRejectedSegmentView(index, frame.SourceRect, reason));
+        }
+
+        return rejected;
+    }
 
     private static List<SpriteSheetFrameDetectionView> DetectFramesFromPixels(
         byte[] rgba,
@@ -565,7 +967,13 @@ internal static class SpriteSheetImageAnalyzer
                 []));
         }
 
-        return new SpriteSheetDetectionResult(sourceAssetId, width, height, rows, columns, background, frames);
+        return new SpriteSheetDetectionResult(sourceAssetId, width, height, rows, columns, background, frames)
+        {
+            Warnings =
+            [
+                "No foreground connected components were detected; generated an expected-count grid fallback."
+            ],
+        };
     }
 
     private static int CountRows(IReadOnlyList<SpriteSheetFrameDetectionView> frames)
@@ -675,3 +1083,17 @@ internal sealed record SpriteAnimationFramePixels(
     int Width,
     int Height,
     byte[] Rgba);
+
+internal sealed record SpriteSheetRepairAnalysis(
+    Guid SourceAssetId,
+    int ImageWidth,
+    int ImageHeight,
+    int Rows,
+    int Columns,
+    int CellWidth,
+    int CellHeight,
+    SpriteSheetBackground Background,
+    IReadOnlyList<SpriteSheetFrameUpdateView> Frames,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<SpriteSheetRejectedSegmentView> RejectedSegments,
+    IReadOnlyList<SpriteSheetFrameQualityView> FrameQuality);

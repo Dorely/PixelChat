@@ -35,6 +35,7 @@ public sealed class AssistantToolRegistry(
         "save_prompt_recipe",
         "revert_recipe_version",
         "create_sprite_sheet",
+        "repair_sprite_sheet_frames",
         "review_sprite_animation",
         "detect_sprite_sheet_frames",
     };
@@ -200,7 +201,19 @@ public sealed class AssistantToolRegistry(
                 string? layoutHint = null,
                 string? backgroundMode = null) => DetectSpriteSheetFramesAsync(projectId, sourceAssetId, expectedFrames, layoutHint, backgroundMode),
             name: "detect_sprite_sheet_frames",
-            description: "Detect and apply sprite-sheet frames for an existing PNG source asset, then switch to the Sprites workspace. The compact JSON returns numbered frame boxes only; exact shape paths are applied server-side and omitted from JSON. Inspect the model-only annotated sheet image, where frame numbers match the JSON frameNumber values, for visual reasoning."),
+            description: "Detect and apply sprite-sheet frames for an existing PNG source asset, then switch to the Sprites workspace. Pass expectedFrames and a concrete layoutHint when known. If connected components are merged or outlier-heavy, detection will use an expected-count repair candidate with internal polygon shapePaths and rejected segment annotations. Result JSON reports only compact shape counts, not generated polygon points; inspect the returned model-only annotated image before deciding the boxes are acceptable."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid spriteSheetId,
+                int expectedFrames,
+                string? layoutHint = null,
+                int[]? targetFrameNumbers = null,
+                bool apply = true,
+                CancellationToken cancellationToken = default) =>
+                RepairSpriteSheetFramesAsync(projectId, spriteSheetId, expectedFrames, layoutHint, targetFrameNumbers, apply, cancellationToken),
+            name: "repair_sprite_sheet_frames",
+            description: "Repair a difficult or overlapping sprite sheet toward an expected frame count. Generates grid-guided frame boxes plus internal polygon shapePaths for overlap separation, marks tiny/merged connected-component outliers as rejected segments, and can apply the repaired frame set. Use targetFrameNumbers as 1-based frame numbers for focused rework. Result JSON reports compact shape counts, not generated polygon points. Every result is followed by model-only annotated sheet and filmstrip images; inspect them and iterate before claiming success."),
 
         AIFunctionFactory.Create(
             method: (
@@ -217,23 +230,23 @@ public sealed class AssistantToolRegistry(
                 string? horizontalAnchor = null,
                 string? verticalAnchor = null) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, frames, padding, gutter, fps, loop, horizontalAnchor, verticalAnchor),
             name: "update_sprite_sheet_frames",
-            description: "Replace the visible Sprites workspace frame set and layout without changing working image bytes. The frames array is authoritative: omission deletes, array order becomes frame order, and existing frame ids are reused by position, so attachments may point at new frame content after reorder. Shapes only separate neighboring sprites; they do not mask a frame's own pixels."),
+            description: "Replace the visible Sprites workspace frame set and layout without changing working image bytes. The frames array is authoritative: omission deletes, array order becomes frame order, and existing frame ids are reused by position, so attachments may point at new frame content after reorder. You may send manual shapePaths polygons for overlapping sprites: each polygon should outline the intended sprite region so neighboring frame polygons can erase bleed in overlaps. Tool results return only compact shape counts, so inspect the model-only annotated sheet and filmstrip and keep adjusting misaligned boxes/polygons."),
 
         AIFunctionFactory.Create(
             method: (Guid spriteSheetId, CancellationToken cancellationToken = default) =>
                 ExpandSpriteSheetFramesToCellsAsync(projectId, spriteSheetId, cancellationToken),
             name: "expand_sprite_sheet_frames_to_cells",
-            description: "Grow each saved frame source rect to the sheet's cell size using the sheet anchors, preserving real source pixels where possible and filling out-of-image areas with the resolved sheet background. Does not scale or stretch pixels."),
+            description: "Grow each saved frame source rect to the sheet's cell size using the sheet anchors, preserving real source pixels where possible and filling out-of-image areas with the resolved sheet background. Does not scale or stretch pixels. Result JSON omits polygon points and reports compact shape counts. Inspect the returned model-only images for new clipping or neighbor bleed."),
 
         AIFunctionFactory.Create(
             method: (Guid spriteSheetId) => NormalizeSpriteSheetAsync(projectId, spriteSheetId),
             name: "normalize_sprite_sheet",
-            description: "Normalize the selected PNG sprite sheet by copying full saved source rects with background preserved, subtracting only neighboring shape intrusions, applying padding/gutter/grid/alignment settings, stitching a new working PNG, and rebasing frame boxes/shapes."),
+            description: "Normalize the selected PNG sprite sheet by copying full saved source rects with background preserved, subtracting only neighboring shape intrusions, applying padding/gutter/grid/alignment settings, stitching a new working PNG, and rebasing frame boxes/shapes. Result JSON omits polygon points and reports compact shape counts. Inspect the returned model-only images before making further coordinate edits."),
 
         AIFunctionFactory.Create(
             method: (Guid spriteSheetId) => ResetSpriteSheetToOriginalAsync(projectId, spriteSheetId),
             name: "reset_sprite_sheet_to_original",
-            description: "Reset the selected working sprite sheet to its immutable original image and clear all frame records."),
+            description: "Reset the selected working sprite sheet to its immutable original image and clear all frame records. Returns the reset working image as model-only feedback because no frame review exists after records are cleared."),
 
         AIFunctionFactory.Create(
             method: (Guid spriteSheetId, Guid[]? frameIds = null) => AttachSpriteSheetFramesAsync(projectId, spriteSheetId, frameIds),
@@ -573,8 +586,8 @@ public sealed class AssistantToolRegistry(
             sheet.Id,
             Math.Clamp(detection.Rows, 1, 32),
             Math.Clamp(detection.Columns, 1, 64),
-            Math.Clamp(CeilDiv(detection.ImageWidth, Math.Max(1, detection.Columns)), 1, 8192),
-            Math.Clamp(CeilDiv(detection.ImageHeight, Math.Max(1, detection.Rows)), 1, 8192),
+            Math.Clamp(MaxFrameWidth(detection.Frames, CeilDiv(detection.ImageWidth, Math.Max(1, detection.Columns))), 1, 8192),
+            Math.Clamp(MaxFrameHeight(detection.Frames, CeilDiv(detection.ImageHeight, Math.Max(1, detection.Rows))), 1, 8192),
             Padding: 0,
             Gutter: 0,
             sheet.Fps,
@@ -584,6 +597,24 @@ public sealed class AssistantToolRegistry(
             frames));
 
         return JsonSerializer.Serialize(CompactDetectionResult(detection, saved), JsonOptions);
+    }
+
+    private async Task<string> RepairSpriteSheetFramesAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        int expectedFrames,
+        string? layoutHint,
+        int[]? targetFrameNumbers,
+        bool apply,
+        CancellationToken cancellationToken)
+    {
+        var repair = await workflow.RepairSpriteSheetFramesAsync(projectId, new RepairSpriteSheetFramesRequest(
+            spriteSheetId,
+            Math.Clamp(expectedFrames, 1, 256),
+            layoutHint,
+            targetFrameNumbers,
+            apply), cancellationToken);
+        return JsonSerializer.Serialize(CompactRepairResult(repair), JsonOptions);
     }
 
     private async Task<string> UpdateSpriteSheetFramesAsync(
@@ -635,11 +666,55 @@ public sealed class AssistantToolRegistry(
         saved.HorizontalAnchor,
         saved.VerticalAnchor,
         background = detection.Background,
+        warnings = detection.Warnings,
+        rejectedSegments = detection.RejectedSegments,
+        frameQuality = detection.FrameQuality,
         frameCount = saved.Frames.Count,
         frames = saved.Frames.Select(CompactFrame),
         modelOnlyImage = "Annotated sheet image supplied separately. Number labels in the image match frameNumber values here.",
-        omitted = "Exact shape paths and preview image data are applied server-side and intentionally omitted from JSON.",
+        modelOnlyImages = "This mutation returns model-only annotated sheet and compact filmstrip/contact imagery after the tool result.",
+        omitted = "Preview image data is stored server-side and intentionally omitted from JSON.",
         message = "Sprite-sheet frames detected and applied.",
+    };
+
+    private static object CompactRepairResult(RepairSpriteSheetFramesResult repair) => new
+    {
+        spriteSheetId = repair.SpriteSheetId,
+        repair.SourceAssetId,
+        repair.WorkingAssetId,
+        repair.Applied,
+        repair.ImageWidth,
+        repair.ImageHeight,
+        repair.Rows,
+        repair.Columns,
+        repair.CellWidth,
+        repair.CellHeight,
+        repair.Padding,
+        repair.Gutter,
+        repair.Fps,
+        repair.Loop,
+        repair.HorizontalAnchor,
+        repair.VerticalAnchor,
+        background = repair.Background,
+        frameCount = repair.Frames.Count,
+        frames = repair.Frames.Select((frame, index) => new
+        {
+            frameNumber = index + 1,
+            index,
+            label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label,
+            frame.SourceRect,
+            hasShapePaths = HasShapePaths(frame.ShapePaths),
+            shapePathCount = ShapePathCount(frame.ShapePaths),
+            shapePointCount = ShapePointCount(frame.ShapePaths),
+        }),
+        warnings = repair.Warnings,
+        rejectedSegments = repair.RejectedSegments,
+        frameQuality = repair.FrameQuality,
+        savedFrameIds = repair.SavedSheet?.Frames.Select(frame => frame.Id).ToList() ?? [],
+        modelOnlyImages = "Repair returns a model-only annotated repair sheet plus compact filmstrip/contact imagery when frames are available. Inspect them before claiming success.",
+        message = repair.Applied
+            ? "Sprite-sheet frame repair applied."
+            : "Sprite-sheet frame repair proposed without applying.",
     };
 
     private static object CompactSpriteSheetResult(SpriteSheetDefinitionView saved, string message) => new
@@ -660,7 +735,11 @@ public sealed class AssistantToolRegistry(
         background = saved.Background,
         frameCount = saved.Frames.Count,
         frames = saved.Frames.Select(CompactFrame),
-        omitted = "Exact shape paths and preview image data are stored server-side and intentionally omitted from JSON.",
+        warnings = CompactSpriteSheetWarnings(saved),
+        rejectedSegments = Array.Empty<SpriteSheetRejectedSegmentView>(),
+        frameQuality = CompactFrameQuality(saved),
+        modelOnlyImages = "This mutation returns model-only annotated sheet and compact filmstrip/contact imagery after the tool result.",
+        omitted = "Preview image data is stored server-side and intentionally omitted from JSON.",
         message,
     };
 
@@ -672,10 +751,82 @@ public sealed class AssistantToolRegistry(
         frame.SourceRect,
         frame.CellRect,
         frame.SpriteRect,
-        hasShapePaths = frame.ShapePaths.Any(path => path.Points.Count >= 3),
+        hasShapePaths = HasShapePaths(frame.ShapePaths),
+        shapePathCount = ShapePathCount(frame.ShapePaths),
+        shapePointCount = ShapePointCount(frame.ShapePaths),
         frame.PreviewWidth,
         frame.PreviewHeight,
     };
+
+    private static IReadOnlyList<string> CompactSpriteSheetWarnings(SpriteSheetDefinitionView saved)
+    {
+        var warnings = new List<string>();
+        if (saved.Frames.Count == 0)
+            warnings.Add("No frame records are currently saved.");
+        if (saved.Frames.Any(frame => frame.SourceRect.Width > saved.CellWidth || frame.SourceRect.Height > saved.CellHeight))
+            warnings.Add("One or more source rectangles exceed the configured cell size and may clip when normalized.");
+        if (saved.Frames.Any(frame => !frame.ShapePaths.Any(path => path.Points.Count >= 3)))
+            warnings.Add("One or more frames do not have polygon shapePaths; overlapping sprites may bleed into neighboring frames.");
+        warnings.AddRange(CompactFrameQuality(saved)
+            .SelectMany(item => item.Warnings.Select(warning => $"Frame {item.FrameNumber}: {warning}")));
+        return warnings.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static IReadOnlyList<CompactFrameQualityItem> CompactFrameQuality(SpriteSheetDefinitionView saved)
+    {
+        var areas = saved.Frames
+            .Select(frame => frame.SourceRect.Width * (double)frame.SourceRect.Height)
+            .Where(area => area > 0)
+            .Order()
+            .ToList();
+        var median = areas.Count == 0 ? 0 : areas[areas.Count / 2];
+        return saved.Frames
+            .OrderBy(frame => frame.Index)
+            .Select(frame =>
+            {
+                var warnings = new List<string>();
+                var area = frame.SourceRect.Width * (double)frame.SourceRect.Height;
+                if (median > 0 && area < median * 0.25d)
+                    warnings.Add("source rectangle is a small outlier");
+                if (median > 0 && area > median * 2.75d)
+                    warnings.Add("source rectangle is a large/merged outlier");
+                if (frame.SourceRect.Width > saved.CellWidth)
+                    warnings.Add("source rectangle is wider than the cell");
+                if (frame.SourceRect.Height > saved.CellHeight)
+                    warnings.Add("source rectangle is taller than the cell");
+                if (!frame.ShapePaths.Any(path => path.Points.Count >= 3))
+                    warnings.Add("missing polygon shapePaths for overlap separation");
+                return new CompactFrameQualityItem(
+                    frame.Index + 1,
+                    frame.Index,
+                    frame.SourceRect,
+                    HasShapePaths(frame.ShapePaths),
+                    ShapePathCount(frame.ShapePaths),
+                    ShapePointCount(frame.ShapePaths),
+                    warnings);
+            })
+            .ToList();
+    }
+
+    private sealed record CompactFrameQualityItem(
+        int FrameNumber,
+        int Index,
+        SpriteSheetRect SourceRect,
+        bool HasShapePaths,
+        int ShapePathCount,
+        int ShapePointCount,
+        IReadOnlyList<string> Warnings);
+
+    private static bool HasShapePaths(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
+        ShapePathCount(shapePaths) > 0;
+
+    private static int ShapePathCount(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
+        shapePaths.Count(path => path.Points.Count >= 3);
+
+    private static int ShapePointCount(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
+        shapePaths
+            .Where(path => path.Points.Count >= 3)
+            .Sum(path => path.Points.Count);
 
     private async Task<string> ExpandSpriteSheetFramesToCellsAsync(
         Guid projectId,
@@ -683,43 +834,19 @@ public sealed class AssistantToolRegistry(
         CancellationToken cancellationToken)
     {
         var saved = await workflow.ExpandSpriteSheetFramesToCellAsync(projectId, spriteSheetId, cancellationToken);
-        return JsonSerializer.Serialize(new
-        {
-            saved.Id,
-            saved.WorkingAssetId,
-            saved.SourceAssetId,
-            saved.Rows,
-            saved.Columns,
-            saved.CellWidth,
-            saved.CellHeight,
-            frameCount = saved.Frames.Count,
-            message = "Sprite sheet frames expanded to cells.",
-        }, JsonOptions);
+        return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet frames expanded to cells."), JsonOptions);
     }
 
     private async Task<string> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId)
     {
         var saved = await workflow.ResetSpriteSheetToOriginalAsync(projectId, spriteSheetId);
-        return JsonSerializer.Serialize(new
-        {
-            saved.Id,
-            saved.WorkingAssetId,
-            saved.SourceAssetId,
-            message = "Sprite sheet reset to original image and frame records cleared.",
-        }, JsonOptions);
+        return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet reset to original image and frame records cleared."), JsonOptions);
     }
 
     private async Task<string> NormalizeSpriteSheetAsync(Guid projectId, Guid spriteSheetId)
     {
         var saved = await workflow.NormalizeSpriteSheetAsync(projectId, spriteSheetId);
-        return JsonSerializer.Serialize(new
-        {
-            saved.Id,
-            saved.WorkingAssetId,
-            saved.SourceAssetId,
-            frameCount = saved.Frames.Count,
-            message = "Sprite sheet normalized.",
-        }, JsonOptions);
+        return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet normalized."), JsonOptions);
     }
 
     private async Task<string> AttachSpriteSheetFramesAsync(Guid projectId, Guid spriteSheetId, Guid[]? frameIds)
@@ -782,6 +909,12 @@ public sealed class AssistantToolRegistry(
 
     private static int CeilDiv(int value, int divisor) =>
         (Math.Max(0, value) + Math.Max(1, divisor) - 1) / Math.Max(1, divisor);
+
+    private static int MaxFrameWidth(IReadOnlyList<SpriteSheetFrameDetectionView> frames, int fallback) =>
+        frames.Count == 0 ? fallback : Math.Max(1, frames.Max(frame => frame.SourceRect.Width));
+
+    private static int MaxFrameHeight(IReadOnlyList<SpriteSheetFrameDetectionView> frames, int fallback) =>
+        frames.Count == 0 ? fallback : Math.Max(1, frames.Max(frame => frame.SourceRect.Height));
 
     private static string NormalizeHorizontalAnchor(string? value) =>
         value?.Trim().ToLowerInvariant() switch

@@ -243,7 +243,44 @@ internal static class SpriteSheetServerRenderer
             detection.Background,
             frames,
             "Detected sprite-sheet frames with frame numbers",
-            "sprite-sheet-detection-numbered-frames.png");
+            "sprite-sheet-detection-numbered-frames.png",
+            detection.RejectedSegments);
+    }
+
+    internal static SpriteSheetReviewImage BuildRepairAnnotatedSheetView(
+        byte[] sourceRgba,
+        int sourceWidth,
+        int sourceHeight,
+        int rows,
+        int columns,
+        int cellWidth,
+        int cellHeight,
+        int gutter,
+        SpriteSheetBackground background,
+        IReadOnlyList<SpriteSheetFrameUpdateView> inputFrames,
+        IReadOnlyList<SpriteSheetRejectedSegmentView> rejectedSegments)
+    {
+        var frames = inputFrames
+            .Select((frame, index) => new RenderFrame(
+                index,
+                string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label,
+                NormalizeSourceRect(frame.SourceRect),
+                NormalizeShapePaths(frame.ShapePaths, sourceWidth, sourceHeight)))
+            .ToList();
+        return BuildAnnotatedSheetView(
+            sourceRgba,
+            sourceWidth,
+            sourceHeight,
+            rows,
+            columns,
+            cellWidth,
+            cellHeight,
+            gutter,
+            background,
+            frames,
+            "Sprite-sheet repair view with rejected segments",
+            "sprite-sheet-repair-numbered-frames.png",
+            rejectedSegments);
     }
 
     private static SpriteSheetReviewImage BuildAnnotatedSheetView(
@@ -258,13 +295,20 @@ internal static class SpriteSheetServerRenderer
         SpriteSheetBackground background,
         IReadOnlyList<RenderFrame> frames,
         string label,
-        string fileName)
+        string fileName,
+        IReadOnlyList<SpriteSheetRejectedSegmentView>? rejectedSegments = null)
     {
         ValidateCanvasSize(sourceWidth, sourceHeight, "Annotated sprite sheet image is too large.");
         var output = NewFilledCanvas(sourceWidth, sourceHeight, background);
         Array.Copy(sourceRgba, output, Math.Min(sourceRgba.Length, output.Length));
 
         DrawGrid(output, sourceWidth, sourceHeight, rows, columns, cellWidth, cellHeight, gutter);
+        foreach (var segment in rejectedSegments ?? Array.Empty<SpriteSheetRejectedSegmentView>())
+        {
+            DrawRectangle(output, sourceWidth, sourceHeight, segment.Rect, 239, 68, 68, 240, 3);
+            DrawIndexLabel(output, sourceWidth, sourceHeight, segment.Index, segment.Rect.X, segment.Rect.Y);
+        }
+
         foreach (var frame in frames)
         {
             DrawRectangle(output, sourceWidth, sourceHeight, frame.SourceRect, 31, 111, 235, 230, 2);
