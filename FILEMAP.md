@@ -52,8 +52,8 @@
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, sprite sheets/reviews, exports, single-example versioned recipes, recipe-version generation provenance, masks, import, crop, and edits. |
-| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, sprite-sheet editor, recipe-versioned generation/edit, single-example recipe management, and assistant tools. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, background-aware sprite sheets/reviews/expand/normalize, exports, recipes, masks, import, crop, and edits. |
+| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, background-aware sprite-sheet editor/reviews, recipe-versioned generation/edit, recipe management, and assistant tools. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
 | `BackgroundRemovalOptions.cs` | Configurable local background-removal sidecar defaults for uv, Python, rembg, model list, acceleration, cache paths, alpha matting, and timeout. |
@@ -62,9 +62,9 @@
 | `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, parallelism, retry, timeout, partial previews, and reference defaults. |
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
-| `SpriteSheetImageAnalyzer.cs` | Server-side PNG foreground analyzer that detects connected sprite objects, row-major frame boxes, shape outlines, and animation motion metrics. |
+| `SpriteSheetImageAnalyzer.cs` | Server-side PNG analyzer for background-aware foreground detection, connected sprite boxes/shape outlines, and animation motion metrics. |
 | `SpriteSheetPngCodec.cs` | Minimal PNG RGBA decoder/encoder used by server-side sprite-sheet rendering. |
-| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with shape-masked copying, sheet-wide alignment anchors, onion-skin overlays, and filmstrips. |
+| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with background-preserving full-rect copies, neighbor-shape separation, annotated sheet views, diffs, onion skins, and filmstrips. |
 
 ### Components/
 
@@ -103,7 +103,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with non-destructive box/outline editing, anchor controls, metadata autosave, explicit Normalize Sheet stitching, frame thumbnails/attachments, animation preview, reset, and export. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with non-destructive box/outline editing, anchor controls, server-rendered autosave previews, expand-to-cell, normalize, frame thumbnails/attachments, animation preview, reset, and export. |
 
 ### Llm/
 
@@ -140,7 +140,7 @@
 | `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, output errors, lineage, status, and stamped recipe version. |
 | `PromptRecipe.cs` | EF entity for reusable prompt/style/production guides, avoid rules, one active example image, and preferred defaults. |
 | `PromptRecipeVersion.cs` | EF entity for append-only prompt recipe snapshots including the active example image used by user/assistant saves and restore. |
-| `SpriteSheetDefinition.cs` | EF entity for row-based sprite-sheet definitions linking immutable source assets to mutable working sprite-sheet assets plus layout, FPS, and loop defaults. |
+| `SpriteSheetDefinition.cs` | EF entity for row-based sprite-sheet definitions linking immutable source assets to mutable working sprite-sheet assets plus layout, background fill, FPS, and loop defaults. |
 | `SpriteSheetFrameRecord.cs` | EF entity for durable sprite frame records, current/source/cell/sprite rectangles, labels, previews, dimensions, and timestamps. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets. |
 | `ChatContextAttachment.cs` | EF entity for persistent visible chat attachments referencing assets, masks, crops, recipes, or batches. |
@@ -177,6 +177,7 @@
 | `20260610204025_SpriteSheetSmartSeparation.cs` / `.Designer.cs` | EF migration adding sprite frame shape JSON plus sheet-wide horizontal and vertical normalization anchors. |
 | `20260611071606_PromptRecipeVersions.cs` / `.Designer.cs` | EF migration adding append-only prompt recipe version history and backfilling existing recipes as version 1. |
 | `20260611181547_RecipeExampleImageAndVersionLinkage.cs` / `.Designer.cs` | EF migration replacing multi-example recipe JSON with one example image and adding recipe-version linkage to batches/assets. |
+| `20260611222045_SpriteSheetBackgroundFill.cs` / `.Designer.cs` | EF migration adding nullable sprite-sheet background fill metadata. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

@@ -4,13 +4,14 @@ internal static class SpriteSheetImageAnalyzer
 {
     internal static SpriteAnimationMetricsView ComputeMotionMetrics(
         IReadOnlyList<SpriteAnimationFramePixels> frames,
+        SpriteSheetBackground background,
         bool loop)
     {
         var ordered = frames.OrderBy(frame => frame.Index).ToList();
         if (ordered.Count < 2)
             return new SpriteAnimationMetricsView([], 0, 0, 0);
 
-        var stats = ordered.Select(BuildFrameStats).ToList();
+        var stats = ordered.Select(frame => BuildFrameStats(frame, background)).ToList();
         var pairs = new List<SpriteAnimationFramePairMetricsView>();
         for (var index = 0; index < stats.Count - 1; index++)
             pairs.Add(BuildPairMetrics(stats[index], stats[index + 1], loopSeam: false));
@@ -43,15 +44,12 @@ internal static class SpriteSheetImageAnalyzer
         string? backgroundMode)
     {
         if (!SpriteSheetPngCodec.TryReadRgba(data, out var width, out var height, out var rgba))
-        {
-            var fallbackWidth = knownWidth.GetValueOrDefault(1);
-            var fallbackHeight = knownHeight.GetValueOrDefault(1);
-            return GridFallback(sourceAssetId, fallbackWidth, fallbackHeight, expectedFrames, layoutHint);
-        }
+            throw new InvalidOperationException("Sprite-sheet frame detection requires a PNG source image.");
 
-        var frames = DetectFramesFromPixels(rgba, width, height, expectedFrames, backgroundMode);
+        var background = ResolveBackground(rgba, width, height, backgroundMode);
+        var frames = DetectFramesFromPixels(rgba, width, height, expectedFrames, background);
         if (frames.Count == 0)
-            return GridFallback(sourceAssetId, width, height, expectedFrames, layoutHint);
+            return GridFallback(sourceAssetId, width, height, expectedFrames, layoutHint, background);
 
         if (expectedFrames is > 0 && frames.Count > expectedFrames.Value)
         {
@@ -75,10 +73,101 @@ internal static class SpriteSheetImageAnalyzer
             height,
             Math.Max(1, rowCount),
             Math.Max(1, columnCount),
+            background,
             frames);
     }
 
-    private static FrameForegroundStats BuildFrameStats(SpriteAnimationFramePixels frame)
+    public static SpriteSheetBackground ResolveBackground(byte[] rgba, int width, int height, string? hint = null)
+    {
+        var normalizedHint = string.IsNullOrWhiteSpace(hint) ? "auto" : hint.Trim().ToLowerInvariant();
+        if (normalizedHint is "alpha" or "transparent" or "transparency")
+            return new SpriteSheetBackground("alpha", 0, 0, 0, 0);
+        if (TryParseHexColor(normalizedHint, out var hintR, out var hintG, out var hintB))
+            return new SpriteSheetBackground("color", hintR, hintG, hintB, byte.MaxValue);
+
+        var samples = EnumerateBorderPixels(rgba, width, height).ToList();
+        if (samples.Count == 0)
+            return new SpriteSheetBackground("alpha", 0, 0, 0, 0);
+
+        var transparent = samples.Count(pixel => pixel.A <= 16);
+        if (transparent > samples.Count / 2)
+            return new SpriteSheetBackground("alpha", 0, 0, 0, 0);
+
+        var dominant = samples
+            .Where(pixel => pixel.A > 16)
+            .GroupBy(pixel => ((pixel.R >> 3) << 16) | ((pixel.G >> 3) << 8) | (pixel.B >> 3))
+            .OrderByDescending(group => group.Count())
+            .FirstOrDefault();
+        if (dominant is null)
+            return new SpriteSheetBackground("alpha", 0, 0, 0, 0);
+
+        var count = dominant.Count();
+        return new SpriteSheetBackground(
+            "color",
+            (byte)Math.Round(dominant.Sum(pixel => pixel.R) / (double)count),
+            (byte)Math.Round(dominant.Sum(pixel => pixel.G) / (double)count),
+            (byte)Math.Round(dominant.Sum(pixel => pixel.B) / (double)count),
+            byte.MaxValue);
+    }
+
+    internal static bool IsForeground(byte r, byte g, byte b, byte a, SpriteSheetBackground background)
+    {
+        if (a <= 16)
+            return false;
+
+        var mode = string.IsNullOrWhiteSpace(background.Mode)
+            ? "alpha"
+            : background.Mode.Trim().ToLowerInvariant();
+        if (mode == "alpha")
+            return true;
+
+        const int colorTolerance = 12;
+        return Math.Abs(r - background.R) > colorTolerance
+            || Math.Abs(g - background.G) > colorTolerance
+            || Math.Abs(b - background.B) > colorTolerance;
+    }
+
+    private static IEnumerable<(byte R, byte G, byte B, byte A)> EnumerateBorderPixels(byte[] rgba, int width, int height)
+    {
+        if (width <= 0 || height <= 0)
+            yield break;
+
+        for (var x = 0; x < width; x++)
+        {
+            yield return PixelAt(rgba, width, x, 0);
+            if (height > 1)
+                yield return PixelAt(rgba, width, x, height - 1);
+        }
+
+        for (var y = 1; y < height - 1; y++)
+        {
+            yield return PixelAt(rgba, width, 0, y);
+            if (width > 1)
+                yield return PixelAt(rgba, width, width - 1, y);
+        }
+    }
+
+    private static (byte R, byte G, byte B, byte A) PixelAt(byte[] rgba, int width, int x, int y)
+    {
+        var offset = ((y * width) + x) * 4;
+        return (rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3]);
+    }
+
+    private static bool TryParseHexColor(string value, out byte r, out byte g, out byte b)
+    {
+        r = 0;
+        g = 0;
+        b = 0;
+        var normalized = value.StartsWith('#') ? value[1..] : value;
+        if (normalized.Length != 6)
+            return false;
+
+        return byte.TryParse(normalized[..2], System.Globalization.NumberStyles.HexNumber, null, out r)
+            && byte.TryParse(normalized[2..4], System.Globalization.NumberStyles.HexNumber, null, out g)
+            && byte.TryParse(normalized[4..6], System.Globalization.NumberStyles.HexNumber, null, out b);
+    }
+
+    private static FrameForegroundStats BuildFrameStats(SpriteAnimationFramePixels frame, SpriteSheetBackground background)
     {
         var foreground = new bool[frame.Width * frame.Height];
         var area = 0;
@@ -100,7 +189,7 @@ internal static class SpriteSheetImageAnalyzer
                     frame.Rgba[offset + 1],
                     frame.Rgba[offset + 2],
                     frame.Rgba[offset + 3],
-                    "auto");
+                    background);
                 foreground[pixel] = isForeground;
                 if (!isForeground)
                     continue;
@@ -183,7 +272,7 @@ internal static class SpriteSheetImageAnalyzer
         int width,
         int height,
         int? expectedFrames,
-        string? backgroundMode)
+        SpriteSheetBackground background)
     {
         var foreground = new bool[width * height];
         var foregroundCount = 0;
@@ -197,7 +286,7 @@ internal static class SpriteSheetImageAnalyzer
                     rgba[offset + 1],
                     rgba[offset + 2],
                     rgba[offset + 3],
-                    backgroundMode);
+                    background);
                 foreground[(y * width) + x] = isForeground;
                 if (isForeground)
                     foregroundCount++;
@@ -444,29 +533,13 @@ internal static class SpriteSheetImageAnalyzer
             new SpriteSheetPoint(rect.X, rect.Y + rect.Height),
         ]);
 
-    private static bool IsForeground(byte r, byte g, byte b, byte a, string? backgroundMode)
-    {
-        if (a <= 16)
-            return false;
-
-        var mode = string.IsNullOrWhiteSpace(backgroundMode)
-            ? "auto"
-            : backgroundMode.Trim().ToLowerInvariant();
-        if (mode is "alpha" or "transparency")
-            return true;
-
-        return !IsMagentaKeyColor(r, g, b);
-    }
-
-    private static bool IsMagentaKeyColor(byte r, byte g, byte b) =>
-        r >= 210 && b >= 210 && g <= 80;
-
     private static SpriteSheetDetectionResult GridFallback(
         Guid sourceAssetId,
         int width,
         int height,
         int? expectedFrames,
-        string? layoutHint)
+        string? layoutHint,
+        SpriteSheetBackground background)
     {
         var count = Math.Max(1, expectedFrames.GetValueOrDefault(1));
         var rows = 1;
@@ -492,7 +565,7 @@ internal static class SpriteSheetImageAnalyzer
                 []));
         }
 
-        return new SpriteSheetDetectionResult(sourceAssetId, width, height, rows, columns, frames);
+        return new SpriteSheetDetectionResult(sourceAssetId, width, height, rows, columns, background, frames);
     }
 
     private static int CountRows(IReadOnlyList<SpriteSheetFrameDetectionView> frames)

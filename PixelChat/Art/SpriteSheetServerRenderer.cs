@@ -2,6 +2,8 @@ namespace PixelChat.Art;
 
 internal static class SpriteSheetServerRenderer
 {
+    private const long MaxPixels = 120_000_000;
+
     public static SpriteSheetServerPreviewResult BuildFramePreviews(
         byte[] sourceRgba,
         int sourceWidth,
@@ -15,8 +17,13 @@ internal static class SpriteSheetServerRenderer
         int fps,
         string? horizontalAnchor,
         string? verticalAnchor,
+        SpriteSheetBackground background,
         IReadOnlyList<SpriteSheetFrameUpdateView> inputFrames)
     {
+        var frames = NormalizeFrames(inputFrames, rows, columns, sourceWidth, sourceHeight);
+        if (frames.Count == 0)
+            return new SpriteSheetServerPreviewResult([]);
+
         rows = Math.Clamp(rows, 1, 32);
         columns = Math.Clamp(columns, 1, 64);
         cellWidth = Math.Clamp(cellWidth, 1, 8192);
@@ -24,36 +31,22 @@ internal static class SpriteSheetServerRenderer
         padding = Math.Clamp(padding, 0, 4096);
         gutter = Math.Clamp(gutter, 0, 4096);
         _ = Math.Clamp(fps, 1, 60);
-        var maxFrames = checked(rows * columns);
-        var frames = inputFrames
-            .Where(frame => frame.Index >= 0 && frame.Index < maxFrames)
-            .OrderBy(frame => frame.Index)
-            .Take(maxFrames)
-            .ToList();
-        if (frames.Count == 0)
-            return new SpriteSheetServerPreviewResult([]);
+        if (frames.Count > rows * columns)
+            throw new InvalidOperationException("Sprite frame count exceeds the configured sheet grid.");
 
         var savedFrames = new List<SpriteSheetFrameView>();
-        foreach (var input in frames)
+        foreach (var frame in frames)
         {
-            var sourceRect = ClampRect(input.SourceRect, sourceWidth, sourceHeight);
-            var shapePaths = NormalizeShapePaths(input.ShapePaths, sourceWidth, sourceHeight);
-            var row = input.Index / columns;
-            var column = input.Index % columns;
-            var cellRect = new SpriteSheetRect(
-                column * (cellWidth + gutter),
-                row * (cellHeight + gutter),
-                cellWidth,
-                cellHeight);
-            var (destX, destY) = AlignedDestination(cellRect, sourceRect, padding, horizontalAnchor, verticalAnchor);
-            var spriteRect = new SpriteSheetRect(destX, destY, sourceRect.Width, sourceRect.Height);
-            var previewRgba = CropRect(sourceRgba, sourceWidth, sourceHeight, sourceRect, shapePaths);
-            var previewDataUrl = DataUrl.ToDataUrl("image/png", SpriteSheetPngCodec.EncodeRgba(sourceRect.Width, sourceRect.Height, previewRgba));
+            var cellRect = CellRectForIndex(frame.Index, columns, cellWidth, cellHeight, gutter);
+            var (destX, destY) = AlignedDestination(cellRect with { X = 0, Y = 0 }, frame.SourceRect, padding, horizontalAnchor, verticalAnchor);
+            var spriteRect = new SpriteSheetRect(cellRect.X + destX, cellRect.Y + destY, frame.SourceRect.Width, frame.SourceRect.Height);
+            var previewRgba = CropFrame(sourceRgba, sourceWidth, sourceHeight, frame, frames, background);
+            var previewDataUrl = DataUrl.ToDataUrl("image/png", SpriteSheetPngCodec.EncodeRgba(frame.SourceRect.Width, frame.SourceRect.Height, previewRgba));
             savedFrames.Add(new SpriteSheetFrameView(
-                input.Index,
-                string.IsNullOrWhiteSpace(input.Label) ? $"Frame {input.Index + 1}" : input.Label.Trim(),
-                sourceRect,
-                shapePaths,
+                frame.Index,
+                frame.Label,
+                frame.SourceRect,
+                frame.ShapePaths,
                 cellRect,
                 spriteRect,
                 previewDataUrl));
@@ -75,8 +68,13 @@ internal static class SpriteSheetServerRenderer
         int fps,
         string? horizontalAnchor,
         string? verticalAnchor,
+        SpriteSheetBackground background,
         IReadOnlyList<SpriteSheetFrameUpdateView> inputFrames)
     {
+        var frames = NormalizeFrames(inputFrames, rows, columns, sourceWidth, sourceHeight);
+        if (frames.Count == 0)
+            throw new InvalidOperationException("At least one sprite frame is required.");
+
         rows = Math.Clamp(rows, 1, 32);
         columns = Math.Clamp(columns, 1, 64);
         cellWidth = Math.Clamp(cellWidth, 1, 8192);
@@ -84,47 +82,32 @@ internal static class SpriteSheetServerRenderer
         padding = Math.Clamp(padding, 0, 4096);
         gutter = Math.Clamp(gutter, 0, 4096);
         _ = Math.Clamp(fps, 1, 60);
-        var maxFrames = checked(rows * columns);
-        var frames = inputFrames
-            .Where(frame => frame.Index >= 0 && frame.Index < maxFrames)
-            .OrderBy(frame => frame.Index)
-            .Take(maxFrames)
-            .ToList();
-        if (frames.Count == 0)
-            throw new InvalidOperationException("At least one sprite frame is required.");
+        if (frames.Count > rows * columns)
+            throw new InvalidOperationException("Sprite frame count exceeds the configured sheet grid.");
 
         var outputWidth = checked((columns * cellWidth) + (Math.Max(0, columns - 1) * gutter));
         var outputHeight = checked((rows * cellHeight) + (Math.Max(0, rows - 1) * gutter));
-        if (outputWidth <= 0 || outputHeight <= 0 || outputWidth * (long)outputHeight > 120_000_000)
-            throw new InvalidOperationException("Sprite sheet output is too large.");
+        ValidateCanvasSize(outputWidth, outputHeight, "Sprite sheet output is too large.");
 
-        var outputRgba = new byte[checked(outputWidth * outputHeight * 4)];
+        var outputRgba = NewFilledCanvas(outputWidth, outputHeight, background);
         var savedFrames = new List<SpriteSheetFrameView>();
-        foreach (var input in frames)
+        foreach (var frame in frames)
         {
-            var sourceRect = ClampRect(input.SourceRect, sourceWidth, sourceHeight);
-            var shapePaths = NormalizeShapePaths(input.ShapePaths, sourceWidth, sourceHeight);
-            var row = input.Index / columns;
-            var column = input.Index % columns;
-            var cellRect = new SpriteSheetRect(
-                column * (cellWidth + gutter),
-                row * (cellHeight + gutter),
-                cellWidth,
-                cellHeight);
-            var (destX, destY) = AlignedDestination(cellRect, sourceRect, padding, horizontalAnchor, verticalAnchor);
-            CopySprite(sourceRgba, sourceWidth, sourceHeight, sourceRect, shapePaths, outputRgba, outputWidth, outputHeight, destX, destY);
+            var cellRect = CellRectForIndex(frame.Index, columns, cellWidth, cellHeight, gutter);
+            var (relativeDestX, relativeDestY) = AlignedDestination(cellRect with { X = 0, Y = 0 }, frame.SourceRect, padding, horizontalAnchor, verticalAnchor);
+            var destX = cellRect.X + relativeDestX;
+            var destY = cellRect.Y + relativeDestY;
+            CopyFrame(sourceRgba, sourceWidth, sourceHeight, frame, frames, background, outputRgba, outputWidth, outputHeight, destX, destY);
 
-            var spriteRect = IntersectRect(new SpriteSheetRect(destX, destY, sourceRect.Width, sourceRect.Height), outputWidth, outputHeight);
-            var rebasedSourceRect = spriteRect.Width > 0 && spriteRect.Height > 0
-                ? spriteRect
-                : new SpriteSheetRect(cellRect.X, cellRect.Y, 1, 1);
-            var rebasedShapePaths = RebaseShapePaths(shapePaths, sourceRect, destX, destY, outputWidth, outputHeight);
-            var previewRgba = CropRect(outputRgba, outputWidth, outputHeight, cellRect);
+            var sourceOnOutput = new SpriteSheetRect(destX, destY, frame.SourceRect.Width, frame.SourceRect.Height);
+            var spriteRect = IntersectRect(sourceOnOutput, outputWidth, outputHeight);
+            var rebasedShapePaths = RebaseShapePaths(frame.ShapePaths, frame.SourceRect, destX, destY, outputWidth, outputHeight);
+            var previewRgba = CropRect(outputRgba, outputWidth, outputHeight, cellRect, background);
             var previewDataUrl = DataUrl.ToDataUrl("image/png", SpriteSheetPngCodec.EncodeRgba(cellRect.Width, cellRect.Height, previewRgba));
             savedFrames.Add(new SpriteSheetFrameView(
-                input.Index,
-                string.IsNullOrWhiteSpace(input.Label) ? $"Frame {input.Index + 1}" : input.Label.Trim(),
-                rebasedSourceRect,
+                frame.Index,
+                frame.Label,
+                spriteRect.Width > 0 && spriteRect.Height > 0 ? spriteRect : new SpriteSheetRect(cellRect.X, cellRect.Y, 1, 1),
                 rebasedShapePaths,
                 cellRect,
                 spriteRect,
@@ -138,32 +121,211 @@ internal static class SpriteSheetServerRenderer
             savedFrames);
     }
 
-    internal static SpriteSheetAnimationReviewRenderResult BuildAnimationReviewComposites(
-        IReadOnlyList<SpriteAnimationFramePixels> frames)
+    internal static SpriteSheetReviewRenderResult BuildAnimationReview(
+        byte[] sourceRgba,
+        int sourceWidth,
+        int sourceHeight,
+        int rows,
+        int columns,
+        int cellWidth,
+        int cellHeight,
+        int padding,
+        int gutter,
+        string? horizontalAnchor,
+        string? verticalAnchor,
+        SpriteSheetBackground background,
+        IReadOnlyList<SpriteSheetFrameUpdateView> inputFrames,
+        bool loop,
+        int maxFrames)
     {
-        var ordered = frames.OrderBy(frame => frame.Index).ToList();
-        if (ordered.Count == 0)
+        var frames = NormalizeFrames(inputFrames, rows, columns, sourceWidth, sourceHeight)
+            .Take(Math.Clamp(maxFrames <= 0 ? 12 : maxFrames, 1, 24))
+            .ToList();
+        if (frames.Count == 0)
             throw new InvalidOperationException("At least one sprite frame is required.");
 
-        var frameWidth = ordered.Max(frame => frame.Width);
-        var frameHeight = ordered.Max(frame => frame.Height);
-        if (frameWidth <= 0 || frameHeight <= 0 || frameWidth * (long)frameHeight * ordered.Count > 120_000_000)
-            throw new InvalidOperationException("Sprite animation review images are too large.");
+        cellWidth = Math.Clamp(cellWidth, 1, 8192);
+        cellHeight = Math.Clamp(cellHeight, 1, 8192);
+        padding = Math.Clamp(padding, 0, 4096);
+        gutter = Math.Clamp(gutter, 0, 4096);
+        ValidateCanvasSize(cellWidth, cellHeight, "Sprite animation review images are too large.");
 
-        var onion = BuildOnionSkin(ordered, frameWidth, frameHeight);
-        var filmstrip = BuildFilmstrip(ordered, frameWidth, frameHeight);
-        return new SpriteSheetAnimationReviewRenderResult(
-            SpriteSheetPngCodec.EncodeRgba(frameWidth, frameHeight, onion),
-            SpriteSheetPngCodec.EncodeRgba(checked((frameWidth * ordered.Count) + Math.Max(0, ordered.Count - 1)), frameHeight, filmstrip),
-            frameWidth,
-            frameHeight,
-            checked((frameWidth * ordered.Count) + Math.Max(0, ordered.Count - 1)),
-            frameHeight);
+        var metricFrames = new List<SpriteAnimationFramePixels>();
+        var images = new List<SpriteSheetReviewImage>();
+        foreach (var frame in frames)
+        {
+            var cellRgba = NewFilledCanvas(cellWidth, cellHeight, background);
+            var cell = new SpriteSheetRect(0, 0, cellWidth, cellHeight);
+            var (destX, destY) = AlignedDestination(cell, frame.SourceRect, padding, horizontalAnchor, verticalAnchor);
+            CopyFrame(sourceRgba, sourceWidth, sourceHeight, frame, frames, background, cellRgba, cellWidth, cellHeight, destX, destY);
+            var label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label;
+            metricFrames.Add(new SpriteAnimationFramePixels(frame.Index, label, cellWidth, cellHeight, cellRgba));
+
+            var labeled = (byte[])cellRgba.Clone();
+            DrawIndexLabel(labeled, cellWidth, cellHeight, frame.Index, 0, 0);
+            images.Add(new SpriteSheetReviewImage(
+                label,
+                $"sprite-frame-{frame.Index + 1}.png",
+                "frame",
+                frame.Index,
+                null,
+                null,
+                SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, labeled)));
+        }
+
+        images.Insert(0, BuildAnnotatedSheetView(
+            sourceRgba,
+            sourceWidth,
+            sourceHeight,
+            rows,
+            columns,
+            cellWidth,
+            cellHeight,
+            gutter,
+            background,
+            frames,
+            "Sprite sheet view",
+            "sprite-sheet-view.png"));
+
+        for (var index = 0; index < metricFrames.Count - 1; index++)
+            images.Add(BuildPairDiff(metricFrames[index], metricFrames[index + 1], background));
+        if (loop && metricFrames.Count > 1)
+            images.Add(BuildPairDiff(metricFrames[^1], metricFrames[0], background));
+
+        var onion = BuildOnionSkin(metricFrames, cellWidth, cellHeight, background);
+        DrawIndexSequence(onion, cellWidth, cellHeight, metricFrames.Select(frame => frame.Index).ToList());
+        images.Add(new SpriteSheetReviewImage(
+            "Onion-skin overlay",
+            "sprite-animation-onion-skin.png",
+            "onion-skin",
+            null,
+            null,
+            null,
+            SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, onion)));
+
+        var filmstrip = BuildFilmstrip(metricFrames, cellWidth, cellHeight, background);
+        images.Add(new SpriteSheetReviewImage(
+            "Filmstrip, left-to-right frames 1..N",
+            "sprite-animation-filmstrip.png",
+            "filmstrip",
+            null,
+            null,
+            null,
+            SpriteSheetPngCodec.EncodeRgba(checked((cellWidth * metricFrames.Count) + Math.Max(0, metricFrames.Count - 1)), cellHeight, filmstrip)));
+
+        return new SpriteSheetReviewRenderResult(metricFrames, images);
     }
 
-    private static byte[] BuildOnionSkin(IReadOnlyList<SpriteAnimationFramePixels> frames, int width, int height)
+    internal static SpriteSheetReviewImage BuildDetectionAnnotatedSheetView(
+        byte[] sourceRgba,
+        int sourceWidth,
+        int sourceHeight,
+        SpriteSheetDetectionResult detection)
     {
-        var output = new byte[checked(width * height * 4)];
+        var frames = detection.Frames
+            .Select((frame, index) => new RenderFrame(
+                index,
+                $"Frame {index + 1}",
+                NormalizeSourceRect(frame.SourceRect),
+                NormalizeShapePaths(frame.ShapePaths, sourceWidth, sourceHeight)))
+            .ToList();
+        var cellWidth = Math.Max(1, sourceWidth / Math.Max(1, detection.Columns));
+        var cellHeight = Math.Max(1, sourceHeight / Math.Max(1, detection.Rows));
+        return BuildAnnotatedSheetView(
+            sourceRgba,
+            sourceWidth,
+            sourceHeight,
+            detection.Rows,
+            detection.Columns,
+            cellWidth,
+            cellHeight,
+            0,
+            detection.Background,
+            frames,
+            "Detected sprite-sheet frames",
+            "sprite-sheet-detection-view.png");
+    }
+
+    private static SpriteSheetReviewImage BuildAnnotatedSheetView(
+        byte[] sourceRgba,
+        int sourceWidth,
+        int sourceHeight,
+        int rows,
+        int columns,
+        int cellWidth,
+        int cellHeight,
+        int gutter,
+        SpriteSheetBackground background,
+        IReadOnlyList<RenderFrame> frames,
+        string label,
+        string fileName)
+    {
+        ValidateCanvasSize(sourceWidth, sourceHeight, "Annotated sprite sheet image is too large.");
+        var output = NewFilledCanvas(sourceWidth, sourceHeight, background);
+        Array.Copy(sourceRgba, output, Math.Min(sourceRgba.Length, output.Length));
+
+        DrawGrid(output, sourceWidth, sourceHeight, rows, columns, cellWidth, cellHeight, gutter);
+        foreach (var frame in frames)
+        {
+            DrawRectangle(output, sourceWidth, sourceHeight, frame.SourceRect, 31, 111, 235, 230, 2);
+            DrawIndexLabel(output, sourceWidth, sourceHeight, frame.Index, frame.SourceRect.X, frame.SourceRect.Y);
+        }
+
+        return new SpriteSheetReviewImage(
+            label,
+            fileName,
+            "sheet-view",
+            null,
+            null,
+            null,
+            SpriteSheetPngCodec.EncodeRgba(sourceWidth, sourceHeight, output));
+    }
+
+    private static SpriteSheetReviewImage BuildPairDiff(
+        SpriteAnimationFramePixels from,
+        SpriteAnimationFramePixels to,
+        SpriteSheetBackground background)
+    {
+        var width = Math.Max(from.Width, to.Width);
+        var height = Math.Max(from.Height, to.Height);
+        ValidateCanvasSize(width, height, "Sprite animation diff image is too large.");
+        var output = NewFilledCanvas(width, height, background);
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var fromPixel = TryGetPixel(from, x, y, out var fr, out var fg, out var fb, out var fa)
+                    && SpriteSheetImageAnalyzer.IsForeground(fr, fg, fb, fa, background);
+                var toPixel = TryGetPixel(to, x, y, out var tr, out var tg, out var tb, out var ta)
+                    && SpriteSheetImageAnalyzer.IsForeground(tr, tg, tb, ta, background);
+                if (!fromPixel && !toPixel)
+                    continue;
+
+                var targetIndex = ((y * width) + x) * 4;
+                if (fromPixel && toPixel)
+                    SetPixel(output, targetIndex, 190, 190, 190, 210);
+                else if (fromPixel)
+                    SetPixel(output, targetIndex, 230, 65, 80, 220);
+                else
+                    SetPixel(output, targetIndex, 35, 190, 220, 220);
+            }
+        }
+
+        DrawIndexLabel(output, width, height, from.Index, 0, 0);
+        DrawIndexLabel(output, width, height, to.Index, Math.Max(0, width / 2), 0);
+        return new SpriteSheetReviewImage(
+            $"Frame {from.Index + 1} vs {to.Index + 1}",
+            $"sprite-diff-{from.Index + 1}-vs-{to.Index + 1}.png",
+            "pair-diff",
+            null,
+            from.Index,
+            to.Index,
+            SpriteSheetPngCodec.EncodeRgba(width, height, output));
+    }
+
+    private static byte[] BuildOnionSkin(IReadOnlyList<SpriteAnimationFramePixels> frames, int width, int height, SpriteSheetBackground background)
+    {
+        var output = NewFilledCanvas(width, height, background);
         var overlayAlpha = Math.Clamp(180 / Math.Max(1, frames.Count), 28, 96);
         foreach (var frame in frames)
         {
@@ -172,7 +334,7 @@ internal static class SpriteSheetServerRenderer
                 for (var x = 0; x < Math.Min(width, frame.Width); x++)
                 {
                     var sourceIndex = ((y * frame.Width) + x) * 4;
-                    if (!IsForeground(frame.Rgba[sourceIndex], frame.Rgba[sourceIndex + 1], frame.Rgba[sourceIndex + 2], frame.Rgba[sourceIndex + 3]))
+                    if (!SpriteSheetImageAnalyzer.IsForeground(frame.Rgba[sourceIndex], frame.Rgba[sourceIndex + 1], frame.Rgba[sourceIndex + 2], frame.Rgba[sourceIndex + 3], background))
                         continue;
 
                     var alpha = Math.Min(frame.Rgba[sourceIndex + 3], overlayAlpha);
@@ -184,21 +346,15 @@ internal static class SpriteSheetServerRenderer
         return output;
     }
 
-    private static byte[] BuildFilmstrip(IReadOnlyList<SpriteAnimationFramePixels> frames, int frameWidth, int frameHeight)
+    private static byte[] BuildFilmstrip(IReadOnlyList<SpriteAnimationFramePixels> frames, int frameWidth, int frameHeight, SpriteSheetBackground background)
     {
         var outputWidth = checked((frameWidth * frames.Count) + Math.Max(0, frames.Count - 1));
-        var output = new byte[checked(outputWidth * frameHeight * 4)];
+        var output = NewFilledCanvas(outputWidth, frameHeight, background);
         for (var separator = 1; separator < frames.Count; separator++)
         {
             var x = (separator * frameWidth) + separator - 1;
             for (var y = 0; y < frameHeight; y++)
-            {
-                var index = ((y * outputWidth) + x) * 4;
-                output[index] = 160;
-                output[index + 1] = 160;
-                output[index + 2] = 160;
-                output[index + 3] = byte.MaxValue;
-            }
+                SetPixel(output, ((y * outputWidth) + x) * 4, 160, 160, 160, byte.MaxValue);
         }
 
         for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
@@ -210,9 +366,6 @@ internal static class SpriteSheetServerRenderer
                 for (var x = 0; x < Math.Min(frameWidth, frame.Width); x++)
                 {
                     var sourceIndex = ((y * frame.Width) + x) * 4;
-                    if (!IsForeground(frame.Rgba[sourceIndex], frame.Rgba[sourceIndex + 1], frame.Rgba[sourceIndex + 2], frame.Rgba[sourceIndex + 3]))
-                        continue;
-
                     var targetIndex = ((y * outputWidth) + destX + x) * 4;
                     output[targetIndex] = frame.Rgba[sourceIndex];
                     output[targetIndex + 1] = frame.Rgba[sourceIndex + 1];
@@ -220,43 +373,188 @@ internal static class SpriteSheetServerRenderer
                     output[targetIndex + 3] = frame.Rgba[sourceIndex + 3];
                 }
             }
+
+            DrawIndexLabel(output, outputWidth, frameHeight, frame.Index, destX, 0);
         }
 
         return output;
     }
 
-    private static void BlendPixel(byte[] target, int targetIndex, byte r, byte g, byte b, byte a)
+    private static void CopyFrame(
+        byte[] source,
+        int sourceWidth,
+        int sourceHeight,
+        RenderFrame frame,
+        IReadOnlyList<RenderFrame> allFrames,
+        SpriteSheetBackground background,
+        byte[] target,
+        int targetWidth,
+        int targetHeight,
+        int destX,
+        int destY)
     {
-        var sourceAlpha = a / 255d;
-        var targetAlpha = target[targetIndex + 3] / 255d;
-        var outputAlpha = sourceAlpha + (targetAlpha * (1 - sourceAlpha));
-        if (outputAlpha <= 0)
-            return;
+        var neighbors = IntersectingNeighborShapes(frame, allFrames);
+        var currentHasShape = frame.ShapePaths.Count > 0;
+        for (var y = 0; y < frame.SourceRect.Height; y++)
+        {
+            var targetY = destY + y;
+            if (targetY < 0 || targetY >= targetHeight)
+                continue;
 
-        target[targetIndex] = (byte)Math.Round(((r * sourceAlpha) + (target[targetIndex] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
-        target[targetIndex + 1] = (byte)Math.Round(((g * sourceAlpha) + (target[targetIndex + 1] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
-        target[targetIndex + 2] = (byte)Math.Round(((b * sourceAlpha) + (target[targetIndex + 2] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
-        target[targetIndex + 3] = (byte)Math.Round(outputAlpha * 255);
+            for (var x = 0; x < frame.SourceRect.Width; x++)
+            {
+                var targetX = destX + x;
+                if (targetX < 0 || targetX >= targetWidth)
+                    continue;
+
+                var sourceX = frame.SourceRect.X + x;
+                var sourceY = frame.SourceRect.Y + y;
+                var targetIndex = ((targetY * targetWidth) + targetX) * 4;
+                if (sourceX < 0 || sourceX >= sourceWidth || sourceY < 0 || sourceY >= sourceHeight)
+                {
+                    WriteBackground(target, targetIndex, background);
+                    continue;
+                }
+
+                var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
+                if (ShouldReplaceWithBackground(
+                    source[sourceIndex],
+                    source[sourceIndex + 1],
+                    source[sourceIndex + 2],
+                    source[sourceIndex + 3],
+                    sourceX + 0.5d,
+                    sourceY + 0.5d,
+                    frame.ShapePaths,
+                    currentHasShape,
+                    neighbors,
+                    background))
+                {
+                    WriteBackground(target, targetIndex, background);
+                    continue;
+                }
+
+                target[targetIndex] = source[sourceIndex];
+                target[targetIndex + 1] = source[sourceIndex + 1];
+                target[targetIndex + 2] = source[sourceIndex + 2];
+                target[targetIndex + 3] = source[sourceIndex + 3];
+            }
+        }
     }
 
-    private static SpriteSheetRect ClampRect(SpriteSheetRect rect, int width, int height)
+    private static byte[] CropFrame(
+        byte[] source,
+        int sourceWidth,
+        int sourceHeight,
+        RenderFrame frame,
+        IReadOnlyList<RenderFrame> allFrames,
+        SpriteSheetBackground background)
     {
-        var x = Math.Clamp(rect.X, 0, Math.Max(0, width - 1));
-        var y = Math.Clamp(rect.Y, 0, Math.Max(0, height - 1));
+        ValidateCanvasSize(frame.SourceRect.Width, frame.SourceRect.Height, "Sprite frame preview is too large.");
+        var output = NewFilledCanvas(frame.SourceRect.Width, frame.SourceRect.Height, background);
+        CopyFrame(source, sourceWidth, sourceHeight, frame, allFrames, background, output, frame.SourceRect.Width, frame.SourceRect.Height, 0, 0);
+        return output;
+    }
+
+    private static byte[] CropRect(
+        byte[] source,
+        int sourceWidth,
+        int sourceHeight,
+        SpriteSheetRect rect,
+        SpriteSheetBackground background)
+    {
+        ValidateCanvasSize(rect.Width, rect.Height, "Sprite frame preview is too large.");
+        var output = NewFilledCanvas(rect.Width, rect.Height, background);
+        for (var y = 0; y < rect.Height; y++)
+        {
+            var sourceY = rect.Y + y;
+            if (sourceY < 0 || sourceY >= sourceHeight)
+                continue;
+
+            for (var x = 0; x < rect.Width; x++)
+            {
+                var sourceX = rect.X + x;
+                if (sourceX < 0 || sourceX >= sourceWidth)
+                    continue;
+
+                var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
+                var targetIndex = ((y * rect.Width) + x) * 4;
+                output[targetIndex] = source[sourceIndex];
+                output[targetIndex + 1] = source[sourceIndex + 1];
+                output[targetIndex + 2] = source[sourceIndex + 2];
+                output[targetIndex + 3] = source[sourceIndex + 3];
+            }
+        }
+
+        return output;
+    }
+
+    private static bool ShouldReplaceWithBackground(
+        byte r,
+        byte g,
+        byte b,
+        byte a,
+        double sourceX,
+        double sourceY,
+        IReadOnlyList<SpriteSheetShapePath> ownShapePaths,
+        bool currentHasShape,
+        IReadOnlyList<IReadOnlyList<SpriteSheetShapePath>> neighborShapePaths,
+        SpriteSheetBackground background)
+    {
+        if (!SpriteSheetImageAnalyzer.IsForeground(r, g, b, a, background))
+            return false;
+        if (currentHasShape && ContainsShape(ownShapePaths, sourceX, sourceY))
+            return false;
+
+        return neighborShapePaths.Any(paths => ContainsShape(paths, sourceX, sourceY));
+    }
+
+    private static IReadOnlyList<IReadOnlyList<SpriteSheetShapePath>> IntersectingNeighborShapes(
+        RenderFrame frame,
+        IReadOnlyList<RenderFrame> allFrames)
+    {
+        return allFrames
+            .Where(neighbor => neighbor.Index != frame.Index && neighbor.ShapePaths.Count > 0 && RectsIntersect(frame.SourceRect, ShapeBounds(neighbor.ShapePaths)))
+            .Select(neighbor => neighbor.ShapePaths)
+            .ToList();
+    }
+
+    private static List<RenderFrame> NormalizeFrames(
+        IReadOnlyList<SpriteSheetFrameUpdateView> inputFrames,
+        int rows,
+        int columns,
+        int sourceWidth,
+        int sourceHeight)
+    {
+        rows = Math.Clamp(rows, 1, 32);
+        columns = Math.Clamp(columns, 1, 64);
+        if (inputFrames.Count > rows * columns)
+            throw new InvalidOperationException("Sprite frame count exceeds the configured sheet grid.");
+
+        return inputFrames
+            .Select((frame, index) => new RenderFrame(
+                index,
+                string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label.Trim(),
+                NormalizeSourceRect(frame.SourceRect),
+                NormalizeShapePaths(frame.ShapePaths, sourceWidth, sourceHeight)))
+            .ToList();
+    }
+
+    private static SpriteSheetRect NormalizeSourceRect(SpriteSheetRect rect) =>
+        new(
+            Math.Clamp(rect.X, -32768, 32767),
+            Math.Clamp(rect.Y, -32768, 32767),
+            Math.Clamp(rect.Width, 1, 8192),
+            Math.Clamp(rect.Height, 1, 8192));
+
+    private static SpriteSheetRect CellRectForIndex(int index, int columns, int cellWidth, int cellHeight, int gutter)
+    {
+        var row = index / columns;
+        var column = index % columns;
         return new SpriteSheetRect(
-            x,
-            y,
-            Math.Clamp(rect.Width, 1, Math.Max(1, width - x)),
-            Math.Clamp(rect.Height, 1, Math.Max(1, height - y)));
-    }
-
-    private static SpriteSheetRect IntersectRect(SpriteSheetRect rect, int width, int height)
-    {
-        var x1 = Math.Clamp(rect.X, 0, width);
-        var y1 = Math.Clamp(rect.Y, 0, height);
-        var x2 = Math.Clamp(rect.X + rect.Width, 0, width);
-        var y2 = Math.Clamp(rect.Y + rect.Height, 0, height);
-        return new SpriteSheetRect(x1, y1, Math.Max(0, x2 - x1), Math.Max(0, y2 - y1));
+            column * (cellWidth + gutter),
+            row * (cellHeight + gutter),
+            cellWidth,
+            cellHeight);
     }
 
     private static (int X, int Y) AlignedDestination(
@@ -279,96 +577,11 @@ internal static class SpriteSheetServerRenderer
             _ => cellRect.Y + cellRect.Height - padding - sourceRect.Height,
         };
 
+        var maxX = cellRect.X + cellRect.Width - sourceRect.Width;
+        var maxY = cellRect.Y + cellRect.Height - sourceRect.Height;
+        x = maxX < cellRect.X ? cellRect.X : Math.Clamp(x, cellRect.X, maxX);
+        y = maxY < cellRect.Y ? cellRect.Y : Math.Clamp(y, cellRect.Y, maxY);
         return (x, y);
-    }
-
-    private static void CopySprite(
-        byte[] source,
-        int sourceWidth,
-        int sourceHeight,
-        SpriteSheetRect sourceRect,
-        IReadOnlyList<SpriteSheetShapePath> shapePaths,
-        byte[] target,
-        int targetWidth,
-        int targetHeight,
-        int destX,
-        int destY)
-    {
-        for (var y = 0; y < sourceRect.Height; y++)
-        {
-            var targetY = destY + y;
-            if (targetY < 0 || targetY >= targetHeight)
-                continue;
-
-            var sourceY = sourceRect.Y + y;
-            if (sourceY < 0 || sourceY >= sourceHeight)
-                continue;
-
-            for (var x = 0; x < sourceRect.Width; x++)
-            {
-                var targetX = destX + x;
-                if (targetX < 0 || targetX >= targetWidth)
-                    continue;
-
-                var sourceX = sourceRect.X + x;
-                if (sourceX < 0 || sourceX >= sourceWidth)
-                    continue;
-
-                var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
-                if (shapePaths.Count > 0
-                    && (!IsForeground(source[sourceIndex], source[sourceIndex + 1], source[sourceIndex + 2], source[sourceIndex + 3])
-                        || !ContainsShape(shapePaths, sourceX + 0.5d, sourceY + 0.5d)))
-                {
-                    continue;
-                }
-
-                var targetIndex = ((targetY * targetWidth) + targetX) * 4;
-                target[targetIndex] = source[sourceIndex];
-                target[targetIndex + 1] = source[sourceIndex + 1];
-                target[targetIndex + 2] = source[sourceIndex + 2];
-                target[targetIndex + 3] = source[sourceIndex + 3];
-            }
-        }
-    }
-
-    private static byte[] CropRect(
-        byte[] source,
-        int sourceWidth,
-        int sourceHeight,
-        SpriteSheetRect rect,
-        IReadOnlyList<SpriteSheetShapePath>? shapePaths = null)
-    {
-        shapePaths ??= [];
-        var output = new byte[checked(rect.Width * rect.Height * 4)];
-        for (var y = 0; y < rect.Height; y++)
-        {
-            var sourceY = rect.Y + y;
-            if (sourceY < 0 || sourceY >= sourceHeight)
-                continue;
-
-            for (var x = 0; x < rect.Width; x++)
-            {
-                var sourceX = rect.X + x;
-                if (sourceX < 0 || sourceX >= sourceWidth)
-                    continue;
-
-                var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
-                if (shapePaths.Count > 0
-                    && (!IsForeground(source[sourceIndex], source[sourceIndex + 1], source[sourceIndex + 2], source[sourceIndex + 3])
-                        || !ContainsShape(shapePaths, sourceX + 0.5d, sourceY + 0.5d)))
-                {
-                    continue;
-                }
-
-                var targetIndex = ((y * rect.Width) + x) * 4;
-                output[targetIndex] = source[sourceIndex];
-                output[targetIndex + 1] = source[sourceIndex + 1];
-                output[targetIndex + 2] = source[sourceIndex + 2];
-                output[targetIndex + 3] = source[sourceIndex + 3];
-            }
-        }
-
-        return output;
     }
 
     private static IReadOnlyList<SpriteSheetShapePath> NormalizeShapePaths(
@@ -449,11 +662,236 @@ internal static class SpriteSheetServerRenderer
         return inside;
     }
 
-    private static bool IsForeground(byte r, byte g, byte b, byte a) =>
-        a > 16 && !IsMagentaKeyColor(r, g, b);
+    private static SpriteSheetRect ShapeBounds(IReadOnlyList<SpriteSheetShapePath> paths)
+    {
+        var points = paths.SelectMany(path => path.Points).ToList();
+        if (points.Count == 0)
+            return new SpriteSheetRect(0, 0, 1, 1);
 
-    private static bool IsMagentaKeyColor(byte r, byte g, byte b) =>
-        r >= 210 && b >= 210 && g <= 80;
+        var minX = points.Min(point => point.X);
+        var minY = points.Min(point => point.Y);
+        var maxX = points.Max(point => point.X);
+        var maxY = points.Max(point => point.Y);
+        return new SpriteSheetRect(minX, minY, Math.Max(1, maxX - minX), Math.Max(1, maxY - minY));
+    }
+
+    private static bool RectsIntersect(SpriteSheetRect left, SpriteSheetRect right) =>
+        left.X < right.X + right.Width
+        && left.X + left.Width > right.X
+        && left.Y < right.Y + right.Height
+        && left.Y + left.Height > right.Y;
+
+    private static SpriteSheetRect IntersectRect(SpriteSheetRect rect, int width, int height)
+    {
+        var x1 = Math.Clamp(rect.X, 0, width);
+        var y1 = Math.Clamp(rect.Y, 0, height);
+        var x2 = Math.Clamp(rect.X + rect.Width, 0, width);
+        var y2 = Math.Clamp(rect.Y + rect.Height, 0, height);
+        return new SpriteSheetRect(x1, y1, Math.Max(0, x2 - x1), Math.Max(0, y2 - y1));
+    }
+
+    private static byte[] NewFilledCanvas(int width, int height, SpriteSheetBackground background)
+    {
+        ValidateCanvasSize(width, height, "Image is too large.");
+        var rgba = new byte[checked(width * height * 4)];
+        FillRgba(rgba, background);
+        return rgba;
+    }
+
+    private static void FillRgba(byte[] rgba, SpriteSheetBackground background)
+    {
+        for (var index = 0; index < rgba.Length; index += 4)
+            WriteBackground(rgba, index, background);
+    }
+
+    private static void WriteBackground(byte[] target, int index, SpriteSheetBackground background)
+    {
+        target[index] = background.R;
+        target[index + 1] = background.G;
+        target[index + 2] = background.B;
+        target[index + 3] = background.Mode.Equals("alpha", StringComparison.OrdinalIgnoreCase) ? (byte)0 : background.A;
+    }
+
+    private static void SetPixel(byte[] target, int index, byte r, byte g, byte b, byte a)
+    {
+        target[index] = r;
+        target[index + 1] = g;
+        target[index + 2] = b;
+        target[index + 3] = a;
+    }
+
+    private static void BlendPixel(byte[] target, int targetIndex, byte r, byte g, byte b, byte a)
+    {
+        var sourceAlpha = a / 255d;
+        var targetAlpha = target[targetIndex + 3] / 255d;
+        var outputAlpha = sourceAlpha + (targetAlpha * (1 - sourceAlpha));
+        if (outputAlpha <= 0)
+            return;
+
+        target[targetIndex] = (byte)Math.Round(((r * sourceAlpha) + (target[targetIndex] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
+        target[targetIndex + 1] = (byte)Math.Round(((g * sourceAlpha) + (target[targetIndex + 1] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
+        target[targetIndex + 2] = (byte)Math.Round(((b * sourceAlpha) + (target[targetIndex + 2] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
+        target[targetIndex + 3] = (byte)Math.Round(outputAlpha * 255);
+    }
+
+    private static bool TryGetPixel(SpriteAnimationFramePixels frame, int x, int y, out byte r, out byte g, out byte b, out byte a)
+    {
+        r = 0;
+        g = 0;
+        b = 0;
+        a = 0;
+        if (x < 0 || y < 0 || x >= frame.Width || y >= frame.Height)
+            return false;
+
+        var index = ((y * frame.Width) + x) * 4;
+        r = frame.Rgba[index];
+        g = frame.Rgba[index + 1];
+        b = frame.Rgba[index + 2];
+        a = frame.Rgba[index + 3];
+        return true;
+    }
+
+    private static void DrawGrid(byte[] rgba, int width, int height, int rows, int columns, int cellWidth, int cellHeight, int gutter)
+    {
+        if (rows <= 0 || columns <= 0 || cellWidth <= 0 || cellHeight <= 0)
+            return;
+
+        for (var column = 1; column < columns; column++)
+        {
+            var x = column * cellWidth + (column - 1) * gutter;
+            DrawLine(rgba, width, height, x, 0, x, height - 1, 245, 159, 0, 210, 1);
+            if (gutter > 0)
+                DrawLine(rgba, width, height, x + gutter, 0, x + gutter, height - 1, 245, 159, 0, 150, 1);
+        }
+
+        for (var row = 1; row < rows; row++)
+        {
+            var y = row * cellHeight + (row - 1) * gutter;
+            DrawLine(rgba, width, height, 0, y, width - 1, y, 245, 159, 0, 210, 1);
+            if (gutter > 0)
+                DrawLine(rgba, width, height, 0, y + gutter, width - 1, y + gutter, 245, 159, 0, 150, 1);
+        }
+    }
+
+    private static void DrawRectangle(byte[] rgba, int width, int height, SpriteSheetRect rect, byte r, byte g, byte b, byte a, int thickness)
+    {
+        for (var offset = 0; offset < thickness; offset++)
+        {
+            DrawLine(rgba, width, height, rect.X, rect.Y + offset, rect.X + rect.Width - 1, rect.Y + offset, r, g, b, a, 1);
+            DrawLine(rgba, width, height, rect.X, rect.Y + rect.Height - 1 - offset, rect.X + rect.Width - 1, rect.Y + rect.Height - 1 - offset, r, g, b, a, 1);
+            DrawLine(rgba, width, height, rect.X + offset, rect.Y, rect.X + offset, rect.Y + rect.Height - 1, r, g, b, a, 1);
+            DrawLine(rgba, width, height, rect.X + rect.Width - 1 - offset, rect.Y, rect.X + rect.Width - 1 - offset, rect.Y + rect.Height - 1, r, g, b, a, 1);
+        }
+    }
+
+    private static void DrawLine(byte[] rgba, int width, int height, int x1, int y1, int x2, int y2, byte r, byte g, byte b, byte a, int thickness)
+    {
+        var dx = Math.Abs(x2 - x1);
+        var sx = x1 < x2 ? 1 : -1;
+        var dy = -Math.Abs(y2 - y1);
+        var sy = y1 < y2 ? 1 : -1;
+        var error = dx + dy;
+        var x = x1;
+        var y = y1;
+        while (true)
+        {
+            FillRect(rgba, width, height, x, y, thickness, thickness, r, g, b, a);
+            if (x == x2 && y == y2)
+                break;
+
+            var e2 = 2 * error;
+            if (e2 >= dy)
+            {
+                error += dy;
+                x += sx;
+            }
+            if (e2 <= dx)
+            {
+                error += dx;
+                y += sy;
+            }
+        }
+    }
+
+    private static void FillRect(byte[] rgba, int width, int height, int x, int y, int rectWidth, int rectHeight, byte r, byte g, byte b, byte a)
+    {
+        var startX = Math.Clamp(x, 0, width);
+        var startY = Math.Clamp(y, 0, height);
+        var endX = Math.Clamp(x + rectWidth, 0, width);
+        var endY = Math.Clamp(y + rectHeight, 0, height);
+        for (var py = startY; py < endY; py++)
+        {
+            for (var px = startX; px < endX; px++)
+                BlendPixel(rgba, ((py * width) + px) * 4, r, g, b, a);
+        }
+    }
+
+    private static void DrawIndexSequence(byte[] rgba, int width, int height, IReadOnlyList<int> indexes)
+    {
+        var x = 0;
+        foreach (var index in indexes)
+        {
+            DrawIndexLabel(rgba, width, height, index, x, 0);
+            x += 24;
+            if (x >= width)
+                break;
+        }
+    }
+
+    private static void DrawIndexLabel(byte[] rgba, int width, int height, int index, int x, int y)
+    {
+        var digits = (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var scale = Math.Clamp(Math.Min(width, height) / 80, 2, 6);
+        var digitWidth = 3 * scale;
+        var digitHeight = 5 * scale;
+        var gap = scale;
+        var textWidth = (digits.Length * digitWidth) + Math.Max(0, digits.Length - 1) * gap;
+        var barWidth = textWidth + (4 * scale);
+        var barHeight = digitHeight + (4 * scale);
+        x = Math.Clamp(x, 0, Math.Max(0, width - barWidth));
+        y = Math.Clamp(y, 0, Math.Max(0, height - barHeight));
+        FillRect(rgba, width, height, x, y, barWidth, barHeight, 0, 0, 0, 220);
+
+        var cursor = x + (2 * scale);
+        var top = y + (2 * scale);
+        foreach (var digit in digits)
+        {
+            DrawDigit(rgba, width, height, cursor, top, scale, digit);
+            cursor += digitWidth + gap;
+        }
+    }
+
+    private static void DrawDigit(byte[] rgba, int width, int height, int x, int y, int scale, char digit)
+    {
+        var rows = digit switch
+        {
+            '0' => new[] { "111", "101", "101", "101", "111" },
+            '1' => new[] { "010", "110", "010", "010", "111" },
+            '2' => new[] { "111", "001", "111", "100", "111" },
+            '3' => new[] { "111", "001", "111", "001", "111" },
+            '4' => new[] { "101", "101", "111", "001", "001" },
+            '5' => new[] { "111", "100", "111", "001", "111" },
+            '6' => new[] { "111", "100", "111", "101", "111" },
+            '7' => new[] { "111", "001", "001", "010", "010" },
+            '8' => new[] { "111", "101", "111", "101", "111" },
+            '9' => new[] { "111", "101", "111", "001", "111" },
+            _ => new[] { "000", "000", "000", "000", "000" },
+        };
+        for (var row = 0; row < rows.Length; row++)
+        {
+            for (var column = 0; column < rows[row].Length; column++)
+            {
+                if (rows[row][column] == '1')
+                    FillRect(rgba, width, height, x + column * scale, y + row * scale, scale, scale, 255, 255, 255, 255);
+            }
+        }
+    }
+
+    private static void ValidateCanvasSize(int width, int height, string error)
+    {
+        if (width <= 0 || height <= 0 || width * (long)height > MaxPixels)
+            throw new InvalidOperationException(error);
+    }
 
     private static string NormalizeHorizontalAnchor(string? value) =>
         value?.Trim().ToLowerInvariant() switch
@@ -470,6 +908,12 @@ internal static class SpriteSheetServerRenderer
             "middle" or "center" => "middle",
             _ => "bottom",
         };
+
+    private sealed record RenderFrame(
+        int Index,
+        string Label,
+        SpriteSheetRect SourceRect,
+        IReadOnlyList<SpriteSheetShapePath> ShapePaths);
 }
 
 internal sealed record SpriteSheetServerRenderResult(
@@ -481,10 +925,15 @@ internal sealed record SpriteSheetServerRenderResult(
 internal sealed record SpriteSheetServerPreviewResult(
     IReadOnlyList<SpriteSheetFrameView> Frames);
 
-internal sealed record SpriteSheetAnimationReviewRenderResult(
-    byte[] OnionSkinPngData,
-    byte[] FilmstripPngData,
-    int FrameWidth,
-    int FrameHeight,
-    int FilmstripWidth,
-    int FilmstripHeight);
+internal sealed record SpriteSheetReviewRenderResult(
+    IReadOnlyList<SpriteAnimationFramePixels> MetricFrames,
+    IReadOnlyList<SpriteSheetReviewImage> Images);
+
+internal sealed record SpriteSheetReviewImage(
+    string Label,
+    string FileName,
+    string Kind,
+    int? FrameIndex,
+    int? FromFrame,
+    int? ToFrame,
+    byte[] PngData);

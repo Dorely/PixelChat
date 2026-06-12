@@ -37,6 +37,7 @@
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Select)" title="@ToolTitle(SpriteEditTool.Select)" aria-pressed="@(_tool == SpriteEditTool.Select)" @onclick="() => SetToolAsync(SpriteEditTool.Select)">Select</button>
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Draw)" title="@ToolTitle(SpriteEditTool.Draw)" aria-pressed="@(_tool == SpriteEditTool.Draw)" @onclick="() => SetToolAsync(SpriteEditTool.Draw)">Draw Box</button>
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Outline)" title="@ToolTitle(SpriteEditTool.Outline)" aria-pressed="@(_tool == SpriteEditTool.Outline)" @onclick="() => SetToolAsync(SpriteEditTool.Outline)">Outline</button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_frames.Count == 0)" @onclick="ExpandToCellsAsync">Expand to Cells</button>
                         <button type="button" class="btn btn-sm btn-primary" disabled="@(_frames.Count == 0)" @onclick="NormalizeSheetAsync">Normalize Sheet</button>
                         <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_selectedFrameIndex < 0 || _frames.Count == 0)" @onclick="DeleteSelectedFrameAsync">Delete</button>
                     </div>
@@ -354,7 +355,7 @@
 
     private async Task NormalizeSheetAsync()
     {
-        if (_module is null || Workbench.ActiveSpriteSheet is not { } active || string.IsNullOrWhiteSpace(_workingImageDataUrl) || _frames.Count == 0)
+        if (Workbench.ActiveSpriteSheet is not { } active || _frames.Count == 0)
             return;
 
         _error = null;
@@ -362,47 +363,41 @@
         try
         {
             NormalizeLayout();
-            var output = await _module.InvokeAsync<SpriteSheetRenderOutput>(
-                "renderSpriteSheetNormalize",
-                _workingImageDataUrl,
-                BuildLayoutPayload());
-            if (string.IsNullOrWhiteSpace(output.DataUrl))
-                throw new InvalidOperationException("Sprite sheet render did not produce a PNG.");
+            await AutosaveLayoutNowAsync();
+            if (!string.IsNullOrWhiteSpace(_error))
+                return;
 
-            var saved = await Workflow.NormalizeSpriteSheetAsync(Workbench.Project.Id, new NormalizeSpriteSheetRequest(
-                active.Id,
-                output.DataUrl,
-                _rows,
-                _columns,
-                _cellWidth,
-                _cellHeight,
-                _padding,
-                _gutter,
-                _fps,
-                _loop,
-                _horizontalAnchor,
-                _verticalAnchor,
-                output.Frames));
-            _workingImageDataUrl = output.DataUrl;
-            LoadSheet(saved, new ArtAssetView(
-                saved.WorkingAssetId ?? Guid.Empty,
-                saved.Label,
-                "sprite-sheet.png",
-                ArtAssetKind.SpriteSheet,
-                "image/png",
-                output.DataUrl,
-                output.Width,
-                output.Height,
-                saved.SourceAssetId,
-                null,
-                null,
-                null,
-                null,
-                false,
-                string.Empty,
-                string.Empty,
-                DateTime.UtcNow));
+            await Workflow.NormalizeSpriteSheetAsync(Workbench.Project.Id, active.Id);
+            _loadedSpriteSheetId = null;
+            _loadedSpriteSheetUpdatedAt = null;
             _status = "Sprite sheet normalized.";
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+    }
+
+    private async Task ExpandToCellsAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is not { } active || _frames.Count == 0)
+            return;
+
+        _error = null;
+        _status = "Expanding frames to cells...";
+        try
+        {
+            NormalizeLayout();
+            await AutosaveLayoutNowAsync();
+            if (!string.IsNullOrWhiteSpace(_error))
+                return;
+
+            var saved = await Workflow.ExpandSpriteSheetFramesToCellAsync(Workbench.Project.Id, active.Id);
+            if (CurrentWorkingAsset(active) is { } working)
+                LoadSheet(saved, working);
+            _status = "Frames expanded to cells.";
             await OnChanged.InvokeAsync();
         }
         catch (Exception ex)
@@ -537,18 +532,13 @@
 
     private async Task AutosaveLayoutNowAsync()
     {
-        if (_disposed || _module is null || Workbench.ActiveSpriteSheet is not { } active || string.IsNullOrWhiteSpace(_workingImageDataUrl))
+        if (_disposed || Workbench.ActiveSpriteSheet is not { } active || string.IsNullOrWhiteSpace(_workingImageDataUrl))
             return;
 
         _autosaveCts?.Cancel();
         NormalizeLayout();
         try
         {
-            var output = await _module.InvokeAsync<SpriteSheetFramePreviewOutput>(
-                "renderSpriteFramePreviews",
-                _workingImageDataUrl,
-                BuildLayoutPayload());
-
             var saved = await Workflow.AutosaveSpriteSheetLayoutAsync(Workbench.Project.Id, new AutosaveSpriteSheetLayoutRequest(
                 active.Id,
                 _rows,
@@ -561,7 +551,7 @@
                 _loop,
                 _horizontalAnchor,
                 _verticalAnchor,
-                output.Frames));
+                BuildFrameUpdates()));
             LoadSheet(saved, new ArtAssetView(
                 saved.WorkingAssetId ?? Guid.Empty,
                 saved.Label,
@@ -679,6 +669,7 @@
                 {
                     frame.Index,
                     frame.Label,
+                    frame.PreviewDataUrl,
                     SourceRect = new { X = frame.X, Y = frame.Y, Width = frame.Width, Height = frame.Height },
                     frame.ShapePaths,
                 })
@@ -799,6 +790,19 @@
         _dotNetRef?.Dispose();
     }
 
+    private List<SpriteSheetFrameUpdateView> BuildFrameUpdates()
+    {
+        NormalizeLayout();
+        return _frames
+            .OrderBy(frame => frame.Index)
+            .Select((frame, index) => new SpriteSheetFrameUpdateView(
+                index,
+                frame.Label,
+                new SpriteSheetRect(frame.X, frame.Y, frame.Width, frame.Height),
+                frame.ShapePaths))
+            .ToList();
+    }
+
     private enum SpriteEditTool
     {
         Select,
@@ -817,19 +821,6 @@
         public int Height { get; set; }
         public List<SpriteSheetShapePath> ShapePaths { get; set; } = [];
         public string PreviewDataUrl { get; set; } = string.Empty;
-    }
-
-    private sealed class SpriteSheetRenderOutput
-    {
-        public string DataUrl { get; set; } = string.Empty;
-        public int Width { get; set; }
-        public int Height { get; set; }
-        public List<SpriteSheetFrameView> Frames { get; set; } = [];
-    }
-
-    private sealed class SpriteSheetFramePreviewOutput
-    {
-        public List<SpriteSheetFrameView> Frames { get; set; } = [];
     }
 
     public sealed class SpriteCanvasChange

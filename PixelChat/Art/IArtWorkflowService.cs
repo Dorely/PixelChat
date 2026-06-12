@@ -17,6 +17,7 @@ public interface IArtWorkflowService
     Task<string> ListSpriteSheetsJsonAsync(Guid projectId, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadSpriteSheetJsonAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteAnimationReviewView> BuildSpriteAnimationReviewAsync(Guid projectId, Guid spriteSheetId, int maxFrames = 12, CancellationToken cancellationToken = default);
+    Task<SpriteAnimationReviewImageView> BuildSpriteSheetDetectionAnnotatedSheetAsync(Guid projectId, SpriteSheetDetectionResult detection, CancellationToken cancellationToken = default);
     Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, BackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
     Task<BackgroundRemovalExportCacheView> SaveBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, SaveBackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ExportStepCacheView>> GetExportStepCacheAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
@@ -25,8 +26,8 @@ public interface IArtWorkflowService
     Task<SpriteSheetDetectionResult> DetectSpriteSheetFramesAsync(Guid projectId, SpriteSheetDetectionRequest request, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> StartSpriteSheetEditAsync(Guid projectId, Guid sourceAssetId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> AutosaveSpriteSheetLayoutAsync(Guid projectId, AutosaveSpriteSheetLayoutRequest request, CancellationToken cancellationToken = default);
-    Task<SpriteSheetDefinitionView> NormalizeSpriteSheetAsync(Guid projectId, NormalizeSpriteSheetRequest request, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> NormalizeSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
+    Task<SpriteSheetDefinitionView> ExpandSpriteSheetFramesToCellAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> UpdateSpriteSheetFramesAsync(Guid projectId, UpdateSpriteSheetFramesRequest request, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task SelectSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);

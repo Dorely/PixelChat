@@ -18,13 +18,13 @@ public static class AssistantPromptBuilder
         - Read tools (`list_workspace_state`, `list_assets`/`read_asset`, `list_recipes`/`read_recipe`/`list_recipe_versions`, `list_batches`/`read_batch`, `list_sprite_sheets`/`read_sprite_sheet`, `detect_sprite_sheet_frames`): inspect project data with no visible side effects.
         - Draft tools (`draft_generate_form`, `draft_edit_form`, `draft_prompt_recipe_form`): fill visible forms for the user to review and submit manually.
         - Autonomous tools (`run_generation_round`, `save_prompt_recipe`, `revert_recipe_version`, `create_sprite_sheet`): perform real generation and recipe work directly during bounded iteration.
-        - Sprite-sheet tools (`update_sprite_sheet_frames`, `normalize_sprite_sheet`, `reset_sprite_sheet_to_original`, `review_sprite_animation`, `attach_sprite_sheet_frames`).
+        - Sprite-sheet tools (`update_sprite_sheet_frames`, `expand_sprite_sheet_frames_to_cells`, `normalize_sprite_sheet`, `reset_sprite_sheet_to_original`, `review_sprite_animation`, `attach_sprite_sheet_frames`).
         - Workspace tools (`switch_workspace_mode`, `attach_chat_attachment`, `clear_chat_attachments`, `mark_asset`, `export_asset`): visible UI changes.
 
         How image context reaches you:
 
         - Visible chat attachments arrive automatically as images with the user's current message. Do not call read tools just to see them again.
-        - Images from `read_asset`, `run_generation_round` outputs, and `review_sprite_animation` are model-only: you can see them, the user cannot. When the user should see an image, attach it or point at the asset by name.
+        - Images from `read_asset`, `run_generation_round` outputs, `detect_sprite_sheet_frames`, and `review_sprite_animation` are model-only: you can see them, the user cannot. When the user should see an image, attach it or point at the asset by name.
         - List tools return metadata only, never image bytes.
         - `list_workspace_state` populates only the active tab's section; use focused list/read tools for everything else.
 
@@ -72,10 +72,11 @@ public static class AssistantPromptBuilder
         # Sprite-Sheet Work
 
         - The user can start a sheet from an asset card/import, or you can call `create_sprite_sheet` during autonomous work.
-        - Use `detect_sprite_sheet_frames` to inspect the active source/working asset; it returns row-major boxes plus optional shape paths for object-owned pixels.
-        - Use `update_sprite_sheet_frames` to set boxes, shape paths, rows/columns, cell sizes, gutter/padding, sheet-wide anchors, FPS, and loop settings. It autosaves metadata and frame previews only, never image bytes.
-        - Use `review_sprite_animation` to judge the animation from ordered frames, the onion-skin overlay, the filmstrip, and motion metrics such as centroid drift, silhouette area changes, foreground pixel differences, and loop seam movement.
-        - Use `normalize_sprite_sheet` when stitching is needed to produce a good animation or the user asks to spread/stitch/normalize; it rewrites the working PNG and rebases boxes and shapes.
+        - Use `detect_sprite_sheet_frames` to inspect the active source/working PNG; verify the model-only annotated sheet view before committing boxes.
+        - Use `update_sprite_sheet_frames` as a replace-set: the frames array is authoritative, omission deletes, and array order becomes frame order. Shapes separate neighboring sprites only; they never mask a frame's own pixels.
+        - Use `expand_sprite_sheet_frames_to_cells` before normalize when frames should share a uniform cell. It grows source rects to cell size, preserves background, and never scales pixels.
+        - Use `normalize_sprite_sheet` when stitching is needed to produce a good animation or the user asks to spread/stitch/normalize; it copies full rects, subtracts only neighboring shape intrusions, preserves background, rewrites the working PNG, and rebases boxes/shapes.
+        - Use `review_sprite_animation` after normalize or major frame edits. Judge the labeled sheet view, pairwise diffs, onion-skin overlay, filmstrip, and motion metrics such as centroid drift, silhouette area changes, foreground pixel differences, and loop seam movement.
         - Use `reset_sprite_sheet_to_original` only when the user asks to start over.
         - Use `attach_sprite_sheet_frames` when frame previews need to be visible chat image context.
         - Repeat inspect → adjust → review until the sheet is genuinely animatable.

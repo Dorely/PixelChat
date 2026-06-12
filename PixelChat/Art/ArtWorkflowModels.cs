@@ -66,9 +66,17 @@ public sealed record SpriteSheetDefinitionView(
     bool Loop,
     string HorizontalAnchor,
     string VerticalAnchor,
+    SpriteSheetBackground Background,
     IReadOnlyList<SpriteSheetFrameRecordView> Frames,
     DateTime CreatedAt,
     DateTime UpdatedAt);
+
+public sealed record SpriteSheetBackground(
+    string Mode,
+    byte R,
+    byte G,
+    byte B,
+    byte A);
 
 public sealed record SpriteSheetFrameRecordView(
     Guid Id,
@@ -116,7 +124,11 @@ public sealed record SpriteAnimationReviewImageView(
     string Label,
     string FileName,
     string ContentType,
-    string DataUrl);
+    string DataUrl,
+    string Kind,
+    int? FrameIndex,
+    int? FromFrame,
+    int? ToFrame);
 
 public sealed record SpriteSheetFrameView(
     int Index,
@@ -152,6 +164,7 @@ public sealed record SpriteSheetDetectionResult(
     int ImageHeight,
     int Rows,
     int Columns,
+    SpriteSheetBackground Background,
     IReadOnlyList<SpriteSheetFrameDetectionView> Frames);
 
 public sealed record SpriteSheetFrameDetectionView(
@@ -171,22 +184,7 @@ public sealed record AutosaveSpriteSheetLayoutRequest(
     bool Loop,
     string HorizontalAnchor,
     string VerticalAnchor,
-    IReadOnlyList<SpriteSheetFrameView> Frames);
-
-public sealed record NormalizeSpriteSheetRequest(
-    Guid SpriteSheetId,
-    string WorkingPngDataUrl,
-    int Rows,
-    int Columns,
-    int CellWidth,
-    int CellHeight,
-    int Padding,
-    int Gutter,
-    int Fps,
-    bool Loop,
-    string HorizontalAnchor,
-    string VerticalAnchor,
-    IReadOnlyList<SpriteSheetFrameView> Frames);
+    IReadOnlyList<SpriteSheetFrameUpdateView> Frames);
 
 public sealed record UpdateSpriteSheetFramesRequest(
     Guid SpriteSheetId,

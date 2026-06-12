@@ -27,6 +27,7 @@ public sealed class AssistantToolRegistry(
         "switch_workspace_mode",
         "mark_asset",
         "update_sprite_sheet_frames",
+        "expand_sprite_sheet_frames_to_cells",
         "normalize_sprite_sheet",
         "reset_sprite_sheet_to_original",
         "attach_sprite_sheet_frames",
@@ -139,7 +140,7 @@ public sealed class AssistantToolRegistry(
             method: (Guid spriteSheetId, int maxFrames = 12, CancellationToken cancellationToken = default) =>
                 ReviewSpriteAnimationAsync(projectId, spriteSheetId, maxFrames, cancellationToken),
             name: "review_sprite_animation",
-            description: "Review a sprite animation from saved frame records. Returns motion metrics in JSON and supplies ordered frame, onion-skin, and filmstrip images as model-only content."),
+            description: "Review a sprite animation from the current PNG working sheet. Returns motion metrics in JSON and supplies labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content with manifest fields."),
 
         AIFunctionFactory.Create(
             method: (string type, Guid refId, string? label = null) => AttachContextAsync(projectId, type, refId, label),
@@ -198,7 +199,7 @@ public sealed class AssistantToolRegistry(
                 string? layoutHint = null,
                 string? backgroundMode = null) => DetectSpriteSheetFramesAsync(projectId, sourceAssetId, expectedFrames, layoutHint, backgroundMode),
             name: "detect_sprite_sheet_frames",
-            description: "Read-only sprite-sheet image analysis for an existing source asset. Detects connected foreground objects using alpha or magenta key-color background and returns row-major boxes plus editable shape paths."),
+            description: "Read-only PNG sprite-sheet image analysis for an existing source asset. Resolves alpha or dominant border-color background, returns row-major boxes plus editable shape paths, and supplies an annotated sheet-view image as model-only content."),
 
         AIFunctionFactory.Create(
             method: (
@@ -207,20 +208,26 @@ public sealed class AssistantToolRegistry(
                 int columns,
                 int cellWidth,
                 int cellHeight,
+                SpriteSheetFrameUpdateView[] frames,
                 int? padding = null,
                 int? gutter = null,
                 int? fps = null,
                 bool? loop = null,
                 string? horizontalAnchor = null,
-                string? verticalAnchor = null,
-                SpriteSheetFrameUpdateView[]? frames = null) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, padding, gutter, fps, loop, horizontalAnchor, verticalAnchor, frames),
+                string? verticalAnchor = null) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, frames, padding, gutter, fps, loop, horizontalAnchor, verticalAnchor),
             name: "update_sprite_sheet_frames",
-            description: "Update the visible Sprites workspace frame boxes, optional shape paths, sheet-wide alignment anchors, and layout settings without changing the working image bytes. Use detected boxes/shapes or user-requested adjustments."),
+            description: "Replace the visible Sprites workspace frame set and layout without changing working image bytes. The frames array is authoritative: omission deletes, array order becomes frame order, and existing frame ids are reused by position, so attachments may point at new frame content after reorder. Shapes only separate neighboring sprites; they do not mask a frame's own pixels."),
+
+        AIFunctionFactory.Create(
+            method: (Guid spriteSheetId, CancellationToken cancellationToken = default) =>
+                ExpandSpriteSheetFramesToCellsAsync(projectId, spriteSheetId, cancellationToken),
+            name: "expand_sprite_sheet_frames_to_cells",
+            description: "Grow each saved frame source rect to the sheet's cell size using the sheet anchors, preserving real source pixels where possible and filling out-of-image areas with the resolved sheet background. Does not scale or stretch pixels."),
 
         AIFunctionFactory.Create(
             method: (Guid spriteSheetId) => NormalizeSpriteSheetAsync(projectId, spriteSheetId),
             name: "normalize_sprite_sheet",
-            description: "Normalize the selected sprite sheet by cropping saved boxes/shapes, applying padding/gutter/grid/alignment settings, stitching a new working PNG, and rebasing frame boxes/shapes."),
+            description: "Normalize the selected PNG sprite sheet by copying full saved source rects with background preserved, subtracting only neighboring shape intrusions, applying padding/gutter/grid/alignment settings, stitching a new working PNG, and rebasing frame boxes/shapes."),
 
         AIFunctionFactory.Create(
             method: (Guid spriteSheetId) => ResetSpriteSheetToOriginalAsync(projectId, spriteSheetId),
@@ -474,7 +481,7 @@ public sealed class AssistantToolRegistry(
             review.Fps,
             review.Loop,
             review.Metrics,
-            modelOnlyImages = review.Images.Select(image => new { image.Label, image.FileName, image.ContentType }).ToList(),
+            modelOnlyImages = review.Images.Select(image => new { image.Label, image.FileName, image.ContentType, image.Kind, image.FrameIndex, image.FromFrame, image.ToFrame }).ToList(),
         }, JsonOptions);
     }
 
@@ -563,13 +570,13 @@ public sealed class AssistantToolRegistry(
         int columns,
         int cellWidth,
         int cellHeight,
+        SpriteSheetFrameUpdateView[] frames,
         int? padding,
         int? gutter,
         int? fps,
         bool? loop,
         string? horizontalAnchor,
-        string? verticalAnchor,
-        SpriteSheetFrameUpdateView[]? frames)
+        string? verticalAnchor)
     {
         var saved = await workflow.UpdateSpriteSheetFramesAsync(projectId, new UpdateSpriteSheetFramesRequest(
             spriteSheetId,
@@ -583,8 +590,28 @@ public sealed class AssistantToolRegistry(
             loop ?? true,
             NormalizeHorizontalAnchor(horizontalAnchor),
             NormalizeVerticalAnchor(verticalAnchor),
-            frames ?? []));
+            frames));
         return JsonSerializer.Serialize(saved, JsonOptions);
+    }
+
+    private async Task<string> ExpandSpriteSheetFramesToCellsAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        CancellationToken cancellationToken)
+    {
+        var saved = await workflow.ExpandSpriteSheetFramesToCellAsync(projectId, spriteSheetId, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            saved.Id,
+            saved.WorkingAssetId,
+            saved.SourceAssetId,
+            saved.Rows,
+            saved.Columns,
+            saved.CellWidth,
+            saved.CellHeight,
+            frameCount = saved.Frames.Count,
+            message = "Sprite sheet frames expanded to cells.",
+        }, JsonOptions);
     }
 
     private async Task<string> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId)

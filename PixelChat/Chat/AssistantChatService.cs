@@ -718,6 +718,9 @@ public sealed class AssistantChatService(
 
             if (string.Equals(pendingCall.Name, "review_sprite_animation", StringComparison.Ordinal))
                 return await BuildSpriteAnimationReviewModelOnlyContentsAsync(pendingCall, projectId, toolResult, cancellationToken);
+
+            if (string.Equals(pendingCall.Name, "detect_sprite_sheet_frames", StringComparison.Ordinal))
+                return await BuildSpriteSheetDetectionModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -786,7 +789,7 @@ public sealed class AssistantChatService(
             cancellationToken);
         var contents = new List<AIContent>
         {
-            new TextContent($"Model-only images: sprite animation review for sprite sheet {spriteSheetId}. Frames are ordered by index; filmstrip is left-to-right frames 1..N. These images are not attached to visible chat context."),
+            new TextContent($"Model-only images: sprite animation review for sprite sheet {spriteSheetId}. Filenames identify sheet view, ordered frames, pairwise diffs, onion-skin, and filmstrip; JSON manifest fields include kind/frame indexes. These images are not attached to visible chat context."),
         };
         foreach (var image in review.Images)
         {
@@ -797,6 +800,26 @@ public sealed class AssistantChatService(
         }
 
         return contents;
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildSpriteSheetDetectionModelOnlyContentsAsync(
+        Guid projectId,
+        string toolResult,
+        CancellationToken cancellationToken)
+    {
+        var detection = JsonSerializer.Deserialize<SpriteSheetDetectionResult>(toolResult, JsonOptions);
+        if (detection is null)
+            return Array.Empty<AIContent>();
+
+        var image = await workflow.BuildSpriteSheetDetectionAnnotatedSheetAsync(projectId, detection, cancellationToken);
+        return
+        [
+            new TextContent($"Model-only image: annotated sprite-sheet detection view for source asset {detection.SourceAssetId}. Frame boxes are labeled by index and background mode is {detection.Background.Mode}. This image is not attached to visible chat context."),
+            new DataContent(image.DataUrl, image.ContentType)
+            {
+                Name = image.FileName,
+            },
+        ];
     }
 
     private static Guid? ReadGuidArgument(PendingToolCall pendingCall, string name)

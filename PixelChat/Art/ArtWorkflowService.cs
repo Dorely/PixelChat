@@ -367,9 +367,14 @@ public sealed class ArtWorkflowService(
         CancellationToken cancellationToken = default)
     {
         var sheet = await db.SpriteSheetDefinitions
-            .AsNoTracking()
+            .Include(s => s.OutputAsset)
             .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken)
             ?? throw new InvalidOperationException("Sprite sheet was not found.");
+        var working = sheet.OutputAsset ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
+        if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Sprite animation review requires a PNG working image.");
+        var background = EnsureSheetBackground(sheet, rgba, width, height);
+
         var frameLimit = Math.Clamp(maxFrames <= 0 ? 12 : maxFrames, 1, 24);
         var frames = await db.SpriteSheetFrameRecords
             .AsNoTracking()
@@ -380,32 +385,37 @@ public sealed class ArtWorkflowService(
         if (frames.Count == 0)
             throw new InvalidOperationException("No sprite frames were found to review.");
 
-        var frameWidth = Math.Max(1, frames.Max(frame => Math.Max(frame.CellWidth, frame.PreviewWidth)));
-        var frameHeight = Math.Max(1, frames.Max(frame => Math.Max(frame.CellHeight, frame.PreviewHeight)));
-        var canvases = frames
-            .Select(frame => BuildAnimationReviewFrameCanvas(frame, frameWidth, frameHeight))
-            .ToList();
-        var metrics = SpriteSheetImageAnalyzer.ComputeMotionMetrics(canvases, sheet.Loop);
-        var composites = SpriteSheetServerRenderer.BuildAnimationReviewComposites(canvases);
-        var images = canvases
-            .Select(frame => new SpriteAnimationReviewImageView(
-                frame.Label,
-                $"sprite-frame-{frame.Index + 1}.png",
+        var updates = frames.Select(FrameUpdateFromRecord).ToList();
+        var reviewRender = SpriteSheetServerRenderer.BuildAnimationReview(
+            rgba,
+            width,
+            height,
+            sheet.Rows,
+            sheet.Columns,
+            sheet.CellWidth,
+            sheet.CellHeight,
+            sheet.Padding,
+            sheet.Gutter,
+            sheet.HorizontalAnchor,
+            sheet.VerticalAnchor,
+            background,
+            updates,
+            sheet.Loop,
+            frameLimit);
+        var metrics = SpriteSheetImageAnalyzer.ComputeMotionMetrics(reviewRender.MetricFrames, background, sheet.Loop);
+        var images = reviewRender.Images
+            .Select(image => new SpriteAnimationReviewImageView(
+                image.Label,
+                image.FileName,
                 "image/png",
-                DataUrl.ToDataUrl("image/png", SpriteSheetPngCodec.EncodeRgba(frame.Width, frame.Height, frame.Rgba))))
+                DataUrl.ToDataUrl("image/png", image.PngData),
+                image.Kind,
+                image.FrameIndex,
+                image.FromFrame,
+                image.ToFrame))
             .ToList();
 
-        images.Add(new SpriteAnimationReviewImageView(
-            "Onion-skin overlay",
-            "sprite-animation-onion-skin.png",
-            "image/png",
-            DataUrl.ToDataUrl("image/png", composites.OnionSkinPngData)));
-        images.Add(new SpriteAnimationReviewImageView(
-            "Filmstrip, left-to-right frames 1..N",
-            "sprite-animation-filmstrip.png",
-            "image/png",
-            DataUrl.ToDataUrl("image/png", composites.FilmstripPngData)));
-
+        await db.SaveChangesAsync(cancellationToken);
         return new SpriteAnimationReviewView(
             sheet.Id,
             frames.Count,
@@ -415,6 +425,30 @@ public sealed class ArtWorkflowService(
             sheet.Loop,
             metrics,
             images);
+    }
+
+    public async Task<SpriteAnimationReviewImageView> BuildSpriteSheetDetectionAnnotatedSheetAsync(
+        Guid projectId,
+        SpriteSheetDetectionResult detection,
+        CancellationToken cancellationToken = default)
+    {
+        var source = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == detection.SourceAssetId, cancellationToken)
+            ?? throw new InvalidOperationException("Source asset was not found.");
+        if (!SpriteSheetPngCodec.TryReadRgba(source.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Sprite-sheet detection annotation requires a PNG source image.");
+
+        var image = SpriteSheetServerRenderer.BuildDetectionAnnotatedSheetView(rgba, width, height, detection);
+        return new SpriteAnimationReviewImageView(
+            image.Label,
+            image.FileName,
+            "image/png",
+            DataUrl.ToDataUrl("image/png", image.PngData),
+            image.Kind,
+            image.FrameIndex,
+            image.FromFrame,
+            image.ToFrame);
     }
 
     public async Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(
@@ -618,6 +652,8 @@ public sealed class ArtWorkflowService(
             .AsNoTracking()
             .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == request.SourceAssetId, cancellationToken)
             ?? throw new InvalidOperationException("Source asset was not found.");
+        if (!source.ContentType.Equals("image/png", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Sprite-sheet frame detection requires a PNG source image.");
 
         return SpriteSheetImageAnalyzer.Detect(
             source.Id,
@@ -643,6 +679,9 @@ public sealed class ArtWorkflowService(
             .OrderByDescending(s => s.UpdatedAt)
             .FirstOrDefaultAsync(cancellationToken);
         var now = DateTime.UtcNow;
+        SpriteSheetBackground? background = null;
+        if (SpriteSheetPngCodec.TryReadRgba(source.Data, out var sourceWidth, out var sourceHeight, out var sourceRgba))
+            background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
         if (existing is not null)
         {
             var project = await GetProjectAsync(projectId, cancellationToken);
@@ -650,6 +689,8 @@ public sealed class ArtWorkflowService(
             project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
             project.UpdatedAt = now;
             existing.UpdatedAt = now;
+            if (background is not null && string.IsNullOrWhiteSpace(existing.BackgroundMode))
+                ApplyBackground(existing, background);
             await db.SaveChangesAsync(cancellationToken);
             return await LoadSpriteSheetViewAsync(projectId, existing.Id, cancellationToken);
         }
@@ -669,6 +710,8 @@ public sealed class ArtWorkflowService(
             Loop = true,
             HorizontalAnchor = "center",
             VerticalAnchor = "bottom",
+            BackgroundMode = background?.Mode,
+            BackgroundColor = background is null ? null : BackgroundColor(background),
             FramesJson = "[]",
             CreatedAt = now,
             UpdatedAt = now,
@@ -711,37 +754,33 @@ public sealed class ArtWorkflowService(
         CancellationToken cancellationToken = default)
     {
         var definition = await db.SpriteSheetDefinitions
+            .Include(s => s.OutputAsset)
             .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == request.SpriteSheetId, cancellationToken)
             ?? throw new InvalidOperationException("Sprite sheet was not found.");
-        UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop, request.HorizontalAnchor, request.VerticalAnchor);
-        await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, request.Frames, cancellationToken);
+        var (rows, columns) = GridCapacity(request.Rows, request.Columns, request.Frames.Count);
+        UpdateSpriteSheetDefinition(definition, rows, columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop, request.HorizontalAnchor, request.VerticalAnchor);
+        var frameViews = BuildPreviewlessFrameViews(definition, request.Frames);
+        if (definition.OutputAsset is { } working && SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
+        {
+            var background = EnsureSheetBackground(definition, rgba, width, height);
+            frameViews = SpriteSheetServerRenderer.BuildFramePreviews(
+                rgba,
+                width,
+                height,
+                definition.Rows,
+                definition.Columns,
+                definition.CellWidth,
+                definition.CellHeight,
+                definition.Padding,
+                definition.Gutter,
+                definition.Fps,
+                definition.HorizontalAnchor,
+                definition.VerticalAnchor,
+                background,
+                request.Frames).Frames;
+        }
 
-        var project = await GetProjectAsync(projectId, cancellationToken);
-        project.ActiveSpriteSheetId = definition.Id;
-        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
-        project.UpdatedAt = definition.UpdatedAt;
-        await db.SaveChangesAsync(cancellationToken);
-        return await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
-    }
-
-    public async Task<SpriteSheetDefinitionView> NormalizeSpriteSheetAsync(
-        Guid projectId,
-        NormalizeSpriteSheetRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        var definition = await db.SpriteSheetDefinitions
-            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == request.SpriteSheetId, cancellationToken)
-            ?? throw new InvalidOperationException("Sprite sheet was not found.");
-        if (definition.OutputAssetId is not Guid workingAssetId)
-            throw new InvalidOperationException("Sprite sheet working asset was not found.");
-
-        var working = await db.ArtAssets
-            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == workingAssetId, cancellationToken)
-            ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
-        var parsed = ParsePngDataUrl(request.WorkingPngDataUrl, "Sprite sheet working image must be a PNG data URL.");
-        UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop, request.HorizontalAnchor, request.VerticalAnchor);
-        UpdateWorkingSpriteAsset(working, parsed, definition, DateTime.UtcNow);
-        await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, request.Frames, cancellationToken);
+        await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, frameViews, cancellationToken);
 
         var project = await GetProjectAsync(projectId, cancellationToken);
         project.ActiveSpriteSheetId = definition.Id;
@@ -762,7 +801,8 @@ public sealed class ArtWorkflowService(
             ?? throw new InvalidOperationException("Sprite sheet was not found.");
         var working = definition.OutputAsset ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
         if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
-            throw new InvalidOperationException("Agent sprite-sheet normalization currently requires a PNG working image.");
+            throw new InvalidOperationException("Sprite-sheet normalization requires a PNG working image.");
+        var background = EnsureSheetBackground(definition, rgba, width, height);
 
         var records = await db.SpriteSheetFrameRecords
             .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == definition.Id)
@@ -771,13 +811,9 @@ public sealed class ArtWorkflowService(
         if (records.Count == 0)
             throw new InvalidOperationException("At least one sprite frame is required.");
 
-        var updates = records
-            .Select(frame => new SpriteSheetFrameUpdateView(
-                frame.Index,
-                frame.Label,
-                RectView(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
-                DeserializeShapePaths(frame.ShapeJson)))
-            .ToList();
+        var (rows, columns) = GridCapacity(definition.Rows, definition.Columns, records.Count);
+        UpdateSpriteSheetDefinition(definition, rows, columns, definition.CellWidth, definition.CellHeight, definition.Padding, definition.Gutter, definition.Fps, definition.Loop, definition.HorizontalAnchor, definition.VerticalAnchor);
+        var updates = records.Select(FrameUpdateFromRecord).ToList();
         var layout = SpriteSheetServerRenderer.Render(
             rgba,
             width,
@@ -791,6 +827,7 @@ public sealed class ArtWorkflowService(
             definition.Fps,
             definition.HorizontalAnchor,
             definition.VerticalAnchor,
+            background,
             updates);
         var parsed = new ImagePayload("image/png", layout.PngData, layout.Width, layout.Height);
         UpdateWorkingSpriteAsset(working, parsed, definition, DateTime.UtcNow);
@@ -815,25 +852,96 @@ public sealed class ArtWorkflowService(
             .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == request.SpriteSheetId, cancellationToken)
             ?? throw new InvalidOperationException("Sprite sheet was not found.");
         var working = definition.OutputAsset ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
+        var (rows, columns) = GridCapacity(request.Rows, request.Columns, request.Frames.Count);
+        UpdateSpriteSheetDefinition(definition, rows, columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop, request.HorizontalAnchor, request.VerticalAnchor);
+        IReadOnlyList<SpriteSheetFrameView> frameViews;
         if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
-            throw new InvalidOperationException("Agent sprite-sheet frame updates currently require a PNG working image.");
+        {
+            frameViews = BuildPreviewlessFrameViews(definition, request.Frames);
+        }
+        else
+        {
+            var background = EnsureSheetBackground(definition, rgba, width, height);
+            frameViews = SpriteSheetServerRenderer.BuildFramePreviews(
+                rgba,
+                width,
+                height,
+                definition.Rows,
+                definition.Columns,
+                definition.CellWidth,
+                definition.CellHeight,
+                definition.Padding,
+                definition.Gutter,
+                definition.Fps,
+                definition.HorizontalAnchor,
+                definition.VerticalAnchor,
+                background,
+                request.Frames).Frames;
+        }
 
-        var layout = SpriteSheetServerRenderer.BuildFramePreviews(
+        await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, frameViews, cancellationToken);
+
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveSpriteSheetId = definition.Id;
+        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+        project.UpdatedAt = definition.UpdatedAt;
+        await db.SaveChangesAsync(cancellationToken);
+        return await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
+    }
+
+    public async Task<SpriteSheetDefinitionView> ExpandSpriteSheetFramesToCellAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        CancellationToken cancellationToken = default)
+    {
+        var definition = await db.SpriteSheetDefinitions
+            .Include(s => s.OutputAsset)
+            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite sheet was not found.");
+        var working = definition.OutputAsset ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
+        if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Expanding sprite-sheet frames requires a PNG working image.");
+        var background = EnsureSheetBackground(definition, rgba, width, height);
+
+        var records = await db.SpriteSheetFrameRecords
+            .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == definition.Id)
+            .OrderBy(frame => frame.Index)
+            .ToListAsync(cancellationToken);
+        if (records.Count == 0)
+            throw new InvalidOperationException("At least one sprite frame is required.");
+
+        var (rows, columns) = GridCapacity(definition.Rows, definition.Columns, records.Count);
+        UpdateSpriteSheetDefinition(definition, rows, columns, definition.CellWidth, definition.CellHeight, definition.Padding, definition.Gutter, definition.Fps, definition.Loop, definition.HorizontalAnchor, definition.VerticalAnchor);
+        var updates = records
+            .Select(frame => FrameUpdateFromRecord(frame) with
+            {
+                SourceRect = ExpandRectToCell(
+                    RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
+                    definition.CellWidth,
+                    definition.CellHeight,
+                    width,
+                    height,
+                    definition.HorizontalAnchor,
+                    definition.VerticalAnchor)
+            })
+            .ToList();
+
+        var preview = SpriteSheetServerRenderer.BuildFramePreviews(
             rgba,
             width,
             height,
-            request.Rows,
-            request.Columns,
-            request.CellWidth,
-            request.CellHeight,
-            request.Padding,
-            request.Gutter,
-            request.Fps,
-            request.HorizontalAnchor,
-            request.VerticalAnchor,
-            request.Frames);
-        UpdateSpriteSheetDefinition(definition, request.Rows, request.Columns, request.CellWidth, request.CellHeight, request.Padding, request.Gutter, request.Fps, request.Loop, request.HorizontalAnchor, request.VerticalAnchor);
-        await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, layout.Frames, cancellationToken);
+            definition.Rows,
+            definition.Columns,
+            definition.CellWidth,
+            definition.CellHeight,
+            definition.Padding,
+            definition.Gutter,
+            definition.Fps,
+            definition.HorizontalAnchor,
+            definition.VerticalAnchor,
+            background,
+            updates);
+        await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, preview.Frames, cancellationToken);
 
         var project = await GetProjectAsync(projectId, cancellationToken);
         project.ActiveSpriteSheetId = definition.Id;
@@ -863,6 +971,13 @@ public sealed class ArtWorkflowService(
         working.Height = source.Height;
         working.ThumbnailData = null;
         working.UpdatedAt = now;
+        if (SpriteSheetPngCodec.TryReadRgba(source.Data, out var width, out var height, out var rgba))
+            ApplyBackground(definition, SpriteSheetImageAnalyzer.ResolveBackground(rgba, width, height));
+        else
+        {
+            definition.BackgroundMode = null;
+            definition.BackgroundColor = null;
+        }
         definition.Rows = 1;
         definition.Columns = 1;
         definition.CellWidth = Math.Max(1, source.Width ?? 128);
@@ -983,11 +1098,12 @@ public sealed class ArtWorkflowService(
             loop = definition.Loop,
             horizontalAnchor = NormalizeHorizontalAnchor(definition.HorizontalAnchor),
             verticalAnchor = NormalizeVerticalAnchor(definition.VerticalAnchor),
+            background = BackgroundOrDefault(definition),
             frames = frames.Select(frame => new
             {
                 frame.Index,
                 label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label,
-                sourceRect = RectView(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
+                sourceRect = RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
                 cellRect = RectView(frame.CellX, frame.CellY, frame.CellWidth, frame.CellHeight),
                 spriteRect = RectView(frame.SpriteX, frame.SpriteY, frame.SpriteWidth, frame.SpriteHeight),
                 shapePaths = DeserializeShapePaths(frame.ShapeJson),
@@ -2326,6 +2442,143 @@ public sealed class ArtWorkflowService(
         definition.UpdatedAt = DateTime.UtcNow;
     }
 
+    private static (int Rows, int Columns) GridCapacity(int rows, int columns, int frameCount)
+    {
+        rows = Math.Clamp(rows, 1, 32);
+        columns = Math.Clamp(columns, 1, 64);
+        if (frameCount <= rows * columns)
+            return (rows, columns);
+        if (frameCount > 32 * 64)
+            throw new InvalidOperationException("Sprite sheets support at most 2048 frames.");
+
+        while (frameCount > rows * columns && columns < 64)
+            columns++;
+        while (frameCount > rows * columns && rows < 32)
+            rows++;
+        if (frameCount > rows * columns)
+            throw new InvalidOperationException("Sprite frame count exceeds the supported sheet grid.");
+        return (rows, columns);
+    }
+
+    private static IReadOnlyList<SpriteSheetFrameView> BuildPreviewlessFrameViews(
+        SpriteSheetDefinition definition,
+        IReadOnlyList<SpriteSheetFrameUpdateView> frames)
+    {
+        return frames
+            .Select((frame, index) =>
+            {
+                var row = index / definition.Columns;
+                var column = index % definition.Columns;
+                var sourceRect = NormalizeSourceSpriteRect(frame.SourceRect);
+                var cellRect = new SpriteSheetRect(
+                    column * (definition.CellWidth + definition.Gutter),
+                    row * (definition.CellHeight + definition.Gutter),
+                    definition.CellWidth,
+                    definition.CellHeight);
+                var spriteRect = new SpriteSheetRect(cellRect.X, cellRect.Y, sourceRect.Width, sourceRect.Height);
+                return new SpriteSheetFrameView(
+                    index,
+                    string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label.Trim(),
+                    sourceRect,
+                    NormalizeShapePaths(frame.ShapePaths),
+                    cellRect,
+                    spriteRect,
+                    string.Empty);
+            })
+            .ToList();
+    }
+
+    private static SpriteSheetFrameUpdateView FrameUpdateFromRecord(SpriteSheetFrameRecord frame) =>
+        new(
+            frame.Index,
+            frame.Label,
+            RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
+            DeserializeShapePaths(frame.ShapeJson));
+
+    private static SpriteSheetRect ExpandRectToCell(
+        SpriteSheetRect rect,
+        int cellWidth,
+        int cellHeight,
+        int imageWidth,
+        int imageHeight,
+        string? horizontalAnchor,
+        string? verticalAnchor)
+    {
+        cellWidth = Math.Max(1, cellWidth);
+        cellHeight = Math.Max(1, cellHeight);
+        var pivotX = PivotForHorizontalAnchor(horizontalAnchor);
+        var pivotY = PivotForVerticalAnchor(verticalAnchor);
+        var anchorX = rect.X + (int)Math.Round(rect.Width * pivotX);
+        var anchorY = rect.Y + (int)Math.Round(rect.Height * pivotY);
+        var x = anchorX - (int)Math.Round(cellWidth * pivotX);
+        var y = anchorY - (int)Math.Round(cellHeight * pivotY);
+        x = ShiftInsideImage(x, cellWidth, imageWidth);
+        y = ShiftInsideImage(y, cellHeight, imageHeight);
+        return new SpriteSheetRect(x, y, cellWidth, cellHeight);
+    }
+
+    private static int ShiftInsideImage(int origin, int size, int imageSize)
+    {
+        if (imageSize <= 0)
+            return origin;
+        if (size >= imageSize)
+            return 0;
+        return Math.Clamp(origin, 0, imageSize - size);
+    }
+
+    private SpriteSheetBackground EnsureSheetBackground(SpriteSheetDefinition definition, byte[] rgba, int width, int height)
+    {
+        var existing = BackgroundFromDefinition(definition);
+        if (existing is not null)
+            return existing;
+
+        var resolved = SpriteSheetImageAnalyzer.ResolveBackground(rgba, width, height);
+        ApplyBackground(definition, resolved);
+        return resolved;
+    }
+
+    private static SpriteSheetBackground? BackgroundFromDefinition(SpriteSheetDefinition definition)
+    {
+        var mode = definition.BackgroundMode?.Trim().ToLowerInvariant();
+        if (mode == "alpha")
+            return new SpriteSheetBackground("alpha", 0, 0, 0, 0);
+        if (mode == "color" && TryParseBackgroundColor(definition.BackgroundColor, out var r, out var g, out var b))
+            return new SpriteSheetBackground("color", r, g, b, byte.MaxValue);
+        return null;
+    }
+
+    private static SpriteSheetBackground BackgroundOrDefault(SpriteSheetDefinition definition) =>
+        BackgroundFromDefinition(definition) ?? new SpriteSheetBackground("alpha", 0, 0, 0, 0);
+
+    private static void ApplyBackground(SpriteSheetDefinition definition, SpriteSheetBackground background)
+    {
+        definition.BackgroundMode = NormalizeSpriteSheetBackgroundMode(background.Mode);
+        definition.BackgroundColor = definition.BackgroundMode == "color" ? BackgroundColor(background) : null;
+    }
+
+    private static string NormalizeSpriteSheetBackgroundMode(string? mode) =>
+        string.Equals(mode, "color", StringComparison.OrdinalIgnoreCase) ? "color" : "alpha";
+
+    private static string BackgroundColor(SpriteSheetBackground background) =>
+        $"#{background.R:X2}{background.G:X2}{background.B:X2}";
+
+    private static bool TryParseBackgroundColor(string? value, out byte r, out byte g, out byte b)
+    {
+        r = 0;
+        g = 0;
+        b = 0;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        var normalized = value.Trim();
+        if (normalized.StartsWith('#'))
+            normalized = normalized[1..];
+        if (normalized.Length != 6)
+            return false;
+        return byte.TryParse(normalized[..2], System.Globalization.NumberStyles.HexNumber, null, out r)
+            && byte.TryParse(normalized[2..4], System.Globalization.NumberStyles.HexNumber, null, out g)
+            && byte.TryParse(normalized[4..6], System.Globalization.NumberStyles.HexNumber, null, out b);
+    }
+
     private void UpdateWorkingSpriteAsset(
         ArtAsset working,
         ImagePayload image,
@@ -2350,6 +2603,8 @@ public sealed class ArtWorkflowService(
             definition.CellHeight,
             definition.HorizontalAnchor,
             definition.VerticalAnchor,
+            definition.BackgroundMode,
+            definition.BackgroundColor,
             frameCount = definition.FrameRecords.Count,
         }, JsonOptions);
     }
@@ -2373,10 +2628,9 @@ public sealed class ArtWorkflowService(
 
         var existing = await db.SpriteSheetFrameRecords
             .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == definition.Id)
+            .OrderBy(frame => frame.Index)
             .ToListAsync(cancellationToken);
-        var byIndex = existing.ToDictionary(frame => frame.Index);
-        var keepIndexes = normalized.Select(frame => frame.Index).ToHashSet();
-        var removed = existing.Where(frame => !keepIndexes.Contains(frame.Index)).ToList();
+        var removed = existing.Skip(normalized.Count).ToList();
         if (removed.Count > 0)
         {
             var removedIds = removed.Select(frame => frame.Id).ToList();
@@ -2388,16 +2642,16 @@ public sealed class ArtWorkflowService(
         }
 
         var now = DateTime.UtcNow;
-        foreach (var frame in normalized)
+        for (var position = 0; position < normalized.Count; position++)
         {
-            var preview = ParsePngDataUrl(frame.PreviewPngDataUrl, "Sprite frame preview must be a PNG data URL.");
-            if (!byIndex.TryGetValue(frame.Index, out var record))
+            var frame = normalized[position];
+            var record = position < existing.Count ? existing[position] : null;
+            if (record is null)
             {
                 record = new SpriteSheetFrameRecord
                 {
                     ProjectId = projectId,
                     SpriteSheetDefinitionId = definition.Id,
-                    Index = frame.Index,
                     CreatedAt = now,
                 };
                 await db.SpriteSheetFrameRecords.AddAsync(record, cancellationToken);
@@ -2418,10 +2672,21 @@ public sealed class ArtWorkflowService(
             record.SpriteY = frame.SpriteRect.Y;
             record.SpriteWidth = frame.SpriteRect.Width;
             record.SpriteHeight = frame.SpriteRect.Height;
-            record.PreviewContentType = preview.ContentType;
-            record.PreviewData = preview.Data;
-            record.PreviewWidth = preview.Width;
-            record.PreviewHeight = preview.Height;
+            if (string.IsNullOrWhiteSpace(frame.PreviewPngDataUrl))
+            {
+                record.PreviewContentType = "image/png";
+                record.PreviewData = [];
+                record.PreviewWidth = 0;
+                record.PreviewHeight = 0;
+            }
+            else
+            {
+                var preview = ParsePngDataUrl(frame.PreviewPngDataUrl, "Sprite frame preview must be a PNG data URL.");
+                record.PreviewContentType = preview.ContentType;
+                record.PreviewData = preview.Data;
+                record.PreviewWidth = preview.Width;
+                record.PreviewHeight = preview.Height;
+            }
             record.UpdatedAt = now;
         }
     }
@@ -2856,6 +3121,7 @@ public sealed class ArtWorkflowService(
         loop = spriteSheet.Loop,
         horizontalAnchor = NormalizeHorizontalAnchor(spriteSheet.HorizontalAnchor),
         verticalAnchor = NormalizeVerticalAnchor(spriteSheet.VerticalAnchor),
+        background = BackgroundOrDefault(spriteSheet),
         frameCount,
         spriteSheet.UpdatedAt,
     };
@@ -2889,6 +3155,7 @@ public sealed class ArtWorkflowService(
         spriteSheet.Gutter,
         fps = spriteSheet.Fps,
         loop = spriteSheet.Loop,
+        background = spriteSheet.Background,
         frames = spriteSheet.Frames.Select(frame => new
         {
             frame.Id,
@@ -2963,6 +3230,7 @@ public sealed class ArtWorkflowService(
             spriteSheet.Loop,
             NormalizeHorizontalAnchor(spriteSheet.HorizontalAnchor),
             NormalizeVerticalAnchor(spriteSheet.VerticalAnchor),
+            BackgroundOrDefault(spriteSheet),
             frames
                 .OrderBy(frame => frame.Index)
                 .Select(frame => FrameRecordView(spriteSheet, frame))
@@ -3024,20 +3292,19 @@ public sealed class ArtWorkflowService(
         int cellHeight)
     {
         var maxFrames = checked(rows * columns);
+        if (frames.Count > maxFrames)
+            throw new InvalidOperationException("Sprite frame count exceeds the configured sheet grid.");
+
         return frames
-            .Where(frame => frame.Index >= 0 && frame.Index < maxFrames)
-            .OrderBy(frame => frame.Index)
-            .Take(maxFrames)
-            .Select(frame =>
+            .Select((frame, index) =>
             {
-                var index = frame.Index;
                 var row = index / columns;
                 var column = index % columns;
                 var fallbackCell = new SpriteSheetRect(column * cellWidth, row * cellHeight, cellWidth, cellHeight);
                 return new SpriteSheetFrameView(
                     index,
                     string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label.Trim(),
-                    NormalizeSpriteRect(frame.SourceRect),
+                    NormalizeSourceSpriteRect(frame.SourceRect),
                     NormalizeShapePaths(frame.ShapePaths),
                     NormalizeSpriteRect(frame.CellRect, fallbackCell),
                     NormalizeSpriteRect(frame.SpriteRect, fallbackCell),
@@ -3045,6 +3312,13 @@ public sealed class ArtWorkflowService(
             })
             .ToList();
     }
+
+    private static SpriteSheetRect NormalizeSourceSpriteRect(SpriteSheetRect rect) =>
+        new(
+            Math.Clamp(rect.X, -32768, 32767),
+            Math.Clamp(rect.Y, -32768, 32767),
+            Math.Clamp(rect.Width, 1, 32767),
+            Math.Clamp(rect.Height, 1, 32767));
 
     private static SpriteSheetRect NormalizeSpriteRect(SpriteSheetRect rect) =>
         new(
@@ -3235,60 +3509,20 @@ public sealed class ArtWorkflowService(
             spriteSheet.Id,
             frame.Index,
             string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label,
-            RectView(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
+            RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
             DeserializeShapePaths(frame.ShapeJson),
             RectView(frame.CellX, frame.CellY, frame.CellWidth, frame.CellHeight),
             RectView(frame.SpriteX, frame.SpriteY, frame.SpriteWidth, frame.SpriteHeight),
-            DataUrl.ToDataUrl(frame.PreviewContentType, frame.PreviewData),
+            frame.PreviewData.Length == 0 ? string.Empty : DataUrl.ToDataUrl(frame.PreviewContentType, frame.PreviewData),
             frame.PreviewWidth,
             frame.PreviewHeight,
             FrameDuration(spriteSheet.Fps));
 
-    private static SpriteAnimationFramePixels BuildAnimationReviewFrameCanvas(
-        SpriteSheetFrameRecord frame,
-        int width,
-        int height)
-    {
-        var output = new byte[checked(width * height * 4)];
-        var label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label;
-        if (!SpriteSheetPngCodec.TryReadRgba(frame.PreviewData, out var previewWidth, out var previewHeight, out var previewRgba))
-            return new SpriteAnimationFramePixels(frame.Index, label, width, height, output);
-
-        var previewIsCell = previewWidth == frame.CellWidth && previewHeight == frame.CellHeight;
-        var destX = previewIsCell ? 0 : frame.SpriteX - frame.CellX;
-        var destY = previewIsCell ? 0 : frame.SpriteY - frame.CellY;
-        for (var y = 0; y < previewHeight; y++)
-        {
-            var targetY = destY + y;
-            if (targetY < 0 || targetY >= height)
-                continue;
-
-            for (var x = 0; x < previewWidth; x++)
-            {
-                var targetX = destX + x;
-                if (targetX < 0 || targetX >= width)
-                    continue;
-
-                var sourceIndex = ((y * previewWidth) + x) * 4;
-                if (!IsReviewForeground(previewRgba[sourceIndex], previewRgba[sourceIndex + 1], previewRgba[sourceIndex + 2], previewRgba[sourceIndex + 3]))
-                    continue;
-
-                var targetIndex = ((targetY * width) + targetX) * 4;
-                output[targetIndex] = previewRgba[sourceIndex];
-                output[targetIndex + 1] = previewRgba[sourceIndex + 1];
-                output[targetIndex + 2] = previewRgba[sourceIndex + 2];
-                output[targetIndex + 3] = previewRgba[sourceIndex + 3];
-            }
-        }
-
-        return new SpriteAnimationFramePixels(frame.Index, label, width, height, output);
-    }
-
-    private static bool IsReviewForeground(byte r, byte g, byte b, byte a) =>
-        a > 16 && !(r >= 210 && b >= 210 && g <= 80);
-
     private static SpriteSheetRect RectView(int x, int y, int width, int height) =>
         new(Math.Max(0, x), Math.Max(0, y), Math.Max(1, width), Math.Max(1, height));
+
+    private static SpriteSheetRect RectViewPreserveOrigin(int x, int y, int width, int height) =>
+        new(x, y, Math.Max(1, width), Math.Max(1, height));
 
     private int ClampCount(int count) =>
         Math.Clamp(count <= 0 ? 1 : count, 1, Math.Max(1, imageOptions.Value.MaxOutputs));

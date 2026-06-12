@@ -24,6 +24,8 @@ public class SpriteSheetDefinition
     public bool Loop { get; set; } = true;
     public string HorizontalAnchor { get; set; } = "center";
     public string VerticalAnchor { get; set; } = "bottom";
+    public string? BackgroundMode { get; set; }
+    public string? BackgroundColor { get; set; }
     public string FramesJson { get; set; } = "[]";
 
     public ICollection<SpriteSheetFrameRecord> FrameRecords { get; set; } = [];

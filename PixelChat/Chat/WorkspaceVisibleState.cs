@@ -143,5 +143,6 @@ public sealed record WorkspaceSpriteSheetSummary(
     bool Loop,
     string HorizontalAnchor,
     string VerticalAnchor,
+    SpriteSheetBackground Background,
     int FrameCount,
     DateTime UpdatedAt);
