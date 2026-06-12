@@ -84,16 +84,15 @@ internal static class SpriteSheetImageAnalyzer
             frames = frames
                 .OrderByDescending(frame => frame.SourceRect.Width * frame.SourceRect.Height)
                 .Take(expectedFrames.Value)
-                .OrderBy(frame => frame.SourceRect.Y)
-                .ThenBy(frame => frame.SourceRect.X)
-                .Select((frame, index) => frame with { Index = index })
                 .ToList();
+            frames = OrderFramesForReading(frames);
         }
 
-        var rowCount = CountRows(frames);
+        var readingRows = BuildReadingRows(frames);
+        var rowCount = readingRows.Count;
         var columnCount = rowCount <= 1
             ? frames.Count
-            : frames.GroupBy(frame => RowBucket(frame.SourceRect.Y, frames)).Max(group => group.Count());
+            : readingRows.Max(row => row.Frames.Count);
 
         var warnings = BuildDetectionWarnings(frames, expectedFrames);
         var rejectedSegments = BuildRejectedSegments(frames, expectedFrames);
@@ -735,13 +734,57 @@ internal static class SpriteSheetImageAnalyzer
         if (groups.Count == 0)
             return [];
 
-        return groups
+        var frames = groups
             .Select((group, index) => new SpriteSheetFrameDetectionView(index, group.Rect, BuildShapePaths(group.Pixels, width, height, group.Rect)))
-            .OrderBy(frame => frame.SourceRect.Y)
-            .ThenBy(frame => frame.SourceRect.X)
+            .ToList();
+        return OrderFramesForReading(frames);
+    }
+
+    private static List<SpriteSheetFrameDetectionView> OrderFramesForReading(IReadOnlyList<SpriteSheetFrameDetectionView> frames) =>
+        BuildReadingRows(frames)
+            .SelectMany(row => row.Frames
+                .OrderBy(frame => frame.SourceRect.X)
+                .ThenBy(frame => frame.SourceRect.Y))
             .Select((frame, index) => frame with { Index = index })
             .ToList();
+
+    private static List<DetectionReadingRow> BuildReadingRows(IReadOnlyList<SpriteSheetFrameDetectionView> frames)
+    {
+        if (frames.Count == 0)
+            return [];
+
+        var medianHeight = frames
+            .Select(frame => Math.Max(1, frame.SourceRect.Height))
+            .Order()
+            .ElementAt(frames.Count / 2);
+        var rowTolerance = Math.Max(8d, medianHeight / 2d);
+        var rows = new List<DetectionReadingRow>();
+        foreach (var frame in frames
+            .OrderBy(frame => RectCenterY(frame.SourceRect))
+            .ThenBy(frame => frame.SourceRect.X)
+            .ThenBy(frame => frame.SourceRect.Y))
+        {
+            var centerY = RectCenterY(frame.SourceRect);
+            var nearest = rows
+                .Select(row => new { Row = row, Distance = Math.Abs(row.CenterY - centerY) })
+                .Where(item => item.Distance <= rowTolerance)
+                .OrderBy(item => item.Distance)
+                .FirstOrDefault();
+
+            if (nearest is null)
+                rows.Add(new DetectionReadingRow(frame, centerY));
+            else
+                nearest.Row.Add(frame, centerY);
+        }
+
+        return rows
+            .OrderBy(row => row.CenterY)
+            .ThenBy(row => row.MinY)
+            .ToList();
     }
+
+    private static double RectCenterY(SpriteSheetRect rect) =>
+        rect.Y + (rect.Height / 2d);
 
     private static List<Component> FindComponents(bool[] foreground, int width, int height, int foregroundCount)
     {
@@ -1005,48 +1048,23 @@ internal static class SpriteSheetImageAnalyzer
         };
     }
 
-    private static int CountRows(IReadOnlyList<SpriteSheetFrameDetectionView> frames)
+    private sealed class DetectionReadingRow
     {
-        if (frames.Count <= 1)
-            return frames.Count;
+        private double _centerYTotal;
 
-        var ordered = frames.OrderBy(frame => frame.SourceRect.Y).ToList();
-        var medianHeight = ordered
-            .Select(frame => frame.SourceRect.Height)
-            .Order()
-            .ElementAt(ordered.Count / 2);
-        var rowTolerance = Math.Max(8, medianHeight / 3);
-        var rows = new List<int>();
-        foreach (var frame in ordered)
+        public DetectionReadingRow(SpriteSheetFrameDetectionView frame, double centerY) =>
+            Add(frame, centerY);
+
+        public List<SpriteSheetFrameDetectionView> Frames { get; } = [];
+        public double CenterY => _centerYTotal / Math.Max(1, Frames.Count);
+        public int MinY { get; private set; } = int.MaxValue;
+
+        public void Add(SpriteSheetFrameDetectionView frame, double centerY)
         {
-            if (rows.Any(rowY => Math.Abs(rowY - frame.SourceRect.Y) <= rowTolerance))
-                continue;
-
-            rows.Add(frame.SourceRect.Y);
+            Frames.Add(frame);
+            _centerYTotal += centerY;
+            MinY = Math.Min(MinY, frame.SourceRect.Y);
         }
-
-        return rows.Count;
-    }
-
-    private static int RowBucket(int y, IReadOnlyList<SpriteSheetFrameDetectionView> frames)
-    {
-        var orderedRows = frames
-            .Select(frame => frame.SourceRect.Y)
-            .Distinct()
-            .Order()
-            .ToList();
-        var medianHeight = frames
-            .Select(frame => frame.SourceRect.Height)
-            .Order()
-            .ElementAt(frames.Count / 2);
-        var rowTolerance = Math.Max(8, medianHeight / 3);
-        for (var index = 0; index < orderedRows.Count; index++)
-        {
-            if (Math.Abs(orderedRows[index] - y) <= rowTolerance)
-                return index;
-        }
-
-        return orderedRows.Count;
     }
 
     private sealed class Component
