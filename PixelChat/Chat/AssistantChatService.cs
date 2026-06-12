@@ -408,7 +408,7 @@ public sealed class AssistantChatService(
             if (message.Id == currentUserMessageId)
             {
                 workbench ??= await workflow.GetWorkbenchAsync(projectId, cancellationToken);
-                messages.Add(BuildCurrentUserMessage(message.Content, workbench));
+                messages.Add(await BuildCurrentUserMessageAsync(message.Content, workbench, projectId, cancellationToken));
                 continue;
             }
 
@@ -441,7 +441,7 @@ public sealed class AssistantChatService(
         var messages = BuildPersistedModelMessages(history);
         var workbench = await workflow.GetWorkbenchAsync(projectId, cancellationToken);
         if (workbench.Attachments.Count > 0)
-            messages.Add(BuildCurrentUserMessage(string.Empty, workbench));
+            messages.Add(await BuildCurrentUserMessageAsync(string.Empty, workbench, projectId, cancellationToken));
 
         return messages;
     }
@@ -502,7 +502,11 @@ public sealed class AssistantChatService(
             pendingCall.ArgumentsJson,
             pendingCall.TextOffset);
 
-    private static ChatMessage BuildCurrentUserMessage(string text, WorkbenchView workbench)
+    private async Task<ChatMessage> BuildCurrentUserMessageAsync(
+        string text,
+        WorkbenchView workbench,
+        Guid projectId,
+        CancellationToken cancellationToken)
     {
         var contents = new List<AIContent>();
         var contextSummary = BuildVisibleContextSummary(workbench);
@@ -519,7 +523,8 @@ public sealed class AssistantChatService(
                     var asset = workbench.Assets.FirstOrDefault(item => item.Id == attachment.RefId);
                     if (asset is not null && includedAssetIds.Add(asset.Id))
                     {
-                        contents.Add(new DataContent(asset.PreviewDataUrl, asset.ContentType)
+                        var image = await workflow.GetAssetFullImageAsync(projectId, asset.Id, cancellationToken);
+                        contents.Add(new DataContent(DataUrl.ToDataUrl(image.ContentType, image.Data), image.ContentType)
                         {
                             Name = asset.FileName,
                         });
@@ -530,7 +535,8 @@ public sealed class AssistantChatService(
                     var mask = workbench.Masks.FirstOrDefault(item => item.Id == attachment.RefId);
                     if (mask is not null)
                     {
-                        contents.Add(new DataContent(mask.PreviewDataUrl, mask.ContentType)
+                        var image = await workflow.GetMaskImageAsync(projectId, mask.Id, cancellationToken);
+                        contents.Add(new DataContent(DataUrl.ToDataUrl(image.ContentType, image.Data), image.ContentType)
                         {
                             Name = $"{mask.Label}.png",
                         });
@@ -543,7 +549,8 @@ public sealed class AssistantChatService(
                         .FirstOrDefault(item => item.Id == attachment.RefId);
                     if (frame is not null)
                     {
-                        contents.Add(new DataContent(frame.PreviewDataUrl, "image/png")
+                        var image = await workflow.GetSpriteFramePreviewImageAsync(projectId, frame.Id, cancellationToken);
+                        contents.Add(new DataContent(DataUrl.ToDataUrl(image.ContentType, image.Data), image.ContentType)
                         {
                             Name = $"{frame.Label}.png",
                         });

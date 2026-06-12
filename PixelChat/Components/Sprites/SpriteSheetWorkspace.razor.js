@@ -1,6 +1,7 @@
 const editorStates = new WeakMap();
 const animations = new WeakMap();
 const frameWorkStates = new WeakMap();
+const imageCache = new Map();
 
 export async function drawSpriteBoxEditor(sourceCanvas, animationCanvas, dotNetRef, imageUrl, payload, selectedIndex, tool) {
     if (!sourceCanvas || typeof sourceCanvas.addEventListener !== "function") return;
@@ -631,9 +632,7 @@ function drawSourceCanvas(canvas, state) {
         ctx.fillText(label, x + 5 * deviceScale(), y + 3 * deviceScale(), labelWidth - 8 * deviceScale());
 
         if (selected) {
-            if (frame.shapePaths?.length) {
-                drawVertexHandles(ctx, frame.shapePaths, viewport, scaleX, scaleY);
-            } else {
+            if (!frame.shapePaths?.length) {
                 drawHandles(ctx, x, y, w, h);
             }
         }
@@ -677,23 +676,6 @@ function drawShapeOverlay(ctx, shapePaths, viewport, scaleX, scaleY, selected) {
     ctx.fill("evenodd");
     ctx.stroke();
     ctx.restore();
-}
-
-function drawVertexHandles(ctx, shapePaths, viewport, scaleX, scaleY) {
-    const points = shapePaths.flatMap(path => path.points || []);
-
-    const radius = 4.5 * deviceScale();
-    ctx.lineWidth = Math.max(1.5, 1.5 * deviceScale());
-    for (const point of points) {
-        const x = viewport.x + point.x * scaleX;
-        const y = viewport.y + point.y * scaleY;
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = "#ffffff";
-        ctx.strokeStyle = "#f59f00";
-        ctx.fill();
-        ctx.stroke();
-    }
 }
 
 function drawOutlineDraft(ctx, state, viewport, scaleX, scaleY) {
@@ -752,7 +734,7 @@ async function buildFramePreviewCanvases(image, layout) {
         const frame = layout.frames[index];
         const sourceRect = clampRect(frame.sourceRect, imageWidth(image), imageHeight(image));
         const shapePaths = normalizeShapePaths(frame.shapePaths, imageWidth(image), imageHeight(image));
-        const previewCanvas = await loadPreviewCanvas(frame.previewDataUrl, image, sourceRect);
+        const previewCanvas = renderPlainCrop(image, sourceRect);
         frames.push({
             index,
             label: frame.label || `Frame ${index + 1}`,
@@ -763,24 +745,6 @@ async function buildFramePreviewCanvases(image, layout) {
     }
 
     return { frames };
-}
-
-async function loadPreviewCanvas(previewDataUrl, image, sourceRect) {
-    if (previewDataUrl) {
-        try {
-            const preview = await loadImage(previewDataUrl);
-            const canvas = document.createElement("canvas");
-            canvas.width = imageWidth(preview);
-            canvas.height = imageHeight(preview);
-            const ctx = canvas.getContext("2d");
-            ctx.imageSmoothingEnabled = false;
-            ctx.drawImage(preview, 0, 0);
-            return canvas;
-        } catch {
-        }
-    }
-
-    return renderPlainCrop(image, sourceRect);
 }
 
 function renderPlainCrop(image, sourceRect) {
@@ -1064,7 +1028,6 @@ function normalizeLayout(payload) {
         return {
             index: clampInt(read(frame, "Index", "index"), 0, 127, fallbackIndex),
             label: String(read(frame, "Label", "label") || `Frame ${fallbackIndex + 1}`),
-            previewDataUrl: String(read(frame, "PreviewDataUrl", "previewDataUrl") || ""),
             sourceRect: {
                 x: clampInt(read(rect, "X", "x"), -32768, 32767, 0),
                 y: clampInt(read(rect, "Y", "y"), -32768, 32767, 0),
@@ -1214,9 +1177,13 @@ function imageHeight(image) {
 
 async function loadImage(url) {
     if (!url) throw new Error("Image URL is required.");
+    const cached = imageCache.get(url);
+    if (cached) return cached;
+
     const image = new Image();
     image.decoding = "async";
     image.src = url;
     await image.decode();
+    imageCache.set(url, image);
     return image;
 }

@@ -7,6 +7,7 @@ public sealed class WorkspaceChatRuntime(
     IServiceScopeFactory scopeFactory,
     ILogger<WorkspaceChatRuntime> logger) : IWorkspaceChatRuntime
 {
+    private static readonly TimeSpan StateChangedThrottle = TimeSpan.FromMilliseconds(80);
     private readonly object _gate = new();
     private ChatLiveTurn? _live;
     private CancellationTokenSource? _turnCts;
@@ -14,6 +15,8 @@ public sealed class WorkspaceChatRuntime(
     private TokenContextEstimate? _tokenCount;
     private string? _error;
     private bool _running;
+    private bool _stateChangedPending;
+    private DateTime _lastStateChangedAt = DateTime.MinValue;
 
     public event Action? StateChanged;
     public event Action? WorkspaceChanged;
@@ -64,7 +67,7 @@ public sealed class WorkspaceChatRuntime(
             turnCts = _turnCts;
             _ = Task.Run(() => RunTurnAsync(projectId, text, turnCts, persisted), CancellationToken.None);
         }
-        NotifyStateChanged();
+        NotifyStateChanged(immediate: true);
 
         using var registration = cancellationToken.Register(() => persisted.TrySetCanceled(cancellationToken));
         await persisted.Task;
@@ -96,7 +99,7 @@ public sealed class WorkspaceChatRuntime(
         using var scope = scopeFactory.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IAssistantChatService>();
         await chat.ResetAsync(projectId, cancellationToken);
-        NotifyStateChanged();
+        NotifyStateChanged(immediate: true);
     }
 
     public void ClearError()
@@ -104,7 +107,7 @@ public sealed class WorkspaceChatRuntime(
         lock (_gate)
             _error = null;
 
-        NotifyStateChanged();
+        NotifyStateChanged(immediate: true);
     }
 
     private async Task RunTurnAsync(
@@ -196,7 +199,7 @@ public sealed class WorkspaceChatRuntime(
             }
 
             turnCts.Dispose();
-            NotifyStateChanged();
+            NotifyStateChanged(immediate: true);
         }
     }
 
@@ -265,10 +268,61 @@ public sealed class WorkspaceChatRuntime(
         lock (_gate)
             _error = message;
 
-        NotifyStateChanged();
+        NotifyStateChanged(immediate: true);
     }
 
-    private void NotifyStateChanged() => Notify(StateChanged, "Workspace chat state subscriber failed.");
+    private void NotifyStateChanged(bool immediate = false)
+    {
+        if (immediate)
+        {
+            lock (_gate)
+            {
+                _stateChangedPending = false;
+                _lastStateChangedAt = DateTime.UtcNow;
+            }
+
+            Notify(StateChanged, "Workspace chat state subscriber failed.");
+            return;
+        }
+
+        TimeSpan delay = TimeSpan.Zero;
+        var notifyNow = false;
+        var schedule = false;
+        lock (_gate)
+        {
+            var now = DateTime.UtcNow;
+            var elapsed = now - _lastStateChangedAt;
+            if (elapsed >= StateChangedThrottle)
+            {
+                _lastStateChangedAt = now;
+                notifyNow = true;
+            }
+            else if (!_stateChangedPending)
+            {
+                _stateChangedPending = true;
+                delay = StateChangedThrottle - elapsed;
+                schedule = true;
+            }
+        }
+
+        if (notifyNow)
+            Notify(StateChanged, "Workspace chat state subscriber failed.");
+
+        if (!schedule)
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(delay);
+            lock (_gate)
+            {
+                _stateChangedPending = false;
+                _lastStateChangedAt = DateTime.UtcNow;
+            }
+
+            Notify(StateChanged, "Workspace chat state subscriber failed.");
+        });
+    }
 
     private void NotifyWorkspaceChanged() => Notify(WorkspaceChanged, "Workspace chat workspace subscriber failed.");
 

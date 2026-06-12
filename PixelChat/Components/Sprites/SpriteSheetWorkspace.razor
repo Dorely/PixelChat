@@ -131,9 +131,9 @@
                     {
                         <div class="sprite-frame-row @(frame.Index == _selectedFrameIndex ? "is-selected" : "")">
                             <button type="button" class="frame-thumb" @onclick="() => SelectFrameAsync(frame.Index)">
-                                @if (!string.IsNullOrWhiteSpace(frame.PreviewDataUrl))
+                                @if (!string.IsNullOrWhiteSpace(frame.PreviewImageUrl))
                                 {
-                                    <img src="@frame.PreviewDataUrl" alt="@frame.Label" />
+                                    <LazyImage Src="@frame.PreviewImageUrl" Alt="@frame.Label" Width="58" Height="58" />
                                 }
                                 else
                                 {
@@ -262,7 +262,7 @@
             return;
         }
 
-        if (_loadedSpriteSheetId == active.Id && _loadedSpriteSheetUpdatedAt == active.UpdatedAt && _workingImageDataUrl == working.PreviewDataUrl)
+        if (_loadedSpriteSheetId == active.Id && _loadedSpriteSheetUpdatedAt == active.UpdatedAt && _workingImageDataUrl == working.FullImageUrl)
             return;
 
         LoadSheet(active, working);
@@ -806,6 +806,7 @@
                 ArtAssetKind.SpriteSheet,
                 "image/png",
                 _workingImageDataUrl,
+                _workingImageDataUrl,
                 null,
                 null,
                 saved.SourceAssetId,
@@ -835,7 +836,7 @@
     {
         _loadedSpriteSheetId = sheet.Id;
         _loadedSpriteSheetUpdatedAt = sheet.UpdatedAt;
-        _workingImageDataUrl = working.PreviewDataUrl;
+        _workingImageDataUrl = working.FullImageUrl;
         _rows = Math.Max(1, sheet.Rows);
         _columns = Math.Max(1, sheet.Columns);
         _cellWidth = Math.Max(1, sheet.CellWidth);
@@ -859,7 +860,7 @@
                 Width = frame.SourceRect.Width,
                 Height = frame.SourceRect.Height,
                 ShapePaths = frame.ShapePaths.ToList(),
-                PreviewDataUrl = frame.PreviewDataUrl,
+                PreviewImageUrl = frame.PreviewImageUrl,
                 WorkingState = frame.WorkingState,
                 WorkingWidth = frame.WorkingWidth,
                 WorkingHeight = frame.WorkingHeight,
@@ -984,7 +985,6 @@
                 {
                     frame.Index,
                     frame.Label,
-                    frame.PreviewDataUrl,
                     SourceRect = new { X = frame.X, Y = frame.Y, Width = frame.Width, Height = frame.Height },
                     frame.ShapePaths,
                 })
@@ -1239,7 +1239,7 @@
         public int Width { get; set; }
         public int Height { get; set; }
         public List<SpriteSheetShapePath> ShapePaths { get; set; } = [];
-        public string PreviewDataUrl { get; set; } = string.Empty;
+        public string PreviewImageUrl { get; set; } = string.Empty;
         public string WorkingState { get; set; } = "none";
         public int WorkingWidth { get; set; }
         public int WorkingHeight { get; set; }

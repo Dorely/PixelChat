@@ -69,11 +69,51 @@ public sealed class ArtWorkflowService(
             .AsNoTracking()
             .Where(a => a.ProjectId == selected.Id)
             .OrderByDescending(a => a.CreatedAt)
+            .Select(a => new ArtAssetListItem(
+                a.Id,
+                a.ProjectId,
+                a.Label,
+                a.FileName,
+                a.Kind,
+                a.ContentType,
+                a.Width,
+                a.Height,
+                a.ParentAssetId,
+                a.SourceBatchId,
+                a.SourcePromptRecipeId,
+                a.SourcePromptRecipeVersion,
+                a.IsFavorite,
+                a.Notes,
+                a.Prompt,
+                a.SourceMetadataJson,
+                a.CreatedAt,
+                a.UpdatedAt))
             .ToListAsync(cancellationToken);
         var batches = await db.GenerationBatches
             .AsNoTracking()
             .Where(b => b.ProjectId == selected.Id)
             .OrderByDescending(b => b.CreatedAt)
+            .Select(b => new GenerationBatchListItem(
+                b.Id,
+                b.Label,
+                b.Provider,
+                b.MainlineModel,
+                b.ImageModel,
+                b.Prompt,
+                b.NegativePrompt,
+                b.Size,
+                b.Background,
+                b.Count,
+                b.InputAssetIdsJson,
+                b.InputMaskIdsJson,
+                b.ParentBatchId,
+                b.PromptRecipeId,
+                b.PromptRecipeVersion,
+                b.Status,
+                b.Error,
+                b.OutputErrorsJson,
+                b.OutputStatesJson,
+                b.CreatedAt))
             .ToListAsync(cancellationToken);
         var recipes = await db.PromptRecipes
             .AsNoTracking()
@@ -87,16 +127,53 @@ public sealed class ArtWorkflowService(
             .ToListAsync(cancellationToken);
         var spriteSheetIds = spriteSheets.Select(s => s.Id).ToList();
         var spriteSheetFrameRecords = spriteSheetIds.Count == 0
-            ? new List<SpriteSheetFrameRecord>()
+            ? new List<SpriteSheetFrameListItem>()
             : await db.SpriteSheetFrameRecords
                 .AsNoTracking()
                 .Where(f => f.ProjectId == selected.Id && spriteSheetIds.Contains(f.SpriteSheetDefinitionId))
                 .OrderBy(f => f.Index)
+                .Select(f => new SpriteSheetFrameListItem(
+                    f.Id,
+                    f.ProjectId,
+                    f.SpriteSheetDefinitionId,
+                    f.Index,
+                    f.Label,
+                    f.SourceX,
+                    f.SourceY,
+                    f.SourceWidth,
+                    f.SourceHeight,
+                    f.ShapeJson,
+                    f.CellX,
+                    f.CellY,
+                    f.CellWidth,
+                    f.CellHeight,
+                    f.SpriteX,
+                    f.SpriteY,
+                    f.SpriteWidth,
+                    f.SpriteHeight,
+                    f.PreviewWidth,
+                    f.PreviewHeight,
+                    f.WorkingState,
+                    f.WorkingWidth,
+                    f.WorkingHeight,
+                    f.WorkingMargin,
+                    f.WorkingUpdatedAt,
+                    f.UpdatedAt))
                 .ToListAsync(cancellationToken);
         var masks = await db.ImageMasks
             .AsNoTracking()
             .Where(m => m.ProjectId == selected.Id)
             .OrderByDescending(m => m.CreatedAt)
+            .Select(m => new ImageMaskListItem(
+                m.Id,
+                m.ProjectId,
+                m.AssetId,
+                m.Label,
+                m.ContentType,
+                m.Width,
+                m.Height,
+                m.CreatedAt,
+                m.UpdatedAt))
             .ToListAsync(cancellationToken);
         var attachments = await db.ChatContextAttachments
             .AsNoTracking()
@@ -113,9 +190,9 @@ public sealed class ArtWorkflowService(
             .ToList();
         var spriteSheetFramesBySheet = spriteSheetFrameRecords
             .GroupBy(frame => frame.SpriteSheetDefinitionId)
-            .ToDictionary(group => group.Key, group => (IReadOnlyList<SpriteSheetFrameRecord>)group.ToList());
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<SpriteSheetFrameListItem>)group.ToList());
         var spriteSheetViews = spriteSheets
-            .Select(sheet => SpriteSheetView(sheet, spriteSheetFramesBySheet.GetValueOrDefault(sheet.Id, [])))
+            .Select(sheet => SpriteSheetViewFromListItems(sheet, spriteSheetFramesBySheet.GetValueOrDefault(sheet.Id, [])))
             .ToList();
         var maskViews = masks.Select(MaskView).ToList();
         var attachmentViews = attachments.Select(AttachmentView).ToList();
@@ -133,6 +210,95 @@ public sealed class ArtWorkflowService(
             batchViews.FirstOrDefault(b => b.Id == selected.ActiveBatchId),
             spriteSheetViews.FirstOrDefault(s => s.Id == selected.ActiveSpriteSheetId),
             providerStatus);
+    }
+
+    public async Task<ImageBinaryView> GetAssetPreviewImageAsync(
+        Guid projectId,
+        Guid assetId,
+        CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+
+        if (asset.ThumbnailData is { Length: > 0 } thumbnail)
+        {
+            return new ImageBinaryView(
+                asset.ContentType,
+                thumbnail,
+                FileNameForAsset(asset, "preview"),
+                asset.UpdatedAt);
+        }
+
+        if (asset.ContentType.Equals("image/png", StringComparison.OrdinalIgnoreCase)
+            && TryBuildAssetThumbnail(asset.Data, out var thumbnailData))
+        {
+            asset.ThumbnailData = thumbnailData;
+            asset.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(cancellationToken);
+            return new ImageBinaryView(
+                "image/png",
+                thumbnailData,
+                FileNameForAsset(asset, "preview"),
+                asset.UpdatedAt);
+        }
+
+        return new ImageBinaryView(
+            asset.ContentType,
+            asset.Data,
+            FileNameForAsset(asset, "preview"),
+            asset.UpdatedAt);
+    }
+
+    public async Task<ImageBinaryView> GetAssetFullImageAsync(
+        Guid projectId,
+        Guid assetId,
+        CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+        return new ImageBinaryView(
+            asset.ContentType,
+            asset.Data,
+            FileNameForAsset(asset, "full"),
+            asset.UpdatedAt);
+    }
+
+    public async Task<ImageBinaryView> GetMaskImageAsync(
+        Guid projectId,
+        Guid maskId,
+        CancellationToken cancellationToken = default)
+    {
+        var mask = await db.ImageMasks
+            .AsNoTracking()
+            .FirstOrDefaultAsync(m => m.ProjectId == projectId && m.Id == maskId, cancellationToken)
+            ?? throw new InvalidOperationException("Mask was not found.");
+        return new ImageBinaryView(
+            mask.ContentType,
+            mask.Data,
+            string.IsNullOrWhiteSpace(mask.Label) ? $"mask-{mask.Id:N}.png" : CleanFileName(mask.Label, "mask") + ".png",
+            mask.UpdatedAt);
+    }
+
+    public async Task<ImageBinaryView> GetSpriteFramePreviewImageAsync(
+        Guid projectId,
+        Guid frameId,
+        CancellationToken cancellationToken = default)
+    {
+        var frame = await db.SpriteSheetFrameRecords
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.ProjectId == projectId && f.Id == frameId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite frame was not found.");
+        if (frame.PreviewData.Length == 0)
+            throw new InvalidOperationException("Sprite frame preview image was not found.");
+
+        return new ImageBinaryView(
+            frame.PreviewContentType,
+            frame.PreviewData,
+            string.IsNullOrWhiteSpace(frame.Label) ? $"sprite-frame-{frame.Index + 1}.png" : CleanFileName(frame.Label, $"sprite-frame-{frame.Index + 1}") + ".png",
+            frame.UpdatedAt);
     }
 
     public async Task<ArtAssetExportView> GetAssetForExportAsync(
@@ -3857,13 +4023,17 @@ public sealed class ArtWorkflowService(
         new(project.Id, project.Name, project.ActiveWorkspaceMode, project.ActiveBatchId, project.ActiveSpriteSheetId);
 
     private static ArtAssetView AssetView(ArtAsset asset) =>
+        AssetView(AssetListItem(asset));
+
+    private static ArtAssetView AssetView(ArtAssetListItem asset) =>
         new(
             asset.Id,
             asset.Label,
             string.IsNullOrWhiteSpace(asset.FileName) ? $"asset-{asset.Id:N}.{ExtensionForContentType(asset.ContentType)}" : asset.FileName,
             asset.Kind,
             asset.ContentType,
-            DataUrl.ToDataUrl(asset.ContentType, asset.ThumbnailData is { Length: > 0 } thumb ? thumb : asset.Data),
+            AssetPreviewImageUrl(asset.ProjectId, asset.Id, asset.UpdatedAt),
+            AssetFullImageUrl(asset.ProjectId, asset.Id, asset.UpdatedAt),
             asset.Width,
             asset.Height,
             asset.ParentAssetId,
@@ -3890,6 +4060,11 @@ public sealed class ArtWorkflowService(
     private static SpriteSheetDefinitionView SpriteSheetView(
         SpriteSheetDefinition spriteSheet,
         IReadOnlyList<SpriteSheetFrameRecord> frames) =>
+        SpriteSheetViewFromListItems(spriteSheet, frames.Select(ToSpriteSheetFrameListItem).ToList());
+
+    private static SpriteSheetDefinitionView SpriteSheetViewFromListItems(
+        SpriteSheetDefinition spriteSheet,
+        IReadOnlyList<SpriteSheetFrameListItem> frames) =>
         new(
             spriteSheet.Id,
             spriteSheet.SourceAssetId,
@@ -4074,7 +4249,10 @@ public sealed class ArtWorkflowService(
     private static string Sha256Hex(byte[] data) =>
         Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
 
-    private static GenerationBatchView BatchView(GenerationBatch batch, IReadOnlyList<ArtAsset> assets)
+    private static GenerationBatchView BatchView(GenerationBatch batch, IReadOnlyList<ArtAsset> assets) =>
+        BatchView(ToGenerationBatchListItem(batch), assets.Select(AssetListItem).ToList());
+
+    private static GenerationBatchView BatchView(GenerationBatchListItem batch, IReadOnlyList<ArtAssetListItem> assets)
     {
         var outputAssets = assets
             .Where(a => a.SourceBatchId == batch.Id)
@@ -4148,12 +4326,15 @@ public sealed class ArtWorkflowService(
             version.CreatedAt);
 
     private static ImageMaskView MaskView(ImageMask mask) =>
+        MaskView(ToImageMaskListItem(mask));
+
+    private static ImageMaskView MaskView(ImageMaskListItem mask) =>
         new(
             mask.Id,
             mask.AssetId,
             mask.Label,
             mask.ContentType,
-            DataUrl.ToDataUrl(mask.ContentType, mask.Data),
+            MaskImageUrl(mask.ProjectId, mask.Id, mask.UpdatedAt),
             mask.Width,
             mask.Height,
             mask.CreatedAt);
@@ -4174,11 +4355,41 @@ public sealed class ArtWorkflowService(
             .AsNoTracking()
             .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == spriteSheetId)
             .OrderBy(frame => frame.Index)
+            .Select(frame => new SpriteSheetFrameListItem(
+                frame.Id,
+                frame.ProjectId,
+                frame.SpriteSheetDefinitionId,
+                frame.Index,
+                frame.Label,
+                frame.SourceX,
+                frame.SourceY,
+                frame.SourceWidth,
+                frame.SourceHeight,
+                frame.ShapeJson,
+                frame.CellX,
+                frame.CellY,
+                frame.CellWidth,
+                frame.CellHeight,
+                frame.SpriteX,
+                frame.SpriteY,
+                frame.SpriteWidth,
+                frame.SpriteHeight,
+                frame.PreviewWidth,
+                frame.PreviewHeight,
+                frame.WorkingState,
+                frame.WorkingWidth,
+                frame.WorkingHeight,
+                frame.WorkingMargin,
+                frame.WorkingUpdatedAt,
+                frame.UpdatedAt))
             .ToListAsync(cancellationToken);
-        return SpriteSheetView(sheet, frames);
+        return SpriteSheetViewFromListItems(sheet, frames);
     }
 
     private static SpriteSheetFrameRecordView FrameRecordView(SpriteSheetDefinition spriteSheet, SpriteSheetFrameRecord frame) =>
+        FrameRecordView(spriteSheet, ToSpriteSheetFrameListItem(frame));
+
+    private static SpriteSheetFrameRecordView FrameRecordView(SpriteSheetDefinition spriteSheet, SpriteSheetFrameListItem frame) =>
         new(
             frame.Id,
             spriteSheet.Id,
@@ -4188,7 +4399,7 @@ public sealed class ArtWorkflowService(
             DeserializeShapePaths(frame.ShapeJson),
             RectView(frame.CellX, frame.CellY, frame.CellWidth, frame.CellHeight),
             RectView(frame.SpriteX, frame.SpriteY, frame.SpriteWidth, frame.SpriteHeight),
-            frame.PreviewData.Length == 0 ? string.Empty : DataUrl.ToDataUrl(frame.PreviewContentType, frame.PreviewData),
+            SpriteFramePreviewImageUrl(frame.ProjectId, frame.Id, frame.UpdatedAt),
             frame.PreviewWidth,
             frame.PreviewHeight,
             NormalizeFrameWorkingState(frame.WorkingState),
@@ -4255,6 +4466,78 @@ public sealed class ArtWorkflowService(
     private static string ExtensionForContentType(string contentType) =>
         contentType.Equals("image/jpeg", StringComparison.OrdinalIgnoreCase) ? "jpg" : "png";
 
+    private static string AssetPreviewImageUrl(Guid projectId, Guid assetId, DateTime updatedAt) =>
+        $"/media/projects/{projectId:D}/assets/{assetId:D}/preview{VersionQuery(updatedAt)}";
+
+    private static string AssetFullImageUrl(Guid projectId, Guid assetId, DateTime updatedAt) =>
+        $"/media/projects/{projectId:D}/assets/{assetId:D}/full{VersionQuery(updatedAt)}";
+
+    private static string MaskImageUrl(Guid projectId, Guid maskId, DateTime updatedAt) =>
+        $"/media/projects/{projectId:D}/masks/{maskId:D}{VersionQuery(updatedAt)}";
+
+    private static string SpriteFramePreviewImageUrl(Guid projectId, Guid frameId, DateTime updatedAt) =>
+        $"/media/projects/{projectId:D}/sprite-frames/{frameId:D}/preview{VersionQuery(updatedAt)}";
+
+    private static string VersionQuery(DateTime updatedAt)
+    {
+        var utc = updatedAt.Kind == DateTimeKind.Utc ? updatedAt : DateTime.SpecifyKind(updatedAt, DateTimeKind.Utc);
+        return $"?v={utc.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    private static string FileNameForAsset(ArtAsset asset, string suffix)
+    {
+        var fileName = string.IsNullOrWhiteSpace(asset.FileName)
+            ? $"asset-{asset.Id:N}.{ExtensionForContentType(asset.ContentType)}"
+            : asset.FileName;
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var extension = Path.GetExtension(fileName);
+        if (string.IsNullOrWhiteSpace(extension))
+            extension = "." + ExtensionForContentType(asset.ContentType);
+        return CleanFileName($"{stem}-{suffix}", $"asset-{suffix}") + extension;
+    }
+
+    private static string CleanFileName(string value, string fallback)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string((string.IsNullOrWhiteSpace(value) ? fallback : value.Trim())
+            .Select(character => invalid.Contains(character) ? '-' : character)
+            .ToArray())
+            .Trim();
+        return string.IsNullOrWhiteSpace(cleaned) ? fallback : cleaned;
+    }
+
+    private static bool TryBuildAssetThumbnail(byte[] sourceData, out byte[] thumbnailData)
+    {
+        const int maxDimension = 384;
+        thumbnailData = [];
+        if (!SpriteSheetPngCodec.TryReadRgba(sourceData, out var width, out var height, out var rgba))
+            return false;
+        if (width <= 0 || height <= 0 || (width <= maxDimension && height <= maxDimension))
+            return false;
+
+        var scale = Math.Min(maxDimension / (double)width, maxDimension / (double)height);
+        var targetWidth = Math.Max(1, (int)Math.Round(width * scale));
+        var targetHeight = Math.Max(1, (int)Math.Round(height * scale));
+        var target = new byte[targetWidth * targetHeight * 4];
+        for (var y = 0; y < targetHeight; y++)
+        {
+            var sourceY = Math.Min(height - 1, (int)(y * (height / (double)targetHeight)));
+            for (var x = 0; x < targetWidth; x++)
+            {
+                var sourceX = Math.Min(width - 1, (int)(x * (width / (double)targetWidth)));
+                var sourceIndex = ((sourceY * width) + sourceX) * 4;
+                var targetIndex = ((y * targetWidth) + x) * 4;
+                target[targetIndex] = rgba[sourceIndex];
+                target[targetIndex + 1] = rgba[sourceIndex + 1];
+                target[targetIndex + 2] = rgba[sourceIndex + 2];
+                target[targetIndex + 3] = rgba[sourceIndex + 3];
+            }
+        }
+
+        thumbnailData = SpriteSheetPngCodec.EncodeRgba(targetWidth, targetHeight, target);
+        return thumbnailData.Length > 0;
+    }
+
     private static string LabelForIndex(int index)
     {
         const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -4295,6 +4578,94 @@ public sealed class ArtWorkflowService(
         string.IsNullOrEmpty(value) || value.Length <= maxChars
             ? value
             : value[..maxChars] + "...";
+
+    private static ArtAssetListItem AssetListItem(ArtAsset asset) =>
+        new(
+            asset.Id,
+            asset.ProjectId,
+            asset.Label,
+            asset.FileName,
+            asset.Kind,
+            asset.ContentType,
+            asset.Width,
+            asset.Height,
+            asset.ParentAssetId,
+            asset.SourceBatchId,
+            asset.SourcePromptRecipeId,
+            asset.SourcePromptRecipeVersion,
+            asset.IsFavorite,
+            asset.Notes,
+            asset.Prompt,
+            asset.SourceMetadataJson,
+            asset.CreatedAt,
+            asset.UpdatedAt);
+
+    private static GenerationBatchListItem ToGenerationBatchListItem(GenerationBatch batch) =>
+        new(
+            batch.Id,
+            batch.Label,
+            batch.Provider,
+            batch.MainlineModel,
+            batch.ImageModel,
+            batch.Prompt,
+            batch.NegativePrompt,
+            batch.Size,
+            batch.Background,
+            batch.Count,
+            batch.InputAssetIdsJson,
+            batch.InputMaskIdsJson,
+            batch.ParentBatchId,
+            batch.PromptRecipeId,
+            batch.PromptRecipeVersion,
+            batch.Status,
+            batch.Error,
+            batch.OutputErrorsJson,
+            batch.OutputStatesJson,
+            batch.CreatedAt);
+
+    private static ImageMaskListItem ToImageMaskListItem(ImageMask mask) =>
+        new(
+            mask.Id,
+            mask.ProjectId,
+            mask.AssetId,
+            mask.Label,
+            mask.ContentType,
+            mask.Width,
+            mask.Height,
+            mask.CreatedAt,
+            mask.UpdatedAt);
+
+    private static SpriteSheetFrameListItem ToSpriteSheetFrameListItem(SpriteSheetFrameRecord frame) =>
+        new(
+            frame.Id,
+            frame.ProjectId,
+            frame.SpriteSheetDefinitionId,
+            frame.Index,
+            frame.Label,
+            frame.SourceX,
+            frame.SourceY,
+            frame.SourceWidth,
+            frame.SourceHeight,
+            frame.ShapeJson,
+            frame.CellX,
+            frame.CellY,
+            frame.CellWidth,
+            frame.CellHeight,
+            frame.SpriteX,
+            frame.SpriteY,
+            frame.SpriteWidth,
+            frame.SpriteHeight,
+            frame.PreviewWidth,
+            frame.PreviewHeight,
+            frame.WorkingState,
+            frame.WorkingWidth,
+            frame.WorkingHeight,
+            frame.WorkingMargin,
+            frame.WorkingUpdatedAt,
+            frame.UpdatedAt);
+
+    private static int? ReadBatchOutputIndex(ArtAssetListItem asset) =>
+        ReadBatchOutputIndex(asset.SourceMetadataJson) ?? ReadBatchOutputIndexFromLabel(asset.Label);
 
     private static int? ReadBatchOutputIndex(ArtAsset asset) =>
         ReadBatchOutputIndex(asset.SourceMetadataJson) ?? ReadBatchOutputIndexFromLabel(asset.Label);
@@ -4527,4 +4898,85 @@ public sealed class ArtWorkflowService(
             return [];
         }
     }
+
+    private sealed record ArtAssetListItem(
+        Guid Id,
+        Guid ProjectId,
+        string Label,
+        string FileName,
+        ArtAssetKind Kind,
+        string ContentType,
+        int? Width,
+        int? Height,
+        Guid? ParentAssetId,
+        Guid? SourceBatchId,
+        Guid? SourcePromptRecipeId,
+        int? SourcePromptRecipeVersion,
+        bool IsFavorite,
+        string Notes,
+        string Prompt,
+        string SourceMetadataJson,
+        DateTime CreatedAt,
+        DateTime UpdatedAt);
+
+    private sealed record GenerationBatchListItem(
+        Guid Id,
+        string Label,
+        string Provider,
+        string MainlineModel,
+        string ImageModel,
+        string Prompt,
+        string NegativePrompt,
+        string Size,
+        string Background,
+        int Count,
+        string InputAssetIdsJson,
+        string InputMaskIdsJson,
+        Guid? ParentBatchId,
+        Guid? PromptRecipeId,
+        int? PromptRecipeVersion,
+        GenerationBatchStatus Status,
+        string Error,
+        string OutputErrorsJson,
+        string OutputStatesJson,
+        DateTime CreatedAt);
+
+    private sealed record ImageMaskListItem(
+        Guid Id,
+        Guid ProjectId,
+        Guid AssetId,
+        string Label,
+        string ContentType,
+        int Width,
+        int Height,
+        DateTime CreatedAt,
+        DateTime UpdatedAt);
+
+    private sealed record SpriteSheetFrameListItem(
+        Guid Id,
+        Guid ProjectId,
+        Guid SpriteSheetDefinitionId,
+        int Index,
+        string Label,
+        int SourceX,
+        int SourceY,
+        int SourceWidth,
+        int SourceHeight,
+        string ShapeJson,
+        int CellX,
+        int CellY,
+        int CellWidth,
+        int CellHeight,
+        int SpriteX,
+        int SpriteY,
+        int SpriteWidth,
+        int SpriteHeight,
+        int PreviewWidth,
+        int PreviewHeight,
+        string WorkingState,
+        int WorkingWidth,
+        int WorkingHeight,
+        int WorkingMargin,
+        DateTime? WorkingUpdatedAt,
+        DateTime UpdatedAt);
 }

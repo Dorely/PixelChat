@@ -98,7 +98,7 @@ else
                     <div class="busy-strip">@_busyText</div>
                 }
 
-                @switch (_workbench.Project.ActiveWorkspaceMode)
+                @switch (_activeWorkspaceMode)
                 {
                     case WorkspaceMode.Generate:
                         @RenderGenerateWorkspace()
@@ -142,6 +142,10 @@ else
     private Guid? _recipeExampleAssetId;
     private WorkbenchView? _workbench;
     private ImageGenerationRuntimeSnapshot _generationRuntimeSnapshot = new([]);
+    private WorkspaceMode _activeWorkspaceMode = WorkspaceMode.Generate;
+    private Guid? _activeWorkspaceProjectId;
+    private int _workspaceModePersistRequestVersion;
+    private int _workspaceModePersistCompleteVersion;
     private ChatLiveTurn? _live;
     private IJSObjectReference? _editorModule;
     private DotNetObjectReference<Home>? _dotNetRef;
@@ -266,7 +270,19 @@ else
     {
         _workbench = await Workflow.GetWorkbenchAsync(ParseProjectIdOrNull(_projectIdText));
         _projectIdText = _workbench.Project.Id.ToString();
-        _loadedEditorAssetId = _workbench.Project.ActiveWorkspaceMode == WorkspaceMode.Edit ? _loadedEditorAssetId : null;
+        if (_activeWorkspaceProjectId != _workbench.Project.Id)
+        {
+            _activeWorkspaceProjectId = _workbench.Project.Id;
+            _activeWorkspaceMode = _workbench.Project.ActiveWorkspaceMode;
+            _workspaceModePersistRequestVersion = 0;
+            _workspaceModePersistCompleteVersion = 0;
+        }
+        else if (_workspaceModePersistRequestVersion == _workspaceModePersistCompleteVersion)
+        {
+            _activeWorkspaceMode = _workbench.Project.ActiveWorkspaceMode;
+        }
+
+        _loadedEditorAssetId = _activeWorkspaceMode == WorkspaceMode.Edit ? _loadedEditorAssetId : null;
         if (_editAssetId is Guid editAssetId && !_workbench.Assets.Any(asset => asset.Id == editAssetId))
             _editAssetId = null;
         if (_exportAsset is { } exportAsset && !_workbench.Assets.Any(asset => asset.Id == exportAsset.Id))
@@ -356,10 +372,20 @@ else
         if (_workbench is null)
             return;
 
-        if (_workbench.Project.ActiveWorkspaceMode == WorkspaceMode.Edit && mode != WorkspaceMode.Edit)
-            await FlushMaskAutosaveAsync();
-        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, mode);
-        await ReloadWorkbenchAsync();
+        var capturedMask = _activeWorkspaceMode == WorkspaceMode.Edit && mode != WorkspaceMode.Edit
+            ? await CaptureMaskAutosaveAsync()
+            : null;
+
+        _activeWorkspaceMode = mode;
+        PublishVisibleState();
+        StateHasChanged();
+
+        if (capturedMask is not null)
+            _ = InvokeAsync(() => PersistCapturedMaskAutosaveAsync(capturedMask));
+
+        var projectId = _workbench.Project.Id;
+        var version = ++_workspaceModePersistRequestVersion;
+        _ = InvokeAsync(() => PersistWorkspaceModeAsync(projectId, mode, version));
     }
 
     private RenderFragment RenderGenerateWorkspace() => __builder =>
@@ -434,7 +460,7 @@ else
                         @foreach (var asset in DraftReferenceAssets())
                         {
                             <span class="draft-reference-card">
-                                <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
+                                <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" Width="56" Height="56" Style="border-radius: 6px" />
                                 <span>
                                     <small>Reference</small>
                                     <strong>@asset.Label</strong>
@@ -870,15 +896,15 @@ else
                     <span class="chat-attachment-chip">
                         @if (asset is not null)
                         {
-                            <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
+                            <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" Width="44" Height="44" Style="border-radius: 6px" />
                         }
                         else if (mask is not null)
                         {
-                            <img src="@mask.PreviewDataUrl" alt="@mask.Label" />
+                            <LazyImage Src="@mask.PreviewImageUrl" Alt="@mask.Label" Width="44" Height="44" Style="border-radius: 6px" />
                         }
                         else if (spriteFrame is not null)
                         {
-                            <img src="@spriteFrame.PreviewDataUrl" alt="@spriteFrame.Label" />
+                            <LazyImage Src="@spriteFrame.PreviewImageUrl" Alt="@spriteFrame.Label" Width="44" Height="44" Style="border-radius: 6px" />
                         }
                         <span>
                             <small>@AttachmentKindLabel(attachment)</small>
@@ -952,7 +978,7 @@ else
                 &#9829;
             </button>
             <div class="asset-thumb">
-                <img src="@asset.PreviewDataUrl" alt="@asset.Label" />
+                <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" />
             </div>
             <div class="asset-card-body">
                 <div class="asset-title-row">
@@ -1559,6 +1585,65 @@ else
         await PersistMaskAutosaveAsync(asset.Id, version, CancellationToken.None);
     }
 
+    private async Task<CapturedMaskAutosave?> CaptureMaskAutosaveAsync()
+    {
+        var asset = CurrentEditAsset();
+        if (!_maskAutosaveDirty || _workbench is null || asset is null || _editorModule is null)
+            return null;
+
+        _maskAutosaveCts?.Cancel();
+        _maskAutosaveCts = null;
+        var version = ++_maskAutosaveVersion;
+        var maskDataUrl = await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas);
+        return new CapturedMaskAutosave(
+            _workbench.Project.Id,
+            asset.Id,
+            $"{asset.Label} mask",
+            maskDataUrl,
+            version);
+    }
+
+    private async Task PersistCapturedMaskAutosaveAsync(CapturedMaskAutosave captured)
+    {
+        await _maskAutosaveLock.WaitAsync();
+        try
+        {
+            await Workflow.UpsertAssetMaskAsync(
+                captured.ProjectId,
+                captured.AssetId,
+                captured.MaskDataUrl,
+                captured.Label);
+            if (captured.Version == _maskAutosaveVersion)
+                _maskAutosaveDirty = false;
+            await ReloadWorkbenchAsync();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            StateHasChanged();
+        }
+        finally
+        {
+            _maskAutosaveLock.Release();
+        }
+    }
+
+    private async Task PersistWorkspaceModeAsync(Guid projectId, WorkspaceMode mode, int version)
+    {
+        try
+        {
+            await Workflow.SetWorkspaceModeAsync(projectId, mode);
+            if (version == _workspaceModePersistRequestVersion)
+                _workspaceModePersistCompleteVersion = version;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            StateHasChanged();
+        }
+    }
+
     private async Task PersistMaskAutosaveAsync(Guid assetId, long version, CancellationToken cancellationToken)
     {
         await _maskAutosaveLock.WaitAsync(cancellationToken);
@@ -1832,7 +1917,7 @@ else
         _exportElapsed = TimeSpan.Zero;
         _exportStartedAt = null;
         _exportFileName = DefaultExportFileName(asset.FileName, asset.Label);
-        _exportPreviewDataUrl = asset.PreviewDataUrl;
+        _exportPreviewDataUrl = asset.PreviewImageUrl;
         _exportStatus = "Loading export asset...";
         _exportError = null;
         StateHasChanged();
@@ -2742,7 +2827,7 @@ else
     private async Task LoadEditorAssetIfNeededAsync()
     {
         var asset = CurrentEditAsset();
-        if (_editorModule is null || _workbench?.Project.ActiveWorkspaceMode != WorkspaceMode.Edit || asset is null)
+        if (_editorModule is null || _activeWorkspaceMode != WorkspaceMode.Edit || asset is null)
             return;
 
         if (_loadedEditorAssetId == asset.Id)
@@ -2755,10 +2840,10 @@ else
             await _editorModule.InvokeVoidAsync(
                 "loadEditor",
                 _editorCanvas,
-                asset.PreviewDataUrl,
+                asset.FullImageUrl,
                 _brushSize,
                 _editorTool,
-                mask?.PreviewDataUrl,
+                mask?.PreviewImageUrl,
                 _dotNetRef);
             _maskAutosaveDirty = false;
         }
@@ -2810,11 +2895,55 @@ else
     {
         _ = InvokeAsync(async () =>
         {
-            _generationRuntimeSnapshot = ImageRuntime.GetSnapshot();
-            await ReloadWorkbenchAsync();
+            var previousSnapshot = _generationRuntimeSnapshot;
+            var projectId = _workbench?.Project.Id;
+            var previousRunningBatchIds = previousSnapshot.Batches
+                .Where(batch => batch.IsRunning && (projectId is null || batch.ProjectId == projectId.Value))
+                .Select(batch => batch.BatchId)
+                .ToHashSet();
+            var snapshot = ImageRuntime.GetSnapshot();
+            _generationRuntimeSnapshot = snapshot;
+            var completedBatch = previousRunningBatchIds.Any(batchId =>
+                snapshot.Batches.Any(batch => batch.BatchId == batchId && !batch.IsRunning));
+            var completedOutput = projectId is Guid currentProjectId
+                && HasNewTerminalGenerationOutput(previousSnapshot, snapshot, currentProjectId);
+            if (completedBatch || completedOutput)
+                await ReloadWorkbenchAsync();
             StateHasChanged();
         });
     }
+
+    private static bool HasNewTerminalGenerationOutput(
+        ImageGenerationRuntimeSnapshot previousSnapshot,
+        ImageGenerationRuntimeSnapshot snapshot,
+        Guid projectId)
+    {
+        var previousStatuses = previousSnapshot.Batches
+            .Where(batch => batch.ProjectId == projectId)
+            .SelectMany(batch => batch.Outputs.Select(output => new
+            {
+                batch.BatchId,
+                output.OutputIndex,
+                output.Status,
+            }))
+            .ToDictionary(output => (output.BatchId, output.OutputIndex), output => output.Status);
+
+        return snapshot.Batches
+            .Where(batch => batch.ProjectId == projectId)
+            .SelectMany(batch => batch.Outputs.Select(output => new
+            {
+                batch.BatchId,
+                output.OutputIndex,
+                output.Status,
+            }))
+            .Any(output =>
+                IsTerminalGenerationOutputStatus(output.Status)
+                && (!previousStatuses.TryGetValue((output.BatchId, output.OutputIndex), out var previous)
+                    || !IsTerminalGenerationOutputStatus(previous)));
+    }
+
+    private static bool IsTerminalGenerationOutputStatus(GenerationOutputStatus status) =>
+        status is GenerationOutputStatus.Succeeded or GenerationOutputStatus.Failed;
 
     private void ApplyChatRuntimeSnapshot(WorkspaceChatRuntimeSnapshot snapshot)
     {
@@ -3138,19 +3267,19 @@ else
         if (_workbench is null)
             return;
 
-        var mode = _workbench.Project.ActiveWorkspaceMode;
+        var mode = _activeWorkspaceMode;
         VisibleState.Publish(new WorkspaceVisibleStateSnapshot(
             _workbench.Project.Id,
             _workbench.Project.Name,
             mode,
             _workbench.ImageProviderStatus,
             _workbench.Attachments,
-            mode == WorkspaceMode.Generate ? BuildGenerateVisibleState() : null,
-            mode == WorkspaceMode.Edit ? BuildEditVisibleState() : null,
-            mode == WorkspaceMode.Compare ? BuildCompareVisibleState() : null,
-            mode == WorkspaceMode.Sprites ? BuildSpritesVisibleState() : null,
-            mode == WorkspaceMode.Recipes ? BuildRecipeVisibleState() : null,
-            mode == WorkspaceMode.Assets ? BuildAssetsVisibleState() : null,
+            BuildGenerateVisibleState(),
+            BuildEditVisibleState(),
+            BuildCompareVisibleState(),
+            BuildSpritesVisibleState(),
+            BuildRecipeVisibleState(),
+            BuildAssetsVisibleState(),
             DateTime.UtcNow));
     }
 
@@ -3540,7 +3669,7 @@ else
         count is int value ? Math.Clamp(value <= 0 ? 1 : value, 1, Math.Max(1, ImageOptions.Value.MaxOutputs)) : current;
 
     private string ModeButtonClass(WorkspaceMode mode) =>
-        _workbench?.Project.ActiveWorkspaceMode == mode ? "mode-tab is-active" : "mode-tab";
+        _activeWorkspaceMode == mode ? "mode-tab is-active" : "mode-tab";
 
     private string EditorToolClass(string tool) =>
         _editorTool == tool ? "segmented-button is-active" : "segmented-button";
@@ -3744,6 +3873,13 @@ else
     private sealed record AssetGroup(string Label, IReadOnlyList<ArtAssetView> Assets);
 
     private sealed record RecipeOutputGroup(string Label, int? Version, IReadOnlyList<ArtAssetView> Assets);
+
+    private sealed record CapturedMaskAutosave(
+        Guid ProjectId,
+        Guid AssetId,
+        string Label,
+        string MaskDataUrl,
+        long Version);
 
     private sealed record ExportPreviewResult(
         bool RemoveBackground,

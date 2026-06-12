@@ -318,7 +318,7 @@ public sealed class AssistantToolRegistry(
             return JsonSerializer.Serialize(new
             {
                 snapshotMissing = false,
-                note = "Only the active visible page section is populated. Use focused list/read tools for broader project data.",
+                note = "The live UI snapshot includes compact state for all workspace tabs. Use focused list/read tools for broader project data or full records.",
                 state = snapshot,
             }, JsonOptions);
         }

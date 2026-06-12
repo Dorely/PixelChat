@@ -1,4 +1,5 @@
 const states = new WeakMap();
+const imageCache = new Map();
 
 export async function loadEditor(canvas, imageUrl, brushSize, tool, maskUrl, dotNetRef) {
     const image = await loadImage(imageUrl);
@@ -1365,9 +1366,15 @@ function normalizeJsonFileName(value) {
 }
 
 function loadImage(src) {
+    const cached = imageCache.get(src);
+    if (cached) return Promise.resolve(cached);
+
     return new Promise((resolve, reject) => {
         const img = new Image();
-        img.onload = () => resolve(img);
+        img.onload = () => {
+            imageCache.set(src, img);
+            resolve(img);
+        };
         img.onerror = reject;
         img.src = src;
     });

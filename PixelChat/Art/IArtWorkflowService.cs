@@ -7,6 +7,10 @@ public interface IArtWorkflowService
     Task<ProjectView> EnsureDefaultProjectAsync(CancellationToken cancellationToken = default);
     Task<ProjectView> CreateProjectAsync(string name, CancellationToken cancellationToken = default);
     Task<WorkbenchView> GetWorkbenchAsync(Guid? projectId = null, CancellationToken cancellationToken = default);
+    Task<ImageBinaryView> GetAssetPreviewImageAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
+    Task<ImageBinaryView> GetAssetFullImageAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
+    Task<ImageBinaryView> GetMaskImageAsync(Guid projectId, Guid maskId, CancellationToken cancellationToken = default);
+    Task<ImageBinaryView> GetSpriteFramePreviewImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
     Task<ArtAssetExportView> GetAssetForExportAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<string> ListAssetsJsonAsync(Guid projectId, string? kind = null, string? query = null, bool? favorite = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadAssetJsonAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);

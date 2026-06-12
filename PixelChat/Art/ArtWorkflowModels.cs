@@ -28,7 +28,8 @@ public sealed record ArtAssetView(
     string FileName,
     ArtAssetKind Kind,
     string ContentType,
-    string PreviewDataUrl,
+    string PreviewImageUrl,
+    string FullImageUrl,
     int? Width,
     int? Height,
     Guid? ParentAssetId,
@@ -87,7 +88,7 @@ public sealed record SpriteSheetFrameRecordView(
     IReadOnlyList<SpriteSheetShapePath> ShapePaths,
     SpriteSheetRect CellRect,
     SpriteSheetRect SpriteRect,
-    string PreviewDataUrl,
+    string PreviewImageUrl,
     int PreviewWidth,
     int PreviewHeight,
     string WorkingState,
@@ -446,10 +447,16 @@ public sealed record ImageMaskView(
     Guid AssetId,
     string Label,
     string ContentType,
-    string PreviewDataUrl,
+    string PreviewImageUrl,
     int Width,
     int Height,
     DateTime CreatedAt);
+
+public sealed record ImageBinaryView(
+    string ContentType,
+    byte[] Data,
+    string FileName,
+    DateTime LastModified);
 
 public sealed record ChatContextAttachmentView(
     Guid Id,

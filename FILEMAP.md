@@ -25,7 +25,7 @@
 | File | Description |
 |------|-------------|
 | `PixelChat.csproj` | `net10.0` Blazor Web project with Electron.NET, EF Core SQLite, Microsoft.Extensions.AI, OpenAI SDK, runtime IDs, and warnings-as-errors. |
-| `Program.cs` | App host setup: Electron mode detection/window launch, Blazor Interactive Server, DI wiring, EF migrations, OAuth endpoints, and routing. |
+| `Program.cs` | App host setup: Electron mode detection/window launch, Blazor Interactive Server, DI wiring, EF migrations, OAuth/media endpoints, and routing. |
 | `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OAuth redirect URI, SQLite, Blazor hub size, agent/tool limits, image-generation defaults, and local background-removal sidecar/model defaults. |
 | `Properties/launchSettings.json` | Local launch profiles for browser-hosted HTTP and Electron desktop mode on `localhost:1455`. |
 | `Properties/electron-builder.json` | Electron/electron-builder packaging metadata for Windows, Linux, and macOS targets. |
@@ -41,8 +41,8 @@
 | File | Description |
 |------|-------------|
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, autonomous generation budget wiring/model-only outputs, Shellmate-style tool streaming/execution, form drafts, and transcript replay. |
-| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, exposes live snapshots, finished-turn commits, and workspace/form side effects. |
-| `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact active-tab records including recipe example/version context used by assistant tools. |
+| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, throttles streaming state notifications, commits finished turns, and applies workspace/form side effects. |
+| `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact all-tab records including recipe example/version context used by assistant tools. |
 | `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt: autonomous recipe iteration, good-sprite-animation criteria, the malformed-sheet manual repair playbook, frame-cleanup/coordinate discipline, and generation size constraints. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records, form draft payloads including recipe example drafts, and per-turn autonomous generation budget state. |
 | `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, single-example recipe saves/versioning, size-validated autonomous generation rounds, merged heuristic frame mapping, per-frame sprite tools with erase/keep modes, attachments, favorites, and exports. |
@@ -52,8 +52,9 @@
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for projects, assets, background-aware sprite sheets/reviews/expand/normalize, per-frame isolation/edit/reassembly, exports, recipes, masks, import, crop, and edits. |
-| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, per-frame sprite isolation/reassembly, background-aware sprite-sheet editor/reviews, recipe-versioned generation/edit, recipe management, and assistant tools. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for metadata-only workbench loads, media binary reads, assets, sprite sheets/reviews/normalize, per-frame edit/reassembly, exports, recipes, masks, import, crop, and edits. |
+| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, lazy media URLs/binaries, per-frame sprite isolation/reassembly, recipe-versioned generation/edit, recipe management, and assistant tools. |
+| `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, masks, and sprite-frame previews. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
 | `BackgroundRemovalOptions.cs` | Configurable local background-removal sidecar defaults for uv, Python, rembg, model list, acceleration, cache paths, alpha matting, and timeout. |
@@ -73,6 +74,12 @@
 | `App.razor` | Root HTML shell, static assets, Blazor script, and reconnect modal. |
 | `Routes.razor` | Router setup using `MainLayout` and the NotFound page. |
 | `_Imports.razor` | Shared Razor `@using` directives for components. |
+
+### Components/Shared/
+
+| File | Description |
+|------|-------------|
+| `LazyImage.razor` / `.razor.css` / `.razor.js` | IntersectionObserver-backed image component that reserves thumbnail space and assigns `src` only when near the viewport. |
 
 ### Components/Chat/
 
@@ -94,7 +101,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: chat attachments, recipe-aware Generate/Edit, version-grouped recipe outputs/example selection, Compare/Sprites/Recipes/Assets tabs, canvas helpers, and exports. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, lazy thumbnails, chat attachments, recipe-aware Generate/Edit, Compare/Sprites/Recipes/Assets tabs, canvas helpers, and exports. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, thinking modes, defaults, API-key updates, and child model rows. |
@@ -103,7 +110,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with irregular source-region editing, hidden per-frame isolation/erase/AI edit/reassembly, output layout controls, animation preview, reset, and export. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with lazy frame thumbnails, single-sheet canvas loading, irregular source-region editing, per-frame isolation/erase/AI edit/reassembly, animation preview, reset, and export. |
 
 ### Llm/
 

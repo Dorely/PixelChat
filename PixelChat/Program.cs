@@ -89,6 +89,7 @@ app.MapRazorComponents<PixelChat.Components.App>()
     .AddInteractiveServerRenderMode();
 
 app.MapOpenAIAccountOAuth();
+app.MapPixelChatArtMedia();
 
 app.Run();
 
