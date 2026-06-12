@@ -34,6 +34,14 @@ public class SpriteSheetFrameRecord
     public int PreviewWidth { get; set; }
     public int PreviewHeight { get; set; }
 
+    public string WorkingState { get; set; } = "none";
+    public string WorkingContentType { get; set; } = "image/png";
+    public byte[] WorkingData { get; set; } = [];
+    public int WorkingWidth { get; set; }
+    public int WorkingHeight { get; set; }
+    public int WorkingMargin { get; set; }
+    public DateTime? WorkingUpdatedAt { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

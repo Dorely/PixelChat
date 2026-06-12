@@ -1,5 +1,6 @@
 const editorStates = new WeakMap();
 const animations = new WeakMap();
+const frameWorkStates = new WeakMap();
 
 export async function drawSpriteBoxEditor(sourceCanvas, animationCanvas, dotNetRef, imageUrl, payload, selectedIndex, tool) {
     const image = await loadImage(imageUrl);
@@ -28,6 +29,17 @@ export async function drawSpriteBoxEditor(sourceCanvas, animationCanvas, dotNetR
 export function disposeSpriteBoxEditor(sourceCanvas, animationCanvas) {
     stopAnimation(animationCanvas);
     editorStates.delete(sourceCanvas);
+}
+
+export async function drawFrameWorkCanvas(canvas, dotNetRef, imageUrl, eraseMode) {
+    if (!canvas) return;
+
+    const state = ensureFrameWorkState(canvas, dotNetRef);
+    state.dotNetRef = dotNetRef;
+    state.imageUrl = String(imageUrl || "");
+    state.eraseMode = Boolean(eraseMode);
+    state.image = state.imageUrl ? await loadImage(state.imageUrl) : null;
+    drawFrameWork(canvas, state);
 }
 
 function ensureEditorState(canvas, dotNetRef) {
@@ -64,6 +76,122 @@ function ensureEditorState(canvas, dotNetRef) {
         }
     });
     return state;
+}
+
+function ensureFrameWorkState(canvas, dotNetRef) {
+    let state = frameWorkStates.get(canvas);
+    if (state) {
+        state.dotNetRef = dotNetRef;
+        return state;
+    }
+
+    state = {
+        dotNetRef,
+        image: null,
+        imageUrl: "",
+        eraseMode: false,
+        viewport: null,
+        drag: null,
+    };
+    frameWorkStates.set(canvas, state);
+
+    canvas.addEventListener("pointerdown", event => onFrameWorkPointerDown(canvas, state, event));
+    canvas.addEventListener("pointermove", event => onFrameWorkPointerMove(canvas, state, event));
+    canvas.addEventListener("pointerup", event => onFrameWorkPointerUp(canvas, state, event));
+    canvas.addEventListener("pointercancel", event => onFrameWorkPointerUp(canvas, state, event));
+    canvas.addEventListener("pointerleave", event => {
+        if (state.drag) onFrameWorkPointerUp(canvas, state, event);
+    });
+    return state;
+}
+
+function onFrameWorkPointerDown(canvas, state, event) {
+    if (!state.eraseMode || !state.image || !state.viewport) return;
+    const point = eventToFrameWorkPoint(canvas, state, event);
+    if (!point) return;
+
+    event.preventDefault();
+    canvas.setPointerCapture?.(event.pointerId);
+    state.drag = { start: point, current: point };
+    drawFrameWork(canvas, state);
+}
+
+function onFrameWorkPointerMove(canvas, state, event) {
+    if (!state.drag) return;
+    const point = eventToFrameWorkPoint(canvas, state, event);
+    if (!point) return;
+
+    event.preventDefault();
+    state.drag.current = point;
+    drawFrameWork(canvas, state);
+}
+
+function onFrameWorkPointerUp(canvas, state, event) {
+    if (!state.drag) return;
+
+    event.preventDefault();
+    const rect = rectFromPoints(state.drag.start, state.drag.current);
+    state.drag = null;
+    drawFrameWork(canvas, state);
+    if (rect.w < 1 || rect.h < 1) return;
+
+    state.dotNetRef?.invokeMethodAsync("OnFrameWorkEraseRect", {
+        X: rect.x,
+        Y: rect.y,
+        Width: rect.w,
+        Height: rect.h,
+    });
+}
+
+function drawFrameWork(canvas, state) {
+    const ctx = resizeCanvas(canvas);
+    drawChecker(ctx, canvas.width, canvas.height);
+    canvas.classList.toggle("is-erase-mode", Boolean(state.eraseMode));
+    canvas.classList.toggle("is-dragging-erase", Boolean(state.drag));
+    if (!state.image) {
+        state.viewport = null;
+        return;
+    }
+
+    const width = imageWidth(state.image);
+    const height = imageHeight(state.image);
+    const viewport = fitRect(canvas.width, canvas.height, width, height, 16 * deviceScale());
+    state.viewport = viewport;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(state.image, viewport.x, viewport.y, viewport.w, viewport.h);
+
+    if (!state.drag) return;
+    const rect = rectFromPoints(state.drag.start, state.drag.current);
+    const scaleX = viewport.w / width;
+    const scaleY = viewport.h / height;
+    ctx.save();
+    ctx.fillStyle = "rgba(220, 53, 69, 0.22)";
+    ctx.strokeStyle = "rgba(220, 53, 69, 0.92)";
+    ctx.lineWidth = Math.max(2, 2 * deviceScale());
+    const x = viewport.x + rect.x * scaleX;
+    const y = viewport.y + rect.y * scaleY;
+    const w = rect.w * scaleX;
+    const h = rect.h * scaleY;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+    ctx.restore();
+}
+
+function eventToFrameWorkPoint(canvas, state, event) {
+    if (!state.viewport || !state.image) return null;
+    const rect = canvas.getBoundingClientRect();
+    const dpr = deviceScale();
+    const x = (event.clientX - rect.left) * dpr;
+    const y = (event.clientY - rect.top) * dpr;
+    const viewport = state.viewport;
+    if (x < viewport.x || x > viewport.x + viewport.w || y < viewport.y || y > viewport.y + viewport.h) {
+        return null;
+    }
+
+    return {
+        x: clampInt(Math.round((x - viewport.x) / viewport.w * imageWidth(state.image)), 0, imageWidth(state.image) - 1, 0),
+        y: clampInt(Math.round((y - viewport.y) / viewport.h * imageHeight(state.image)), 0, imageHeight(state.image) - 1, 0),
+    };
 }
 
 function updateCanvasToolClasses(canvas, state) {

@@ -90,7 +90,49 @@ public sealed record SpriteSheetFrameRecordView(
     string PreviewDataUrl,
     int PreviewWidth,
     int PreviewHeight,
+    string WorkingState,
+    int WorkingWidth,
+    int WorkingHeight,
+    int WorkingMargin,
+    DateTime? WorkingUpdatedAt,
     double Duration);
+
+public sealed record SpriteFrameWorkingView(
+    Guid FrameId,
+    Guid SpriteSheetId,
+    int Index,
+    string Label,
+    string State,
+    string WorkingPngDataUrl,
+    int WorkingWidth,
+    int WorkingHeight,
+    int WorkingMargin,
+    DateTime? WorkingUpdatedAt);
+
+public sealed record EditSpriteFrameRequest(
+    Guid SpriteSheetId,
+    int FrameIndex,
+    string Prompt,
+    string? Background);
+
+public sealed record EraseSpriteFrameRegionsRequest(
+    Guid SpriteSheetId,
+    int FrameIndex,
+    IReadOnlyList<SpriteSheetRect> Rects,
+    IReadOnlyList<SpriteSheetShapePath>? Polygons);
+
+public sealed record ReassembleSpriteSheetResult(
+    SpriteSheetDefinitionView Sheet,
+    IReadOnlyList<SpriteFrameReassemblyView> Frames,
+    IReadOnlyList<string> Warnings);
+
+public sealed record SpriteFrameReassemblyView(
+    int Index,
+    string Label,
+    bool UsedWorkingImage,
+    SpriteSheetRect DetectedRect,
+    SpriteSheetRect PlacedRect,
+    IReadOnlyList<string> Warnings);
 
 public sealed record SpriteAnimationReviewView(
     Guid SpriteSheetId,

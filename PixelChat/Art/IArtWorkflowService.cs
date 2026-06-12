@@ -34,6 +34,12 @@ public interface IArtWorkflowService
     Task<SpriteSheetDefinitionView> UpdateSpriteSheetFramesAsync(Guid projectId, UpdateSpriteSheetFramesRequest request, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteAnimationReviewImageView> BuildSpriteSheetRepairAnnotatedSheetAsync(Guid projectId, RepairSpriteSheetFramesResult repair, CancellationToken cancellationToken = default);
+    Task<SpriteFrameWorkingView> IsolateSpriteFrameAsync(Guid projectId, Guid spriteSheetId, int frameIndex, int? margin = null, CancellationToken cancellationToken = default);
+    Task<SpriteFrameWorkingView> GetSpriteFrameWorkingImageAsync(Guid projectId, Guid spriteSheetId, int frameIndex, CancellationToken cancellationToken = default);
+    Task<SpriteFrameWorkingView> EraseSpriteFrameRegionsAsync(Guid projectId, EraseSpriteFrameRegionsRequest request, CancellationToken cancellationToken = default);
+    Task<SpriteFrameWorkingView> EditSpriteFrameAsync(Guid projectId, EditSpriteFrameRequest request, CancellationToken cancellationToken = default);
+    Task<SpriteFrameWorkingView> ClearSpriteFrameWorkingImageAsync(Guid projectId, Guid spriteSheetId, int frameIndex, CancellationToken cancellationToken = default);
+    Task<ReassembleSpriteSheetResult> ReassembleSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task SelectSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ChatContextAttachmentView>> AttachSpriteSheetFramesAsync(Guid projectId, Guid spriteSheetId, IReadOnlyList<Guid>? frameIds = null, CancellationToken cancellationToken = default);
     Task<string?> BuildSpriteSheetManifestJsonAsync(Guid projectId, Guid assetId, string pngFileName, CancellationToken cancellationToken = default);

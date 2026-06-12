@@ -121,6 +121,199 @@ internal static class SpriteSheetServerRenderer
             savedFrames);
     }
 
+    public static SpriteSheetFrameWorkingRenderResult ExtractFrameRegion(
+        byte[] sourceRgba,
+        int sourceWidth,
+        int sourceHeight,
+        int rows,
+        int columns,
+        SpriteSheetBackground background,
+        IReadOnlyList<SpriteSheetFrameUpdateView> inputFrames,
+        int frameIndex,
+        int margin)
+    {
+        var frames = NormalizeFrames(inputFrames, rows, columns, sourceWidth, sourceHeight);
+        if (frameIndex < 0 || frameIndex >= frames.Count)
+            throw new InvalidOperationException("Sprite frame index is outside the saved frame range.");
+
+        margin = Math.Clamp(margin, 0, 1024);
+        var frame = frames[frameIndex];
+        var expanded = new SpriteSheetRect(
+            frame.SourceRect.X - margin,
+            frame.SourceRect.Y - margin,
+            checked(frame.SourceRect.Width + (margin * 2)),
+            checked(frame.SourceRect.Height + (margin * 2)));
+        ValidateCanvasSize(expanded.Width, expanded.Height, "Isolated sprite frame is too large.");
+
+        var output = NewFilledCanvas(expanded.Width, expanded.Height, background);
+        var expandedFrame = frame with { SourceRect = expanded };
+        CopyFrame(sourceRgba, sourceWidth, sourceHeight, expandedFrame, frames, background, output, expanded.Width, expanded.Height, 0, 0);
+        return new SpriteSheetFrameWorkingRenderResult(
+            SpriteSheetPngCodec.EncodeRgba(expanded.Width, expanded.Height, output),
+            expanded.Width,
+            expanded.Height);
+    }
+
+    public static SpriteSheetFrameWorkingRenderResult EraseRegions(
+        byte[] sourceRgba,
+        int width,
+        int height,
+        SpriteSheetBackground background,
+        IReadOnlyList<SpriteSheetRect> rects,
+        IReadOnlyList<SpriteSheetShapePath>? polygons)
+    {
+        ValidateCanvasSize(width, height, "Isolated sprite frame is too large.");
+        if (sourceRgba.Length < width * height * 4)
+            throw new InvalidOperationException("Isolated sprite frame pixels are incomplete.");
+
+        var output = (byte[])sourceRgba.Clone();
+        var normalizedRects = (rects ?? [])
+            .Select(rect => IntersectRect(rect, width, height))
+            .Where(rect => rect.Width > 0 && rect.Height > 0)
+            .ToList();
+        var normalizedPolygons = NormalizeShapePaths(polygons, width, height);
+        if (normalizedRects.Count == 0 && normalizedPolygons.Count == 0)
+        {
+            return new SpriteSheetFrameWorkingRenderResult(
+                SpriteSheetPngCodec.EncodeRgba(width, height, output),
+                width,
+                height);
+        }
+
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var insideRect = normalizedRects.Any(rect =>
+                    x >= rect.X && x < rect.X + rect.Width && y >= rect.Y && y < rect.Y + rect.Height);
+                var insidePolygon = normalizedPolygons.Count > 0 && ContainsShape(normalizedPolygons, x + 0.5d, y + 0.5d);
+                if (!insideRect && !insidePolygon)
+                    continue;
+
+                WriteBackground(output, ((y * width) + x) * 4, background);
+            }
+        }
+
+        return new SpriteSheetFrameWorkingRenderResult(
+            SpriteSheetPngCodec.EncodeRgba(width, height, output),
+            width,
+            height);
+    }
+
+    public static SpriteSheetReassembleRenderResult ReassembleIrregularFrames(
+        int rows,
+        int columns,
+        int padding,
+        int gutter,
+        string? horizontalAnchor,
+        string? verticalAnchor,
+        SpriteSheetBackground sheetBackground,
+        IReadOnlyList<SpriteSheetFrameImageInput> inputFrames)
+    {
+        if (inputFrames.Count == 0)
+            throw new InvalidOperationException("At least one sprite frame is required.");
+
+        rows = Math.Clamp(rows, 1, 32);
+        columns = Math.Clamp(columns, 1, 64);
+        padding = Math.Clamp(padding, 0, 4096);
+        gutter = Math.Clamp(gutter, 0, 4096);
+        if (rows * columns < inputFrames.Count)
+            columns = Math.Clamp((int)Math.Ceiling(inputFrames.Count / (double)rows), 1, 64);
+        if (rows * columns < inputFrames.Count)
+            rows = Math.Clamp((int)Math.Ceiling(inputFrames.Count / (double)columns), 1, 32);
+        if (rows * columns < inputFrames.Count)
+            throw new InvalidOperationException("Sprite frame count exceeds the configured sheet grid.");
+
+        var prepared = inputFrames
+            .Select(input =>
+            {
+                ValidateCanvasSize(input.Width, input.Height, "Isolated sprite frame is too large.");
+                if (input.Rgba.Length < input.Width * input.Height * 4)
+                    throw new InvalidOperationException("Isolated sprite frame pixels are incomplete.");
+
+                var detectionBackground = input.UsedWorkingImage
+                    ? SpriteSheetImageAnalyzer.ResolveBackground(input.Rgba, input.Width, input.Height)
+                    : sheetBackground;
+                var warnings = new List<string>();
+                var bounds = SpriteSheetImageAnalyzer.ForegroundBounds(input.Rgba, input.Width, input.Height, detectionBackground);
+                if (bounds is null)
+                {
+                    warnings.Add("no foreground was detected; used the full frame canvas");
+                    bounds = new SpriteSheetRect(0, 0, input.Width, input.Height);
+                }
+
+                return new PreparedReassembleFrame(input, detectionBackground, bounds, warnings);
+            })
+            .ToList();
+
+        var frameWidth = Math.Max(1, prepared.Max(frame => frame.Bounds.Width) + (padding * 2));
+        var frameHeight = Math.Max(1, prepared.Max(frame => frame.Bounds.Height) + (padding * 2));
+        var outputWidth = checked((columns * frameWidth) + (Math.Max(0, columns - 1) * gutter));
+        var outputHeight = checked((rows * frameHeight) + (Math.Max(0, rows - 1) * gutter));
+        ValidateCanvasSize(outputWidth, outputHeight, "Sprite sheet output is too large.");
+
+        var outputRgba = NewFilledCanvas(outputWidth, outputHeight, sheetBackground);
+        var savedFrames = new List<SpriteSheetFrameView>();
+        var frameInfos = new List<SpriteSheetReassembleFrameRenderInfo>();
+        var warnings = new List<string>();
+        for (var index = 0; index < prepared.Count; index++)
+        {
+            var frame = prepared[index];
+            var cellRect = CellRectForIndex(index, columns, frameWidth, frameHeight, gutter);
+            var (destX, destY) = AlignedDestination(cellRect, frame.Bounds, padding, horizontalAnchor, verticalAnchor);
+            var placedRect = new SpriteSheetRect(destX, destY, frame.Bounds.Width, frame.Bounds.Height);
+            var clippedPlacedRect = IntersectRect(placedRect, outputWidth, outputHeight);
+            if (clippedPlacedRect.Width != placedRect.Width || clippedPlacedRect.Height != placedRect.Height)
+                frame.Warnings.Add("foreground was clipped during reassembly");
+
+            CopyForegroundBounds(
+                frame.Input.Rgba,
+                frame.Input.Width,
+                frame.Input.Height,
+                frame.Bounds,
+                frame.Background,
+                outputRgba,
+                outputWidth,
+                outputHeight,
+                destX,
+                destY);
+
+            var label = string.IsNullOrWhiteSpace(frame.Input.Label) ? $"Frame {index + 1}" : frame.Input.Label.Trim();
+            var previewRgba = CropRect(outputRgba, outputWidth, outputHeight, cellRect, sheetBackground);
+            var previewDataUrl = DataUrl.ToDataUrl("image/png", SpriteSheetPngCodec.EncodeRgba(cellRect.Width, cellRect.Height, previewRgba));
+            savedFrames.Add(new SpriteSheetFrameView(
+                index,
+                label,
+                cellRect,
+                [],
+                cellRect,
+                clippedPlacedRect.Width > 0 && clippedPlacedRect.Height > 0 ? clippedPlacedRect : new SpriteSheetRect(cellRect.X, cellRect.Y, 1, 1),
+                previewDataUrl));
+
+            if (frame.Warnings.Count > 0)
+                warnings.AddRange(frame.Warnings.Select(warning => $"Frame {index + 1}: {warning}"));
+            frameInfos.Add(new SpriteSheetReassembleFrameRenderInfo(
+                index,
+                label,
+                frame.Input.UsedWorkingImage,
+                frame.Bounds,
+                clippedPlacedRect.Width > 0 && clippedPlacedRect.Height > 0 ? clippedPlacedRect : new SpriteSheetRect(cellRect.X, cellRect.Y, 1, 1),
+                frame.Warnings));
+        }
+
+        return new SpriteSheetReassembleRenderResult(
+            SpriteSheetPngCodec.EncodeRgba(outputWidth, outputHeight, outputRgba),
+            outputWidth,
+            outputHeight,
+            frameWidth,
+            frameHeight,
+            rows,
+            columns,
+            savedFrames,
+            frameInfos,
+            warnings.Distinct(StringComparer.Ordinal).ToList());
+    }
+
     internal static SpriteSheetReviewRenderResult BuildAnimationReview(
         byte[] sourceRgba,
         int sourceWidth,
@@ -531,6 +724,52 @@ internal static class SpriteSheetServerRenderer
         }
 
         return output;
+    }
+
+    private static void CopyForegroundBounds(
+        byte[] source,
+        int sourceWidth,
+        int sourceHeight,
+        SpriteSheetRect bounds,
+        SpriteSheetBackground sourceBackground,
+        byte[] target,
+        int targetWidth,
+        int targetHeight,
+        int destX,
+        int destY)
+    {
+        for (var y = 0; y < bounds.Height; y++)
+        {
+            var sourceY = bounds.Y + y;
+            var targetY = destY + y;
+            if (sourceY < 0 || sourceY >= sourceHeight || targetY < 0 || targetY >= targetHeight)
+                continue;
+
+            for (var x = 0; x < bounds.Width; x++)
+            {
+                var sourceX = bounds.X + x;
+                var targetX = destX + x;
+                if (sourceX < 0 || sourceX >= sourceWidth || targetX < 0 || targetX >= targetWidth)
+                    continue;
+
+                var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
+                if (!SpriteSheetImageAnalyzer.IsForeground(
+                    source[sourceIndex],
+                    source[sourceIndex + 1],
+                    source[sourceIndex + 2],
+                    source[sourceIndex + 3],
+                    sourceBackground))
+                {
+                    continue;
+                }
+
+                var targetIndex = ((targetY * targetWidth) + targetX) * 4;
+                target[targetIndex] = source[sourceIndex];
+                target[targetIndex + 1] = source[sourceIndex + 1];
+                target[targetIndex + 2] = source[sourceIndex + 2];
+                target[targetIndex + 3] = source[sourceIndex + 3];
+            }
+        }
     }
 
     private static bool ShouldReplaceWithBackground(
@@ -985,7 +1224,46 @@ internal static class SpriteSheetServerRenderer
         string Label,
         SpriteSheetRect SourceRect,
         IReadOnlyList<SpriteSheetShapePath> ShapePaths);
+
+    private sealed record PreparedReassembleFrame(
+        SpriteSheetFrameImageInput Input,
+        SpriteSheetBackground Background,
+        SpriteSheetRect Bounds,
+        List<string> Warnings);
 }
+
+internal sealed record SpriteSheetFrameWorkingRenderResult(
+    byte[] PngData,
+    int Width,
+    int Height);
+
+internal sealed record SpriteSheetFrameImageInput(
+    int Index,
+    string Label,
+    byte[] Rgba,
+    int Width,
+    int Height,
+    bool UsedWorkingImage);
+
+internal sealed record SpriteSheetReassembleFrameRenderInfo(
+    int Index,
+    string Label,
+    bool UsedWorkingImage,
+    SpriteSheetRect DetectedRect,
+    SpriteSheetRect PlacedRect,
+    IReadOnlyList<string> Warnings);
+
+internal sealed record SpriteSheetReassembleRenderResult(
+    byte[] PngData,
+    int Width,
+    int Height,
+    int FrameWidth,
+    int FrameHeight,
+    int Rows,
+    int Columns,
+    IReadOnlyList<SpriteSheetFrameView> Frames,
+    IReadOnlyList<SpriteSheetReassembleFrameRenderInfo> FrameInfos,
+    IReadOnlyList<string> Warnings);
 
 internal sealed record SpriteSheetServerRenderResult(
     byte[] PngData,

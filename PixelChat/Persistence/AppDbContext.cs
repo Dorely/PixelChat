@@ -240,6 +240,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => new { e.ProjectId, e.SpriteSheetDefinitionId, e.Index }).IsUnique();
             entity.HasIndex(e => e.SpriteSheetDefinitionId);
             entity.Property(e => e.ShapeJson).HasDefaultValue("[]");
+            entity.Property(e => e.WorkingState).HasDefaultValue("none");
+            entity.Property(e => e.WorkingContentType).HasDefaultValue("image/png");
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.SpriteSheetFrameRecords)

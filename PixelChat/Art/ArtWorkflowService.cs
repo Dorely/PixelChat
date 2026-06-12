@@ -1186,6 +1186,253 @@ public sealed class ArtWorkflowService(
         return SpriteSheetView(definition, []);
     }
 
+    public async Task<SpriteFrameWorkingView> IsolateSpriteFrameAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        int frameIndex,
+        int? margin = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (definition, working, records) = await LoadSpriteSheetWorkingEntitiesAsync(projectId, spriteSheetId, cancellationToken);
+        var record = FrameRecordAt(records, frameIndex);
+        if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Sprite-frame isolation requires a PNG working image.");
+
+        var background = EnsureSheetBackground(definition, rgba, width, height);
+        var marginValue = NormalizeFrameWorkingMargin(margin, definition.Padding);
+        var extracted = SpriteSheetServerRenderer.ExtractFrameRegion(
+            rgba,
+            width,
+            height,
+            definition.Rows,
+            definition.Columns,
+            background,
+            records.Select(FrameUpdateFromRecord).ToList(),
+            frameIndex,
+            marginValue);
+
+        var now = DateTime.UtcNow;
+        ApplyFrameWorkingImage(record, "isolated", extracted.PngData, extracted.Width, extracted.Height, marginValue, now);
+        definition.UpdatedAt = now;
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveSpriteSheetId = definition.Id;
+        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+        project.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+        return FrameWorkingView(definition, record);
+    }
+
+    public async Task<SpriteFrameWorkingView> GetSpriteFrameWorkingImageAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        int frameIndex,
+        CancellationToken cancellationToken = default)
+    {
+        var definition = await db.SpriteSheetDefinitions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite sheet was not found.");
+        var record = await db.SpriteSheetFrameRecords
+            .AsNoTracking()
+            .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == definition.Id && frame.Index == frameIndex)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException("Sprite frame was not found.");
+        return FrameWorkingView(definition, record);
+    }
+
+    public async Task<SpriteFrameWorkingView> EraseSpriteFrameRegionsAsync(
+        Guid projectId,
+        EraseSpriteFrameRegionsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var (definition, record) = await EnsureFrameWorkingImageAsync(
+            projectId,
+            request.SpriteSheetId,
+            request.FrameIndex,
+            margin: null,
+            cancellationToken);
+        if (!SpriteSheetPngCodec.TryReadRgba(record.WorkingData, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Isolated sprite frame must be a PNG image.");
+
+        var background = ResolveWorkingFrameBackground(definition, rgba, width, height);
+        var erased = SpriteSheetServerRenderer.EraseRegions(
+            rgba,
+            width,
+            height,
+            background,
+            request.Rects,
+            request.Polygons);
+
+        var now = DateTime.UtcNow;
+        ApplyFrameWorkingImage(record, "edited", erased.PngData, erased.Width, erased.Height, record.WorkingMargin, now);
+        definition.UpdatedAt = now;
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+        return FrameWorkingView(definition, record);
+    }
+
+    public async Task<SpriteFrameWorkingView> EditSpriteFrameAsync(
+        Guid projectId,
+        EditSpriteFrameRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var prompt = CleanRequired(request.Prompt, "Frame edit prompt is required.");
+        var (definition, record) = await EnsureFrameWorkingImageAsync(
+            projectId,
+            request.SpriteSheetId,
+            request.FrameIndex,
+            margin: null,
+            cancellationToken);
+        if (record.WorkingData.Length == 0)
+            throw new InvalidOperationException("Sprite frame isolation failed.");
+
+        var background = NormalizeBackground(request.Background ?? imageOptions.Value.DefaultBackground);
+        var providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
+            BuildPrompt(prompt, string.Empty, recipe: null, background),
+            NormalizeSize(imageOptions.Value.DefaultSize),
+            1,
+            imageOptions.Value.DefaultMainlineModel,
+            imageOptions.Value.DefaultImageModel,
+            new ImageProviderReference($"sprite-frame-{record.Index + 1}.png", record.WorkingContentType, record.WorkingData),
+            Mask: null,
+            ReferenceImages: [],
+            OutputFormat: "png",
+            Quality: imageOptions.Value.DefaultQuality,
+            Background: background), cancellationToken);
+        var image = providerResult.Images.FirstOrDefault()
+            ?? throw new InvalidOperationException("Image provider completed without returning an image.");
+        var contentType = NormalizeImageContentType(image.ContentType)
+            ?? throw new InvalidOperationException("Image provider returned an unsupported image type.");
+        if (!contentType.Equals("image/png", StringComparison.OrdinalIgnoreCase)
+            || !SpriteSheetPngCodec.TryReadRgba(image.Data, out var width, out var height, out _))
+        {
+            throw new InvalidOperationException("Image provider returned a non-PNG frame image.");
+        }
+
+        var now = DateTime.UtcNow;
+        ApplyFrameWorkingImage(record, "edited", image.Data, width, height, record.WorkingMargin, now);
+        definition.UpdatedAt = now;
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+        return FrameWorkingView(definition, record);
+    }
+
+    public async Task<SpriteFrameWorkingView> ClearSpriteFrameWorkingImageAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        int frameIndex,
+        CancellationToken cancellationToken = default)
+    {
+        var (definition, _, records) = await LoadSpriteSheetWorkingEntitiesAsync(projectId, spriteSheetId, cancellationToken);
+        var record = FrameRecordAt(records, frameIndex);
+        ClearFrameWorkingImage(record, "none");
+        var now = DateTime.UtcNow;
+        record.UpdatedAt = now;
+        definition.UpdatedAt = now;
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+        return FrameWorkingView(definition, record);
+    }
+
+    public async Task<ReassembleSpriteSheetResult> ReassembleSpriteSheetAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        CancellationToken cancellationToken = default)
+    {
+        var (definition, working, records) = await LoadSpriteSheetWorkingEntitiesAsync(projectId, spriteSheetId, cancellationToken);
+        if (records.Count == 0)
+            throw new InvalidOperationException("At least one sprite frame is required.");
+        if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var sheetWidth, out var sheetHeight, out var sheetRgba))
+            throw new InvalidOperationException("Sprite-sheet reassembly requires a PNG working image.");
+
+        var background = EnsureSheetBackground(definition, sheetRgba, sheetWidth, sheetHeight);
+        var updates = records.Select(FrameUpdateFromRecord).ToList();
+        var inputs = new List<SpriteSheetFrameImageInput>();
+        for (var index = 0; index < records.Count; index++)
+        {
+            var record = records[index];
+            if (record.WorkingData.Length > 0)
+            {
+                if (!SpriteSheetPngCodec.TryReadRgba(record.WorkingData, out var width, out var height, out var rgba))
+                    throw new InvalidOperationException($"Working image for frame {index + 1} must be a PNG.");
+                inputs.Add(new SpriteSheetFrameImageInput(index, record.Label, rgba, width, height, UsedWorkingImage: true));
+                continue;
+            }
+
+            var extracted = SpriteSheetServerRenderer.ExtractFrameRegion(
+                sheetRgba,
+                sheetWidth,
+                sheetHeight,
+                definition.Rows,
+                definition.Columns,
+                background,
+                updates,
+                index,
+                margin: 0);
+            if (!SpriteSheetPngCodec.TryReadRgba(extracted.PngData, out var extractedWidth, out var extractedHeight, out var extractedRgba))
+                throw new InvalidOperationException($"Extracted image for frame {index + 1} must be a PNG.");
+            inputs.Add(new SpriteSheetFrameImageInput(index, record.Label, extractedRgba, extractedWidth, extractedHeight, UsedWorkingImage: false));
+        }
+
+        var render = SpriteSheetServerRenderer.ReassembleIrregularFrames(
+            definition.Rows,
+            definition.Columns,
+            definition.Padding,
+            definition.Gutter,
+            definition.HorizontalAnchor,
+            definition.VerticalAnchor,
+            background,
+            inputs);
+
+        var now = DateTime.UtcNow;
+        UpdateSpriteSheetDefinition(
+            definition,
+            render.Rows,
+            render.Columns,
+            render.FrameWidth,
+            render.FrameHeight,
+            definition.Padding,
+            definition.Gutter,
+            definition.Fps,
+            definition.Loop,
+            definition.HorizontalAnchor,
+            definition.VerticalAnchor);
+        UpdateWorkingSpriteAsset(working, new ImagePayload("image/png", render.PngData, render.Width, render.Height), definition, now);
+        await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, render.Frames, cancellationToken);
+
+        var updatedRecords = await db.SpriteSheetFrameRecords
+            .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == definition.Id)
+            .OrderBy(frame => frame.Index)
+            .ToListAsync(cancellationToken);
+        foreach (var frame in updatedRecords)
+        {
+            ClearFrameWorkingImage(frame, "reassembled");
+            frame.UpdatedAt = now;
+        }
+
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveSpriteSheetId = definition.Id;
+        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+        project.UpdatedAt = now;
+        definition.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+
+        var saved = await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
+        return new ReassembleSpriteSheetResult(
+            saved,
+            render.FrameInfos.Select(info => new SpriteFrameReassemblyView(
+                info.Index,
+                info.Label,
+                info.UsedWorkingImage,
+                info.DetectedRect,
+                info.PlacedRect,
+                info.Warnings)).ToList(),
+            render.Warnings);
+    }
+
     public async Task SelectSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default)
     {
         if (!await db.SpriteSheetDefinitions.AnyAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken))
@@ -2669,6 +2916,127 @@ public sealed class ArtWorkflowService(
             RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
             DeserializeShapePaths(frame.ShapeJson));
 
+    private async Task<(SpriteSheetDefinition Definition, ArtAsset Working, List<SpriteSheetFrameRecord> Records)> LoadSpriteSheetWorkingEntitiesAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        CancellationToken cancellationToken)
+    {
+        var definition = await db.SpriteSheetDefinitions
+            .Include(s => s.OutputAsset)
+            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite sheet was not found.");
+        var working = definition.OutputAsset ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
+        var records = await db.SpriteSheetFrameRecords
+            .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == definition.Id)
+            .OrderBy(frame => frame.Index)
+            .ToListAsync(cancellationToken);
+        return (definition, working, records);
+    }
+
+    private async Task<(SpriteSheetDefinition Definition, SpriteSheetFrameRecord Record)> EnsureFrameWorkingImageAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        int frameIndex,
+        int? margin,
+        CancellationToken cancellationToken)
+    {
+        var (definition, working, records) = await LoadSpriteSheetWorkingEntitiesAsync(projectId, spriteSheetId, cancellationToken);
+        var record = FrameRecordAt(records, frameIndex);
+        if (record.WorkingData.Length > 0)
+            return (definition, record);
+
+        if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Sprite-frame isolation requires a PNG working image.");
+        var background = EnsureSheetBackground(definition, rgba, width, height);
+        var marginValue = NormalizeFrameWorkingMargin(margin, definition.Padding);
+        var extracted = SpriteSheetServerRenderer.ExtractFrameRegion(
+            rgba,
+            width,
+            height,
+            definition.Rows,
+            definition.Columns,
+            background,
+            records.Select(FrameUpdateFromRecord).ToList(),
+            frameIndex,
+            marginValue);
+        ApplyFrameWorkingImage(record, "isolated", extracted.PngData, extracted.Width, extracted.Height, marginValue, DateTime.UtcNow);
+        return (definition, record);
+    }
+
+    private static SpriteSheetFrameRecord FrameRecordAt(IReadOnlyList<SpriteSheetFrameRecord> records, int frameIndex)
+    {
+        if (frameIndex < 0 || frameIndex >= records.Count)
+            throw new InvalidOperationException("Sprite frame index is outside the saved frame range.");
+        return records[frameIndex];
+    }
+
+    private static int NormalizeFrameWorkingMargin(int? margin, int sheetPadding)
+    {
+        var value = margin ?? Math.Max(16, sheetPadding);
+        return Math.Clamp(value, 0, 1024);
+    }
+
+    private static void ApplyFrameWorkingImage(
+        SpriteSheetFrameRecord record,
+        string state,
+        byte[] pngData,
+        int width,
+        int height,
+        int margin,
+        DateTime now)
+    {
+        if (width <= 0 || height <= 0 || width * (long)height > 120_000_000)
+            throw new InvalidOperationException("Working frame image is too large.");
+        record.WorkingState = NormalizeFrameWorkingState(state);
+        record.WorkingContentType = "image/png";
+        record.WorkingData = pngData;
+        record.WorkingWidth = width;
+        record.WorkingHeight = height;
+        record.WorkingMargin = Math.Clamp(margin, 0, 1024);
+        record.WorkingUpdatedAt = now;
+        record.UpdatedAt = now;
+    }
+
+    private static void ClearFrameWorkingImage(SpriteSheetFrameRecord record, string state)
+    {
+        record.WorkingState = NormalizeFrameWorkingState(state);
+        record.WorkingContentType = "image/png";
+        record.WorkingData = [];
+        record.WorkingWidth = 0;
+        record.WorkingHeight = 0;
+        record.WorkingMargin = 0;
+        record.WorkingUpdatedAt = null;
+    }
+
+    private static string NormalizeFrameWorkingState(string? state) =>
+        state?.Trim().ToLowerInvariant() switch
+        {
+            "isolated" => "isolated",
+            "edited" => "edited",
+            "reassembled" => "reassembled",
+            _ => "none",
+        };
+
+    private static SpriteSheetBackground ResolveWorkingFrameBackground(
+        SpriteSheetDefinition definition,
+        byte[] rgba,
+        int width,
+        int height) =>
+        BackgroundFromDefinition(definition) ?? SpriteSheetImageAnalyzer.ResolveBackground(rgba, width, height);
+
+    private static SpriteFrameWorkingView FrameWorkingView(SpriteSheetDefinition definition, SpriteSheetFrameRecord frame) =>
+        new(
+            frame.Id,
+            definition.Id,
+            frame.Index,
+            string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label,
+            NormalizeFrameWorkingState(frame.WorkingState),
+            frame.WorkingData.Length == 0 ? string.Empty : DataUrl.ToDataUrl(frame.WorkingContentType, frame.WorkingData),
+            frame.WorkingWidth,
+            frame.WorkingHeight,
+            frame.WorkingMargin,
+            frame.WorkingUpdatedAt);
+
     private static IReadOnlyList<SpriteSheetFrameUpdateView> MergeTargetedRepairFrames(
         IReadOnlyList<SpriteSheetFrameRecord> existingRecords,
         IReadOnlyList<SpriteSheetFrameUpdateView> repairFrames,
@@ -2869,13 +3237,22 @@ public sealed class ArtWorkflowService(
                 await db.SpriteSheetFrameRecords.AddAsync(record, cancellationToken);
             }
 
+            var shapeJson = JsonSerializer.Serialize(frame.ShapePaths, JsonOptions);
+            var geometryChanged = record.SourceX != frame.SourceRect.X
+                || record.SourceY != frame.SourceRect.Y
+                || record.SourceWidth != frame.SourceRect.Width
+                || record.SourceHeight != frame.SourceRect.Height
+                || !string.Equals(record.ShapeJson, shapeJson, StringComparison.Ordinal);
+            if (NormalizeFrameWorkingState(record.WorkingState) != "none" && geometryChanged)
+                ClearFrameWorkingImage(record, "none");
+
             record.Index = frame.Index;
             record.Label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label.Trim();
             record.SourceX = frame.SourceRect.X;
             record.SourceY = frame.SourceRect.Y;
             record.SourceWidth = frame.SourceRect.Width;
             record.SourceHeight = frame.SourceRect.Height;
-            record.ShapeJson = JsonSerializer.Serialize(frame.ShapePaths, JsonOptions);
+            record.ShapeJson = shapeJson;
             record.CellX = frame.CellRect.X;
             record.CellY = frame.CellRect.Y;
             record.CellWidth = frame.CellRect.Width;
@@ -3381,6 +3758,11 @@ public sealed class ArtWorkflowService(
             shapePointCount = ShapePointCount(frame.ShapePaths),
             frame.PreviewWidth,
             frame.PreviewHeight,
+            frame.WorkingState,
+            frame.WorkingWidth,
+            frame.WorkingHeight,
+            frame.WorkingMargin,
+            frame.WorkingUpdatedAt,
         }),
     };
 
@@ -3742,6 +4124,11 @@ public sealed class ArtWorkflowService(
             frame.PreviewData.Length == 0 ? string.Empty : DataUrl.ToDataUrl(frame.PreviewContentType, frame.PreviewData),
             frame.PreviewWidth,
             frame.PreviewHeight,
+            NormalizeFrameWorkingState(frame.WorkingState),
+            frame.WorkingWidth,
+            frame.WorkingHeight,
+            frame.WorkingMargin,
+            frame.WorkingUpdatedAt,
             FrameDuration(spriteSheet.Fps));
 
     private static SpriteSheetRect RectView(int x, int y, int width, int height) =>

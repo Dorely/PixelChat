@@ -718,6 +718,9 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal))
                 return await BuildGenerationRoundModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
+            if (IsSpriteFrameWorkingImageTool(pendingCall.Name))
+                return await BuildSpriteFrameWorkingModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
+
             if (string.Equals(pendingCall.Name, "review_sprite_animation", StringComparison.Ordinal))
                 return await BuildSpriteAnimationReviewModelOnlyContentsAsync(pendingCall, projectId, toolResult, cancellationToken);
 
@@ -774,6 +777,42 @@ public sealed class AssistantChatService(
         }
 
         return contents.Count > 1 ? contents : Array.Empty<AIContent>();
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildSpriteFrameWorkingModelOnlyContentsAsync(
+        Guid projectId,
+        string toolResult,
+        CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(toolResult);
+        var root = document.RootElement;
+        if (root.TryGetProperty("frame", out var nestedFrame))
+            root = nestedFrame;
+
+        if (!TryReadGuidProperty(root, "spriteSheetId", out var spriteSheetId)
+            || !TryReadIntProperty(root, "frameNumber", out var frameNumber)
+            || frameNumber <= 0)
+        {
+            return Array.Empty<AIContent>();
+        }
+
+        var frame = await workflow.GetSpriteFrameWorkingImageAsync(projectId, spriteSheetId, frameNumber - 1, cancellationToken);
+        if (string.IsNullOrWhiteSpace(frame.WorkingPngDataUrl))
+        {
+            return
+            [
+                new TextContent($"Model-only sprite frame read for sprite sheet {spriteSheetId}, frame {frameNumber}: no hidden working image is stored."),
+            ];
+        }
+
+        return
+        [
+            new TextContent($"Model-only image: hidden working sprite frame {frameNumber} for sprite sheet {spriteSheetId}. This image is not attached to visible chat context."),
+            new DataContent(frame.WorkingPngDataUrl, "image/png")
+            {
+                Name = $"sprite-frame-{frameNumber}-working.png",
+            },
+        ];
     }
 
     private async Task<IReadOnlyList<AIContent>> BuildSpriteAnimationReviewModelOnlyContentsAsync(
@@ -961,7 +1000,14 @@ public sealed class AssistantChatService(
         toolName is "update_sprite_sheet_frames"
             or "expand_sprite_sheet_frames_to_cells"
             or "normalize_sprite_sheet"
-            or "reset_sprite_sheet_to_original";
+            or "reset_sprite_sheet_to_original"
+            or "reassemble_sprite_sheet";
+
+    private static bool IsSpriteFrameWorkingImageTool(string toolName) =>
+        toolName is "isolate_sprite_frame"
+            or "read_sprite_frame_image"
+            or "erase_sprite_frame_regions"
+            or "edit_sprite_frame";
 
     private static bool TryBuildRepairResultFromToolJson(JsonElement root, out RepairSpriteSheetFramesResult repair)
     {

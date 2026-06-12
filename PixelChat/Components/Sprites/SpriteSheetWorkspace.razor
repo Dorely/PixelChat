@@ -28,7 +28,7 @@
         <div class="sprite-editor-grid">
             <section class="sprite-editor-main">
                 <div class="sprite-canvas-panel">
-                    <div class="section-title">Source Frames</div>
+                    <div class="section-title">Source Regions</div>
                     <canvas class="sprite-source-canvas" @ref="_sourceCanvas"></canvas>
                 </div>
 
@@ -38,7 +38,7 @@
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Draw)" title="@ToolTitle(SpriteEditTool.Draw)" aria-pressed="@(_tool == SpriteEditTool.Draw)" @onclick="() => SetToolAsync(SpriteEditTool.Draw)">Draw Box</button>
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Outline)" title="@ToolTitle(SpriteEditTool.Outline)" aria-pressed="@(_tool == SpriteEditTool.Outline)" @onclick="() => SetToolAsync(SpriteEditTool.Outline)">Outline</button>
                         <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_frames.Count == 0)" @onclick="ExpandToCellsAsync">Expand to Cells</button>
-                        <button type="button" class="btn btn-sm btn-primary" disabled="@(_frames.Count == 0)" @onclick="NormalizeSheetAsync">Normalize Sheet</button>
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@(_frames.Count == 0 || _frameEditRunning)" @onclick="ReassembleSheetAsync">Reassemble</button>
                         <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_selectedFrameIndex < 0 || _frames.Count == 0)" @onclick="DeleteSelectedFrameAsync">Delete</button>
                     </div>
 
@@ -51,6 +51,7 @@
                             <span>Y @selected.Y</span>
                             <span>W @selected.Width</span>
                             <span>H @selected.Height</span>
+                            <span>@WorkingStateLabel(selected)</span>
                         }
                         else
                         {
@@ -78,11 +79,11 @@
                             <input class="form-control form-control-sm" type="number" min="1" max="64" @bind="_columns" @bind:after="OnLayoutFieldChangedAsync" />
                         </label>
                         <label>
-                            <span>Cell W</span>
+                            <span>Output W</span>
                             <input class="form-control form-control-sm" type="number" min="1" max="8192" @bind="_cellWidth" @bind:after="OnLayoutFieldChangedAsync" />
                         </label>
                         <label>
-                            <span>Cell H</span>
+                            <span>Output H</span>
                             <input class="form-control form-control-sm" type="number" min="1" max="8192" @bind="_cellHeight" @bind:after="OnLayoutFieldChangedAsync" />
                         </label>
                         <label>
@@ -141,12 +142,40 @@
                                 <span class="@FrameMarkerClass(frame)" title="@FrameGeometryLabel(frame)" aria-hidden="true"></span>
                             </button>
                             <input class="form-control form-control-sm" @bind="frame.Label" @bind:after="OnFrameLabelChangedAsync" />
+                            <span class="@WorkingBadgeClass(frame)">@WorkingStateLabel(frame)</span>
                             <div class="frame-row-actions">
                                 <button type="button" class="btn btn-sm btn-outline-secondary" title="Move up" disabled="@(frame.Index == 0)" @onclick="() => MoveFrameAsync(frame.Index, -1)">Up</button>
                                 <button type="button" class="btn btn-sm btn-outline-secondary" title="Move down" disabled="@(frame.Index >= _frames.Count - 1)" @onclick="() => MoveFrameAsync(frame.Index, 1)">Down</button>
                                 <button type="button" class="btn btn-sm btn-outline-secondary" title="Attach frame" disabled="@(frame.Id is null)" @onclick="() => AttachFrameAsync(frame)">Attach</button>
                             </div>
                         </div>
+                    }
+                </div>
+
+                <div class="frame-work-panel">
+                    <div class="section-title">Frame Work</div>
+                    @if (SelectedFrame() is { } selectedFrame)
+                    {
+                        <div class="frame-work-meta">
+                            <span>@selectedFrame.Label</span>
+                            <span>@WorkingStateLabel(selectedFrame)</span>
+                            @if (_frameWorkImageWidth > 0 && _frameWorkImageHeight > 0)
+                            {
+                                <span>@_frameWorkImageWidth x @_frameWorkImageHeight</span>
+                            }
+                        </div>
+                        <canvas class="@FrameWorkCanvasClass()" @ref="_frameWorkCanvas"></canvas>
+                        <div class="frame-work-actions">
+                            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@_frameEditRunning" @onclick="IsolateSelectedFrameAsync">@(HasWorkingImage(selectedFrame) ? "Re-isolate" : "Isolate")</button>
+                            <button type="button" class="@FrameEraseButtonClass()" disabled="@(!HasWorkingImage(selectedFrame) || _frameEditRunning)" @onclick="ToggleFrameEraseModeAsync">Erase</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(!HasWorkingImage(selectedFrame) || _frameEditRunning)" @onclick="ClearSelectedFrameWorkAsync">Revert</button>
+                        </div>
+                        <textarea class="form-control form-control-sm frame-edit-prompt" rows="2" placeholder="Frame edit prompt" @bind="_frameEditPrompt"></textarea>
+                        <button type="button" class="btn btn-sm btn-primary frame-edit-button" disabled="@(_frameEditRunning || string.IsNullOrWhiteSpace(_frameEditPrompt))" @onclick="EditSelectedFrameAsync">AI Edit</button>
+                    }
+                    else
+                    {
+                        <div class="empty-state compact">Select a frame.</div>
                     }
                 </div>
 
@@ -177,6 +206,7 @@
     private DotNetObjectReference<SpriteSheetWorkspace>? _dotNetRef;
     private ElementReference _sourceCanvas;
     private ElementReference _animationCanvas;
+    private ElementReference _frameWorkCanvas;
     private CancellationTokenSource? _autosaveCts;
     private bool _disposed;
 
@@ -197,6 +227,14 @@
     private SpriteEditTool _tool = SpriteEditTool.Select;
     private string _status = string.Empty;
     private string? _error;
+    private string _frameWorkImageDataUrl = string.Empty;
+    private int _frameWorkImageWidth;
+    private int _frameWorkImageHeight;
+    private int? _loadedFrameWorkIndex;
+    private DateTime? _loadedFrameWorkUpdatedAt;
+    private string _frameEditPrompt = string.Empty;
+    private bool _frameEditRunning;
+    private bool _frameEraseMode;
     private readonly List<SpriteSheetEditorFrame> _frames = [];
 
     private bool HasActiveSheet => Workbench.ActiveSpriteSheet is not null && CurrentWorkingAsset() is not null;
@@ -209,6 +247,11 @@
             _loadedSpriteSheetId = null;
             _loadedSpriteSheetUpdatedAt = null;
             _workingImageDataUrl = string.Empty;
+            _frameWorkImageDataUrl = string.Empty;
+            _frameWorkImageWidth = 0;
+            _frameWorkImageHeight = 0;
+            _loadedFrameWorkIndex = null;
+            _loadedFrameWorkUpdatedAt = null;
             _frames.Clear();
             _selectedFrameIndex = -1;
             return;
@@ -250,6 +293,13 @@
         }
 
         await DrawAsync();
+        if (SelectedFrame() is { } selected
+            && HasWorkingImage(selected)
+            && (_loadedFrameWorkIndex != selected.Index || _loadedFrameWorkUpdatedAt != selected.WorkingUpdatedAt || string.IsNullOrWhiteSpace(_frameWorkImageDataUrl)))
+        {
+            await LoadSelectedFrameWorkAsync();
+        }
+        await DrawFrameWorkAsync();
     }
 
     private async Task ImportSourceAsync(InputFileChangeEventArgs args)
@@ -380,6 +430,38 @@
         }
     }
 
+    private async Task ReassembleSheetAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is not { } active || _frames.Count == 0)
+            return;
+
+        _error = null;
+        _status = "Reassembling sprite sheet...";
+        try
+        {
+            NormalizeLayout();
+            await AutosaveLayoutNowAsync();
+            if (!string.IsNullOrWhiteSpace(_error))
+                return;
+
+            await Workflow.ReassembleSpriteSheetAsync(Workbench.Project.Id, active.Id);
+            _loadedSpriteSheetId = null;
+            _loadedSpriteSheetUpdatedAt = null;
+            _loadedFrameWorkIndex = null;
+            _frameWorkImageDataUrl = string.Empty;
+            _frameWorkImageWidth = 0;
+            _frameWorkImageHeight = 0;
+            _frameEraseMode = false;
+            _status = "Sprite sheet reassembled.";
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+    }
+
     private async Task ExpandToCellsAsync()
     {
         if (Workbench.ActiveSpriteSheet is not { } active || _frames.Count == 0)
@@ -417,6 +499,7 @@
     {
         _selectedFrameIndex = index;
         await DrawAsync();
+        await LoadSelectedFrameWorkAsync();
     }
 
     private async Task DeleteSelectedFrameAsync()
@@ -459,6 +542,98 @@
 
         await Workflow.AttachSpriteSheetFramesAsync(Workbench.Project.Id, Workbench.ActiveSpriteSheet.Id);
         await OnChanged.InvokeAsync();
+    }
+
+    private async Task IsolateSelectedFrameAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is not { } active || SelectedFrame() is not { } selected)
+            return;
+
+        _error = null;
+        _status = "Isolating frame...";
+        try
+        {
+            await AutosaveLayoutNowAsync();
+            if (!string.IsNullOrWhiteSpace(_error))
+                return;
+
+            var updated = await Workflow.IsolateSpriteFrameAsync(Workbench.Project.Id, active.Id, selected.Index, Math.Max(16, _padding));
+            ApplyFrameWorkingView(updated);
+            _frameEraseMode = false;
+            _status = "Frame isolated.";
+            await OnChanged.InvokeAsync();
+            await DrawFrameWorkAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+    }
+
+    private async Task ClearSelectedFrameWorkAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is not { } active || SelectedFrame() is not { } selected)
+            return;
+
+        _error = null;
+        _status = "Clearing frame work...";
+        try
+        {
+            var updated = await Workflow.ClearSpriteFrameWorkingImageAsync(Workbench.Project.Id, active.Id, selected.Index);
+            ApplyFrameWorkingView(updated);
+            _frameEraseMode = false;
+            _status = "Frame work cleared.";
+            await OnChanged.InvokeAsync();
+            await DrawFrameWorkAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+    }
+
+    private async Task EditSelectedFrameAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is not { } active || SelectedFrame() is not { } selected || string.IsNullOrWhiteSpace(_frameEditPrompt))
+            return;
+
+        _error = null;
+        _status = "Editing frame...";
+        _frameEditRunning = true;
+        try
+        {
+            await AutosaveLayoutNowAsync();
+            if (!string.IsNullOrWhiteSpace(_error))
+                return;
+
+            var updated = await Workflow.EditSpriteFrameAsync(Workbench.Project.Id, new EditSpriteFrameRequest(
+                active.Id,
+                selected.Index,
+                _frameEditPrompt,
+                "removable"));
+            ApplyFrameWorkingView(updated);
+            _frameEraseMode = false;
+            _status = "Frame edited.";
+            await OnChanged.InvokeAsync();
+            await DrawFrameWorkAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+        finally
+        {
+            _frameEditRunning = false;
+        }
+    }
+
+    private async Task ToggleFrameEraseModeAsync()
+    {
+        _frameEraseMode = !_frameEraseMode;
+        await DrawFrameWorkAsync();
     }
 
     private async Task OnLayoutFieldChangedAsync()
@@ -508,7 +683,33 @@
             return;
 
         _selectedFrameIndex = selectedIndex;
+        _loadedFrameWorkIndex = null;
         await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnFrameWorkEraseRect(SpriteSheetRect rect)
+    {
+        if (_disposed || !_frameEraseMode || Workbench.ActiveSpriteSheet is not { } active || SelectedFrame() is not { } selected)
+            return;
+
+        _error = null;
+        _status = "Erasing frame region...";
+        try
+        {
+            var updated = await Workflow.EraseSpriteFrameRegionsAsync(
+                Workbench.Project.Id,
+                new EraseSpriteFrameRegionsRequest(active.Id, selected.Index, [rect], null));
+            ApplyFrameWorkingView(updated);
+            _status = "Frame region erased.";
+            await OnChanged.InvokeAsync();
+            await DrawFrameWorkAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
     }
 
     private void ScheduleAutosave()
@@ -613,6 +814,11 @@
                 Height = frame.SourceRect.Height,
                 ShapePaths = frame.ShapePaths.ToList(),
                 PreviewDataUrl = frame.PreviewDataUrl,
+                WorkingState = frame.WorkingState,
+                WorkingWidth = frame.WorkingWidth,
+                WorkingHeight = frame.WorkingHeight,
+                WorkingMargin = frame.WorkingMargin,
+                WorkingUpdatedAt = frame.WorkingUpdatedAt,
             }));
         ReindexFrames();
         if (_frames.Count == 0)
@@ -620,6 +826,15 @@
         else if (_selectedFrameIndex < 0 || _selectedFrameIndex >= _frames.Count)
             _selectedFrameIndex = 0;
         _error = null;
+        if (SelectedFrame() is not { } selected || !HasWorkingImage(selected))
+        {
+            _loadedFrameWorkIndex = null;
+            _loadedFrameWorkUpdatedAt = null;
+            _frameWorkImageDataUrl = string.Empty;
+            _frameWorkImageWidth = 0;
+            _frameWorkImageHeight = 0;
+            _frameEraseMode = false;
+        }
     }
 
     private async Task DrawAsync()
@@ -644,6 +859,60 @@
         }
         catch (OperationCanceledException)
         {
+        }
+    }
+
+    private async Task DrawFrameWorkAsync()
+    {
+        if (_disposed || _module is null || _dotNetRef is null)
+            return;
+
+        try
+        {
+            await _module.InvokeVoidAsync(
+                "drawFrameWorkCanvas",
+                _frameWorkCanvas,
+                _dotNetRef,
+                _frameWorkImageDataUrl,
+                _frameEraseMode);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task LoadSelectedFrameWorkAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is not { } active || SelectedFrame() is not { } selected)
+        {
+            _loadedFrameWorkIndex = null;
+            _frameWorkImageDataUrl = string.Empty;
+            _frameWorkImageWidth = 0;
+            _frameWorkImageHeight = 0;
+            _frameEraseMode = false;
+            await DrawFrameWorkAsync();
+            return;
+        }
+
+        if (_loadedFrameWorkIndex == selected.Index && selected.WorkingUpdatedAt == _loadedFrameWorkUpdatedAt)
+        {
+            await DrawFrameWorkAsync();
+            return;
+        }
+
+        try
+        {
+            var view = await Workflow.GetSpriteFrameWorkingImageAsync(Workbench.Project.Id, active.Id, selected.Index);
+            ApplyFrameWorkingView(view);
+            await DrawFrameWorkAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
         }
     }
 
@@ -675,6 +944,27 @@
                 })
                 .ToList(),
         };
+    }
+
+    private void ApplyFrameWorkingView(SpriteFrameWorkingView view)
+    {
+        var frame = _frames.FirstOrDefault(item => item.Index == view.Index);
+        if (frame is not null)
+        {
+            frame.WorkingState = NormalizeWorkingState(view.State);
+            frame.WorkingWidth = view.WorkingWidth;
+            frame.WorkingHeight = view.WorkingHeight;
+            frame.WorkingMargin = view.WorkingMargin;
+            frame.WorkingUpdatedAt = view.WorkingUpdatedAt;
+        }
+
+        _loadedFrameWorkIndex = view.Index;
+        _loadedFrameWorkUpdatedAt = view.WorkingUpdatedAt;
+        _frameWorkImageDataUrl = view.WorkingPngDataUrl;
+        _frameWorkImageWidth = view.WorkingWidth;
+        _frameWorkImageHeight = view.WorkingHeight;
+        if (string.IsNullOrWhiteSpace(view.WorkingPngDataUrl))
+            _frameEraseMode = false;
     }
 
     private void NormalizeLayout()
@@ -767,6 +1057,40 @@
             ? "frame-geometry-readout is-outline"
             : "frame-geometry-readout is-box";
 
+    private static bool HasWorkingImage(SpriteSheetEditorFrame frame) =>
+        NormalizeWorkingState(frame.WorkingState) is "isolated" or "edited";
+
+    private static string NormalizeWorkingState(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "isolated" => "isolated",
+            "edited" => "edited",
+            "reassembled" => "reassembled",
+            _ => "none",
+        };
+
+    private static string WorkingStateLabel(SpriteSheetEditorFrame frame) =>
+        NormalizeWorkingState(frame.WorkingState) switch
+        {
+            "isolated" => "Isolated",
+            "edited" => "Edited",
+            "reassembled" => "Reassembled",
+            _ => "None",
+        };
+
+    private static string WorkingBadgeClass(SpriteSheetEditorFrame frame) =>
+        NormalizeWorkingState(frame.WorkingState) == "none"
+            ? "frame-work-badge is-empty"
+            : "frame-work-badge";
+
+    private string FrameEraseButtonClass() =>
+        _frameEraseMode
+            ? "btn btn-sm btn-secondary is-active"
+            : "btn btn-sm btn-outline-secondary";
+
+    private string FrameWorkCanvasClass() =>
+        _frameEraseMode ? "frame-work-canvas is-erase-mode" : "frame-work-canvas";
+
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
@@ -821,6 +1145,11 @@
         public int Height { get; set; }
         public List<SpriteSheetShapePath> ShapePaths { get; set; } = [];
         public string PreviewDataUrl { get; set; } = string.Empty;
+        public string WorkingState { get; set; } = "none";
+        public int WorkingWidth { get; set; }
+        public int WorkingHeight { get; set; }
+        public int WorkingMargin { get; set; }
+        public DateTime? WorkingUpdatedAt { get; set; }
     }
 
     public sealed class SpriteCanvasChange

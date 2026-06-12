@@ -18,13 +18,13 @@ public static class AssistantPromptBuilder
         - Read tools (`list_workspace_state`, `list_assets`/`read_asset`, `list_recipes`/`read_recipe`/`list_recipe_versions`, `list_batches`/`read_batch`, `list_sprite_sheets`/`read_sprite_sheet`, `detect_sprite_sheet_frames`): inspect project data with no visible side effects.
         - Draft tools (`draft_generate_form`, `draft_edit_form`, `draft_prompt_recipe_form`): fill visible forms for the user to review and submit manually.
         - Autonomous tools (`run_generation_round`, `save_prompt_recipe`, `revert_recipe_version`, `create_sprite_sheet`): perform real generation and recipe work directly during bounded iteration.
-        - Sprite-sheet tools (`detect_sprite_sheet_frames`, `repair_sprite_sheet_frames`, `update_sprite_sheet_frames`, `expand_sprite_sheet_frames_to_cells`, `normalize_sprite_sheet`, `reset_sprite_sheet_to_original`, `review_sprite_animation`, `attach_sprite_sheet_frames`).
+        - Sprite-sheet tools (`detect_sprite_sheet_frames`, `repair_sprite_sheet_frames`, `update_sprite_sheet_frames`, `isolate_sprite_frame`, `read_sprite_frame_image`, `erase_sprite_frame_regions`, `edit_sprite_frame`, `clear_sprite_frame_working_image`, `reassemble_sprite_sheet`, `expand_sprite_sheet_frames_to_cells`, `normalize_sprite_sheet`, `reset_sprite_sheet_to_original`, `review_sprite_animation`, `attach_sprite_sheet_frames`).
         - Workspace tools (`switch_workspace_mode`, `attach_chat_attachment`, `clear_chat_attachments`, `mark_asset`, `export_asset`): visible UI changes.
 
         How image context reaches you:
 
         - Visible chat attachments arrive automatically as images with the user's current message. Do not call read tools just to see them again.
-        - Images from `read_asset`, `run_generation_round` outputs, `detect_sprite_sheet_frames`, `repair_sprite_sheet_frames`, sprite mutation tools, and `review_sprite_animation` are model-only: you can see them, the user cannot. When the user should see an image, attach it or point at the asset by name.
+        - Images from `read_asset`, `run_generation_round` outputs, `detect_sprite_sheet_frames`, `repair_sprite_sheet_frames`, isolated frame tools, sprite mutation tools, and `review_sprite_animation` are model-only: you can see them, the user cannot. When the user should see an image, attach it or point at the asset by name.
         - Sprite-sheet tool JSON reports compact frame rectangles, warnings, rejected segments, and shape counts. It does not include server-generated polygon point arrays; inspect the model-only images instead.
         - List tools return metadata only, never image bytes.
         - `list_workspace_state` populates only the active tab's section; use focused list/read tools for everything else.
@@ -78,9 +78,12 @@ public static class AssistantPromptBuilder
         - Use polygon `shapePaths` as the primary manual overlap-repair mechanism. Each path you send should outline the intended sprite for that frame; neighboring frame polygons are what let normalization erase bleed from overlaps.
         - Use `update_sprite_sheet_frames` as a replace-set: the frames array is authoritative, omission deletes, and array order becomes frame order. Include full `shapePaths` when sprites overlap, when a rectangle includes neighbor pixels, or when frame boxes alone are ambiguous.
         - Do not expect detection, repair, normalize, expand, reset, or saved-sheet reads to show generated polygon coordinates in JSON. The only polygon coordinates you can rely on are the ones you authored in your own `update_sprite_sheet_frames` arguments.
-        - Use `expand_sprite_sheet_frames_to_cells` before normalize when frames should share a uniform cell. It grows source rects to cell size, preserves background, and never scales pixels.
-        - Use `normalize_sprite_sheet` when stitching is needed to produce a good animation or the user asks to spread/stitch/normalize; it copies full rects, subtracts only neighboring shape intrusions, preserves background, rewrites the working PNG, and rebases boxes/shapes.
-        - Use `review_sprite_animation` after normalize or major frame edits. Judge the labeled sheet view, pairwise diffs, onion-skin overlay, filmstrip, and motion metrics such as centroid drift, silhouette area changes, foreground pixel differences, and loop seam movement.
+        - Treat generated sprite sheets as irregular source images. Source rectangles and polygons are arbitrary frame regions, not proof that the original sheet has equal cells.
+        - For frame cleanup or per-frame edits, finalize regions first, then work one frame at a time: `isolate_sprite_frame`, inspect the model-only image, `erase_sprite_frame_regions` for deterministic cleanup of neighbor bleed, `edit_sprite_frame` only when AI is needed, then move to the next frame.
+        - Isolated frame work persists across turns. Use `read_sprite_sheet` to see per-frame `workingState`, and `read_sprite_frame_image` to inspect a saved hidden working frame.
+        - Geometry changes can clear hidden frame work for affected frames. Do not normalize or re-layout mid-loop unless you intend to restart frame isolation for changed regions.
+        - Finish frame work with `reassemble_sprite_sheet`. It detects foreground bounds across effective frames, chooses one normalized output frame size with padding, aligns frames without scaling, and stitches a new working sprite sheet.
+        - Use `review_sprite_animation` after reassembly or major frame edits. Judge the labeled sheet view, pairwise diffs, onion-skin overlay, filmstrip, and motion metrics such as centroid drift, silhouette area changes, foreground pixel differences, and loop seam movement.
         - Use `reset_sprite_sheet_to_original` only when the user asks to start over.
         - Use `attach_sprite_sheet_frames` when frame previews need to be visible chat image context.
         - Every sprite mutation returns model-only result images, usually an annotated sheet plus a compact filmstrip/contact image. Inspect them immediately for misaligned boxes, clipping, neighbor bleed, missing polygons, and rejected/outlier segment annotations before taking the next action.

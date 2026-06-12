@@ -184,6 +184,35 @@ internal static class SpriteSheetImageAnalyzer
             || Math.Abs(b - background.B) > colorTolerance;
     }
 
+    public static SpriteSheetRect? ForegroundBounds(byte[] rgba, int width, int height, SpriteSheetBackground background)
+    {
+        if (width <= 0 || height <= 0 || rgba.Length < width * height * 4)
+            return null;
+
+        var minX = int.MaxValue;
+        var minY = int.MaxValue;
+        var maxX = int.MinValue;
+        var maxY = int.MinValue;
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var offset = ((y * width) + x) * 4;
+                if (!IsForeground(rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3], background))
+                    continue;
+
+                minX = Math.Min(minX, x);
+                minY = Math.Min(minY, y);
+                maxX = Math.Max(maxX, x);
+                maxY = Math.Max(maxY, y);
+            }
+        }
+
+        return maxX < minX || maxY < minY
+            ? null
+            : new SpriteSheetRect(minX, minY, maxX - minX + 1, maxY - minY + 1);
+    }
+
     private static IEnumerable<(byte R, byte G, byte B, byte A)> EnumerateBorderPixels(byte[] rgba, int width, int height)
     {
         if (width <= 0 || height <= 0)
