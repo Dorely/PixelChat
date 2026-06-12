@@ -119,7 +119,8 @@ public sealed record EraseSpriteFrameRegionsRequest(
     Guid SpriteSheetId,
     int FrameIndex,
     IReadOnlyList<SpriteSheetRect> Rects,
-    IReadOnlyList<SpriteSheetShapePath>? Polygons);
+    IReadOnlyList<SpriteSheetShapePath>? Polygons,
+    string? Mode = null);
 
 public sealed record ReassembleSpriteSheetResult(
     SpriteSheetDefinitionView Sheet,

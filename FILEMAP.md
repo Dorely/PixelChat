@@ -43,9 +43,9 @@
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, autonomous generation budget wiring/model-only outputs, Shellmate-style tool streaming/execution, form drafts, and transcript replay. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, exposes live snapshots, finished-turn commits, and workspace/form side effects. |
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact active-tab records including recipe example/version context used by assistant tools. |
-| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt for autonomous iterative recipe, sprite-sheet, and frame-isolation work, visible context, and focused asset-generation discipline. |
+| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt: autonomous recipe iteration, good-sprite-animation criteria, the malformed-sheet manual repair playbook, frame-cleanup/coordinate discipline, and generation size constraints. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records, form draft payloads including recipe example drafts, and per-turn autonomous generation budget state. |
-| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, single-example recipe saves/versioning, autonomous generation rounds, per-frame sprite tools, attachments, favorites, and exports. |
+| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, single-example recipe saves/versioning, size-validated autonomous generation rounds, merged heuristic frame mapping, per-frame sprite tools with erase/keep modes, attachments, favorites, and exports. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
@@ -57,14 +57,14 @@
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
 | `BackgroundRemovalOptions.cs` | Configurable local background-removal sidecar defaults for uv, Python, rembg, model list, acceleration, cache paths, alpha matting, and timeout. |
-| `ImageProviderModels.cs` | Provider abstraction plus generation/edit request, result, streaming progress, and structured error records. |
+| `ImageProviderModels.cs` | Provider abstraction plus generation/edit request, result, streaming progress, structured error records, and pre-submit image size validation. |
 | `OpenAIAccountImageProvider.cs` | OpenAI account Responses image provider using Codex-style auth headers, SSE parsing, partial image progress, references, and masked edit payloads. |
 | `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, parallelism, retry, timeout, partial previews, and reference defaults. |
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 | `SpriteSheetImageAnalyzer.cs` | Server-side PNG analyzer for background-aware foreground bounds, connected sprite boxes/shape outlines, and animation motion metrics. |
 | `SpriteSheetPngCodec.cs` | Minimal PNG RGBA decoder/encoder used by server-side sprite-sheet rendering. |
-| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with irregular frame isolation, erase cleanup, reassembly, annotated sheet views, diffs, onion skins, and filmstrips. |
+| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with irregular frame isolation, erase/keep cleanup, coordinate-grid and removed-vs-source overlays, outlier-aware reassembly, annotated sheet views, diffs, onion skins, and filmstrips. |
 
 ### Components/
 

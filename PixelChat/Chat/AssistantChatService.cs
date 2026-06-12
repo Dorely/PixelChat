@@ -724,11 +724,13 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "review_sprite_animation", StringComparison.Ordinal))
                 return await BuildSpriteAnimationReviewModelOnlyContentsAsync(pendingCall, projectId, toolResult, cancellationToken);
 
-            if (string.Equals(pendingCall.Name, "repair_sprite_sheet_frames", StringComparison.Ordinal))
-                return await BuildSpriteMutationModelOnlyContentsAsync(pendingCall.Name, projectId, toolResult, cancellationToken);
-
-            if (string.Equals(pendingCall.Name, "detect_sprite_sheet_frames", StringComparison.Ordinal))
-                return await BuildSpriteSheetDetectionModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
+            if (string.Equals(pendingCall.Name, "map_sprite_sheet_frames", StringComparison.Ordinal))
+            {
+                var mapMode = ReadStringArgument(pendingCall, "mode")?.Trim().ToLowerInvariant();
+                return mapMode is "grid-repair" or "repair"
+                    ? await BuildSpriteMutationModelOnlyContentsAsync("repair_sprite_sheet_frames", projectId, toolResult, cancellationToken)
+                    : await BuildSpriteSheetDetectionModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
+            }
 
             if (IsSpriteMutationFeedbackTool(pendingCall.Name))
                 return await BuildSpriteMutationModelOnlyContentsAsync(pendingCall.Name, projectId, toolResult, cancellationToken);
@@ -805,14 +807,32 @@ public sealed class AssistantChatService(
             ];
         }
 
-        return
-        [
-            new TextContent($"Model-only image: hidden working sprite frame {frameNumber} for sprite sheet {spriteSheetId}. This image is not attached to visible chat context."),
+        var contents = new List<AIContent>
+        {
+            new TextContent($"Model-only images: hidden working sprite frame {frameNumber} for sprite sheet {spriteSheetId}. The clean copy comes first; the coordinate-grid companion overlays gridlines with labeled pixel coordinates (origin top-left of this {frame.WorkingWidth}x{frame.WorkingHeight} working image, margin {frame.WorkingMargin}px) — use it to compute rect/polygon coordinates, and judge pixels on the clean copy. These images are not attached to visible chat context."),
             new DataContent(frame.WorkingPngDataUrl, "image/png")
             {
                 Name = $"sprite-frame-{frameNumber}-working.png",
             },
-        ];
+        };
+
+        try
+        {
+            var grid = await workflow.BuildSpriteFrameGridImageAsync(projectId, spriteSheetId, frameNumber - 1, cancellationToken);
+            if (grid is not null)
+            {
+                contents.Add(new DataContent(grid.DataUrl, grid.ContentType)
+                {
+                    Name = grid.FileName,
+                });
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Could not build coordinate grid image for sprite sheet {SpriteSheetId} frame {FrameNumber}.", spriteSheetId, frameNumber);
+        }
+
+        return contents;
     }
 
     private async Task<IReadOnlyList<AIContent>> BuildSpriteAnimationReviewModelOnlyContentsAsync(
@@ -836,7 +856,7 @@ public sealed class AssistantChatService(
             cancellationToken);
         var contents = new List<AIContent>
         {
-            new TextContent($"Model-only images: sprite animation review for sprite sheet {spriteSheetId}. Filenames identify sheet view, ordered frames, pairwise diffs, onion-skin, and filmstrip; JSON manifest fields include kind/frame indexes. These images are not attached to visible chat context."),
+            new TextContent($"Model-only images: sprite animation review for sprite sheet {spriteSheetId}. Filenames identify sheet view, ordered frames, pairwise diffs, onion-skin, filmstrip, and removed-vs-source overlays for frames with hidden working images (red marks pixels erased from the source foreground — check them for clipped owned silhouette before declaring frame cleanup done); JSON manifest fields include kind/frame indexes. These images are not attached to visible chat context."),
         };
         foreach (var image in review.Images)
         {
@@ -998,7 +1018,6 @@ public sealed class AssistantChatService(
 
     private static bool IsSpriteMutationFeedbackTool(string toolName) =>
         toolName is "update_sprite_sheet_frames"
-            or "expand_sprite_sheet_frames_to_cells"
             or "normalize_sprite_sheet"
             or "reset_sprite_sheet_to_original"
             or "reassemble_sprite_sheet";
@@ -1145,6 +1164,20 @@ public sealed class AssistantChatService(
             Guid guid => guid,
             string text when Guid.TryParse(text, out var guid) => guid,
             JsonElement { ValueKind: JsonValueKind.String } element when Guid.TryParse(element.GetString(), out var guid) => guid,
+            _ => null,
+        };
+    }
+
+    private static string? ReadStringArgument(PendingToolCall pendingCall, string name)
+    {
+        var arguments = ToolCallArguments.ParseObjectOrNull(pendingCall.ArgumentsJson) ?? pendingCall.Content.Arguments;
+        if (arguments is null || !arguments.TryGetValue(name, out var value))
+            return null;
+
+        return value switch
+        {
+            string text => text,
+            JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
             _ => null,
         };
     }

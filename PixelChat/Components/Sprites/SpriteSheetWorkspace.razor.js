@@ -391,13 +391,16 @@ function eventToFrameWorkPoint(canvas, state, event) {
     const x = (event.clientX - rect.left) * dpr;
     const y = (event.clientY - rect.top) * dpr;
     const viewport = state.viewport;
-    if (x < viewport.x || x > viewport.x + viewport.w || y < viewport.y || y > viewport.y + viewport.h) {
-        return null;
+    if (!state.drag) {
+        const slack = 24 * dpr;
+        if (x < viewport.x - slack || x > viewport.x + viewport.w + slack || y < viewport.y - slack || y > viewport.y + viewport.h + slack) {
+            return null;
+        }
     }
 
     return {
-        x: clampInt(Math.round((x - viewport.x) / viewport.w * imageWidth(state.image)), 0, imageWidth(state.image) - 1, 0),
-        y: clampInt(Math.round((y - viewport.y) / viewport.h * imageHeight(state.image)), 0, imageHeight(state.image) - 1, 0),
+        x: Math.round((x - viewport.x) / viewport.w * imageWidth(state.image)),
+        y: Math.round((y - viewport.y) / viewport.h * imageHeight(state.image)),
     };
 }
 
@@ -908,8 +911,12 @@ function eventToImagePoint(canvas, state, event) {
     const x = (event.clientX - rect.left) * scaleX;
     const y = (event.clientY - rect.top) * scaleY;
     const viewport = state.viewport;
-    if (!viewport || x < viewport.x || x > viewport.x + viewport.w || y < viewport.y || y > viewport.y + viewport.h) {
-        return null;
+    if (!viewport) return null;
+    if (!state.drag) {
+        const slack = 24 * deviceScale();
+        if (x < viewport.x - slack || x > viewport.x + viewport.w + slack || y < viewport.y - slack || y > viewport.y + viewport.h + slack) {
+            return null;
+        }
     }
 
     return {

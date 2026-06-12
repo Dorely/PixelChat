@@ -415,6 +415,42 @@ public sealed class ArtWorkflowService(
                 image.ToFrame))
             .ToList();
 
+        for (var index = 0; index < frames.Count; index++)
+        {
+            var record = frames[index];
+            if (record.WorkingData.Length == 0
+                || !SpriteSheetPngCodec.TryReadRgba(record.WorkingData, out var workingWidth, out var workingHeight, out var workingRgba))
+            {
+                continue;
+            }
+
+            var extracted = SpriteSheetServerRenderer.ExtractFrameRegion(
+                rgba, width, height, sheet.Rows, sheet.Columns, background, updates, index, record.WorkingMargin);
+            if (!SpriteSheetPngCodec.TryReadRgba(extracted.PngData, out var sourceWidth, out var sourceHeight, out var sourceRgba)
+                || sourceWidth != workingWidth
+                || sourceHeight != workingHeight)
+            {
+                continue;
+            }
+
+            var overlay = SpriteSheetServerRenderer.RenderRemovedPixelsOverlay(
+                sourceRgba,
+                background,
+                workingRgba,
+                ResolveWorkingFrameBackground(sheet, workingRgba, workingWidth, workingHeight),
+                workingWidth,
+                workingHeight);
+            images.Add(new SpriteAnimationReviewImageView(
+                $"Frame {index + 1} removed pixels vs source (red = erased from source foreground)",
+                $"frame-{index + 1}-removed-vs-source.png",
+                "image/png",
+                DataUrl.ToDataUrl("image/png", overlay.PngData),
+                "sourceDiff",
+                index,
+                null,
+                null));
+        }
+
         await db.SaveChangesAsync(cancellationToken);
         return new SpriteAnimationReviewView(
             sheet.Id,
@@ -1240,6 +1276,35 @@ public sealed class ArtWorkflowService(
         return FrameWorkingView(definition, record);
     }
 
+    public async Task<SpriteAnimationReviewImageView?> BuildSpriteFrameGridImageAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        int frameIndex,
+        CancellationToken cancellationToken = default)
+    {
+        var record = await db.SpriteSheetFrameRecords
+            .AsNoTracking()
+            .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == spriteSheetId && frame.Index == frameIndex)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException("Sprite frame was not found.");
+        if (record.WorkingData.Length == 0
+            || !SpriteSheetPngCodec.TryReadRgba(record.WorkingData, out var width, out var height, out var rgba))
+        {
+            return null;
+        }
+
+        var rendered = SpriteSheetServerRenderer.RenderCoordinateGridOverlay(rgba, width, height);
+        return new SpriteAnimationReviewImageView(
+            $"Frame {frameIndex + 1} coordinate grid",
+            $"sprite-frame-{frameIndex + 1}-grid.png",
+            "image/png",
+            DataUrl.ToDataUrl("image/png", rendered.PngData),
+            "grid",
+            frameIndex,
+            null,
+            null);
+    }
+
     public async Task<SpriteFrameWorkingView> EraseSpriteFrameRegionsAsync(
         Guid projectId,
         EraseSpriteFrameRegionsRequest request,
@@ -1254,6 +1319,7 @@ public sealed class ArtWorkflowService(
         if (!SpriteSheetPngCodec.TryReadRgba(record.WorkingData, out var width, out var height, out var rgba))
             throw new InvalidOperationException("Isolated sprite frame must be a PNG image.");
 
+        var keepSelection = string.Equals(request.Mode?.Trim(), "keep", StringComparison.OrdinalIgnoreCase);
         var background = ResolveWorkingFrameBackground(definition, rgba, width, height);
         var erased = SpriteSheetServerRenderer.EraseRegions(
             rgba,
@@ -1261,7 +1327,8 @@ public sealed class ArtWorkflowService(
             height,
             background,
             request.Rects,
-            request.Polygons);
+            request.Polygons,
+            keepSelection);
 
         var now = DateTime.UtcNow;
         ApplyFrameWorkingImage(record, "edited", erased.PngData, erased.Width, erased.Height, record.WorkingMargin, now);

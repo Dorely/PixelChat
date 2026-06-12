@@ -27,7 +27,6 @@ public sealed class AssistantToolRegistry(
         "switch_workspace_mode",
         "mark_asset",
         "update_sprite_sheet_frames",
-        "expand_sprite_sheet_frames_to_cells",
         "normalize_sprite_sheet",
         "reset_sprite_sheet_to_original",
         "attach_sprite_sheet_frames",
@@ -35,9 +34,8 @@ public sealed class AssistantToolRegistry(
         "save_prompt_recipe",
         "revert_recipe_version",
         "create_sprite_sheet",
-        "repair_sprite_sheet_frames",
+        "map_sprite_sheet_frames",
         "review_sprite_animation",
-        "detect_sprite_sheet_frames",
         "isolate_sprite_frame",
         "erase_sprite_frame_regions",
         "edit_sprite_frame",
@@ -148,7 +146,7 @@ public sealed class AssistantToolRegistry(
             method: (Guid? spriteSheetId = null, int maxFrames = 12, CancellationToken cancellationToken = default) =>
                 ReviewSpriteAnimationAsync(projectId, spriteSheetId, maxFrames, cancellationToken),
             name: "review_sprite_animation",
-            description: "Review a sprite animation from the current PNG working sheet. Returns motion metrics in JSON and supplies labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content with manifest fields."),
+            description: "Review a sprite animation from the current PNG working sheet. Returns motion metrics in JSON and supplies labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content with manifest fields. For frames with hidden working images it also returns removed-vs-source overlays where red marks pixels erased from the source foreground — inspect these for clipped owned silhouette before declaring cleanup done."),
 
         AIFunctionFactory.Create(
             method: (string type, Guid refId, string? label = null) => AttachContextAsync(projectId, type, refId, label),
@@ -202,24 +200,18 @@ public sealed class AssistantToolRegistry(
 
         AIFunctionFactory.Create(
             method: (
-                Guid sourceAssetId,
+                string mode,
+                Guid? sourceAssetId = null,
+                Guid? spriteSheetId = null,
                 int? expectedFrames = null,
                 string? layoutHint = null,
-                string? backgroundMode = null) => DetectSpriteSheetFramesAsync(projectId, sourceAssetId, expectedFrames, layoutHint, backgroundMode),
-            name: "detect_sprite_sheet_frames",
-            description: "Detect and apply sprite-sheet frames for an existing PNG source asset, then switch to the Sprites workspace. Pass expectedFrames and a concrete layoutHint when known. If connected components are merged or outlier-heavy, detection will use an expected-count repair candidate with internal polygon shapePaths and rejected segment annotations. Result JSON reports only compact shape counts, not generated polygon points; inspect the returned model-only annotated image before deciding the boxes are acceptable."),
-
-        AIFunctionFactory.Create(
-            method: (
-                Guid? spriteSheetId,
-                int expectedFrames,
-                string? layoutHint = null,
+                string? backgroundMode = null,
                 int[]? targetFrameNumbers = null,
                 bool apply = true,
                 CancellationToken cancellationToken = default) =>
-                RepairSpriteSheetFramesAsync(projectId, spriteSheetId, expectedFrames, layoutHint, targetFrameNumbers, apply, cancellationToken),
-            name: "repair_sprite_sheet_frames",
-            description: "Repair a difficult or overlapping sprite sheet toward an expected frame count. Generates grid-guided frame boxes plus internal polygon shapePaths for overlap separation, marks tiny/merged connected-component outliers as rejected segments, and can apply the repaired frame set. Use targetFrameNumbers as 1-based frame numbers for focused rework. Result JSON reports compact shape counts, not generated polygon points. Every result is followed by model-only annotated sheet and filmstrip images; inspect them and iterate before claiming success."),
+                MapSpriteSheetFramesAsync(projectId, mode, sourceAssetId, spriteSheetId, expectedFrames, layoutHint, backgroundMode, targetFrameNumbers, apply, cancellationToken),
+            name: "map_sprite_sheet_frames",
+            description: "Heuristically map sprite-sheet frame boxes. mode 'auto' detects and applies frames for a PNG source asset (requires sourceAssetId; pass expectedFrames and a concrete layoutHint when known) and switches to the Sprites workspace. mode 'grid-repair' regenerates grid-guided boxes plus internal polygon shapePaths toward expectedFrames for an existing sheet (requires expectedFrames; use 1-based targetFrameNumbers for focused rework). Both modes are heuristics that often fail on overlapping or malformed sheets: give this one attempt, inspect the returned model-only annotated sheet, then move to manual update_sprite_sheet_frames and frame isolation instead of retrying. Result JSON reports compact shape counts, not generated polygon points."),
 
         AIFunctionFactory.Create(
             method: (
@@ -243,13 +235,13 @@ public sealed class AssistantToolRegistry(
             method: (Guid? spriteSheetId, int frameNumber, int? margin = null, CancellationToken cancellationToken = default) =>
                 IsolateSpriteFrameAsync(projectId, spriteSheetId, frameNumber, margin, cancellationToken),
             name: "isolate_sprite_frame",
-            description: "Extract one saved sprite frame source region into a hidden working PNG with optional margin. frameNumber is 1-based. The source sheet can be irregular; this does not require equal source cells. Returns compact state JSON and a model-only image of the isolated working frame."),
+            description: "Extract one saved sprite frame source region into a hidden working PNG with optional margin. frameNumber is 1-based. The source sheet can be irregular; this does not require equal source cells. Returns compact state JSON plus model-only images of the isolated working frame: a clean copy for judging pixels and a coordinate-grid companion for computing region coordinates. The reported workingMargin pads all sides, so sprite content starts at (margin, margin)."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId, int frameNumber, CancellationToken cancellationToken = default) =>
                 ReadSpriteFrameImageAsync(projectId, spriteSheetId, frameNumber, cancellationToken),
             name: "read_sprite_frame_image",
-            description: "Read one hidden isolated/edited sprite frame working PNG. frameNumber is 1-based. Returns compact state JSON and the working image as model-only content when present. This is read-only."),
+            description: "Read one hidden isolated/edited sprite frame working PNG. frameNumber is 1-based. Returns compact state JSON and, when present, the working image as model-only content: a clean copy plus a coordinate-grid companion for computing region coordinates. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (
@@ -257,10 +249,11 @@ public sealed class AssistantToolRegistry(
                 int frameNumber,
                 SpriteSheetRect[] rects,
                 SpriteSheetShapePath[]? polygons = null,
+                string? mode = null,
                 CancellationToken cancellationToken = default) =>
-                EraseSpriteFrameRegionsAsync(projectId, spriteSheetId, frameNumber, rects, polygons, cancellationToken),
+                EraseSpriteFrameRegionsAsync(projectId, spriteSheetId, frameNumber, rects, polygons, mode, cancellationToken),
             name: "erase_sprite_frame_regions",
-            description: "Erase cleanup regions from one hidden isolated sprite frame by filling rects or polygons with the sheet background. frameNumber is 1-based and coordinates are in the isolated working image. Auto-isolates if needed. This is deterministic and does not consume generation budget; inspect the returned model-only image."),
+            description: "Deterministically clean one hidden isolated sprite frame using rects or polygons. mode 'erase' (default) fills the selected regions with the sheet background; mode 'keep' inverts the selection, keeping only the selected regions and filling everything else — use keep to select the owned sprite and discard all neighbor bleed in one call. frameNumber is 1-based and coordinates are in the isolated working image; out-of-bounds coordinates are clamped, so generous edge-overshooting regions are safe. Auto-isolates if needed and does not consume generation budget; inspect the returned model-only images (clean copy plus coordinate-grid companion)."),
 
         AIFunctionFactory.Create(
             method: (
@@ -284,12 +277,6 @@ public sealed class AssistantToolRegistry(
                 ReassembleSpriteSheetAsync(projectId, spriteSheetId, cancellationToken),
             name: "reassemble_sprite_sheet",
             description: "Normalize all saved irregular source regions or hidden working frame images into equal animation frames, then stitch a new working sprite sheet. Uses the largest detected foreground bounds plus padding, never scales pixels, and returns reassembly warnings plus model-only sheet/filmstrip feedback."),
-
-        AIFunctionFactory.Create(
-            method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
-                ExpandSpriteSheetFramesToCellsAsync(projectId, spriteSheetId, cancellationToken),
-            name: "expand_sprite_sheet_frames_to_cells",
-            description: "Grow each saved frame source rect to the sheet's cell size using the sheet anchors, preserving real source pixels where possible and filling out-of-image areas with the resolved sheet background. Does not scale or stretch pixels. Result JSON omits polygon points and reports compact shape counts. Inspect the returned model-only images for new clipping or neighbor bleed."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
@@ -468,10 +455,23 @@ public sealed class AssistantToolRegistry(
             }, JsonOptions);
         }
 
+        var normalizedSize = string.IsNullOrWhiteSpace(size) ? "auto" : size.Trim();
+        if (!ImageSizeValidator.TryValidate(normalizedSize, out var sizeError, out var suggestedSize))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = sizeError,
+                suggestedSize,
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+                message = "No generation round was consumed. Fix the size and run the round again.",
+            }, JsonOptions);
+        }
+
         var round = budget.Consume();
         var outputCount = ClampGenerationRoundCount(count);
         var normalizedBackground = NormalizeBackground(background) ?? "auto";
-        var normalizedSize = string.IsNullOrWhiteSpace(size) ? "auto" : size.Trim();
         var references = referenceAssetIds ?? [];
         GenerationBatchView batch;
         if (editSourceAssetId is Guid sourceAssetId)
@@ -630,6 +630,35 @@ public sealed class AssistantToolRegistry(
             Notes: notes ?? string.Empty,
             PreferredSize: preferredSize ?? "auto");
         return Task.FromResult(JsonSerializer.Serialize(draft, JsonOptions));
+    }
+
+    private async Task<string> MapSpriteSheetFramesAsync(
+        Guid projectId,
+        string mode,
+        Guid? sourceAssetId,
+        Guid? spriteSheetId,
+        int? expectedFrames,
+        string? layoutHint,
+        string? backgroundMode,
+        int[]? targetFrameNumbers,
+        bool apply,
+        CancellationToken cancellationToken)
+    {
+        var normalizedMode = mode?.Trim().ToLowerInvariant();
+        if (normalizedMode is "grid-repair" or "repair")
+        {
+            if (expectedFrames is not int expected || expected <= 0)
+                return JsonSerializer.Serialize(new { error = "mode 'grid-repair' requires expectedFrames." }, JsonOptions);
+
+            return await RepairSpriteSheetFramesAsync(projectId, spriteSheetId, expected, layoutHint, targetFrameNumbers, apply, cancellationToken);
+        }
+
+        if (normalizedMode is not "auto")
+            return JsonSerializer.Serialize(new { error = "mode must be 'auto' or 'grid-repair'." }, JsonOptions);
+        if (sourceAssetId is not Guid asset)
+            return JsonSerializer.Serialize(new { error = "mode 'auto' requires sourceAssetId." }, JsonOptions);
+
+        return await DetectSpriteSheetFramesAsync(projectId, asset, expectedFrames, layoutHint, backgroundMode);
     }
 
     private async Task<string> DetectSpriteSheetFramesAsync(
@@ -1029,19 +1058,6 @@ public sealed class AssistantToolRegistry(
             .Where(path => path.Points.Count >= 3)
             .Sum(path => path.Points.Count);
 
-    private async Task<string> ExpandSpriteSheetFramesToCellsAsync(
-        Guid projectId,
-        Guid? spriteSheetId,
-        CancellationToken cancellationToken)
-    {
-        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
-        if (resolution.ErrorJson is not null)
-            return resolution.ErrorJson;
-
-        var saved = await workflow.ExpandSpriteSheetFramesToCellAsync(projectId, resolution.SpriteSheetId!.Value, cancellationToken);
-        return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet frames expanded to cells."), JsonOptions);
-    }
-
     private async Task<string> IsolateSpriteFrameAsync(
         Guid projectId,
         Guid? spriteSheetId,
@@ -1079,18 +1095,23 @@ public sealed class AssistantToolRegistry(
         int frameNumber,
         SpriteSheetRect[] rects,
         SpriteSheetShapePath[]? polygons,
+        string? mode,
         CancellationToken cancellationToken)
     {
         var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
         if (resolution.ErrorJson is not null)
             return resolution.ErrorJson;
 
+        var keepSelection = string.Equals(mode?.Trim(), "keep", StringComparison.OrdinalIgnoreCase);
         var frame = await workflow.EraseSpriteFrameRegionsAsync(projectId, new EraseSpriteFrameRegionsRequest(
             resolution.SpriteSheetId!.Value,
             FrameIndexFromNumber(frameNumber),
             rects ?? [],
-            polygons), cancellationToken);
-        return JsonSerializer.Serialize(CompactFrameWorkingResult(frame, "Sprite frame regions erased."), JsonOptions);
+            polygons,
+            keepSelection ? "keep" : "erase"), cancellationToken);
+        return JsonSerializer.Serialize(CompactFrameWorkingResult(frame, keepSelection
+            ? "Sprite frame selection kept; everything outside the regions was filled with background."
+            : "Sprite frame regions erased."), JsonOptions);
     }
 
     private async Task<string> EditSpriteFrameAsync(

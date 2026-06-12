@@ -593,6 +593,9 @@ public sealed class OpenAIAccountImageProvider(
         string background,
         string imageModel)
     {
+        if (!ImageSizeValidator.TryValidate(size, out var sizeError, out var suggestedSize))
+            throw new ImageProviderException($"{sizeError} Suggested size: {suggestedSize}.", "invalid_size");
+
         var tool = new Dictionary<string, object?>
         {
             ["type"] = "image_generation",

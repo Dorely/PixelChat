@@ -160,7 +160,8 @@ internal static class SpriteSheetServerRenderer
         int height,
         SpriteSheetBackground background,
         IReadOnlyList<SpriteSheetRect> rects,
-        IReadOnlyList<SpriteSheetShapePath>? polygons)
+        IReadOnlyList<SpriteSheetShapePath>? polygons,
+        bool keepSelection = false)
     {
         ValidateCanvasSize(width, height, "Isolated sprite frame is too large.");
         if (sourceRgba.Length < width * height * 4)
@@ -174,6 +175,9 @@ internal static class SpriteSheetServerRenderer
         var normalizedPolygons = NormalizeShapePaths(polygons, width, height);
         if (normalizedRects.Count == 0 && normalizedPolygons.Count == 0)
         {
+            if (keepSelection)
+                throw new InvalidOperationException("Keep mode requires at least one rect or polygon that overlaps the working frame.");
+
             return new SpriteSheetFrameWorkingRenderResult(
                 SpriteSheetPngCodec.EncodeRgba(width, height, output),
                 width,
@@ -187,7 +191,8 @@ internal static class SpriteSheetServerRenderer
                 var insideRect = normalizedRects.Any(rect =>
                     x >= rect.X && x < rect.X + rect.Width && y >= rect.Y && y < rect.Y + rect.Height);
                 var insidePolygon = normalizedPolygons.Count > 0 && ContainsShape(normalizedPolygons, x + 0.5d, y + 0.5d);
-                if (!insideRect && !insidePolygon)
+                var selected = insideRect || insidePolygon;
+                if (selected == keepSelection)
                     continue;
 
                 WriteBackground(output, ((y * width) + x) * 4, background);
@@ -198,6 +203,94 @@ internal static class SpriteSheetServerRenderer
             SpriteSheetPngCodec.EncodeRgba(width, height, output),
             width,
             height);
+    }
+
+    public static SpriteSheetFrameWorkingRenderResult RenderRemovedPixelsOverlay(
+        byte[] sourceRgba,
+        SpriteSheetBackground sourceBackground,
+        byte[] workingRgba,
+        SpriteSheetBackground workingBackground,
+        int width,
+        int height)
+    {
+        ValidateCanvasSize(width, height, "Isolated sprite frame is too large.");
+        if (sourceRgba.Length < width * height * 4 || workingRgba.Length < width * height * 4)
+            throw new InvalidOperationException("Isolated sprite frame pixels are incomplete.");
+
+        var output = (byte[])workingRgba.Clone();
+        for (var index = 0; index < width * height * 4; index += 4)
+        {
+            var sourceForeground = SpriteSheetImageAnalyzer.IsForeground(
+                sourceRgba[index], sourceRgba[index + 1], sourceRgba[index + 2], sourceRgba[index + 3], sourceBackground);
+            var workingForeground = SpriteSheetImageAnalyzer.IsForeground(
+                workingRgba[index], workingRgba[index + 1], workingRgba[index + 2], workingRgba[index + 3], workingBackground);
+            if (!sourceForeground || workingForeground)
+                continue;
+
+            output[index] = 255;
+            output[index + 1] = 0;
+            output[index + 2] = 0;
+            output[index + 3] = 255;
+        }
+
+        return new SpriteSheetFrameWorkingRenderResult(
+            SpriteSheetPngCodec.EncodeRgba(width, height, output),
+            width,
+            height);
+    }
+
+    public static SpriteSheetFrameWorkingRenderResult RenderCoordinateGridOverlay(byte[] sourceRgba, int width, int height)
+    {
+        ValidateCanvasSize(width, height, "Isolated sprite frame is too large.");
+        if (sourceRgba.Length < width * height * 4)
+            throw new InvalidOperationException("Isolated sprite frame pixels are incomplete.");
+
+        var output = (byte[])sourceRgba.Clone();
+        var step = Math.Min(width, height) < 128 ? 16 : 32;
+        for (var x = step; x < width; x += step)
+        {
+            for (var y = 0; y < height; y++)
+                BlendPixel(output, ((y * width) + x) * 4, 0, 0, 0, 90);
+        }
+
+        for (var y = step; y < height; y += step)
+        {
+            for (var x = 0; x < width; x++)
+                BlendPixel(output, ((y * width) + x) * 4, 0, 0, 0, 90);
+        }
+
+        var labelStep = step * Math.Max(1, (int)Math.Ceiling(34d / step));
+        for (var x = labelStep; x < width; x += labelStep)
+            DrawCoordinateLabel(output, width, height, x, x + 1, 1);
+        for (var y = labelStep; y < height; y += labelStep)
+            DrawCoordinateLabel(output, width, height, y, 1, y + 1);
+
+        return new SpriteSheetFrameWorkingRenderResult(
+            SpriteSheetPngCodec.EncodeRgba(width, height, output),
+            width,
+            height);
+    }
+
+    private static void DrawCoordinateLabel(byte[] rgba, int width, int height, int value, int x, int y)
+    {
+        var digits = value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        const int scale = 1;
+        var digitWidth = 3 * scale;
+        var digitHeight = 5 * scale;
+        var gap = scale;
+        var textWidth = (digits.Length * digitWidth) + (Math.Max(0, digits.Length - 1) * gap);
+        var barWidth = textWidth + 2;
+        var barHeight = digitHeight + 2;
+        x = Math.Clamp(x, 0, Math.Max(0, width - barWidth));
+        y = Math.Clamp(y, 0, Math.Max(0, height - barHeight));
+        FillRect(rgba, width, height, x, y, barWidth, barHeight, 0, 0, 0, 200);
+
+        var cursor = x + 1;
+        foreach (var digit in digits)
+        {
+            DrawDigit(rgba, width, height, cursor, y + 1, scale, digit);
+            cursor += digitWidth + gap;
+        }
     }
 
     public static SpriteSheetReassembleRenderResult ReassembleIrregularFrames(
@@ -245,6 +338,18 @@ internal static class SpriteSheetServerRenderer
                 return new PreparedReassembleFrame(input, detectionBackground, bounds, warnings);
             })
             .ToList();
+
+        var medianBoundsWidth = MedianValue(prepared.Select(frame => frame.Bounds.Width));
+        var medianBoundsHeight = MedianValue(prepared.Select(frame => frame.Bounds.Height));
+        foreach (var (frame, index) in prepared.Select((frame, index) => (frame, index)))
+        {
+            if ((medianBoundsWidth > 0 && frame.Bounds.Width > medianBoundsWidth * 3 / 2)
+                || (medianBoundsHeight > 0 && frame.Bounds.Height > medianBoundsHeight * 3 / 2))
+            {
+                frame.Warnings.Add(
+                    $"detected foreground bounds {frame.Bounds.Width}x{frame.Bounds.Height} are much larger than the median {medianBoundsWidth}x{medianBoundsHeight}; stray edge artifacts may be inflating this frame's cell size and placement");
+            }
+        }
 
         var frameWidth = Math.Max(1, prepared.Max(frame => frame.Bounds.Width) + (padding * 2));
         var frameHeight = Math.Max(1, prepared.Max(frame => frame.Bounds.Height) + (padding * 2));
@@ -1195,6 +1300,14 @@ internal static class SpriteSheetServerRenderer
                     FillRect(rgba, width, height, x + column * scale, y + row * scale, scale, scale, 255, 255, 255, 255);
             }
         }
+    }
+
+    private static int MedianValue(IEnumerable<int> values)
+    {
+        var sorted = values.Where(value => value > 0).OrderBy(value => value).ToList();
+        if (sorted.Count == 0)
+            return 0;
+        return sorted[sorted.Count / 2];
     }
 
     private static void ValidateCanvasSize(int width, int height, string error)
