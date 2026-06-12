@@ -941,7 +941,7 @@ else
                 <div class="asset-group-stack">
                     @foreach (var group in AssetRecipeGroups())
                     {
-                        <section class="asset-group">
+                        <section class="asset-group" @key="group.Label">
                             <div class="section-title">@group.Label</div>
                             <div class="asset-grid">
                                 @foreach (var asset in group.Assets)
@@ -969,7 +969,7 @@ else
 
     private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact, bool canSetRecipeExample = false) => __builder =>
     {
-        <article class="asset-card @(compact ? "asset-card-compact" : "")">
+        <article class="asset-card @(compact ? "asset-card-compact" : "")" @key="asset.Id">
             <button type="button"
                     class="asset-favorite @(asset.IsFavorite ? "is-on" : "")"
                     title="Favorite"
