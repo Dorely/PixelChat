@@ -133,7 +133,8 @@ public sealed class AssistantToolRegistry(
             description: "List compact sprite-sheet definitions for the current project. Use read_sprite_sheet for layout and frame boxes."),
 
         AIFunctionFactory.Create(
-            method: (Guid spriteSheetId) => workflow.ReadSpriteSheetJsonAsync(projectId, spriteSheetId),
+            method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
+                ReadSpriteSheetToolAsync(projectId, spriteSheetId, cancellationToken),
             name: "read_sprite_sheet",
             description: "Read a sprite sheet's layout and frame boxes without returning preview image bytes. Use attach_sprite_sheet_frames when frame previews need to be visible image context."),
 
@@ -144,7 +145,7 @@ public sealed class AssistantToolRegistry(
             description: "Create or select a sprite-sheet definition from an existing generated or imported asset and switch the visible workspace to Sprites."),
 
         AIFunctionFactory.Create(
-            method: (Guid spriteSheetId, int maxFrames = 12, CancellationToken cancellationToken = default) =>
+            method: (Guid? spriteSheetId = null, int maxFrames = 12, CancellationToken cancellationToken = default) =>
                 ReviewSpriteAnimationAsync(projectId, spriteSheetId, maxFrames, cancellationToken),
             name: "review_sprite_animation",
             description: "Review a sprite animation from the current PNG working sheet. Returns motion metrics in JSON and supplies labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content with manifest fields."),
@@ -210,7 +211,7 @@ public sealed class AssistantToolRegistry(
 
         AIFunctionFactory.Create(
             method: (
-                Guid spriteSheetId,
+                Guid? spriteSheetId,
                 int expectedFrames,
                 string? layoutHint = null,
                 int[]? targetFrameNumbers = null,
@@ -222,7 +223,7 @@ public sealed class AssistantToolRegistry(
 
         AIFunctionFactory.Create(
             method: (
-                Guid spriteSheetId,
+                Guid? spriteSheetId,
                 int rows,
                 int columns,
                 int cellWidth,
@@ -233,25 +234,26 @@ public sealed class AssistantToolRegistry(
                 int? fps = null,
                 bool? loop = null,
                 string? horizontalAnchor = null,
-                string? verticalAnchor = null) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, frames, padding, gutter, fps, loop, horizontalAnchor, verticalAnchor),
+                string? verticalAnchor = null,
+                CancellationToken cancellationToken = default) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, frames, padding, gutter, fps, loop, horizontalAnchor, verticalAnchor, cancellationToken),
             name: "update_sprite_sheet_frames",
             description: "Replace the visible Sprites workspace frame set and layout without changing working image bytes. The frames array is authoritative: omission deletes, array order becomes frame order, and existing frame ids are reused by position, so attachments may point at new frame content after reorder. You may send manual shapePaths polygons for overlapping sprites: each polygon should outline the intended sprite region so neighboring frame polygons can erase bleed in overlaps. Tool results return only compact shape counts, so inspect the model-only annotated sheet and filmstrip and keep adjusting misaligned boxes/polygons."),
 
         AIFunctionFactory.Create(
-            method: (Guid spriteSheetId, int frameNumber, int? margin = null, CancellationToken cancellationToken = default) =>
+            method: (Guid? spriteSheetId, int frameNumber, int? margin = null, CancellationToken cancellationToken = default) =>
                 IsolateSpriteFrameAsync(projectId, spriteSheetId, frameNumber, margin, cancellationToken),
             name: "isolate_sprite_frame",
             description: "Extract one saved sprite frame source region into a hidden working PNG with optional margin. frameNumber is 1-based. The source sheet can be irregular; this does not require equal source cells. Returns compact state JSON and a model-only image of the isolated working frame."),
 
         AIFunctionFactory.Create(
-            method: (Guid spriteSheetId, int frameNumber, CancellationToken cancellationToken = default) =>
+            method: (Guid? spriteSheetId, int frameNumber, CancellationToken cancellationToken = default) =>
                 ReadSpriteFrameImageAsync(projectId, spriteSheetId, frameNumber, cancellationToken),
             name: "read_sprite_frame_image",
             description: "Read one hidden isolated/edited sprite frame working PNG. frameNumber is 1-based. Returns compact state JSON and the working image as model-only content when present. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (
-                Guid spriteSheetId,
+                Guid? spriteSheetId,
                 int frameNumber,
                 SpriteSheetRect[] rects,
                 SpriteSheetShapePath[]? polygons = null,
@@ -262,7 +264,7 @@ public sealed class AssistantToolRegistry(
 
         AIFunctionFactory.Create(
             method: (
-                Guid spriteSheetId,
+                Guid? spriteSheetId,
                 int frameNumber,
                 string prompt,
                 string? background = null,
@@ -272,35 +274,38 @@ public sealed class AssistantToolRegistry(
             description: "AI-edit one hidden isolated sprite frame without creating a visible asset or generation batch. frameNumber is 1-based. Auto-isolates if needed, consumes one autonomous generation round budget, and returns the edited hidden frame as model-only image content."),
 
         AIFunctionFactory.Create(
-            method: (Guid spriteSheetId, int frameNumber, CancellationToken cancellationToken = default) =>
+            method: (Guid? spriteSheetId, int frameNumber, CancellationToken cancellationToken = default) =>
                 ClearSpriteFrameWorkingImageAsync(projectId, spriteSheetId, frameNumber, cancellationToken),
             name: "clear_sprite_frame_working_image",
             description: "Clear the hidden isolated/edited working image for one frame. frameNumber is 1-based. Use this to revert a frame's isolated work before re-isolating or reassembling."),
 
         AIFunctionFactory.Create(
-            method: (Guid spriteSheetId, CancellationToken cancellationToken = default) =>
+            method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
                 ReassembleSpriteSheetAsync(projectId, spriteSheetId, cancellationToken),
             name: "reassemble_sprite_sheet",
             description: "Normalize all saved irregular source regions or hidden working frame images into equal animation frames, then stitch a new working sprite sheet. Uses the largest detected foreground bounds plus padding, never scales pixels, and returns reassembly warnings plus model-only sheet/filmstrip feedback."),
 
         AIFunctionFactory.Create(
-            method: (Guid spriteSheetId, CancellationToken cancellationToken = default) =>
+            method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
                 ExpandSpriteSheetFramesToCellsAsync(projectId, spriteSheetId, cancellationToken),
             name: "expand_sprite_sheet_frames_to_cells",
             description: "Grow each saved frame source rect to the sheet's cell size using the sheet anchors, preserving real source pixels where possible and filling out-of-image areas with the resolved sheet background. Does not scale or stretch pixels. Result JSON omits polygon points and reports compact shape counts. Inspect the returned model-only images for new clipping or neighbor bleed."),
 
         AIFunctionFactory.Create(
-            method: (Guid spriteSheetId) => NormalizeSpriteSheetAsync(projectId, spriteSheetId),
+            method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
+                NormalizeSpriteSheetAsync(projectId, spriteSheetId, cancellationToken),
             name: "normalize_sprite_sheet",
             description: "Normalize the selected PNG sprite sheet by copying full saved source rects with background preserved, subtracting only neighboring shape intrusions, applying padding/gutter/grid/alignment settings, stitching a new working PNG, and rebasing frame boxes/shapes. Result JSON omits polygon points and reports compact shape counts. Inspect the returned model-only images before making further coordinate edits."),
 
         AIFunctionFactory.Create(
-            method: (Guid spriteSheetId) => ResetSpriteSheetToOriginalAsync(projectId, spriteSheetId),
+            method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
+                ResetSpriteSheetToOriginalAsync(projectId, spriteSheetId, cancellationToken),
             name: "reset_sprite_sheet_to_original",
             description: "Reset the selected working sprite sheet to its immutable original image and clear all frame records. Returns the reset working image as model-only feedback because no frame review exists after records are cleared."),
 
         AIFunctionFactory.Create(
-            method: (Guid spriteSheetId, Guid[]? frameIds = null) => AttachSpriteSheetFramesAsync(projectId, spriteSheetId, frameIds),
+            method: (Guid? spriteSheetId = null, Guid[]? frameIds = null, CancellationToken cancellationToken = default) =>
+                AttachSpriteSheetFramesAsync(projectId, spriteSheetId, frameIds, cancellationToken),
             name: "attach_sprite_sheet_frames",
             description: "Attach one or more saved sprite frame previews to visible chat context. Omit frameIds to attach every frame in the sheet."),
 
@@ -530,13 +535,29 @@ public sealed class AssistantToolRegistry(
         }, JsonOptions);
     }
 
+    private async Task<string> ReadSpriteSheetToolAsync(
+        Guid projectId,
+        Guid? spriteSheetId,
+        CancellationToken cancellationToken)
+    {
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        return await workflow.ReadSpriteSheetJsonAsync(projectId, resolution.SpriteSheetId!.Value, cancellationToken);
+    }
+
     private async Task<string> ReviewSpriteAnimationAsync(
         Guid projectId,
-        Guid spriteSheetId,
+        Guid? spriteSheetId,
         int maxFrames,
         CancellationToken cancellationToken)
     {
-        var review = await workflow.BuildSpriteAnimationReviewAsync(projectId, spriteSheetId, maxFrames, cancellationToken);
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var review = await workflow.BuildSpriteAnimationReviewAsync(projectId, resolution.SpriteSheetId!.Value, maxFrames, cancellationToken);
         return JsonSerializer.Serialize(new
         {
             review.SpriteSheetId,
@@ -652,15 +673,19 @@ public sealed class AssistantToolRegistry(
 
     private async Task<string> RepairSpriteSheetFramesAsync(
         Guid projectId,
-        Guid spriteSheetId,
+        Guid? spriteSheetId,
         int expectedFrames,
         string? layoutHint,
         int[]? targetFrameNumbers,
         bool apply,
         CancellationToken cancellationToken)
     {
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
         var repair = await workflow.RepairSpriteSheetFramesAsync(projectId, new RepairSpriteSheetFramesRequest(
-            spriteSheetId,
+            resolution.SpriteSheetId!.Value,
             Math.Clamp(expectedFrames, 1, 256),
             layoutHint,
             targetFrameNumbers,
@@ -670,7 +695,7 @@ public sealed class AssistantToolRegistry(
 
     private async Task<string> UpdateSpriteSheetFramesAsync(
         Guid projectId,
-        Guid spriteSheetId,
+        Guid? spriteSheetId,
         int rows,
         int columns,
         int cellWidth,
@@ -681,10 +706,15 @@ public sealed class AssistantToolRegistry(
         int? fps,
         bool? loop,
         string? horizontalAnchor,
-        string? verticalAnchor)
+        string? verticalAnchor,
+        CancellationToken cancellationToken)
     {
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
         var saved = await workflow.UpdateSpriteSheetFramesAsync(projectId, new UpdateSpriteSheetFramesRequest(
-            spriteSheetId,
+            resolution.SpriteSheetId!.Value,
             Math.Clamp(rows, 1, 32),
             Math.Clamp(columns, 1, 64),
             Math.Clamp(cellWidth, 1, 8192),
@@ -695,7 +725,7 @@ public sealed class AssistantToolRegistry(
             loop ?? true,
             NormalizeHorizontalAnchor(horizontalAnchor),
             NormalizeVerticalAnchor(verticalAnchor),
-            frames));
+            frames), cancellationToken);
         return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet frames updated."), JsonOptions);
     }
 
@@ -900,6 +930,94 @@ public sealed class AssistantToolRegistry(
         int ShapePointCount,
         IReadOnlyList<string> Warnings);
 
+    private sealed record SpriteSheetToolResolution(Guid? SpriteSheetId, string? ErrorJson);
+
+    private async Task<SpriteSheetToolResolution> ResolveSpriteSheetIdForToolAsync(
+        Guid projectId,
+        Guid? requestedSpriteSheetId,
+        CancellationToken cancellationToken)
+    {
+        var workbench = await workflow.GetWorkbenchAsync(projectId, cancellationToken);
+        var orderedSheets = workbench.SpriteSheets
+            .OrderByDescending(sheet => sheet.Id == workbench.Project.ActiveSpriteSheetId)
+            .ThenByDescending(sheet => sheet.UpdatedAt)
+            .ToList();
+
+        if (orderedSheets.Count == 0)
+        {
+            return new(null, SpriteSheetResolutionErrorJson(
+                requestedSpriteSheetId,
+                workbench,
+                "No sprite sheets exist in this project. Create or detect a sprite sheet before using sprite-frame tools."));
+        }
+
+        if (requestedSpriteSheetId is null || requestedSpriteSheetId == Guid.Empty)
+        {
+            var active = workbench.ActiveSpriteSheet ?? orderedSheets.FirstOrDefault();
+            return active is not null
+                ? new(active.Id, null)
+                : new(null, SpriteSheetResolutionErrorJson(requestedSpriteSheetId, workbench, "No active sprite sheet is available."));
+        }
+
+        var requested = requestedSpriteSheetId.Value;
+        var exact = orderedSheets.FirstOrDefault(sheet => sheet.Id == requested);
+        if (exact is not null)
+            return new(exact.Id, null);
+
+        var assetMatches = orderedSheets
+            .Where(sheet => sheet.SourceAssetId == requested || sheet.WorkingAssetId == requested)
+            .ToList();
+        if (assetMatches.Count == 1)
+            return new(assetMatches[0].Id, null);
+
+        if (assetMatches.Count > 1)
+        {
+            var activeMatch = assetMatches.FirstOrDefault(sheet => sheet.Id == workbench.Project.ActiveSpriteSheetId);
+            if (activeMatch is not null)
+                return new(activeMatch.Id, null);
+
+            return new(null, SpriteSheetResolutionErrorJson(
+                requestedSpriteSheetId,
+                workbench,
+                "The provided id matches multiple sprite-sheet source or working assets. Use one of the listed spriteSheetId values."));
+        }
+
+        if (orderedSheets.Count == 1)
+            return new(orderedSheets[0].Id, null);
+
+        return new(null, SpriteSheetResolutionErrorJson(
+            requestedSpriteSheetId,
+            workbench,
+            "Sprite sheet was not found for the provided id. The id may be stale or may be an unrelated asset id."));
+    }
+
+    private static string SpriteSheetResolutionErrorJson(Guid? requestedSpriteSheetId, WorkbenchView workbench, string message)
+    {
+        var activeSpriteSheetId = workbench.Project.ActiveSpriteSheetId;
+        return JsonSerializer.Serialize(new
+        {
+            error = message,
+            requestedSpriteSheetId,
+            activeSpriteSheetId,
+            spriteSheets = workbench.SpriteSheets
+                .OrderByDescending(sheet => sheet.Id == activeSpriteSheetId)
+                .ThenByDescending(sheet => sheet.UpdatedAt)
+                .Select(sheet => new
+                {
+                    spriteSheetId = sheet.Id,
+                    isActive = sheet.Id == activeSpriteSheetId,
+                    sheet.SourceAssetId,
+                    sheet.WorkingAssetId,
+                    sheet.Label,
+                    sheet.Rows,
+                    sheet.Columns,
+                    frameCount = sheet.Frames.Count,
+                    sheet.UpdatedAt,
+                }),
+            guidance = "Use a spriteSheetId from this list, or omit spriteSheetId when there is an active sprite sheet.",
+        }, JsonOptions);
+    }
+
     private static bool HasShapePaths(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
         ShapePathCount(shapePaths) > 0;
 
@@ -913,31 +1031,43 @@ public sealed class AssistantToolRegistry(
 
     private async Task<string> ExpandSpriteSheetFramesToCellsAsync(
         Guid projectId,
-        Guid spriteSheetId,
+        Guid? spriteSheetId,
         CancellationToken cancellationToken)
     {
-        var saved = await workflow.ExpandSpriteSheetFramesToCellAsync(projectId, spriteSheetId, cancellationToken);
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var saved = await workflow.ExpandSpriteSheetFramesToCellAsync(projectId, resolution.SpriteSheetId!.Value, cancellationToken);
         return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet frames expanded to cells."), JsonOptions);
     }
 
     private async Task<string> IsolateSpriteFrameAsync(
         Guid projectId,
-        Guid spriteSheetId,
+        Guid? spriteSheetId,
         int frameNumber,
         int? margin,
         CancellationToken cancellationToken)
     {
-        var frame = await workflow.IsolateSpriteFrameAsync(projectId, spriteSheetId, FrameIndexFromNumber(frameNumber), margin, cancellationToken);
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var frame = await workflow.IsolateSpriteFrameAsync(projectId, resolution.SpriteSheetId!.Value, FrameIndexFromNumber(frameNumber), margin, cancellationToken);
         return JsonSerializer.Serialize(CompactFrameWorkingResult(frame, "Sprite frame isolated."), JsonOptions);
     }
 
     private async Task<string> ReadSpriteFrameImageAsync(
         Guid projectId,
-        Guid spriteSheetId,
+        Guid? spriteSheetId,
         int frameNumber,
         CancellationToken cancellationToken)
     {
-        var frame = await workflow.GetSpriteFrameWorkingImageAsync(projectId, spriteSheetId, FrameIndexFromNumber(frameNumber), cancellationToken);
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var frame = await workflow.GetSpriteFrameWorkingImageAsync(projectId, resolution.SpriteSheetId!.Value, FrameIndexFromNumber(frameNumber), cancellationToken);
         return JsonSerializer.Serialize(CompactFrameWorkingResult(frame, string.IsNullOrWhiteSpace(frame.WorkingPngDataUrl)
             ? "Sprite frame has no hidden working image."
             : "Sprite frame working image read."), JsonOptions);
@@ -945,14 +1075,18 @@ public sealed class AssistantToolRegistry(
 
     private async Task<string> EraseSpriteFrameRegionsAsync(
         Guid projectId,
-        Guid spriteSheetId,
+        Guid? spriteSheetId,
         int frameNumber,
         SpriteSheetRect[] rects,
         SpriteSheetShapePath[]? polygons,
         CancellationToken cancellationToken)
     {
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
         var frame = await workflow.EraseSpriteFrameRegionsAsync(projectId, new EraseSpriteFrameRegionsRequest(
-            spriteSheetId,
+            resolution.SpriteSheetId!.Value,
             FrameIndexFromNumber(frameNumber),
             rects ?? [],
             polygons), cancellationToken);
@@ -962,7 +1096,7 @@ public sealed class AssistantToolRegistry(
     private async Task<string> EditSpriteFrameAsync(
         Guid projectId,
         AssistantTurnGenerationBudget budget,
-        Guid spriteSheetId,
+        Guid? spriteSheetId,
         int frameNumber,
         string prompt,
         string? background,
@@ -990,9 +1124,13 @@ public sealed class AssistantToolRegistry(
             }, JsonOptions);
         }
 
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
         var round = budget.Consume();
         var frame = await workflow.EditSpriteFrameAsync(projectId, new EditSpriteFrameRequest(
-            spriteSheetId,
+            resolution.SpriteSheetId!.Value,
             FrameIndexFromNumber(frameNumber),
             prompt,
             background), cancellationToken);
@@ -1008,20 +1146,28 @@ public sealed class AssistantToolRegistry(
 
     private async Task<string> ClearSpriteFrameWorkingImageAsync(
         Guid projectId,
-        Guid spriteSheetId,
+        Guid? spriteSheetId,
         int frameNumber,
         CancellationToken cancellationToken)
     {
-        var frame = await workflow.ClearSpriteFrameWorkingImageAsync(projectId, spriteSheetId, FrameIndexFromNumber(frameNumber), cancellationToken);
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var frame = await workflow.ClearSpriteFrameWorkingImageAsync(projectId, resolution.SpriteSheetId!.Value, FrameIndexFromNumber(frameNumber), cancellationToken);
         return JsonSerializer.Serialize(CompactFrameWorkingResult(frame, "Sprite frame working image cleared."), JsonOptions);
     }
 
     private async Task<string> ReassembleSpriteSheetAsync(
         Guid projectId,
-        Guid spriteSheetId,
+        Guid? spriteSheetId,
         CancellationToken cancellationToken)
     {
-        var result = await workflow.ReassembleSpriteSheetAsync(projectId, spriteSheetId, cancellationToken);
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var result = await workflow.ReassembleSpriteSheetAsync(projectId, resolution.SpriteSheetId!.Value, cancellationToken);
         return JsonSerializer.Serialize(new
         {
             spriteSheetId = result.Sheet.Id,
@@ -1055,21 +1201,33 @@ public sealed class AssistantToolRegistry(
         }, JsonOptions);
     }
 
-    private async Task<string> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId)
+    private async Task<string> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid? spriteSheetId, CancellationToken cancellationToken)
     {
-        var saved = await workflow.ResetSpriteSheetToOriginalAsync(projectId, spriteSheetId);
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var saved = await workflow.ResetSpriteSheetToOriginalAsync(projectId, resolution.SpriteSheetId!.Value, cancellationToken);
         return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet reset to original image and frame records cleared."), JsonOptions);
     }
 
-    private async Task<string> NormalizeSpriteSheetAsync(Guid projectId, Guid spriteSheetId)
+    private async Task<string> NormalizeSpriteSheetAsync(Guid projectId, Guid? spriteSheetId, CancellationToken cancellationToken)
     {
-        var saved = await workflow.NormalizeSpriteSheetAsync(projectId, spriteSheetId);
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var saved = await workflow.NormalizeSpriteSheetAsync(projectId, resolution.SpriteSheetId!.Value, cancellationToken);
         return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet normalized."), JsonOptions);
     }
 
-    private async Task<string> AttachSpriteSheetFramesAsync(Guid projectId, Guid spriteSheetId, Guid[]? frameIds)
+    private async Task<string> AttachSpriteSheetFramesAsync(Guid projectId, Guid? spriteSheetId, Guid[]? frameIds, CancellationToken cancellationToken)
     {
-        var attachments = await workflow.AttachSpriteSheetFramesAsync(projectId, spriteSheetId, frameIds);
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var attachments = await workflow.AttachSpriteSheetFramesAsync(projectId, resolution.SpriteSheetId!.Value, frameIds, cancellationToken);
         return JsonSerializer.Serialize(attachments, JsonOptions);
     }
 
