@@ -324,9 +324,20 @@
 }
 
 .frame-work-actions {
+    align-items: center;
     display: flex;
     flex-wrap: wrap;
     gap: 0.4rem;
+}
+
+.frame-erase-controls {
+    display: inline-flex;
+    flex-wrap: nowrap;
+    gap: 0.25rem;
+}
+
+.frame-erase-mode-button {
+    min-width: 4rem;
 }
 
 .frame-edit-prompt {

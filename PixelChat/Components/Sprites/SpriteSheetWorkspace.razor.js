@@ -36,10 +36,29 @@ export async function drawFrameWorkCanvas(canvas, dotNetRef, imageUrl, eraseMode
 
     const state = ensureFrameWorkState(canvas, dotNetRef);
     state.dotNetRef = dotNetRef;
-    state.imageUrl = String(imageUrl || "");
-    state.eraseMode = Boolean(eraseMode);
+    const nextImageUrl = String(imageUrl || "");
+    const nextEraseMode = normalizeFrameWorkEraseMode(eraseMode);
+    if (state.imageUrl !== nextImageUrl || state.eraseMode !== nextEraseMode) {
+        resetFrameWorkDraft(state);
+    }
+
+    state.imageUrl = nextImageUrl;
+    state.eraseMode = nextEraseMode;
     state.image = state.imageUrl ? await loadImage(state.imageUrl) : null;
     drawFrameWork(canvas, state);
+}
+
+function normalizeFrameWorkEraseMode(value) {
+    const mode = String(value || "none").toLowerCase();
+    if (mode === "rect" || mode === "polygon" || mode === "lasso") return mode;
+    return "none";
+}
+
+function resetFrameWorkDraft(state) {
+    state.drag = null;
+    state.polygonDraft = [];
+    state.hoverPoint = null;
+    state.lassoPoints = [];
 }
 
 function ensureEditorState(canvas, dotNetRef) {
@@ -89,9 +108,12 @@ function ensureFrameWorkState(canvas, dotNetRef) {
         dotNetRef,
         image: null,
         imageUrl: "",
-        eraseMode: false,
+        eraseMode: "none",
         viewport: null,
         drag: null,
+        polygonDraft: [],
+        hoverPoint: null,
+        lassoPoints: [],
     };
     frameWorkStates.set(canvas, state);
 
@@ -100,29 +122,76 @@ function ensureFrameWorkState(canvas, dotNetRef) {
     canvas.addEventListener("pointerup", event => onFrameWorkPointerUp(canvas, state, event));
     canvas.addEventListener("pointercancel", event => onFrameWorkPointerUp(canvas, state, event));
     canvas.addEventListener("pointerleave", event => {
-        if (state.drag) onFrameWorkPointerUp(canvas, state, event);
+        if (state.drag) {
+            onFrameWorkPointerUp(canvas, state, event);
+        } else if (state.eraseMode === "polygon" && state.hoverPoint) {
+            state.hoverPoint = null;
+            drawFrameWork(canvas, state);
+        }
     });
     return state;
 }
 
 function onFrameWorkPointerDown(canvas, state, event) {
-    if (!state.eraseMode || !state.image || !state.viewport) return;
+    if (state.eraseMode === "none" || !state.image || !state.viewport) return;
     const point = eventToFrameWorkPoint(canvas, state, event);
     if (!point) return;
 
     event.preventDefault();
-    canvas.setPointerCapture?.(event.pointerId);
-    state.drag = { start: point, current: point };
-    drawFrameWork(canvas, state);
+    if (state.eraseMode === "rect") {
+        canvas.setPointerCapture?.(event.pointerId);
+        state.drag = { type: "rect", start: point, current: point };
+        drawFrameWork(canvas, state);
+        return;
+    }
+
+    if (state.eraseMode === "polygon") {
+        const draft = state.polygonDraft || [];
+        if (draft.length >= 3 && distance(point, draft[0]) <= frameWorkCloseDistance(state)) {
+            invokeFrameWorkPolygonErase(state, draft);
+            resetFrameWorkDraft(state);
+        } else {
+            state.polygonDraft = [...draft, point];
+            state.hoverPoint = null;
+        }
+
+        drawFrameWork(canvas, state);
+        return;
+    }
+
+    if (state.eraseMode === "lasso") {
+        canvas.setPointerCapture?.(event.pointerId);
+        state.drag = { type: "lasso" };
+        state.lassoPoints = [point];
+        drawFrameWork(canvas, state);
+    }
 }
 
 function onFrameWorkPointerMove(canvas, state, event) {
-    if (!state.drag) return;
+    if (state.eraseMode === "none" || !state.image || !state.viewport) return;
     const point = eventToFrameWorkPoint(canvas, state, event);
-    if (!point) return;
+    if (state.eraseMode === "polygon" && !state.drag) {
+        if (!samePoint(state.hoverPoint, point)) {
+            state.hoverPoint = point;
+            drawFrameWork(canvas, state);
+        }
+        return;
+    }
+
+    if (!state.drag || !point) return;
 
     event.preventDefault();
-    state.drag.current = point;
+    if (state.drag.type === "rect") {
+        state.drag.current = point;
+    } else if (state.drag.type === "lasso") {
+        const points = state.lassoPoints || [];
+        const previous = points[points.length - 1];
+        if (!previous || distance(previous, point) >= 1.5) {
+            points.push(point);
+            state.lassoPoints = points;
+        }
+    }
+
     drawFrameWork(canvas, state);
 }
 
@@ -130,23 +199,38 @@ function onFrameWorkPointerUp(canvas, state, event) {
     if (!state.drag) return;
 
     event.preventDefault();
-    const rect = rectFromPoints(state.drag.start, state.drag.current);
+    const drag = state.drag;
     state.drag = null;
-    drawFrameWork(canvas, state);
-    if (rect.w < 1 || rect.h < 1) return;
+    if (drag.type === "rect") {
+        const rect = rectFromPoints(drag.start, drag.current);
+        drawFrameWork(canvas, state);
+        if (rect.w < 1 || rect.h < 1) return;
 
-    state.dotNetRef?.invokeMethodAsync("OnFrameWorkEraseRect", {
-        X: rect.x,
-        Y: rect.y,
-        Width: rect.w,
-        Height: rect.h,
-    });
+        state.dotNetRef?.invokeMethodAsync("OnFrameWorkEraseRect", {
+            X: rect.x,
+            Y: rect.y,
+            Width: rect.w,
+            Height: rect.h,
+        });
+        return;
+    }
+
+    if (drag.type === "lasso") {
+        const polygon = simplifyLassoPoints(state.lassoPoints || []);
+        state.lassoPoints = [];
+        drawFrameWork(canvas, state);
+        if (polygon.length >= 3) {
+            invokeFrameWorkPolygonErase(state, polygon);
+        }
+    }
 }
 
 function drawFrameWork(canvas, state) {
     const ctx = resizeCanvas(canvas);
     drawChecker(ctx, canvas.width, canvas.height);
-    canvas.classList.toggle("is-erase-mode", Boolean(state.eraseMode));
+    canvas.classList.toggle("is-erase-mode", state.eraseMode !== "none");
+    canvas.classList.toggle("is-polygon-mode", state.eraseMode === "polygon");
+    canvas.classList.toggle("is-lasso-mode", state.eraseMode === "lasso");
     canvas.classList.toggle("is-dragging-erase", Boolean(state.drag));
     if (!state.image) {
         state.viewport = null;
@@ -160,10 +244,23 @@ function drawFrameWork(canvas, state) {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(state.image, viewport.x, viewport.y, viewport.w, viewport.h);
 
-    if (!state.drag) return;
-    const rect = rectFromPoints(state.drag.start, state.drag.current);
     const scaleX = viewport.w / width;
     const scaleY = viewport.h / height;
+    if (state.drag?.type === "rect") {
+        drawFrameWorkRectDraft(ctx, state.drag.start, state.drag.current, viewport, scaleX, scaleY);
+    }
+
+    if (state.eraseMode === "polygon" && (state.polygonDraft?.length || 0) > 0) {
+        drawFrameWorkPolygonDraft(ctx, state, viewport, scaleX, scaleY);
+    }
+
+    if (state.drag?.type === "lasso" && (state.lassoPoints?.length || 0) > 0) {
+        drawFrameWorkLassoDraft(ctx, state.lassoPoints, viewport, scaleX, scaleY);
+    }
+}
+
+function drawFrameWorkRectDraft(ctx, start, current, viewport, scaleX, scaleY) {
+    const rect = rectFromPoints(start, current);
     ctx.save();
     ctx.fillStyle = "rgba(220, 53, 69, 0.22)";
     ctx.strokeStyle = "rgba(220, 53, 69, 0.92)";
@@ -175,6 +272,116 @@ function drawFrameWork(canvas, state) {
     ctx.fillRect(x, y, w, h);
     ctx.strokeRect(x, y, w, h);
     ctx.restore();
+}
+
+function drawFrameWorkPolygonDraft(ctx, state, viewport, scaleX, scaleY) {
+    const draft = state.polygonDraft || [];
+    const hover = state.hoverPoint;
+    const canClose = hover && draft.length >= 3 && distance(hover, draft[0]) <= frameWorkCloseDistance(state);
+    const preview = hover && !canClose ? [...draft, hover] : draft;
+    drawFrameWorkPath(ctx, preview, viewport, scaleX, scaleY, draft.length >= 3, canClose);
+
+    ctx.save();
+    for (let index = 0; index < draft.length; index++) {
+        const point = draft[index];
+        const x = viewport.x + point.x * scaleX;
+        const y = viewport.y + point.y * scaleY;
+        const radius = (canClose && index === 0 ? 6.5 : 4.5) * deviceScale();
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = canClose && index === 0 ? "#dc3545" : "#ffffff";
+        ctx.strokeStyle = "#dc3545";
+        ctx.lineWidth = Math.max(1.5, 1.5 * deviceScale());
+        ctx.fill();
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+function drawFrameWorkLassoDraft(ctx, points, viewport, scaleX, scaleY) {
+    drawFrameWorkPath(ctx, points, viewport, scaleX, scaleY, points.length >= 3, false);
+}
+
+function drawFrameWorkPath(ctx, points, viewport, scaleX, scaleY, fill, highlighted) {
+    if (!points || points.length === 0) return;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(viewport.x + points[0].x * scaleX, viewport.y + points[0].y * scaleY);
+    for (let index = 1; index < points.length; index++) {
+        ctx.lineTo(viewport.x + points[index].x * scaleX, viewport.y + points[index].y * scaleY);
+    }
+    if (fill) {
+        ctx.closePath();
+        ctx.fillStyle = highlighted ? "rgba(220, 53, 69, 0.28)" : "rgba(220, 53, 69, 0.18)";
+        ctx.fill();
+    }
+
+    ctx.lineWidth = Math.max(2, 2 * deviceScale());
+    ctx.strokeStyle = highlighted ? "#a61e2d" : "#dc3545";
+    ctx.stroke();
+    ctx.restore();
+}
+
+function invokeFrameWorkPolygonErase(state, points) {
+    if (Math.abs(polygonArea(points || [])) < 1) return;
+
+    const payload = (points || [])
+        .filter(Boolean)
+        .map(point => ({
+            X: Math.round(point.x),
+            Y: Math.round(point.y),
+        }));
+    if (payload.length < 3) return;
+
+    state.dotNetRef?.invokeMethodAsync("OnFrameWorkErasePolygon", payload);
+}
+
+function simplifyLassoPoints(points) {
+    if (!Array.isArray(points) || points.length < 3) return [];
+
+    const compact = [];
+    for (const point of points) {
+        const previous = compact[compact.length - 1];
+        if (!previous || distance(previous, point) >= 2) {
+            compact.push(point);
+        }
+    }
+
+    if (compact.length > 3 && distance(compact[0], compact[compact.length - 1]) < 2) {
+        compact.pop();
+    }
+    if (Math.abs(polygonArea(compact)) < 4) return [];
+
+    const maxPoints = 96;
+    if (compact.length <= maxPoints) return compact;
+
+    const step = Math.ceil(compact.length / maxPoints);
+    const sampled = [];
+    for (let index = 0; index < compact.length; index += step) {
+        sampled.push(compact[index]);
+    }
+    if (!samePoint(sampled[sampled.length - 1], compact[compact.length - 1])) {
+        sampled.push(compact[compact.length - 1]);
+    }
+    return sampled;
+}
+
+function polygonArea(points) {
+    if (!Array.isArray(points) || points.length < 3) return 0;
+
+    let area = 0;
+    for (let index = 0; index < points.length; index++) {
+        const current = points[index];
+        const next = points[(index + 1) % points.length];
+        area += current.x * next.y - next.x * current.y;
+    }
+    return area / 2;
+}
+
+function frameWorkCloseDistance(state) {
+    if (!state.viewport || !state.image) return 8;
+    return 12 / Math.max(0.001, state.viewport.w / imageWidth(state.image));
 }
 
 function eventToFrameWorkPoint(canvas, state, event) {
