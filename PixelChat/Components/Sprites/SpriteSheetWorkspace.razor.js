@@ -3,6 +3,7 @@ const animations = new WeakMap();
 const frameWorkStates = new WeakMap();
 
 export async function drawSpriteBoxEditor(sourceCanvas, animationCanvas, dotNetRef, imageUrl, payload, selectedIndex, tool) {
+    if (!sourceCanvas || typeof sourceCanvas.addEventListener !== "function") return;
     const image = await loadImage(imageUrl);
     const layout = normalizeLayout(payload);
     const state = ensureEditorState(sourceCanvas, dotNetRef);
@@ -32,7 +33,7 @@ export function disposeSpriteBoxEditor(sourceCanvas, animationCanvas) {
 }
 
 export async function drawFrameWorkCanvas(canvas, dotNetRef, imageUrl, eraseMode) {
-    if (!canvas) return;
+    if (!canvas || typeof canvas.addEventListener !== "function") return;
 
     const state = ensureFrameWorkState(canvas, dotNetRef);
     state.dotNetRef = dotNetRef;

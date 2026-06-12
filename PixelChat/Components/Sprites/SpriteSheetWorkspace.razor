@@ -910,7 +910,7 @@
 
     private async Task DrawFrameWorkAsync()
     {
-        if (_disposed || _module is null || _dotNetRef is null)
+        if (_disposed || _module is null || _dotNetRef is null || _frameWorkCanvas.Id is null)
             return;
 
         try
