@@ -807,19 +807,53 @@ public sealed class AssistantChatService(
         string toolResult,
         CancellationToken cancellationToken)
     {
+        using var document = JsonDocument.Parse(toolResult);
+        var root = document.RootElement;
+        if (TryReadGuidProperty(root, "spriteSheetId", out var spriteSheetId))
+        {
+            var image = await workflow.BuildSpriteSheetAnnotatedSheetAsync(projectId, spriteSheetId, cancellationToken);
+            var frameCount = TryReadIntProperty(root, "frameCount", out var parsedFrameCount)
+                ? parsedFrameCount
+                : 0;
+            return
+            [
+                new TextContent($"Model-only image: annotated sprite-sheet detection view for sprite sheet {spriteSheetId}. Each detected frame is labeled with a 1-based number matching the tool result frameNumber values. Exact shape outlines are drawn visually and are not attached to visible chat context. Detected frames: {frameCount}."),
+                new DataContent(image.DataUrl, image.ContentType)
+                {
+                    Name = image.FileName,
+                },
+            ];
+        }
+
         var detection = JsonSerializer.Deserialize<SpriteSheetDetectionResult>(toolResult, JsonOptions);
         if (detection is null)
             return Array.Empty<AIContent>();
 
-        var image = await workflow.BuildSpriteSheetDetectionAnnotatedSheetAsync(projectId, detection, cancellationToken);
+        var legacyImage = await workflow.BuildSpriteSheetDetectionAnnotatedSheetAsync(projectId, detection, cancellationToken);
         return
         [
             new TextContent($"Model-only image: annotated sprite-sheet detection view for source asset {detection.SourceAssetId}. Frame boxes are labeled by index and background mode is {detection.Background.Mode}. This image is not attached to visible chat context."),
-            new DataContent(image.DataUrl, image.ContentType)
+            new DataContent(legacyImage.DataUrl, legacyImage.ContentType)
             {
-                Name = image.FileName,
+                Name = legacyImage.FileName,
             },
         ];
+    }
+
+    private static bool TryReadGuidProperty(JsonElement root, string name, out Guid value)
+    {
+        value = default;
+        return root.TryGetProperty(name, out var element)
+            && element.ValueKind == JsonValueKind.String
+            && Guid.TryParse(element.GetString(), out value);
+    }
+
+    private static bool TryReadIntProperty(JsonElement root, string name, out int value)
+    {
+        value = default;
+        return root.TryGetProperty(name, out var element)
+            && element.ValueKind == JsonValueKind.Number
+            && element.TryGetInt32(out value);
     }
 
     private static Guid? ReadGuidArgument(PendingToolCall pendingCall, string name)

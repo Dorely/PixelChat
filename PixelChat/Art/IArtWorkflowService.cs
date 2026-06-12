@@ -17,6 +17,7 @@ public interface IArtWorkflowService
     Task<string> ListSpriteSheetsJsonAsync(Guid projectId, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadSpriteSheetJsonAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteAnimationReviewView> BuildSpriteAnimationReviewAsync(Guid projectId, Guid spriteSheetId, int maxFrames = 12, CancellationToken cancellationToken = default);
+    Task<SpriteAnimationReviewImageView> BuildSpriteSheetAnnotatedSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteAnimationReviewImageView> BuildSpriteSheetDetectionAnnotatedSheetAsync(Guid projectId, SpriteSheetDetectionResult detection, CancellationToken cancellationToken = default);
     Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, BackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);
     Task<BackgroundRemovalExportCacheView> SaveBackgroundRemovalExportCacheAsync(Guid projectId, Guid assetId, SaveBackgroundRemovalExportCacheRequest request, CancellationToken cancellationToken = default);

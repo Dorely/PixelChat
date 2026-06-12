@@ -36,6 +36,7 @@ public sealed class AssistantToolRegistry(
         "revert_recipe_version",
         "create_sprite_sheet",
         "review_sprite_animation",
+        "detect_sprite_sheet_frames",
     };
 
     public IList<AITool> Build(Guid projectId, AssistantTurnGenerationBudget budget) =>
@@ -199,7 +200,7 @@ public sealed class AssistantToolRegistry(
                 string? layoutHint = null,
                 string? backgroundMode = null) => DetectSpriteSheetFramesAsync(projectId, sourceAssetId, expectedFrames, layoutHint, backgroundMode),
             name: "detect_sprite_sheet_frames",
-            description: "Read-only PNG sprite-sheet image analysis for an existing source asset. Resolves alpha or dominant border-color background, returns row-major boxes plus editable shape paths, and supplies an annotated sheet-view image as model-only content."),
+            description: "Detect and apply sprite-sheet frames for an existing PNG source asset, then switch to the Sprites workspace. The compact JSON returns numbered frame boxes only; exact shape paths are applied server-side and omitted from JSON. Inspect the model-only annotated sheet image, where frame numbers match the JSON frameNumber values, for visual reasoning."),
 
         AIFunctionFactory.Create(
             method: (
@@ -553,14 +554,36 @@ public sealed class AssistantToolRegistry(
         string? layoutHint,
         string? backgroundMode)
     {
-        var result = await workflow.DetectSpriteSheetFramesAsync(
+        var detection = await workflow.DetectSpriteSheetFramesAsync(
             projectId,
             new SpriteSheetDetectionRequest(
                 sourceAssetId,
                 expectedFrames,
                 layoutHint,
                 backgroundMode));
-        return JsonSerializer.Serialize(result, JsonOptions);
+        var sheet = await workflow.StartSpriteSheetEditAsync(projectId, sourceAssetId);
+        var frames = detection.Frames
+            .Select(frame => new SpriteSheetFrameUpdateView(
+                frame.Index,
+                $"Frame {frame.Index + 1}",
+                frame.SourceRect,
+                frame.ShapePaths))
+            .ToList();
+        var saved = await workflow.UpdateSpriteSheetFramesAsync(projectId, new UpdateSpriteSheetFramesRequest(
+            sheet.Id,
+            Math.Clamp(detection.Rows, 1, 32),
+            Math.Clamp(detection.Columns, 1, 64),
+            Math.Clamp(CeilDiv(detection.ImageWidth, Math.Max(1, detection.Columns)), 1, 8192),
+            Math.Clamp(CeilDiv(detection.ImageHeight, Math.Max(1, detection.Rows)), 1, 8192),
+            Padding: 0,
+            Gutter: 0,
+            sheet.Fps,
+            sheet.Loop,
+            sheet.HorizontalAnchor,
+            sheet.VerticalAnchor,
+            frames));
+
+        return JsonSerializer.Serialize(CompactDetectionResult(detection, saved), JsonOptions);
     }
 
     private async Task<string> UpdateSpriteSheetFramesAsync(
@@ -591,8 +614,68 @@ public sealed class AssistantToolRegistry(
             NormalizeHorizontalAnchor(horizontalAnchor),
             NormalizeVerticalAnchor(verticalAnchor),
             frames));
-        return JsonSerializer.Serialize(saved, JsonOptions);
+        return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet frames updated."), JsonOptions);
     }
+
+    private static object CompactDetectionResult(SpriteSheetDetectionResult detection, SpriteSheetDefinitionView saved) => new
+    {
+        sourceAssetId = detection.SourceAssetId,
+        spriteSheetId = saved.Id,
+        saved.WorkingAssetId,
+        detection.ImageWidth,
+        detection.ImageHeight,
+        saved.Rows,
+        saved.Columns,
+        saved.CellWidth,
+        saved.CellHeight,
+        saved.Padding,
+        saved.Gutter,
+        saved.Fps,
+        saved.Loop,
+        saved.HorizontalAnchor,
+        saved.VerticalAnchor,
+        background = detection.Background,
+        frameCount = saved.Frames.Count,
+        frames = saved.Frames.Select(CompactFrame),
+        modelOnlyImage = "Annotated sheet image supplied separately. Number labels in the image match frameNumber values here.",
+        omitted = "Exact shape paths and preview image data are applied server-side and intentionally omitted from JSON.",
+        message = "Sprite-sheet frames detected and applied.",
+    };
+
+    private static object CompactSpriteSheetResult(SpriteSheetDefinitionView saved, string message) => new
+    {
+        spriteSheetId = saved.Id,
+        saved.SourceAssetId,
+        saved.WorkingAssetId,
+        saved.Rows,
+        saved.Columns,
+        saved.CellWidth,
+        saved.CellHeight,
+        saved.Padding,
+        saved.Gutter,
+        saved.Fps,
+        saved.Loop,
+        saved.HorizontalAnchor,
+        saved.VerticalAnchor,
+        background = saved.Background,
+        frameCount = saved.Frames.Count,
+        frames = saved.Frames.Select(CompactFrame),
+        omitted = "Exact shape paths and preview image data are stored server-side and intentionally omitted from JSON.",
+        message,
+    };
+
+    private static object CompactFrame(SpriteSheetFrameRecordView frame) => new
+    {
+        frameNumber = frame.Index + 1,
+        frame.Index,
+        frame.Label,
+        frame.SourceRect,
+        frame.CellRect,
+        frame.SpriteRect,
+        hasShapePaths = frame.ShapePaths.Any(path => path.Points.Count >= 3),
+        frame.PreviewWidth,
+        frame.PreviewHeight,
+    };
 
     private async Task<string> ExpandSpriteSheetFramesToCellsAsync(
         Guid projectId,
@@ -696,6 +779,9 @@ public sealed class AssistantToolRegistry(
     }
 
     private static int ClampCount(int count) => Math.Clamp(count <= 0 ? 1 : count, 1, 4);
+
+    private static int CeilDiv(int value, int divisor) =>
+        (Math.Max(0, value) + Math.Max(1, divisor) - 1) / Math.Max(1, divisor);
 
     private static string NormalizeHorizontalAnchor(string? value) =>
         value?.Trim().ToLowerInvariant() switch

@@ -242,8 +242,8 @@ internal static class SpriteSheetServerRenderer
             0,
             detection.Background,
             frames,
-            "Detected sprite-sheet frames",
-            "sprite-sheet-detection-view.png");
+            "Detected sprite-sheet frames with frame numbers",
+            "sprite-sheet-detection-numbered-frames.png");
     }
 
     private static SpriteSheetReviewImage BuildAnnotatedSheetView(
@@ -268,6 +268,7 @@ internal static class SpriteSheetServerRenderer
         foreach (var frame in frames)
         {
             DrawRectangle(output, sourceWidth, sourceHeight, frame.SourceRect, 31, 111, 235, 230, 2);
+            DrawShapePaths(output, sourceWidth, sourceHeight, frame.ShapePaths, 32, 210, 115, 240, 2);
             DrawIndexLabel(output, sourceWidth, sourceHeight, frame.Index, frame.SourceRect.X, frame.SourceRect.Y);
         }
 
@@ -781,6 +782,32 @@ internal static class SpriteSheetServerRenderer
             DrawLine(rgba, width, height, rect.X, rect.Y + rect.Height - 1 - offset, rect.X + rect.Width - 1, rect.Y + rect.Height - 1 - offset, r, g, b, a, 1);
             DrawLine(rgba, width, height, rect.X + offset, rect.Y, rect.X + offset, rect.Y + rect.Height - 1, r, g, b, a, 1);
             DrawLine(rgba, width, height, rect.X + rect.Width - 1 - offset, rect.Y, rect.X + rect.Width - 1 - offset, rect.Y + rect.Height - 1, r, g, b, a, 1);
+        }
+    }
+
+    private static void DrawShapePaths(
+        byte[] rgba,
+        int width,
+        int height,
+        IReadOnlyList<SpriteSheetShapePath> shapePaths,
+        byte r,
+        byte g,
+        byte b,
+        byte a,
+        int thickness)
+    {
+        foreach (var path in shapePaths)
+        {
+            var points = path.Points;
+            if (points.Count < 2)
+                continue;
+
+            for (var index = 0; index < points.Count; index++)
+            {
+                var start = points[index];
+                var end = points[(index + 1) % points.Count];
+                DrawLine(rgba, width, height, start.X, start.Y, end.X, end.Y, r, g, b, a, thickness);
+            }
         }
     }
 

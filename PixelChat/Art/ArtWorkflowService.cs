@@ -451,6 +451,53 @@ public sealed class ArtWorkflowService(
             image.ToFrame);
     }
 
+    public async Task<SpriteAnimationReviewImageView> BuildSpriteSheetAnnotatedSheetAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        CancellationToken cancellationToken = default)
+    {
+        var sheet = await db.SpriteSheetDefinitions
+            .Include(s => s.OutputAsset)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite sheet was not found.");
+        var working = sheet.OutputAsset ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
+        if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Sprite-sheet annotation requires a PNG working image.");
+
+        var frames = await db.SpriteSheetFrameRecords
+            .AsNoTracking()
+            .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == spriteSheetId)
+            .OrderBy(frame => frame.Index)
+            .ToListAsync(cancellationToken);
+        if (frames.Count == 0)
+            throw new InvalidOperationException("No sprite frames were found to annotate.");
+
+        var detection = new SpriteSheetDetectionResult(
+            sheet.SourceAssetId,
+            width,
+            height,
+            sheet.Rows,
+            sheet.Columns,
+            BackgroundOrDefault(sheet),
+            frames
+                .Select(frame => new SpriteSheetFrameDetectionView(
+                    frame.Index,
+                    RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
+                    DeserializeShapePaths(frame.ShapeJson)))
+                .ToList());
+        var image = SpriteSheetServerRenderer.BuildDetectionAnnotatedSheetView(rgba, width, height, detection);
+        return new SpriteAnimationReviewImageView(
+            image.Label,
+            image.FileName,
+            "image/png",
+            DataUrl.ToDataUrl("image/png", image.PngData),
+            image.Kind,
+            image.FrameIndex,
+            image.FromFrame,
+            image.ToFrame);
+    }
+
     public async Task<BackgroundRemovalExportCacheView?> GetBackgroundRemovalExportCacheAsync(
         Guid projectId,
         Guid assetId,
