@@ -1,0 +1,73 @@
+@namespace PixelChat.Components.Shared
+@using PixelChat.Art
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<canvas class="@CssClass" title="@Title" aria-label="@Title" @ref="_canvas" @onclick="OnClick"></canvas>
+
+@code {
+    [Parameter, EditorRequired]
+    public SpriteSheetDefinitionView Sheet { get; set; } = null!;
+
+    [Parameter]
+    public string CssClass { get; set; } = "sprite-animation-preview";
+
+    [Parameter]
+    public string Title { get; set; } = "Sprite animation preview";
+
+    [Parameter]
+    public EventCallback OnClick { get; set; }
+
+    private IJSObjectReference? _module;
+    private ElementReference _canvas;
+    private string _renderedKey = string.Empty;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Shared/SpriteAnimationPreview.razor.js");
+
+        await RenderPreviewIfNeededAsync();
+    }
+
+    private async Task RenderPreviewIfNeededAsync()
+    {
+        if (_module is null || Sheet is null)
+            return;
+
+        var frames = Sheet.Frames
+            .OrderBy(frame => frame.Index)
+            .Where(frame => !string.IsNullOrWhiteSpace(frame.PreviewImageUrl))
+            .Select(frame => new
+            {
+                frame.PreviewImageUrl,
+                frame.Label,
+                frame.Duration,
+            })
+            .ToList();
+        var key = $"{Sheet.Id:N}:{Sheet.UpdatedAt:O}:{frames.Count}:{string.Join('|', frames.Select(frame => frame.PreviewImageUrl))}";
+        if (string.Equals(key, _renderedKey, StringComparison.Ordinal))
+            return;
+
+        _renderedKey = key;
+        await _module.InvokeVoidAsync("start", _canvas, frames, Sheet.Fps, Sheet.Loop);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is null)
+            return;
+
+        try
+        {
+            await _module.InvokeVoidAsync("dispose", _canvas);
+            await _module.DisposeAsync();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+}

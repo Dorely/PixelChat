@@ -18,13 +18,14 @@ public static class AssistantPromptBuilder
         - Read tools (`list_workspace_state`, `list_assets`/`read_asset`, `list_recipes`/`read_recipe`/`list_recipe_versions`, `list_batches`/`read_batch`, `list_sprite_sheets`/`read_sprite_sheet`): inspect project data with no visible side effects.
         - Draft tools (`draft_generate_form`, `draft_edit_form`, `draft_prompt_recipe_form`): fill visible forms for the user to review and submit manually.
         - Autonomous tools (`run_generation_round`, `save_prompt_recipe`, `revert_recipe_version`, `create_sprite_sheet`): perform real generation and recipe work directly during bounded iteration.
-        - Sprite-sheet tools (`map_sprite_sheet_frames`, `update_sprite_sheet_frames`, `isolate_sprite_frame`, `read_sprite_frame_image`, `erase_sprite_frame_regions`, `edit_sprite_frame`, `clear_sprite_frame_working_image`, `reassemble_sprite_sheet`, `normalize_sprite_sheet`, `reset_sprite_sheet_to_original`, `review_sprite_animation`, `attach_sprite_sheet_frames`).
-        - Workspace tools (`switch_workspace_mode`, `attach_chat_attachment`, `clear_chat_attachments`, `mark_asset`, `export_asset`): visible UI changes.
+        - Sprite-sheet tools (`map_sprite_sheet_frames`, `update_sprite_sheet_frames`, `isolate_sprite_frame`, `read_sprite_frame_image`, `erase_sprite_frame_regions`, `edit_sprite_frame`, `clear_sprite_frame_working_image`, `reassemble_sprite_sheet`, `normalize_sprite_sheet`, `reset_sprite_sheet_to_original`, `review_sprite_animation`).
+        - Workspace tools (`switch_workspace_mode`, `set_compare_review_set`, `add_compare_review_items`, `remove_compare_review_item`, `clear_compare_review_set`, `mark_asset`, `export_asset`): visible UI changes.
 
         How image context reaches you:
 
-        - Visible chat attachments arrive automatically as images with the user's current message. Do not call read tools just to see them again.
-        - Images from `read_asset`, `run_generation_round` outputs, `map_sprite_sheet_frames`, isolated frame tools, sprite mutation tools, and `review_sprite_animation` are model-only: you can see them, the user cannot. When the user should see an image, attach it or point at the asset by name.
+        - User-selected visible chat attachments arrive automatically as images with the user's current message. Do not call read tools just to see them again.
+        - Images from `read_asset`, `run_generation_round` outputs, `map_sprite_sheet_frames`, isolated frame tools, sprite mutation tools, and `review_sprite_animation` are model-only: you can see them, the user cannot. When the user should review images, put the relevant assets, batches, sprite sheets, or sprite animations in the Compare review set.
+        - Compare review-set items are visible to the user only. They do not become model image context.
         - Sprite-sheet tool JSON reports compact frame rectangles, warnings, rejected segments, and shape counts. It does not include server-generated polygon point arrays; inspect the model-only images instead.
         - List tools return metadata only, never image bytes.
         - `list_workspace_state` populates only the active tab's section; use focused list/read tools for everything else.
@@ -107,7 +108,8 @@ public static class AssistantPromptBuilder
         - Geometry changes can clear hidden frame work for affected frames. Do not normalize or re-layout mid-loop unless you intend to restart frame isolation for changed regions.
         - `reassemble_sprite_sheet` detects foreground bounds per frame and warns when one frame's bounds deviate strongly from the median — that usually means stray artifacts are inflating its cell, so clean that frame instead of accepting a jumpy layout.
         - Use `reset_sprite_sheet_to_original` only when the user asks to start over.
-        - Use `attach_sprite_sheet_frames` when frame previews need to be visible chat image context.
+        - Use Compare review-set tools when sprite-sheet results need to be visible for user review.
+        - At the end of animation work, prefer adding the final `spriteAnimation` item and the final `spriteSheet` item to the Compare review set. Add individual `spriteFrame` items only when specific frames need attention.
         - Every sprite mutation returns model-only result images. Inspect them immediately for misaligned boxes, clipping, neighbor bleed, and rejected/outlier segment annotations before taking the next action. Do not claim success if the returned images still show significant misalignment.
 
         # Asset Generation Discipline
@@ -158,7 +160,7 @@ public static class AssistantPromptBuilder
 
         When autonomous iteration is satisfied, stopped early, or budget-exhausted:
 
-        - Present the best assets.
+        - Present the best assets in the Compare review set.
         - Summarize what was verified and what remains imperfect against the acceptance criteria.
         - List recipe versions saved during the task with their `changeSummary` values, and report the final recipe version.
         - Name which asset was set as the recipe example.

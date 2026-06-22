@@ -45,14 +45,14 @@
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact all-tab records including recipe example/version context used by assistant tools. |
 | `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt: autonomous recipe iteration, good-sprite-animation criteria, the malformed-sheet manual repair playbook, frame-cleanup/coordinate discipline, and generation size constraints. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records, form draft payloads including recipe example drafts, and per-turn autonomous generation budget state. |
-| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, single-example recipe saves/versioning, size-validated autonomous generation rounds, merged heuristic frame mapping, per-frame sprite tools with erase/keep modes, attachments, favorites, and exports. |
+| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipe saves/versioning, autonomous generation rounds, sprite tools, Compare review sets, favorites, and exports. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for metadata-only workbench loads, media binary reads, assets, sprite sheets/reviews/normalize, per-frame edit/reassembly, exports, recipes, masks, import, crop, and edits. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Compare review sets, sprite sheets/reviews/normalize, exports, recipes, masks, import, crop, and edits. |
 | `ArtWorkflowModels.cs` | Request/result/view records for the workbench, lazy media URLs/binaries, per-frame sprite isolation/reassembly, recipe-versioned generation/edit, recipe management, and assistant tools. |
 | `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, masks, and sprite-frame previews. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
@@ -80,6 +80,7 @@
 | File | Description |
 |------|-------------|
 | `LazyImage.razor` / `.razor.css` / `.razor.js` | IntersectionObserver-backed image component that reserves thumbnail space and assigns `src` only when near the viewport. |
+| `SpriteAnimationPreview.razor` / `.razor.js` | Reusable canvas animation preview component that plays saved sprite-frame preview images without storing a GIF artifact. |
 
 ### Components/Chat/
 
@@ -101,7 +102,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, lazy thumbnails, chat attachments, recipe-aware Generate/Edit, Compare/Sprites/Recipes/Assets tabs, canvas helpers, and exports. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, chat attachments, shared image preview modal, review-set Compare UI, recipe-aware Generate/Edit, Sprites/Recipes/Assets tabs, canvas helpers, and exports. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, thinking modes, defaults, API-key updates, and child model rows. |
@@ -110,7 +111,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with lazy frame thumbnails, single-sheet canvas loading, irregular source-region editing, per-frame isolation/erase/AI edit/reassembly, animation preview, reset, and export. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with lazy frame thumbnails, preview callbacks, single-sheet canvas loading, irregular source-region editing, per-frame isolation/erase/AI edit/reassembly, animation preview, reset, and export. |
 
 ### Llm/
 
@@ -152,6 +153,7 @@
 | `SpriteSheetFrameRecord.cs` | EF entity for durable sprite frame records, source/output rectangles, previews, hidden working-frame PNGs, labels, dimensions, and timestamps. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets. |
 | `ChatContextAttachment.cs` | EF entity for persistent visible chat attachments referencing assets, masks, crops, recipes, or batches. |
+| `CompareReviewSet.cs` | EF entities for the project-scoped current Compare review set and ordered review items referencing assets, batches, sprite sheets, animations, or frames. |
 | `AssistantConversation.cs` | EF entity for project-scoped persistent assistant conversations. |
 | `AssistantMessage.cs` | EF entity and enums for transcript messages, tool roles, tool-call manifests, roles, statuses, and errors. |
 | `AuthType.cs` | Enum for provider authentication modes: none, API key, or OAuth. |
@@ -188,6 +190,7 @@
 | `20260611222045_SpriteSheetBackgroundFill.cs` / `.Designer.cs` | EF migration adding nullable sprite-sheet background fill metadata. |
 | `20260612071043_SpriteFrameWorkingImages.cs` / `.Designer.cs` | EF migration adding hidden per-frame working PNG state for sprite isolation, cleanup, and reassembly. |
 | `20260612154126_ProviderThinkingMode.cs` / `.Designer.cs` | EF migration adding nullable provider thinking mode and last-tested thinking snapshot fields. |
+| `20260622190840_CompareReviewSet.cs` / `.Designer.cs` | EF migration adding project-scoped Compare review sets and ordered review items. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

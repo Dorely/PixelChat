@@ -22,14 +22,15 @@ public sealed class AssistantToolRegistry(
 
     private static readonly HashSet<string> WorkspaceMutationTools = new(StringComparer.Ordinal)
     {
-        "attach_chat_attachment",
-        "clear_chat_attachments",
         "switch_workspace_mode",
+        "set_compare_review_set",
+        "add_compare_review_items",
+        "remove_compare_review_item",
+        "clear_compare_review_set",
         "mark_asset",
         "update_sprite_sheet_frames",
         "normalize_sprite_sheet",
         "reset_sprite_sheet_to_original",
-        "attach_sprite_sheet_frames",
         "run_generation_round",
         "save_prompt_recipe",
         "revert_recipe_version",
@@ -134,7 +135,7 @@ public sealed class AssistantToolRegistry(
             method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
                 ReadSpriteSheetToolAsync(projectId, spriteSheetId, cancellationToken),
             name: "read_sprite_sheet",
-            description: "Read a sprite sheet's layout and frame boxes without returning preview image bytes. Use attach_sprite_sheet_frames when frame previews need to be visible image context."),
+            description: "Read a sprite sheet's layout and frame boxes without returning preview image bytes. Use compare review-set tools when the user should review sprite-sheet results visually."),
 
         AIFunctionFactory.Create(
             method: (Guid sourceAssetId, CancellationToken cancellationToken = default) =>
@@ -149,19 +150,33 @@ public sealed class AssistantToolRegistry(
             description: "Review a sprite animation from the current PNG working sheet. Returns motion metrics in JSON and supplies labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content with manifest fields. For frames with hidden working images it also returns removed-vs-source overlays where red marks pixels erased from the source foreground — inspect these for clipped owned silhouette before declaring cleanup done."),
 
         AIFunctionFactory.Create(
-            method: (string type, Guid refId, string? label = null) => AttachContextAsync(projectId, type, refId, label),
-            name: "attach_chat_attachment",
-            description: "Attach an existing asset, mask, crop, sprite frame, prompt recipe, or generation batch to the visible chat attachments."),
-
-        AIFunctionFactory.Create(
-            method: () => ClearContextAsync(projectId),
-            name: "clear_chat_attachments",
-            description: "Clear all visible chat attachments for the current project."),
-
-        AIFunctionFactory.Create(
             method: (string mode) => SwitchWorkspaceModeAsync(projectId, mode),
             name: "switch_workspace_mode",
             description: "Switch the visible workspace mode. Allowed values: generate, compare, edit, sprites, recipes, assets."),
+
+        AIFunctionFactory.Create(
+            method: (string? title = null, string? summary = null, CompareReviewToolItem[]? items = null, bool switchToCompare = true, CancellationToken cancellationToken = default) =>
+                SetCompareReviewSetAsync(projectId, title, summary, items, switchToCompare, cancellationToken),
+            name: "set_compare_review_set",
+            description: "Replace the current Compare tab review set with an ordered set of user-visible review items. Item kind values: asset, generationBatch, spriteSheet, spriteAnimation, spriteFrame. This does not attach images to chat or send them back as model context."),
+
+        AIFunctionFactory.Create(
+            method: (CompareReviewToolItem[]? items = null, string? title = null, string? summary = null, bool switchToCompare = true, CancellationToken cancellationToken = default) =>
+                AddCompareReviewItemsAsync(projectId, items, title, summary, switchToCompare, cancellationToken),
+            name: "add_compare_review_items",
+            description: "Append or update items in the current Compare tab review set. Item kind values: asset, generationBatch, spriteSheet, spriteAnimation, spriteFrame. This is for grouping things the user should review visually, not for model image context."),
+
+        AIFunctionFactory.Create(
+            method: (Guid itemId, CancellationToken cancellationToken = default) =>
+                RemoveCompareReviewItemAsync(projectId, itemId, cancellationToken),
+            name: "remove_compare_review_item",
+            description: "Remove one item from the current Compare tab review set by review item id."),
+
+        AIFunctionFactory.Create(
+            method: (CancellationToken cancellationToken = default) =>
+                ClearCompareReviewSetAsync(projectId, cancellationToken),
+            name: "clear_compare_review_set",
+            description: "Clear the current Compare tab review set."),
 
         AIFunctionFactory.Create(
             method: (
@@ -291,12 +306,6 @@ public sealed class AssistantToolRegistry(
             description: "Reset the selected working sprite sheet to its immutable original image and clear all frame records. Returns the reset working image as model-only feedback because no frame review exists after records are cleared."),
 
         AIFunctionFactory.Create(
-            method: (Guid? spriteSheetId = null, Guid[]? frameIds = null, CancellationToken cancellationToken = default) =>
-                AttachSpriteSheetFramesAsync(projectId, spriteSheetId, frameIds, cancellationToken),
-            name: "attach_sprite_sheet_frames",
-            description: "Attach one or more saved sprite frame previews to visible chat context. Omit frameIds to attach every frame in the sheet."),
-
-        AIFunctionFactory.Create(
             method: (Guid assetId, bool? favorite = null, string? notes = null) =>
                 MarkAssetAsync(projectId, assetId, favorite, notes),
             name: "mark_asset",
@@ -326,22 +335,52 @@ public sealed class AssistantToolRegistry(
         return await workflow.GetWorkspaceStateJsonAsync(projectId);
     }
 
-    private async Task<string> AttachContextAsync(Guid projectId, string type, Guid refId, string? label)
-    {
-        var attachment = await workflow.AttachContextAsync(projectId, ParseAttachmentType(type), refId, label);
-        return JsonSerializer.Serialize(attachment, JsonOptions);
-    }
-
-    private async Task<string> ClearContextAsync(Guid projectId)
-    {
-        await workflow.ClearContextAsync(projectId);
-        return "Chat attachments cleared.";
-    }
-
     private async Task<string> SwitchWorkspaceModeAsync(Guid projectId, string mode)
     {
         await workflow.SetWorkspaceModeAsync(projectId, ParseWorkspaceMode(mode));
         return $"Workspace mode switched to {mode}.";
+    }
+
+    private async Task<string> SetCompareReviewSetAsync(
+        Guid projectId,
+        string? title,
+        string? summary,
+        CompareReviewToolItem[]? items,
+        bool switchToCompare,
+        CancellationToken cancellationToken)
+    {
+        var reviewSet = await workflow.SetCompareReviewSetAsync(
+            projectId,
+            new SetCompareReviewSetRequest(title, summary, ToCompareReviewRequests(items), switchToCompare),
+            cancellationToken);
+        return JsonSerializer.Serialize(reviewSet, JsonOptions);
+    }
+
+    private async Task<string> AddCompareReviewItemsAsync(
+        Guid projectId,
+        CompareReviewToolItem[]? items,
+        string? title,
+        string? summary,
+        bool switchToCompare,
+        CancellationToken cancellationToken)
+    {
+        var reviewSet = await workflow.AddCompareReviewItemsAsync(
+            projectId,
+            new AddCompareReviewItemsRequest(title, summary, ToCompareReviewRequests(items), switchToCompare),
+            cancellationToken);
+        return JsonSerializer.Serialize(reviewSet, JsonOptions);
+    }
+
+    private async Task<string> RemoveCompareReviewItemAsync(Guid projectId, Guid itemId, CancellationToken cancellationToken)
+    {
+        await workflow.RemoveCompareReviewItemAsync(projectId, itemId, cancellationToken);
+        return $"Compare review item {itemId} removed.";
+    }
+
+    private async Task<string> ClearCompareReviewSetAsync(Guid projectId, CancellationToken cancellationToken)
+    {
+        await workflow.ClearCompareReviewSetAsync(projectId, cancellationToken);
+        return "Compare review set cleared.";
     }
 
     private async Task<string> SavePromptRecipeToolAsync(
@@ -1242,16 +1281,6 @@ public sealed class AssistantToolRegistry(
         return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet normalized."), JsonOptions);
     }
 
-    private async Task<string> AttachSpriteSheetFramesAsync(Guid projectId, Guid? spriteSheetId, Guid[]? frameIds, CancellationToken cancellationToken)
-    {
-        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
-        if (resolution.ErrorJson is not null)
-            return resolution.ErrorJson;
-
-        var attachments = await workflow.AttachSpriteSheetFramesAsync(projectId, resolution.SpriteSheetId!.Value, frameIds, cancellationToken);
-        return JsonSerializer.Serialize(attachments, JsonOptions);
-    }
-
     private async Task<string> MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes)
     {
         await workflow.MarkAssetAsync(projectId, assetId, favorite, notes);
@@ -1266,16 +1295,25 @@ public sealed class AssistantToolRegistry(
             message = "Use the visible Export button for this asset to open export processing options.",
         }, JsonOptions));
 
-    private static ChatContextAttachmentType ParseAttachmentType(string type) =>
-        NormalizeToken(type) switch
+    private static IReadOnlyList<CompareReviewSetItemRequest> ToCompareReviewRequests(CompareReviewToolItem[]? items) =>
+        items?
+            .Where(item => item.RefId != Guid.Empty)
+            .Select(item => new CompareReviewSetItemRequest(
+                ParseCompareReviewItemKind(item.Kind),
+                item.RefId,
+                item.Label,
+                item.Notes))
+            .ToList() ?? [];
+
+    private static CompareReviewItemKind ParseCompareReviewItemKind(string kind) =>
+        NormalizeToken(kind) switch
         {
-            "asset" => ChatContextAttachmentType.Asset,
-            "mask" => ChatContextAttachmentType.Mask,
-            "crop" => ChatContextAttachmentType.Crop,
-            "spriteframe" or "sprite" or "frame" => ChatContextAttachmentType.SpriteFrame,
-            "promptrecipe" or "recipe" => ChatContextAttachmentType.PromptRecipe,
-            "generationbatch" or "batch" => ChatContextAttachmentType.GenerationBatch,
-            _ => throw new InvalidOperationException($"Unknown context attachment type '{type}'.")
+            "asset" => CompareReviewItemKind.Asset,
+            "generationbatch" or "batch" => CompareReviewItemKind.GenerationBatch,
+            "spritesheet" or "sheet" => CompareReviewItemKind.SpriteSheet,
+            "spriteanimation" or "animation" => CompareReviewItemKind.SpriteAnimation,
+            "spriteframe" or "frame" => CompareReviewItemKind.SpriteFrame,
+            _ => throw new InvalidOperationException($"Unknown compare review item kind '{kind}'.")
         };
 
     private static WorkspaceMode ParseWorkspaceMode(string mode) =>

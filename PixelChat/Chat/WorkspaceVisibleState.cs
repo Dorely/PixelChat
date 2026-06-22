@@ -74,7 +74,8 @@ public sealed record WorkspaceEditVisibleState(
 
 public sealed record WorkspaceCompareVisibleState(
     WorkspaceBatchSummary? ActiveBatch,
-    IReadOnlyList<WorkspaceBatchSummary> VisibleRecentBatches);
+    IReadOnlyList<WorkspaceBatchSummary> VisibleRecentBatches,
+    WorkspaceCompareReviewSetSummary? ReviewSet);
 
 public sealed record WorkspaceSpritesVisibleState(
     WorkspaceSpriteSheetSummary? ActiveSpriteSheet);
@@ -127,6 +128,21 @@ public sealed record WorkspaceBatchSummary(
     string PromptPreview,
     string Error,
     DateTime CreatedAt);
+
+public sealed record WorkspaceCompareReviewSetSummary(
+    Guid Id,
+    string Title,
+    string Summary,
+    IReadOnlyList<WorkspaceCompareReviewItemSummary> Items,
+    DateTime UpdatedAt);
+
+public sealed record WorkspaceCompareReviewItemSummary(
+    Guid Id,
+    CompareReviewItemKind Kind,
+    Guid RefId,
+    string Label,
+    string Notes,
+    int SortOrder);
 
 public sealed record WorkspaceSpriteSheetSummary(
     Guid Id,

@@ -42,6 +42,19 @@
     min-height: 0;
 }
 
+.sprite-section-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.sprite-section-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
 .sprite-source-canvas,
 .sprite-animation-canvas {
     display: block;
@@ -87,6 +100,10 @@
 .sprite-animation-canvas {
     aspect-ratio: 1 / 1;
     max-height: 260px;
+}
+
+.sprite-animation-canvas.is-previewable {
+    cursor: zoom-in;
 }
 
 .sprite-tool-strip {
@@ -233,6 +250,12 @@
     border-radius: 6px;
     background: #edf2f7;
     overflow: hidden;
+}
+
+.frame-thumb:hover,
+.frame-thumb:focus-visible {
+    outline: 2px solid rgba(31, 111, 235, 0.45);
+    outline-offset: -2px;
 }
 
 .frame-thumb img {

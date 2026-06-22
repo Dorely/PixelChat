@@ -11,6 +11,7 @@ public sealed record WorkbenchView(
     IReadOnlyList<SpriteSheetDefinitionView> SpriteSheets,
     IReadOnlyList<ImageMaskView> Masks,
     IReadOnlyList<ChatContextAttachmentView> Attachments,
+    CompareReviewSetView? CompareReviewSet,
     GenerationBatchView? ActiveBatch,
     SpriteSheetDefinitionView? ActiveSpriteSheet,
     ProviderStatusView ImageProviderStatus);
@@ -465,6 +466,22 @@ public sealed record ChatContextAttachmentView(
     string Label,
     int SortOrder);
 
+public sealed record CompareReviewSetView(
+    Guid Id,
+    string Title,
+    string Summary,
+    IReadOnlyList<CompareReviewSetItemView> Items,
+    DateTime UpdatedAt);
+
+public sealed record CompareReviewSetItemView(
+    Guid Id,
+    CompareReviewItemKind Kind,
+    Guid RefId,
+    string Label,
+    string Notes,
+    int SortOrder,
+    DateTime CreatedAt);
+
 public sealed record ProviderStatusView(
     bool Connected,
     string Message);
@@ -489,6 +506,24 @@ public sealed record EditImageRequest(
     string? SourcePngDataUrl,
     string? MaskPngDataUrl,
     IReadOnlyList<Guid> ReferenceAssetIds);
+
+public sealed record CompareReviewSetItemRequest(
+    CompareReviewItemKind Kind,
+    Guid RefId,
+    string? Label = null,
+    string? Notes = null);
+
+public sealed record SetCompareReviewSetRequest(
+    string? Title,
+    string? Summary,
+    IReadOnlyList<CompareReviewSetItemRequest> Items,
+    bool SwitchToCompare = true);
+
+public sealed record AddCompareReviewItemsRequest(
+    string? Title,
+    string? Summary,
+    IReadOnlyList<CompareReviewSetItemRequest> Items,
+    bool SwitchToCompare = true);
 
 public sealed record ImportAssetRequest(
     string FileName,

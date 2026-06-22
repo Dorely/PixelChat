@@ -15,6 +15,8 @@
             <InputFile OnChange="ImportSourceAsync" accept="image/png,image/jpeg" />
             <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet || _framePersistenceRunning)" @onclick="AutoDetectAsync">Auto Detect</button>
             <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(!HasActiveSheet || _framePersistenceRunning)" @onclick="ResetToOriginalAsync">Reset</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet)" @onclick="PreviewSheetAsync">Preview Sheet</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet)" @onclick="AddSheetToReviewAsync">Add Sheet to Review</button>
             <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(CurrentWorkingAsset() is null)" @onclick="ExportWorkingAsync">Export...</button>
         </div>
     </div>
@@ -71,8 +73,14 @@
 
             <aside class="sprite-side-panel">
                 <div class="sprite-canvas-panel sprite-animation-panel">
-                    <div class="section-title">Animation</div>
-                    <canvas class="sprite-animation-canvas" @ref="_animationCanvas"></canvas>
+                    <div class="sprite-section-title-row">
+                        <div class="section-title">Animation</div>
+                        <div class="sprite-section-actions">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet || _frames.Count == 0)" @onclick="PreviewAnimationAsync">Preview</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet || _frames.Count == 0)" @onclick="AddAnimationToReviewAsync">Add to Review</button>
+                        </div>
+                    </div>
+                    <canvas class="@AnimationCanvasClass()" @ref="_animationCanvas" @onclick="PreviewAnimationAsync"></canvas>
                 </div>
 
                 <div class="sprite-settings-panel">
@@ -138,7 +146,7 @@
                     @foreach (var frame in _frames)
                     {
                         <div class="sprite-frame-row @(frame.Index == _selectedFrameIndex ? "is-selected" : "")">
-                            <button type="button" class="frame-thumb" @onclick="() => SelectFrameAsync(frame.Index)">
+                            <button type="button" class="frame-thumb" @onclick="() => SelectFrameAsync(frame.Index)" @ondblclick="() => PreviewFrameAsync(frame)">
                                 @if (!string.IsNullOrWhiteSpace(frame.PreviewImageUrl))
                                 {
                                     <LazyImage Src="@frame.PreviewImageUrl" Alt="@frame.Label" Width="58" Height="58" />
@@ -154,6 +162,7 @@
                             <div class="frame-row-actions">
                                 <button type="button" class="btn btn-sm btn-outline-secondary" title="Move up" disabled="@(frame.Index == 0)" @onclick="() => MoveFrameAsync(frame.Index, -1)">Up</button>
                                 <button type="button" class="btn btn-sm btn-outline-secondary" title="Move down" disabled="@(frame.Index >= _frames.Count - 1)" @onclick="() => MoveFrameAsync(frame.Index, 1)">Down</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Preview frame" disabled="@(!CanPreviewFrame(frame))" @onclick="() => PreviewFrameAsync(frame)">Preview</button>
                                 <button type="button" class="btn btn-sm btn-outline-secondary" title="Attach frame" disabled="@(frame.Id is null)" @onclick="() => AttachFrameAsync(frame)">Attach</button>
                             </div>
                         </div>
@@ -205,6 +214,21 @@
 
     [Parameter]
     public EventCallback<ArtAssetView> OnExportAsset { get; set; }
+
+    [Parameter]
+    public EventCallback<SpriteSheetDefinitionView> OnAddSheetToReview { get; set; }
+
+    [Parameter]
+    public EventCallback<SpriteSheetDefinitionView> OnAddAnimationToReview { get; set; }
+
+    [Parameter]
+    public EventCallback<SpriteSheetDefinitionView> OnPreviewSheet { get; set; }
+
+    [Parameter]
+    public EventCallback<SpriteSheetDefinitionView> OnPreviewAnimation { get; set; }
+
+    [Parameter]
+    public EventCallback<SpriteSheetFrameRecordView> OnPreviewFrame { get; set; }
 
     private IJSObjectReference? _module;
     private DotNetObjectReference<SpriteSheetWorkspace>? _dotNetRef;
@@ -420,6 +444,40 @@
     {
         if (CurrentWorkingAsset() is { } asset)
             await OnExportAsset.InvokeAsync(asset);
+    }
+
+    private async Task AddSheetToReviewAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is { } sheet)
+            await OnAddSheetToReview.InvokeAsync(sheet);
+    }
+
+    private async Task PreviewSheetAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is { } sheet)
+            await OnPreviewSheet.InvokeAsync(sheet);
+    }
+
+    private async Task AddAnimationToReviewAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is { } sheet)
+            await OnAddAnimationToReview.InvokeAsync(sheet);
+    }
+
+    private async Task PreviewAnimationAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is { } sheet && _frames.Count > 0)
+            await OnPreviewAnimation.InvokeAsync(sheet);
+    }
+
+    private async Task PreviewFrameAsync(SpriteSheetEditorFrame frame)
+    {
+        if (frame.Id is not Guid frameId)
+            return;
+
+        var persistedFrame = Workbench.ActiveSpriteSheet?.Frames.FirstOrDefault(candidate => candidate.Id == frameId);
+        if (persistedFrame is not null)
+            await OnPreviewFrame.InvokeAsync(persistedFrame);
     }
 
     private async Task NormalizeSheetAsync()
@@ -1211,6 +1269,12 @@
 
     private string FrameWorkCanvasClass() =>
         _frameEraseMode == FrameWorkEraseMode.None ? "frame-work-canvas" : "frame-work-canvas is-erase-mode";
+
+    private string AnimationCanvasClass() =>
+        HasActiveSheet && _frames.Count > 0 ? "sprite-animation-canvas is-previewable" : "sprite-animation-canvas";
+
+    private static bool CanPreviewFrame(SpriteSheetEditorFrame frame) =>
+        frame.Id is not null && !string.IsNullOrWhiteSpace(frame.PreviewImageUrl);
 
     private string FrameEraseModeToken() =>
         _frameEraseMode switch

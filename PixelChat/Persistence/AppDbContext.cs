@@ -22,6 +22,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<SpriteSheetFrameRecord> SpriteSheetFrameRecords => Set<SpriteSheetFrameRecord>();
     public DbSet<ImageMask> ImageMasks => Set<ImageMask>();
     public DbSet<ChatContextAttachment> ChatContextAttachments => Set<ChatContextAttachment>();
+    public DbSet<CompareReviewSet> CompareReviewSets => Set<CompareReviewSet>();
+    public DbSet<CompareReviewSetItem> CompareReviewSetItems => Set<CompareReviewSetItem>();
     public DbSet<AssistantConversation> AssistantConversations => Set<AssistantConversation>();
     public DbSet<AssistantMessage> AssistantMessages => Set<AssistantMessage>();
 
@@ -278,6 +280,28 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.ChatContextAttachments)
                 .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CompareReviewSet>(entity =>
+        {
+            entity.HasIndex(e => e.ProjectId).IsUnique();
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.CompareReviewSets)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CompareReviewSetItem>(entity =>
+        {
+            entity.HasIndex(e => new { e.CompareReviewSetId, e.SortOrder });
+            entity.HasIndex(e => new { e.CompareReviewSetId, e.Kind, e.RefId }).IsUnique();
+            entity.Property(e => e.Kind).HasConversion<string>();
+
+            entity.HasOne(e => e.CompareReviewSet)
+                .WithMany(s => s.Items)
+                .HasForeignKey(e => e.CompareReviewSetId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

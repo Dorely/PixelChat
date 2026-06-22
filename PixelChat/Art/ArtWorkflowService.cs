@@ -181,6 +181,17 @@ public sealed class ArtWorkflowService(
             .OrderBy(a => a.SortOrder)
             .ThenBy(a => a.CreatedAt)
             .ToListAsync(cancellationToken);
+        var compareReviewSet = await db.CompareReviewSets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(set => set.ProjectId == selected.Id, cancellationToken);
+        var compareReviewItems = compareReviewSet is null
+            ? []
+            : await db.CompareReviewSetItems
+                .AsNoTracking()
+                .Where(item => item.CompareReviewSetId == compareReviewSet.Id)
+                .OrderBy(item => item.SortOrder)
+                .ThenBy(item => item.CreatedAt)
+                .ToListAsync(cancellationToken);
 
         var currentRecipeVersions = await LoadCurrentRecipeVersionsAsync(selected.Id, recipes.Select(recipe => recipe.Id).ToList(), cancellationToken);
         var assetViews = assets.Select(AssetView).ToList();
@@ -207,6 +218,7 @@ public sealed class ArtWorkflowService(
             spriteSheetViews,
             maskViews,
             attachmentViews,
+            compareReviewSet is null ? null : CompareReviewSetView(compareReviewSet, compareReviewItems),
             batchViews.FirstOrDefault(b => b.Id == selected.ActiveBatchId),
             spriteSheetViews.FirstOrDefault(s => s.Id == selected.ActiveSpriteSheetId),
             providerStatus);
@@ -1358,6 +1370,7 @@ public sealed class ArtWorkflowService(
         await db.ChatContextAttachments
             .Where(a => a.ProjectId == projectId && a.Type == ChatContextAttachmentType.SpriteFrame && a.RefId == frameId)
             .ExecuteDeleteAsync(cancellationToken);
+        await RemoveCompareReviewItemsAsync(projectId, CompareReviewItemKind.SpriteFrame, [frameId], cancellationToken);
         var deleted = await db.SpriteSheetFrameRecords
             .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == definition.Id && frame.Id == frameId)
             .ExecuteDeleteAsync(cancellationToken);
@@ -1425,6 +1438,7 @@ public sealed class ArtWorkflowService(
         await db.ChatContextAttachments
             .Where(a => a.ProjectId == projectId && a.Type == ChatContextAttachmentType.SpriteFrame && frameIds.Contains(a.RefId))
             .ExecuteDeleteAsync(cancellationToken);
+        await RemoveCompareReviewItemsAsync(projectId, CompareReviewItemKind.SpriteFrame, frameIds, cancellationToken);
         await db.SpriteSheetFrameRecords
             .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == definition.Id)
             .ExecuteDeleteAsync(cancellationToken);
@@ -2742,6 +2756,21 @@ public sealed class ArtWorkflowService(
             .ToListAsync(cancellationToken);
         db.ChatContextAttachments.RemoveRange(attachments);
 
+        var linkedSpriteSheetIds = await db.SpriteSheetDefinitions
+            .Where(sheet => sheet.ProjectId == projectId && (sheet.SourceAssetId == assetId || sheet.OutputAssetId == assetId))
+            .Select(sheet => sheet.Id)
+            .ToListAsync(cancellationToken);
+        var linkedSpriteFrameIds = linkedSpriteSheetIds.Count == 0
+            ? []
+            : await db.SpriteSheetFrameRecords
+                .Where(frame => frame.ProjectId == projectId && linkedSpriteSheetIds.Contains(frame.SpriteSheetDefinitionId))
+                .Select(frame => frame.Id)
+                .ToListAsync(cancellationToken);
+        await RemoveCompareReviewItemsAsync(projectId, CompareReviewItemKind.Asset, [assetId], cancellationToken);
+        await RemoveCompareReviewItemsAsync(projectId, CompareReviewItemKind.SpriteSheet, linkedSpriteSheetIds, cancellationToken);
+        await RemoveCompareReviewItemsAsync(projectId, CompareReviewItemKind.SpriteAnimation, linkedSpriteSheetIds, cancellationToken);
+        await RemoveCompareReviewItemsAsync(projectId, CompareReviewItemKind.SpriteFrame, linkedSpriteFrameIds, cancellationToken);
+
         var recipes = await db.PromptRecipes
             .Where(r => r.ProjectId == projectId)
             .ToListAsync(cancellationToken);
@@ -2808,6 +2837,76 @@ public sealed class ArtWorkflowService(
         await db.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<CompareReviewSetView> SetCompareReviewSetAsync(
+        Guid projectId,
+        SetCompareReviewSetRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        var reviewSet = await GetOrCreateCompareReviewSetAsync(projectId, request.Title, request.Summary, cancellationToken);
+        var existingItems = await db.CompareReviewSetItems
+            .Where(item => item.CompareReviewSetId == reviewSet.Id)
+            .ToListAsync(cancellationToken);
+        db.CompareReviewSetItems.RemoveRange(existingItems);
+        await db.SaveChangesAsync(cancellationToken);
+
+        reviewSet.Title = NormalizeReviewSetTitle(request.Title, reviewSet.Title);
+        reviewSet.Summary = NormalizeReviewSetSummary(request.Summary);
+        reviewSet.UpdatedAt = DateTime.UtcNow;
+        await AddCompareReviewItemsCoreAsync(projectId, reviewSet, request.Items, cancellationToken);
+
+        if (request.SwitchToCompare)
+            project.ActiveWorkspaceMode = WorkspaceMode.Compare;
+        project.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+        return await LoadCompareReviewSetViewAsync(projectId, reviewSet.Id, cancellationToken);
+    }
+
+    public async Task<CompareReviewSetView> AddCompareReviewItemsAsync(
+        Guid projectId,
+        AddCompareReviewItemsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        var reviewSet = await GetOrCreateCompareReviewSetAsync(projectId, request.Title, request.Summary, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(request.Title))
+            reviewSet.Title = request.Title.Trim();
+        if (request.Summary is not null)
+            reviewSet.Summary = NormalizeReviewSetSummary(request.Summary);
+        reviewSet.UpdatedAt = DateTime.UtcNow;
+
+        await AddCompareReviewItemsCoreAsync(projectId, reviewSet, request.Items, cancellationToken);
+
+        if (request.SwitchToCompare)
+            project.ActiveWorkspaceMode = WorkspaceMode.Compare;
+        project.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+        return await LoadCompareReviewSetViewAsync(projectId, reviewSet.Id, cancellationToken);
+    }
+
+    public async Task RemoveCompareReviewItemAsync(Guid projectId, Guid itemId, CancellationToken cancellationToken = default)
+    {
+        var item = await db.CompareReviewSetItems
+            .Include(i => i.CompareReviewSet)
+            .FirstOrDefaultAsync(i => i.Id == itemId && i.CompareReviewSet.ProjectId == projectId, cancellationToken);
+        if (item is null)
+            return;
+
+        item.CompareReviewSet.UpdatedAt = DateTime.UtcNow;
+        db.CompareReviewSetItems.Remove(item);
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task ClearCompareReviewSetAsync(Guid projectId, CancellationToken cancellationToken = default)
+    {
+        var reviewSet = await db.CompareReviewSets.FirstOrDefaultAsync(set => set.ProjectId == projectId, cancellationToken);
+        if (reviewSet is null)
+            return;
+
+        db.CompareReviewSets.Remove(reviewSet);
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task<string> GetWorkspaceStateJsonAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
         var project = await db.Projects
@@ -2820,14 +2919,26 @@ public sealed class ArtWorkflowService(
             .OrderBy(a => a.SortOrder)
             .ThenBy(a => a.CreatedAt)
             .ToListAsync(cancellationToken);
+        var compareReviewSet = await db.CompareReviewSets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(set => set.ProjectId == projectId, cancellationToken);
+        var compareReviewItems = compareReviewSet is null
+            ? []
+            : await db.CompareReviewSetItems
+                .AsNoTracking()
+                .Where(item => item.CompareReviewSetId == compareReviewSet.Id)
+                .OrderBy(item => item.SortOrder)
+                .ThenBy(item => item.CreatedAt)
+                .ToListAsync(cancellationToken);
         var providerStatus = await BuildProviderStatusAsync(cancellationToken);
 
         return JsonSerializer.Serialize(new
         {
             snapshotMissing = true,
-            note = "No live UI snapshot has been published. This fallback only includes persisted project, active ids, visible chat attachments, and provider status.",
+            note = "No live UI snapshot has been published. This fallback only includes persisted project, active ids, visible chat attachments, current compare review set, and provider status.",
             project = ProjectView(project),
             chatAttachments = attachments.Select(AttachmentView),
+            compareReviewSet = compareReviewSet is null ? null : CompareReviewSetView(compareReviewSet, compareReviewItems),
             provider = providerStatus,
         }, JsonOptions);
     }
@@ -3665,6 +3776,7 @@ public sealed class ArtWorkflowService(
                 .Where(a => a.ProjectId == projectId && a.Type == ChatContextAttachmentType.SpriteFrame && removedIds.Contains(a.RefId))
                 .ToListAsync(cancellationToken);
             db.ChatContextAttachments.RemoveRange(removedAttachments);
+            await RemoveCompareReviewItemsAsync(projectId, CompareReviewItemKind.SpriteFrame, removedIds, cancellationToken);
             db.SpriteSheetFrameRecords.RemoveRange(removed);
         }
 
@@ -3860,6 +3972,171 @@ public sealed class ArtWorkflowService(
             _ => "Context"
         };
     }
+
+    private async Task<CompareReviewSet> GetOrCreateCompareReviewSetAsync(
+        Guid projectId,
+        string? title,
+        string? summary,
+        CancellationToken cancellationToken)
+    {
+        var reviewSet = await db.CompareReviewSets.FirstOrDefaultAsync(set => set.ProjectId == projectId, cancellationToken);
+        if (reviewSet is not null)
+            return reviewSet;
+
+        reviewSet = new CompareReviewSet
+        {
+            ProjectId = projectId,
+            Title = NormalizeReviewSetTitle(title, "Current Review"),
+            Summary = NormalizeReviewSetSummary(summary),
+        };
+        await db.CompareReviewSets.AddAsync(reviewSet, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return reviewSet;
+    }
+
+    private async Task AddCompareReviewItemsCoreAsync(
+        Guid projectId,
+        CompareReviewSet reviewSet,
+        IReadOnlyList<CompareReviewSetItemRequest> requests,
+        CancellationToken cancellationToken)
+    {
+        var dedupedRequests = requests
+            .Where(request => request.RefId != Guid.Empty)
+            .GroupBy(request => CompareReviewKey(request.Kind, request.RefId))
+            .Select(group => group.Last())
+            .ToList();
+        if (dedupedRequests.Count == 0)
+            return;
+
+        var existingItems = await db.CompareReviewSetItems
+            .Where(item => item.CompareReviewSetId == reviewSet.Id)
+            .ToListAsync(cancellationToken);
+        var existingByKey = existingItems.ToDictionary(item => CompareReviewKey(item.Kind, item.RefId));
+        var nextOrder = existingItems.Count == 0 ? 0 : existingItems.Max(item => item.SortOrder) + 1;
+
+        foreach (var request in dedupedRequests)
+        {
+            await EnsureCompareReviewTargetExistsAsync(projectId, request.Kind, request.RefId, cancellationToken);
+            var key = CompareReviewKey(request.Kind, request.RefId);
+            var label = string.IsNullOrWhiteSpace(request.Label)
+                ? await ResolveCompareReviewItemLabelAsync(projectId, request.Kind, request.RefId, cancellationToken)
+                : request.Label.Trim();
+            var notes = request.Notes?.Trim() ?? string.Empty;
+            if (existingByKey.TryGetValue(key, out var existing))
+            {
+                existing.Label = label;
+                existing.Notes = notes;
+                continue;
+            }
+
+            var item = new CompareReviewSetItem
+            {
+                CompareReviewSetId = reviewSet.Id,
+                Kind = request.Kind,
+                RefId = request.RefId,
+                Label = label,
+                Notes = notes,
+                SortOrder = nextOrder++,
+            };
+            await db.CompareReviewSetItems.AddAsync(item, cancellationToken);
+        }
+    }
+
+    private async Task EnsureCompareReviewTargetExistsAsync(
+        Guid projectId,
+        CompareReviewItemKind kind,
+        Guid refId,
+        CancellationToken cancellationToken)
+    {
+        var exists = kind switch
+        {
+            CompareReviewItemKind.Asset =>
+                await db.ArtAssets.AnyAsync(asset => asset.ProjectId == projectId && asset.Id == refId, cancellationToken),
+            CompareReviewItemKind.GenerationBatch =>
+                await db.GenerationBatches.AnyAsync(batch => batch.ProjectId == projectId && batch.Id == refId, cancellationToken),
+            CompareReviewItemKind.SpriteSheet or CompareReviewItemKind.SpriteAnimation =>
+                await db.SpriteSheetDefinitions.AnyAsync(sheet => sheet.ProjectId == projectId && sheet.Id == refId, cancellationToken),
+            CompareReviewItemKind.SpriteFrame =>
+                await db.SpriteSheetFrameRecords.AnyAsync(frame => frame.ProjectId == projectId && frame.Id == refId, cancellationToken),
+            _ => false,
+        };
+
+        if (!exists)
+            throw new InvalidOperationException($"Compare review target was not found for {kind} {refId}.");
+    }
+
+    private async Task<string> ResolveCompareReviewItemLabelAsync(
+        Guid projectId,
+        CompareReviewItemKind kind,
+        Guid refId,
+        CancellationToken cancellationToken)
+    {
+        return kind switch
+        {
+            CompareReviewItemKind.Asset =>
+                await db.ArtAssets.Where(asset => asset.ProjectId == projectId && asset.Id == refId).Select(asset => asset.Label).FirstOrDefaultAsync(cancellationToken)
+                ?? "Asset",
+            CompareReviewItemKind.GenerationBatch =>
+                await db.GenerationBatches.Where(batch => batch.ProjectId == projectId && batch.Id == refId).Select(batch => batch.Label).FirstOrDefaultAsync(cancellationToken)
+                ?? "Batch",
+            CompareReviewItemKind.SpriteSheet =>
+                await db.SpriteSheetDefinitions.Where(sheet => sheet.ProjectId == projectId && sheet.Id == refId).Select(sheet => sheet.Label).FirstOrDefaultAsync(cancellationToken)
+                ?? "Sprite sheet",
+            CompareReviewItemKind.SpriteAnimation =>
+                await db.SpriteSheetDefinitions.Where(sheet => sheet.ProjectId == projectId && sheet.Id == refId).Select(sheet => sheet.Label).FirstOrDefaultAsync(cancellationToken)
+                is { } animationLabel ? $"{animationLabel} animation" : "Sprite animation",
+            CompareReviewItemKind.SpriteFrame =>
+                await db.SpriteSheetFrameRecords.Where(frame => frame.ProjectId == projectId && frame.Id == refId).Select(frame => frame.Label).FirstOrDefaultAsync(cancellationToken)
+                ?? "Sprite frame",
+            _ => "Review item",
+        };
+    }
+
+    private async Task<CompareReviewSetView> LoadCompareReviewSetViewAsync(Guid projectId, Guid reviewSetId, CancellationToken cancellationToken)
+    {
+        var reviewSet = await db.CompareReviewSets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(set => set.ProjectId == projectId && set.Id == reviewSetId, cancellationToken)
+            ?? throw new InvalidOperationException("Compare review set was not found.");
+        var items = await db.CompareReviewSetItems
+            .AsNoTracking()
+            .Where(item => item.CompareReviewSetId == reviewSet.Id)
+            .OrderBy(item => item.SortOrder)
+            .ThenBy(item => item.CreatedAt)
+            .ToListAsync(cancellationToken);
+        return CompareReviewSetView(reviewSet, items);
+    }
+
+    private async Task RemoveCompareReviewItemsAsync(
+        Guid projectId,
+        CompareReviewItemKind kind,
+        IEnumerable<Guid> refIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = refIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return;
+
+        var items = await db.CompareReviewSetItems
+            .Include(item => item.CompareReviewSet)
+            .Where(item => item.CompareReviewSet.ProjectId == projectId && item.Kind == kind && ids.Contains(item.RefId))
+            .ToListAsync(cancellationToken);
+        if (items.Count == 0)
+            return;
+
+        foreach (var reviewSet in items.Select(item => item.CompareReviewSet).DistinctBy(set => set.Id))
+            reviewSet.UpdatedAt = DateTime.UtcNow;
+        db.CompareReviewSetItems.RemoveRange(items);
+    }
+
+    private static string NormalizeReviewSetTitle(string? title, string fallback) =>
+        string.IsNullOrWhiteSpace(title) ? fallback : title.Trim();
+
+    private static string NormalizeReviewSetSummary(string? summary) =>
+        summary?.Trim() ?? string.Empty;
+
+    private static string CompareReviewKey(CompareReviewItemKind kind, Guid refId) =>
+        $"{kind}:{refId:D}";
 
     private async Task<ProviderStatusView> BuildProviderStatusAsync(CancellationToken cancellationToken)
     {
@@ -4555,6 +4832,25 @@ public sealed class ArtWorkflowService(
 
     private static ChatContextAttachmentView AttachmentView(ChatContextAttachment attachment) =>
         new(attachment.Id, attachment.Type, attachment.RefId, attachment.Label, attachment.SortOrder);
+
+    private static CompareReviewSetView CompareReviewSetView(CompareReviewSet reviewSet, IReadOnlyList<CompareReviewSetItem> items) =>
+        new(
+            reviewSet.Id,
+            reviewSet.Title,
+            reviewSet.Summary,
+            items
+                .OrderBy(item => item.SortOrder)
+                .ThenBy(item => item.CreatedAt)
+                .Select(item => new CompareReviewSetItemView(
+                    item.Id,
+                    item.Kind,
+                    item.RefId,
+                    item.Label,
+                    item.Notes,
+                    item.SortOrder,
+                    item.CreatedAt))
+                .ToList(),
+            reviewSet.UpdatedAt);
 
     private async Task<SpriteSheetDefinitionView> LoadSpriteSheetViewAsync(
         Guid projectId,

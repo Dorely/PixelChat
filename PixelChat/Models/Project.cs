@@ -18,6 +18,7 @@ public class Project
     public ICollection<SpriteSheetFrameRecord> SpriteSheetFrameRecords { get; set; } = [];
     public ICollection<ImageMask> Masks { get; set; } = [];
     public ICollection<ChatContextAttachment> ChatContextAttachments { get; set; } = [];
+    public ICollection<CompareReviewSet> CompareReviewSets { get; set; } = [];
     public ICollection<AssistantConversation> AssistantConversations { get; set; } = [];
 }
 

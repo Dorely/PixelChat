@@ -1,5 +1,28 @@
 const states = new WeakMap();
 const imageCache = new Map();
+let reviewPreviewEscapeHandler = null;
+
+export function bindReviewPreviewEscape(dotNetRef) {
+    unbindReviewPreviewEscape();
+    reviewPreviewEscapeHandler = event => {
+        if (event.key !== "Escape") {
+            return;
+        }
+
+        event.preventDefault();
+        dotNetRef.invokeMethodAsync("CloseReviewPreviewFromJs");
+    };
+    document.addEventListener("keydown", reviewPreviewEscapeHandler);
+}
+
+export function unbindReviewPreviewEscape() {
+    if (!reviewPreviewEscapeHandler) {
+        return;
+    }
+
+    document.removeEventListener("keydown", reviewPreviewEscapeHandler);
+    reviewPreviewEscapeHandler = null;
+}
 
 export async function loadEditor(canvas, imageUrl, brushSize, tool, maskUrl, dotNetRef) {
     const image = await loadImage(imageUrl);

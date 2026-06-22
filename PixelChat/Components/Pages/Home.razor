@@ -123,6 +123,7 @@ else
         </section>
 
         @RenderExportModal()
+        @RenderReviewPreviewModal()
     </div>
 }
 
@@ -235,6 +236,8 @@ else
     private TimeSpan _exportElapsed = TimeSpan.Zero;
     private int? _exportCurrentWidth;
     private int? _exportCurrentHeight;
+    private ReviewPreviewState? _reviewPreview;
+    private bool _reviewPreviewEscapeBound;
 
     protected override async Task OnInitializedAsync()
     {
@@ -257,6 +260,7 @@ else
         }
 
         await LoadEditorAssetIfNeededAsync();
+        await BindReviewPreviewEscapeIfNeededAsync();
     }
 
     private async Task ReloadAllAsync()
@@ -264,6 +268,23 @@ else
         await ReloadWorkbenchAsync();
         await ReloadChatAsync();
         StateHasChanged();
+    }
+
+    private async Task BindReviewPreviewEscapeIfNeededAsync()
+    {
+        if (_editorModule is null || _dotNetRef is null)
+            return;
+
+        if (_reviewPreview is not null && !_reviewPreviewEscapeBound)
+        {
+            await _editorModule.InvokeVoidAsync("bindReviewPreviewEscape", _dotNetRef);
+            _reviewPreviewEscapeBound = true;
+        }
+        else if (_reviewPreview is null && _reviewPreviewEscapeBound)
+        {
+            await _editorModule.InvokeVoidAsync("unbindReviewPreviewEscape");
+            _reviewPreviewEscapeBound = false;
+        }
     }
 
     private async Task ReloadWorkbenchAsync()
@@ -460,12 +481,18 @@ else
                         @foreach (var asset in DraftReferenceAssets())
                         {
                             <span class="draft-reference-card">
-                                <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" Width="56" Height="56" Style="border-radius: 6px" />
+                                <button type="button"
+                                        class="draft-reference-thumb"
+                                        title="@($"Preview {asset.Label}")"
+                                        aria-label="@($"Preview {asset.Label}")"
+                                        @onclick="() => OpenAssetReviewPreview(asset)">
+                                    <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" Width="56" Height="56" />
+                                </button>
                                 <span>
                                     <small>Reference</small>
                                     <strong>@asset.Label</strong>
                                 </span>
-                                <button type="button" title="Remove" @onclick="() => RemoveDraftReference(asset.Id)">x</button>
+                                <button type="button" class="draft-reference-remove" title="Remove" @onclick="() => RemoveDraftReference(asset.Id)">x</button>
                             </span>
                         }
                     </div>
@@ -525,9 +552,14 @@ else
                 </div>
                 @if (activeBatch is not null)
                 {
-                    <button type="button" class="btn btn-outline-secondary" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">New Batch</button>
+                    <div class="panel-actions">
+                        <button type="button" class="btn btn-outline-secondary" @onclick="() => AddBatchToReviewAsync(activeBatch)">Add to Review</button>
+                        <button type="button" class="btn btn-outline-secondary" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">New Batch</button>
+                    </div>
                 }
             </div>
+
+            @RenderCompareReviewSet()
 
             @if (activeBatch is null)
             {
@@ -595,6 +627,189 @@ else
                 }
             </div>
         </div>
+    };
+
+    private RenderFragment RenderCompareReviewSet() => __builder =>
+    {
+        var reviewSet = _workbench!.CompareReviewSet;
+        <section class="compare-review-set">
+            <div class="compare-review-head">
+                <div>
+                    <div class="section-title">Current Review</div>
+                    <h2>@(reviewSet?.Title ?? "No review set")</h2>
+                    @if (!string.IsNullOrWhiteSpace(reviewSet?.Summary))
+                    {
+                        <p>@reviewSet.Summary</p>
+                    }
+                </div>
+                @if (reviewSet is not null && reviewSet.Items.Count > 0)
+                {
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ClearCompareReviewSetAsync">Clear</button>
+                }
+            </div>
+
+            @if (reviewSet is null || reviewSet.Items.Count == 0)
+            {
+                <div class="empty-state">No review items yet. Add assets, batches, sprite sheets, or animation previews for final review.</div>
+            }
+            else
+            {
+                <div class="review-grid">
+                    @foreach (var item in reviewSet.Items)
+                    {
+                        @RenderCompareReviewItem(item)
+                    }
+                </div>
+            }
+        </section>
+    };
+
+    private RenderFragment RenderCompareReviewItem(CompareReviewSetItemView item) => __builder =>
+    {
+        if (item.Kind == CompareReviewItemKind.Asset && ReviewAsset(item) is { } asset)
+        {
+            @RenderReviewImageCard(
+                item,
+                "Asset",
+                asset.PreviewImageUrl,
+                asset.Label,
+                FormatDimensions(asset),
+                () => OpenImageReviewPreview(asset.Label, asset.FullImageUrl, FormatDimensions(asset)))
+        }
+        else if (item.Kind == CompareReviewItemKind.SpriteFrame && ReviewSpriteFrame(item) is { } frame)
+        {
+            @RenderReviewImageCard(
+                item,
+                "Frame",
+                frame.PreviewImageUrl,
+                frame.Label,
+                $"{frame.PreviewWidth} x {frame.PreviewHeight}",
+                () => OpenImageReviewPreview(frame.Label, frame.PreviewImageUrl, $"{frame.PreviewWidth} x {frame.PreviewHeight}"))
+        }
+        else if (item.Kind == CompareReviewItemKind.SpriteSheet && ReviewSpriteSheet(item) is { } sheet)
+        {
+            var sheetAsset = ReviewSpriteSheetAsset(sheet);
+            if (sheetAsset is not null)
+            {
+                @RenderReviewImageCard(
+                    item,
+                    "Sprite Sheet",
+                    sheetAsset.PreviewImageUrl,
+                    sheet.Label,
+                    $"{sheet.Frames.Count} frame(s) - {sheet.Fps} FPS",
+                    () => OpenImageReviewPreview(sheet.Label, sheetAsset.FullImageUrl, FormatDimensions(sheetAsset)))
+            }
+            else
+            {
+                @RenderReviewMissingCard(item)
+            }
+        }
+        else if (item.Kind == CompareReviewItemKind.SpriteAnimation && ReviewSpriteSheet(item) is { } animationSheet)
+        {
+            <article class="review-card" @key="item.Id">
+                <button type="button" class="review-thumb review-animation-thumb" @onclick="() => OpenAnimationReviewPreview(animationSheet)">
+                    <SpriteAnimationPreview Sheet="@animationSheet" CssClass="review-animation-canvas" Title="@item.Label" />
+                </button>
+                <div class="review-card-body">
+                    <div class="asset-title-row">
+                        <strong>@item.Label</strong>
+                        <span>Animation</span>
+                    </div>
+                    <p>@($"{animationSheet.Frames.Count} frame(s) - {animationSheet.Fps} FPS")</p>
+                    @if (!string.IsNullOrWhiteSpace(item.Notes))
+                    {
+                        <p>@item.Notes</p>
+                    }
+                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveReviewItemAsync(item.Id)">Remove</button>
+                </div>
+            </article>
+        }
+        else if (item.Kind == CompareReviewItemKind.GenerationBatch && ReviewBatch(item) is { } batch)
+        {
+            @RenderReviewBatchCard(item, batch)
+        }
+        else
+        {
+            @RenderReviewMissingCard(item)
+        }
+    };
+
+    private RenderFragment RenderReviewImageCard(
+        CompareReviewSetItemView item,
+        string kindLabel,
+        string previewUrl,
+        string alt,
+        string meta,
+        Action openPreview) => __builder =>
+    {
+        <article class="review-card" @key="item.Id">
+            <button type="button" class="review-thumb" @onclick="() => openPreview()">
+                <LazyImage Src="@previewUrl" Alt="@alt" />
+            </button>
+            <div class="review-card-body">
+                <div class="asset-title-row">
+                    <strong>@item.Label</strong>
+                    <span>@kindLabel</span>
+                </div>
+                <p>@meta</p>
+                @if (!string.IsNullOrWhiteSpace(item.Notes))
+                {
+                    <p>@item.Notes</p>
+                }
+                <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveReviewItemAsync(item.Id)">Remove</button>
+            </div>
+        </article>
+    };
+
+    private RenderFragment RenderReviewBatchCard(CompareReviewSetItemView item, GenerationBatchView batch) => __builder =>
+    {
+        var outputAssets = batch.OutputAssetIds
+            .Select(assetId => _workbench!.Assets.FirstOrDefault(asset => asset.Id == assetId))
+            .OfType<ArtAssetView>()
+            .ToList();
+        <article class="review-card review-batch-card" @key="item.Id">
+            <div class="review-card-body">
+                <div class="asset-title-row">
+                    <strong>@item.Label</strong>
+                    <span>Batch</span>
+                </div>
+                <p>@($"{batch.Status} - {batch.Count} image(s) - {batch.Size}")</p>
+                @if (!string.IsNullOrWhiteSpace(item.Notes))
+                {
+                    <p>@item.Notes</p>
+                }
+                @if (outputAssets.Count > 0)
+                {
+                    <div class="review-batch-output-grid">
+                        @foreach (var asset in outputAssets)
+                        {
+                            <button type="button" class="review-batch-output" @onclick="() => OpenImageReviewPreview(asset.Label, asset.FullImageUrl, FormatDimensions(asset))">
+                                <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" />
+                            </button>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="empty-context">No saved outputs.</div>
+                }
+                <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveReviewItemAsync(item.Id)">Remove</button>
+            </div>
+        </article>
+    };
+
+    private RenderFragment RenderReviewMissingCard(CompareReviewSetItemView item) => __builder =>
+    {
+        <article class="review-card" @key="item.Id">
+            <div class="review-card-body">
+                <div class="asset-title-row">
+                    <strong>@item.Label</strong>
+                    <span>@item.Kind</span>
+                </div>
+                <p>This review item no longer points to an available project record.</p>
+                <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveReviewItemAsync(item.Id)">Remove</button>
+            </div>
+        </article>
     };
 
     private RenderFragment RenderEditWorkspace() => __builder =>
@@ -686,7 +901,12 @@ else
     {
         <SpriteSheetWorkspace Workbench="@_workbench"
                               OnChanged="OnSpriteSheetChangedAsync"
-                              OnExportAsset="OpenExportAsync" />
+                              OnExportAsset="OpenExportAsync"
+                              OnAddSheetToReview="AddSpriteSheetToReviewAsync"
+                              OnAddAnimationToReview="AddSpriteAnimationToReviewAsync"
+                              OnPreviewSheet="OpenSpriteSheetReviewPreview"
+                              OnPreviewAnimation="OpenAnimationReviewPreview"
+                              OnPreviewFrame="OpenSpriteFrameReviewPreview" />
     };
 
     private RenderFragment RenderRecipesWorkspace() => __builder =>
@@ -896,21 +1116,39 @@ else
                     <span class="chat-attachment-chip">
                         @if (asset is not null)
                         {
-                            <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" Width="44" Height="44" Style="border-radius: 6px" />
+                            <button type="button"
+                                    class="chat-attachment-thumb"
+                                    title="@($"Preview {asset.Label}")"
+                                    aria-label="@($"Preview {asset.Label}")"
+                                    @onclick="() => OpenAssetReviewPreview(asset)">
+                                <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" Width="44" Height="44" />
+                            </button>
                         }
                         else if (mask is not null)
                         {
-                            <LazyImage Src="@mask.PreviewImageUrl" Alt="@mask.Label" Width="44" Height="44" Style="border-radius: 6px" />
+                            <button type="button"
+                                    class="chat-attachment-thumb"
+                                    title="@($"Preview {mask.Label}")"
+                                    aria-label="@($"Preview {mask.Label}")"
+                                    @onclick="() => OpenMaskReviewPreview(mask)">
+                                <LazyImage Src="@mask.PreviewImageUrl" Alt="@mask.Label" Width="44" Height="44" />
+                            </button>
                         }
                         else if (spriteFrame is not null)
                         {
-                            <LazyImage Src="@spriteFrame.PreviewImageUrl" Alt="@spriteFrame.Label" Width="44" Height="44" Style="border-radius: 6px" />
+                            <button type="button"
+                                    class="chat-attachment-thumb"
+                                    title="@($"Preview {spriteFrame.Label}")"
+                                    aria-label="@($"Preview {spriteFrame.Label}")"
+                                    @onclick="() => OpenSpriteFrameReviewPreview(spriteFrame)">
+                                <LazyImage Src="@spriteFrame.PreviewImageUrl" Alt="@spriteFrame.Label" Width="44" Height="44" />
+                            </button>
                         }
                         <span>
                             <small>@AttachmentKindLabel(attachment)</small>
                             <strong>@attachment.Label</strong>
                         </span>
-                        <button type="button" title="Remove" @onclick="() => RemoveContextAsync(attachment.Id)">x</button>
+                        <button type="button" class="chat-attachment-remove" title="Remove" @onclick="() => RemoveContextAsync(attachment.Id)">x</button>
                     </span>
                 }
             </div>
@@ -977,9 +1215,13 @@ else
                     @onclick="() => MarkAssetAsync(asset.Id, !asset.IsFavorite)">
                 &#9829;
             </button>
-            <div class="asset-thumb">
+            <button type="button"
+                    class="asset-thumb"
+                    title="@($"Preview {asset.Label}")"
+                    aria-label="@($"Preview {asset.Label}")"
+                    @onclick="() => OpenAssetReviewPreview(asset)">
                 <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" />
-            </div>
+            </button>
             <div class="asset-card-body">
                 <div class="asset-title-row">
                     <strong>@asset.Label</strong>
@@ -991,6 +1233,7 @@ else
                 }
                 <div class="asset-actions">
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AttachAssetAsync(asset)">Attach</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddAssetToReviewAsync(asset)">Add to Review</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenSpriteSheetAsync(asset)">Sprite Sheet</button>
@@ -1026,13 +1269,17 @@ else
         <article class="asset-card generation-placeholder-card">
             @if (!string.IsNullOrWhiteSpace(partialImageDataUrl))
             {
-                <div class="generation-partial-frame">
+                <button type="button"
+                        class="generation-partial-frame"
+                        title="@($"Preview partial image {LabelForIndex(outputState.OutputIndex)}")"
+                        aria-label="@($"Preview partial image {LabelForIndex(outputState.OutputIndex)}")"
+                        @onclick="() => OpenGenerationPartialReviewPreview(outputState, partialImageDataUrl, label)">
                     <img src="@partialImageDataUrl" alt="@($"Partial preview for Image {LabelForIndex(outputState.OutputIndex)}")" />
                     @if (isGenerating)
                     {
                         <div class="generation-partial-spinner" aria-hidden="true"></div>
                     }
-                </div>
+                </button>
             }
             else if (isGenerating)
             {
@@ -1248,6 +1495,37 @@ else
                         @(_exportSpriteManifestAvailable ? "Download PNG + JSON" : "Download PNG")
                     </button>
                 </footer>
+            </div>
+        </div>
+    };
+
+    private RenderFragment RenderReviewPreviewModal() => __builder =>
+    {
+        if (_reviewPreview is not { } preview)
+            return;
+
+        <div class="review-modal-backdrop" @onclick="CloseReviewPreviewAsync">
+            <div class="review-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="review-preview-title" @onclick:stopPropagation="true">
+                <header class="review-modal-head">
+                    <div>
+                        <h2 id="review-preview-title">@preview.Title</h2>
+                        @if (!string.IsNullOrWhiteSpace(preview.Subtitle))
+                        {
+                            <span>@preview.Subtitle</span>
+                        }
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CloseReviewPreviewAsync">Close</button>
+                </header>
+                <div class="review-modal-stage">
+                    @if (!string.IsNullOrWhiteSpace(preview.ImageUrl))
+                    {
+                        <img src="@preview.ImageUrl" alt="@preview.Title" />
+                    }
+                    else if (preview.AnimationSheet is not null)
+                    {
+                        <SpriteAnimationPreview Sheet="@preview.AnimationSheet" CssClass="review-modal-animation" Title="@preview.Title" />
+                    }
+                </div>
             </div>
         </div>
     };
@@ -1500,6 +1778,132 @@ else
         await Workflow.SelectBatchAsync(_workbench.Project.Id, batchId);
         await ReloadWorkbenchAsync();
     }
+
+    private async Task AddAssetToReviewAsync(ArtAssetView asset)
+    {
+        if (_workbench is null)
+            return;
+
+        await RunWorkflowAsync("Adding asset to review...", () =>
+            AddCompareReviewItemsAsync([new CompareReviewSetItemRequest(
+                CompareReviewItemKind.Asset,
+                asset.Id,
+                asset.Label)]));
+    }
+
+    private async Task AddBatchToReviewAsync(GenerationBatchView batch)
+    {
+        if (_workbench is null)
+            return;
+
+        await RunWorkflowAsync("Adding batch to review...", () =>
+            AddCompareReviewItemsAsync([new CompareReviewSetItemRequest(
+                CompareReviewItemKind.GenerationBatch,
+                batch.Id,
+                batch.Label)]));
+    }
+
+    private async Task AddSpriteSheetToReviewAsync(SpriteSheetDefinitionView sheet)
+    {
+        if (_workbench is null)
+            return;
+
+        await RunWorkflowAsync("Adding sprite sheet to review...", () =>
+            AddCompareReviewItemsAsync([new CompareReviewSetItemRequest(
+                CompareReviewItemKind.SpriteSheet,
+                sheet.Id,
+                sheet.Label)]));
+    }
+
+    private async Task AddSpriteAnimationToReviewAsync(SpriteSheetDefinitionView sheet)
+    {
+        if (_workbench is null)
+            return;
+
+        await RunWorkflowAsync("Adding animation to review...", () =>
+            AddCompareReviewItemsAsync([new CompareReviewSetItemRequest(
+                CompareReviewItemKind.SpriteAnimation,
+                sheet.Id,
+                $"{sheet.Label} animation")]));
+    }
+
+    private Task AddCompareReviewItemsAsync(IReadOnlyList<CompareReviewSetItemRequest> items)
+    {
+        if (_workbench is null)
+            return Task.CompletedTask;
+
+        return Workflow.AddCompareReviewItemsAsync(
+            _workbench.Project.Id,
+            new AddCompareReviewItemsRequest(null, null, items));
+    }
+
+    private async Task RemoveReviewItemAsync(Guid itemId)
+    {
+        if (_workbench is null)
+            return;
+
+        await RunWorkflowAsync("Removing review item...", () =>
+            Workflow.RemoveCompareReviewItemAsync(_workbench.Project.Id, itemId));
+    }
+
+    private async Task ClearCompareReviewSetAsync()
+    {
+        if (_workbench is null)
+            return;
+
+        await RunWorkflowAsync("Clearing review set...", () =>
+            Workflow.ClearCompareReviewSetAsync(_workbench.Project.Id));
+    }
+
+    private void OpenImageReviewPreview(string title, string imageUrl, string subtitle)
+    {
+        _reviewPreview = new ReviewPreviewState(title, subtitle, imageUrl, null);
+        StateHasChanged();
+    }
+
+    private void OpenGenerationPartialReviewPreview(GenerationOutputStateView outputState, string imageUrl, string statusLabel) =>
+        OpenImageReviewPreview($"Image {LabelForIndex(outputState.OutputIndex)} partial", imageUrl, statusLabel);
+
+    private void OpenAssetReviewPreview(ArtAssetView asset) =>
+        OpenImageReviewPreview(asset.Label, asset.FullImageUrl, FormatDimensions(asset));
+
+    private void OpenMaskReviewPreview(ImageMaskView mask) =>
+        OpenImageReviewPreview(mask.Label, mask.PreviewImageUrl, $"{mask.Width} x {mask.Height}");
+
+    private void OpenSpriteFrameReviewPreview(SpriteSheetFrameRecordView frame) =>
+        OpenImageReviewPreview(frame.Label, frame.PreviewImageUrl, $"{frame.PreviewWidth} x {frame.PreviewHeight}");
+
+    private void OpenSpriteSheetReviewPreview(SpriteSheetDefinitionView sheet)
+    {
+        if (ReviewSpriteSheetAsset(sheet) is not { } asset)
+            return;
+
+        OpenImageReviewPreview(sheet.Label, asset.FullImageUrl, FormatDimensions(asset));
+    }
+
+    private void OpenAnimationReviewPreview(SpriteSheetDefinitionView sheet)
+    {
+        _reviewPreview = new ReviewPreviewState(
+            $"{sheet.Label} animation",
+            $"{sheet.Frames.Count} frame(s) - {sheet.Fps} FPS",
+            null,
+            sheet);
+        StateHasChanged();
+    }
+
+    private async Task CloseReviewPreviewAsync()
+    {
+        _reviewPreview = null;
+        if (_editorModule is not null && _reviewPreviewEscapeBound)
+        {
+            await _editorModule.InvokeVoidAsync("unbindReviewPreviewEscape");
+            _reviewPreviewEscapeBound = false;
+        }
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public Task CloseReviewPreviewFromJs() => CloseReviewPreviewAsync();
 
     private async Task ImportAssetAsync(InputFileChangeEventArgs args)
     {
@@ -3320,7 +3724,8 @@ else
     private WorkspaceCompareVisibleState BuildCompareVisibleState() =>
         new(
             _workbench?.ActiveBatch is null ? null : BatchSummary(_workbench.ActiveBatch),
-            _workbench?.Batches.Take(8).Select(BatchSummary).ToList() ?? []);
+            _workbench?.Batches.Take(8).Select(BatchSummary).ToList() ?? [],
+            _workbench?.CompareReviewSet is null ? null : CompareReviewSetSummary(_workbench.CompareReviewSet));
 
     private WorkspaceSpritesVisibleState BuildSpritesVisibleState() =>
         new(_workbench?.ActiveSpriteSheet is null ? null : SpriteSheetSummary(_workbench.ActiveSpriteSheet));
@@ -3389,6 +3794,23 @@ else
             Preview(batch.Prompt, 360),
             batch.Error,
             batch.CreatedAt);
+
+    private static WorkspaceCompareReviewSetSummary CompareReviewSetSummary(CompareReviewSetView reviewSet) =>
+        new(
+            reviewSet.Id,
+            reviewSet.Title,
+            reviewSet.Summary,
+            reviewSet.Items.Select(CompareReviewItemSummary).ToList(),
+            reviewSet.UpdatedAt);
+
+    private static WorkspaceCompareReviewItemSummary CompareReviewItemSummary(CompareReviewSetItemView item) =>
+        new(
+            item.Id,
+            item.Kind,
+            item.RefId,
+            item.Label,
+            item.Notes,
+            item.SortOrder);
 
     private static WorkspaceSpriteSheetSummary SpriteSheetSummary(SpriteSheetDefinitionView spriteSheet) =>
         new(
@@ -3505,6 +3927,31 @@ else
         _assetDeleteCandidateId is Guid assetId
             ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId)
             : null;
+
+    private ArtAssetView? ReviewAsset(CompareReviewSetItemView item) =>
+        item.Kind == CompareReviewItemKind.Asset
+            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == item.RefId)
+            : null;
+
+    private GenerationBatchView? ReviewBatch(CompareReviewSetItemView item) =>
+        item.Kind == CompareReviewItemKind.GenerationBatch
+            ? _workbench?.Batches.FirstOrDefault(batch => batch.Id == item.RefId)
+            : null;
+
+    private SpriteSheetDefinitionView? ReviewSpriteSheet(CompareReviewSetItemView item) =>
+        item.Kind is CompareReviewItemKind.SpriteSheet or CompareReviewItemKind.SpriteAnimation
+            ? _workbench?.SpriteSheets.FirstOrDefault(sheet => sheet.Id == item.RefId)
+            : null;
+
+    private SpriteSheetFrameRecordView? ReviewSpriteFrame(CompareReviewSetItemView item) =>
+        item.Kind == CompareReviewItemKind.SpriteFrame
+            ? _workbench?.SpriteSheets.SelectMany(sheet => sheet.Frames).FirstOrDefault(frame => frame.Id == item.RefId)
+            : null;
+
+    private ArtAssetView? ReviewSpriteSheetAsset(SpriteSheetDefinitionView sheet) =>
+        sheet.WorkingAssetId is Guid workingAssetId
+            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == workingAssetId)
+            : _workbench?.Assets.FirstOrDefault(asset => asset.Id == sheet.SourceAssetId);
 
     private ArtAssetView? AttachmentAsset(ChatContextAttachmentView attachment) =>
         attachment.Type is ChatContextAttachmentType.Asset or ChatContextAttachmentType.Crop
@@ -3924,6 +4371,12 @@ else
         int? Width,
         int? Height);
 
+    private sealed record ReviewPreviewState(
+        string Title,
+        string Subtitle,
+        string? ImageUrl,
+        SpriteSheetDefinitionView? AnimationSheet);
+
     public async ValueTask DisposeAsync()
     {
         ChatRuntime.StateChanged -= OnChatRuntimeStateChanged;
@@ -3933,7 +4386,13 @@ else
         ImageRuntime.StateChanged -= OnImageGenerationRuntimeStateChanged;
         if (_editorModule is not null)
         {
-            try { await _editorModule.DisposeAsync(); } catch { }
+            try
+            {
+                if (_reviewPreviewEscapeBound)
+                    await _editorModule.InvokeVoidAsync("unbindReviewPreviewEscape");
+                await _editorModule.DisposeAsync();
+            }
+            catch { }
         }
         _maskAutosaveCts?.Cancel();
         _maskAutosaveCts?.Dispose();

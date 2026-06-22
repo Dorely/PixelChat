@@ -77,5 +77,9 @@ public interface IArtWorkflowService
     Task<ChatContextAttachmentView> AttachContextAsync(Guid projectId, ChatContextAttachmentType type, Guid refId, string? label = null, CancellationToken cancellationToken = default);
     Task RemoveContextAsync(Guid projectId, Guid attachmentId, CancellationToken cancellationToken = default);
     Task ClearContextAsync(Guid projectId, CancellationToken cancellationToken = default);
+    Task<CompareReviewSetView> SetCompareReviewSetAsync(Guid projectId, SetCompareReviewSetRequest request, CancellationToken cancellationToken = default);
+    Task<CompareReviewSetView> AddCompareReviewItemsAsync(Guid projectId, AddCompareReviewItemsRequest request, CancellationToken cancellationToken = default);
+    Task RemoveCompareReviewItemAsync(Guid projectId, Guid itemId, CancellationToken cancellationToken = default);
+    Task ClearCompareReviewSetAsync(Guid projectId, CancellationToken cancellationToken = default);
     Task<string> GetWorkspaceStateJsonAsync(Guid projectId, CancellationToken cancellationToken = default);
 }

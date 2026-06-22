@@ -34,6 +34,12 @@ public sealed record AssistantFormDraft(
     string? Notes = null,
     string? PreferredSize = null);
 
+public sealed record CompareReviewToolItem(
+    string Kind,
+    Guid RefId,
+    string? Label = null,
+    string? Notes = null);
+
 public sealed class AssistantTurnGenerationBudget(int maxRounds)
 {
     public int MaxRounds { get; } = Math.Max(0, maxRounds);
