@@ -1237,6 +1237,7 @@ else
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenSpriteSheetAsync(asset)">Sprite Sheet</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!CanComposeSpriteFrame(asset))" @onclick="() => AddAssetToSpriteSheetAsync(asset)">Add Frame</button>
                     @if (canSetRecipeExample && _editingRecipeId is not null)
                     {
                         <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!CanSaveRecipe)" @onclick="() => SetRecipeExampleFromOutputAsync(asset.Id)">Set as example</button>
@@ -2282,6 +2283,19 @@ else
 
         await FlushMaskAutosaveAsync();
         await Workflow.StartSpriteSheetEditAsync(_workbench.Project.Id, asset.Id);
+        await ReloadWorkbenchAsync();
+    }
+
+    private async Task AddAssetToSpriteSheetAsync(ArtAssetView asset)
+    {
+        if (_workbench is null || !CanComposeSpriteFrame(asset))
+            return;
+
+        await FlushMaskAutosaveAsync();
+        await Workflow.ComposeSpriteSheetFromImagesAsync(_workbench.Project.Id, new ComposeSpriteSheetFromImagesRequest(
+            [asset.Id],
+            _workbench.Project.ActiveSpriteSheetId,
+            Label: $"{asset.Label} sheet"));
         await ReloadWorkbenchAsync();
     }
 
@@ -4145,6 +4159,9 @@ else
 
     private static string FormatDimensions(ArtAssetView asset) =>
         asset.Width is int width && asset.Height is int height ? $"{width} x {height}" : "Unknown size";
+
+    private static bool CanComposeSpriteFrame(ArtAssetView asset) =>
+        asset.ContentType.Equals("image/png", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatDimensions(ArtAssetExportView asset) =>
         asset.Width is int width && asset.Height is int height ? $"{width} x {height}" : "Unknown size";

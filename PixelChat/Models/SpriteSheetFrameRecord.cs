@@ -19,6 +19,13 @@ public class SpriteSheetFrameRecord
     public int SourceHeight { get; set; }
     public string ShapeJson { get; set; } = "[]";
 
+    public Guid? SourceImageAssetId { get; set; }
+    public ArtAsset? SourceImageAsset { get; set; }
+    public int SourceImageX { get; set; }
+    public int SourceImageY { get; set; }
+    public int SourceImageWidth { get; set; }
+    public int SourceImageHeight { get; set; }
+
     public int CellX { get; set; }
     public int CellY { get; set; }
     public int CellWidth { get; set; }

@@ -52,8 +52,8 @@
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Compare review sets, sprite sheets/reviews/normalize, exports, recipes, masks, import, crop, and edits. |
-| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, lazy media URLs/binaries, per-frame sprite isolation/reassembly, recipe-versioned generation/edit, recipe management, and assistant tools. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Compare review sets, sprite sheets/reviews/compose/normalize, exports, recipes, masks, import, crop, and edits. |
+| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, lazy media URLs/binaries, sprite-sheet composition/provenance, per-frame isolation/reassembly, recipe-versioned generation/edit, recipe management, and assistant tools. |
 | `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, masks, and sprite-frame previews. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
@@ -111,7 +111,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with lazy frame thumbnails, preview callbacks, single-sheet canvas loading, irregular source-region editing, per-frame isolation/erase/AI edit/reassembly, animation preview, reset, and export. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with lazy frame thumbnails, sheet/frame import, multi-image composition, source-region editing, per-frame isolation/erase/AI edit/reassembly, animation preview, reset, and export. |
 
 ### Llm/
 
@@ -150,7 +150,7 @@
 | `PromptRecipe.cs` | EF entity for reusable prompt/style/production guides, avoid rules, one active example image, and preferred defaults. |
 | `PromptRecipeVersion.cs` | EF entity for append-only prompt recipe snapshots including the active example image used by user/assistant saves and restore. |
 | `SpriteSheetDefinition.cs` | EF entity for row-based sprite-sheet definitions linking immutable source assets to mutable working sprite-sheet assets plus layout, background fill, FPS, and loop defaults. |
-| `SpriteSheetFrameRecord.cs` | EF entity for durable sprite frame records, source/output rectangles, previews, hidden working-frame PNGs, labels, dimensions, and timestamps. |
+| `SpriteSheetFrameRecord.cs` | EF entity for durable sprite frame records, source/output rectangles, per-frame source-image provenance, previews, hidden working-frame PNGs, labels, dimensions, and timestamps. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets. |
 | `ChatContextAttachment.cs` | EF entity for persistent visible chat attachments referencing assets, masks, crops, recipes, or batches. |
 | `CompareReviewSet.cs` | EF entities for the project-scoped current Compare review set and ordered review items referencing assets, batches, sprite sheets, animations, or frames. |
@@ -191,6 +191,7 @@
 | `20260612071043_SpriteFrameWorkingImages.cs` / `.Designer.cs` | EF migration adding hidden per-frame working PNG state for sprite isolation, cleanup, and reassembly. |
 | `20260612154126_ProviderThinkingMode.cs` / `.Designer.cs` | EF migration adding nullable provider thinking mode and last-tested thinking snapshot fields. |
 | `20260622190840_CompareReviewSet.cs` / `.Designer.cs` | EF migration adding project-scoped Compare review sets and ordered review items. |
+| `20260622205745_SpriteFrameSourceImageProvenance.cs` / `.Designer.cs` | EF migration adding nullable per-frame source image provenance columns and a SetNull asset reference. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

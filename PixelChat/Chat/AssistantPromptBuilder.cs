@@ -17,8 +17,8 @@ public static class AssistantPromptBuilder
 
         - Read tools (`list_workspace_state`, `list_assets`/`read_asset`, `list_recipes`/`read_recipe`/`list_recipe_versions`, `list_batches`/`read_batch`, `list_sprite_sheets`/`read_sprite_sheet`): inspect project data with no visible side effects.
         - Draft tools (`draft_generate_form`, `draft_edit_form`, `draft_prompt_recipe_form`): fill visible forms for the user to review and submit manually.
-        - Autonomous tools (`run_generation_round`, `save_prompt_recipe`, `revert_recipe_version`, `create_sprite_sheet`): perform real generation and recipe work directly during bounded iteration.
-        - Sprite-sheet tools (`map_sprite_sheet_frames`, `update_sprite_sheet_frames`, `isolate_sprite_frame`, `read_sprite_frame_image`, `erase_sprite_frame_regions`, `edit_sprite_frame`, `clear_sprite_frame_working_image`, `reassemble_sprite_sheet`, `normalize_sprite_sheet`, `reset_sprite_sheet_to_original`, `review_sprite_animation`).
+        - Autonomous tools (`run_generation_round`, `save_prompt_recipe`, `revert_recipe_version`, `create_sprite_sheet`, `compose_sprite_sheet_from_images`): perform real generation and recipe work directly during bounded iteration.
+        - Sprite-sheet tools (`compose_sprite_sheet_from_images`, `map_sprite_sheet_frames`, `update_sprite_sheet_frames`, `isolate_sprite_frame`, `read_sprite_frame_image`, `erase_sprite_frame_regions`, `edit_sprite_frame`, `clear_sprite_frame_working_image`, `reassemble_sprite_sheet`, `normalize_sprite_sheet`, `reset_sprite_sheet_to_original`, `review_sprite_animation`).
         - Workspace tools (`switch_workspace_mode`, `set_compare_review_set`, `add_compare_review_items`, `remove_compare_review_item`, `clear_compare_review_set`, `mark_asset`, `export_asset`): visible UI changes.
 
         How image context reaches you:
@@ -83,6 +83,7 @@ public static class AssistantPromptBuilder
         ## Mapping Frames
 
         - The user can start a sheet from an asset card/import, or you can call `create_sprite_sheet` during autonomous work.
+        - When animation frames or related poses already exist as separate PNG assets, use `compose_sprite_sheet_from_images` to create or extend a sheet. Preserve the intended order in `assetIds`, then continue with `reassemble_sprite_sheet`, `review_sprite_animation`, and cleanup if needed.
         - `map_sprite_sheet_frames` is a heuristic: mode `auto` detects frames from a source asset, mode `grid-repair` regenerates grid-guided boxes toward `expectedFrames`. Give it one attempt with the best `expectedFrames`/`layoutHint` you have, inspect the annotated result, then move on — do not retry mapping variants hoping a heuristic will solve an overlapping or malformed sheet.
         - Treat generated sprite sheets as irregular source images. Source rectangles and polygons are arbitrary frame regions, not proof that the original sheet has equal cells.
         - Use `update_sprite_sheet_frames` as a replace-set: the frames array is authoritative, omission deletes, and array order becomes frame order. Include full `shapePaths` when sprites overlap or boxes alone are ambiguous; neighboring frame polygons are what let normalization erase bleed.

@@ -35,6 +35,7 @@ public sealed class AssistantToolRegistry(
         "save_prompt_recipe",
         "revert_recipe_version",
         "create_sprite_sheet",
+        "compose_sprite_sheet_from_images",
         "map_sprite_sheet_frames",
         "review_sprite_animation",
         "isolate_sprite_frame",
@@ -142,6 +143,25 @@ public sealed class AssistantToolRegistry(
                 CreateSpriteSheetAsync(projectId, sourceAssetId, cancellationToken),
             name: "create_sprite_sheet",
             description: "Create or select a sprite-sheet definition from an existing generated or imported asset and switch the visible workspace to Sprites."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid[] assetIds,
+                Guid? spriteSheetId = null,
+                int? insertAt = null,
+                string? label = null,
+                int? rows = null,
+                int? columns = null,
+                int? padding = null,
+                int? gutter = null,
+                int? fps = null,
+                bool? loop = null,
+                string? horizontalAnchor = null,
+                string? verticalAnchor = null,
+                CancellationToken cancellationToken = default) =>
+                ComposeSpriteSheetFromImagesAsync(projectId, assetIds, spriteSheetId, insertAt, label, rows, columns, padding, gutter, fps, loop, horizontalAnchor, verticalAnchor, cancellationToken),
+            name: "compose_sprite_sheet_from_images",
+            description: "Create or extend a sprite sheet from ordered individual PNG assets. Omit spriteSheetId to create a new composed sheet, or pass an existing sheet id and optional zero-based insertAt to insert frames. Each composed frame preserves sourceImageAssetId/sourceImageRect provenance, then flows through normalize, isolate/edit, reassemble, review, and export like any other sprite sheet."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId = null, int maxFrames = 12, CancellationToken cancellationToken = default) =>
@@ -574,6 +594,52 @@ public sealed class AssistantToolRegistry(
         }, JsonOptions);
     }
 
+    private async Task<string> ComposeSpriteSheetFromImagesAsync(
+        Guid projectId,
+        Guid[]? assetIds,
+        Guid? spriteSheetId,
+        int? insertAt,
+        string? label,
+        int? rows,
+        int? columns,
+        int? padding,
+        int? gutter,
+        int? fps,
+        bool? loop,
+        string? horizontalAnchor,
+        string? verticalAnchor,
+        CancellationToken cancellationToken)
+    {
+        var cleanedAssetIds = (assetIds ?? [])
+            .Where(id => id != Guid.Empty)
+            .Take(2048)
+            .ToList();
+        if (cleanedAssetIds.Count == 0)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "compose_sprite_sheet_from_images requires at least one PNG asset id.",
+            }, JsonOptions);
+        }
+
+        var saved = await workflow.ComposeSpriteSheetFromImagesAsync(projectId, new ComposeSpriteSheetFromImagesRequest(
+            cleanedAssetIds,
+            spriteSheetId,
+            insertAt,
+            label,
+            rows,
+            columns,
+            padding,
+            gutter,
+            fps,
+            loop,
+            horizontalAnchor,
+            verticalAnchor), cancellationToken);
+        return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, spriteSheetId is Guid id && id != Guid.Empty
+            ? "Images added to sprite sheet."
+            : "Sprite sheet composed from individual images."), JsonOptions);
+    }
+
     private async Task<string> ReadSpriteSheetToolAsync(
         Guid projectId,
         Guid? spriteSheetId,
@@ -720,7 +786,9 @@ public sealed class AssistantToolRegistry(
                 frame.Index,
                 $"Frame {frame.Index + 1}",
                 frame.SourceRect,
-                frame.ShapePaths))
+                frame.ShapePaths,
+                sourceAssetId,
+                frame.SourceRect))
             .ToList();
         var saved = await workflow.UpdateSpriteSheetFramesAsync(projectId, new UpdateSpriteSheetFramesRequest(
             sheet.Id,
@@ -852,6 +920,8 @@ public sealed class AssistantToolRegistry(
             index,
             label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label,
             frame.SourceRect,
+            frame.SourceImageAssetId,
+            frame.SourceImageRect,
             hasShapePaths = HasShapePaths(frame.ShapePaths),
             shapePathCount = ShapePathCount(frame.ShapePaths),
             shapePointCount = ShapePointCount(frame.ShapePaths),
@@ -898,6 +968,8 @@ public sealed class AssistantToolRegistry(
         frame.Index,
         frame.Label,
         frame.SourceRect,
+        frame.SourceImageAssetId,
+        frame.SourceImageRect,
         frame.CellRect,
         frame.SpriteRect,
         hasShapePaths = HasShapePaths(frame.ShapePaths),

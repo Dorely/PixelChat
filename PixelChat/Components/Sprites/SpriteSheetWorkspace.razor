@@ -12,7 +12,14 @@
             <span>@HeaderSummary()</span>
         </div>
         <div class="sprite-head-actions">
-            <InputFile OnChange="ImportSourceAsync" accept="image/png,image/jpeg" />
+            <label class="sprite-file-control">
+                <span>Import Sheet</span>
+                <InputFile OnChange="ImportSourceAsync" accept="image/png,image/jpeg" />
+            </label>
+            <label class="sprite-file-control">
+                <span>Import Frames</span>
+                <InputFile OnChange="ImportFramesAsync" accept="image/png" multiple />
+            </label>
             <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet || _framePersistenceRunning)" @onclick="AutoDetectAsync">Auto Detect</button>
             <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(!HasActiveSheet || _framePersistenceRunning)" @onclick="ResetToOriginalAsync">Reset</button>
             <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet)" @onclick="PreviewSheetAsync">Preview Sheet</button>
@@ -157,7 +164,13 @@
                                 }
                                 <span class="@FrameMarkerClass(frame)" title="@FrameGeometryLabel(frame)" aria-hidden="true"></span>
                             </button>
-                            <input class="form-control form-control-sm" @bind="frame.Label" @bind:after="OnFrameLabelChangedAsync" />
+                            <div class="frame-label-stack">
+                                <input class="form-control form-control-sm" @bind="frame.Label" @bind:after="OnFrameLabelChangedAsync" />
+                                @if (!string.IsNullOrWhiteSpace(FrameSourceLabel(frame)))
+                                {
+                                    <small>@FrameSourceLabel(frame)</small>
+                                }
+                            </div>
                             <span class="@WorkingBadgeClass(frame)">@WorkingStateLabel(frame)</span>
                             <div class="frame-row-actions">
                                 <button type="button" class="btn btn-sm btn-outline-secondary" title="Move up" disabled="@(frame.Index == 0)" @onclick="() => MoveFrameAsync(frame.Index, -1)">Up</button>
@@ -360,6 +373,52 @@
         }
     }
 
+    private async Task ImportFramesAsync(InputFileChangeEventArgs args)
+    {
+        var files = args.GetMultipleFiles(128);
+        if (files.Count == 0)
+            return;
+
+        _error = null;
+        _status = files.Count == 1 ? "Importing sprite frame..." : $"Importing {files.Count} sprite frames...";
+        try
+        {
+            var assetIds = new List<Guid>();
+            foreach (var file in files)
+            {
+                if (!file.ContentType.Equals("image/png", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Sprite frame composition requires PNG images.");
+
+                await using var stream = file.OpenReadStream(50 * 1024 * 1024);
+                using var memory = new MemoryStream();
+                await stream.CopyToAsync(memory);
+                var asset = await Workflow.ImportAssetAsync(Workbench.Project.Id, new ImportAssetRequest(
+                    file.Name,
+                    file.ContentType,
+                    memory.ToArray(),
+                    Path.GetFileNameWithoutExtension(file.Name)));
+                assetIds.Add(asset.Id);
+            }
+
+            var hadActiveSheet = Workbench.ActiveSpriteSheet is not null;
+            var sheet = await Workflow.ComposeSpriteSheetFromImagesAsync(Workbench.Project.Id, new ComposeSpriteSheetFromImagesRequest(
+                assetIds,
+                Workbench.ActiveSpriteSheet?.Id,
+                Label: files.Count == 1 ? null : "Imported frame sheet"));
+            _loadedSpriteSheetId = null;
+            _loadedSpriteSheetUpdatedAt = null;
+            _status = hadActiveSheet
+                ? $"Added {files.Count} frame(s)."
+                : $"Created {sheet.Label} from {files.Count} frame(s).";
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+    }
+
     private async Task AutoDetectAsync()
     {
         if (CurrentWorkingAsset() is not { } working)
@@ -389,6 +448,8 @@
                     Width = frame.SourceRect.Width,
                     Height = frame.SourceRect.Height,
                     ShapePaths = frame.ShapePaths.ToList(),
+                    SourceImageAssetId = working.Id,
+                    SourceImageRect = frame.SourceRect,
                 }));
             FitCellsToFrames();
             _selectedFrameIndex = _frames.Count > 0 ? 0 : -1;
@@ -965,6 +1026,8 @@
                 Height = frame.SourceRect.Height,
                 ShapePaths = frame.ShapePaths.ToList(),
                 PreviewImageUrl = frame.PreviewImageUrl,
+                SourceImageAssetId = frame.SourceImageAssetId,
+                SourceImageRect = frame.SourceImageRect,
                 WorkingState = frame.WorkingState,
                 WorkingWidth = frame.WorkingWidth,
                 WorkingHeight = frame.WorkingHeight,
@@ -1210,6 +1273,15 @@
     private static bool HasWorkingImage(SpriteSheetEditorFrame frame) =>
         NormalizeWorkingState(frame.WorkingState) is "isolated" or "edited";
 
+    private string FrameSourceLabel(SpriteSheetEditorFrame frame)
+    {
+        if (frame.SourceImageAssetId is not Guid sourceImageAssetId)
+            return string.Empty;
+
+        var source = Workbench.Assets.FirstOrDefault(asset => asset.Id == sourceImageAssetId);
+        return source is null ? string.Empty : $"Source: {source.Label}";
+    }
+
     private static IReadOnlyList<SpriteSheetPoint> NormalizeFrameWorkPolygon(
         IReadOnlyList<SpriteSheetPoint>? points,
         int width,
@@ -1320,7 +1392,9 @@
                 index,
                 frame.Label,
                 new SpriteSheetRect(frame.X, frame.Y, frame.Width, frame.Height),
-                frame.ShapePaths))
+                frame.ShapePaths,
+                frame.SourceImageAssetId,
+                frame.SourceImageRect))
             .ToList();
     }
 
@@ -1350,6 +1424,8 @@
         public int Height { get; set; }
         public List<SpriteSheetShapePath> ShapePaths { get; set; } = [];
         public string PreviewImageUrl { get; set; } = string.Empty;
+        public Guid? SourceImageAssetId { get; set; }
+        public SpriteSheetRect? SourceImageRect { get; set; }
         public string WorkingState { get; set; } = "none";
         public int WorkingWidth { get; set; }
         public int WorkingHeight { get; set; }

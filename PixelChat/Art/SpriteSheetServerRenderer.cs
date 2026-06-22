@@ -49,7 +49,9 @@ internal static class SpriteSheetServerRenderer
                 frame.ShapePaths,
                 cellRect,
                 spriteRect,
-                previewDataUrl));
+                previewDataUrl,
+                frame.SourceImageAssetId,
+                frame.SourceImageRect));
         }
 
         return new SpriteSheetServerPreviewResult(savedFrames);
@@ -111,7 +113,9 @@ internal static class SpriteSheetServerRenderer
                 rebasedShapePaths,
                 cellRect,
                 spriteRect,
-                previewDataUrl));
+                previewDataUrl,
+                frame.SourceImageAssetId,
+                frame.SourceImageRect));
         }
 
         return new SpriteSheetServerRenderResult(
@@ -393,7 +397,9 @@ internal static class SpriteSheetServerRenderer
                 [],
                 cellRect,
                 clippedPlacedRect.Width > 0 && clippedPlacedRect.Height > 0 ? clippedPlacedRect : new SpriteSheetRect(cellRect.X, cellRect.Y, 1, 1),
-                previewDataUrl));
+                previewDataUrl,
+                frame.Input.SourceImageAssetId,
+                frame.Input.SourceImageRect));
 
             if (frame.Warnings.Count > 0)
                 warnings.AddRange(frame.Warnings.Select(warning => $"Frame {index + 1}: {warning}"));
@@ -924,7 +930,9 @@ internal static class SpriteSheetServerRenderer
                 index,
                 string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label.Trim(),
                 NormalizeSourceRect(frame.SourceRect),
-                NormalizeShapePaths(frame.ShapePaths, sourceWidth, sourceHeight)))
+                NormalizeShapePaths(frame.ShapePaths, sourceWidth, sourceHeight),
+                frame.SourceImageAssetId,
+                frame.SourceImageRect is null ? null : NormalizeSourceRect(frame.SourceImageRect)))
             .ToList();
     }
 
@@ -1336,7 +1344,9 @@ internal static class SpriteSheetServerRenderer
         int Index,
         string Label,
         SpriteSheetRect SourceRect,
-        IReadOnlyList<SpriteSheetShapePath> ShapePaths);
+        IReadOnlyList<SpriteSheetShapePath> ShapePaths,
+        Guid? SourceImageAssetId = null,
+        SpriteSheetRect? SourceImageRect = null);
 
     private sealed record PreparedReassembleFrame(
         SpriteSheetFrameImageInput Input,
@@ -1356,7 +1366,9 @@ internal sealed record SpriteSheetFrameImageInput(
     byte[] Rgba,
     int Width,
     int Height,
-    bool UsedWorkingImage);
+    bool UsedWorkingImage,
+    Guid? SourceImageAssetId = null,
+    SpriteSheetRect? SourceImageRect = null);
 
 internal sealed record SpriteSheetReassembleFrameRenderInfo(
     int Index,

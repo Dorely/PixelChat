@@ -143,6 +143,11 @@ public sealed class ArtWorkflowService(
                     f.SourceWidth,
                     f.SourceHeight,
                     f.ShapeJson,
+                    f.SourceImageAssetId,
+                    f.SourceImageX,
+                    f.SourceImageY,
+                    f.SourceImageWidth,
+                    f.SourceImageHeight,
                     f.CellX,
                     f.CellY,
                     f.CellWidth,
@@ -1136,6 +1141,212 @@ public sealed class ArtWorkflowService(
         return SpriteSheetView(definition, []);
     }
 
+    public async Task<SpriteSheetDefinitionView> ComposeSpriteSheetFromImagesAsync(
+        Guid projectId,
+        ComposeSpriteSheetFromImagesRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var sourceAssetIds = request.AssetIds
+            .Where(id => id != Guid.Empty)
+            .ToList();
+        if (sourceAssetIds.Count == 0)
+            throw new InvalidOperationException("At least one source image asset is required.");
+
+        var assetsById = await db.ArtAssets
+            .Where(asset => asset.ProjectId == projectId && sourceAssetIds.Distinct().Contains(asset.Id))
+            .ToDictionaryAsync(asset => asset.Id, cancellationToken);
+        if (assetsById.Count != sourceAssetIds.Distinct().Count())
+            throw new InvalidOperationException("One or more source image assets could not be found.");
+
+        var newFrameInputs = new List<SpriteSheetFrameImageInput>();
+        foreach (var (assetId, sourceOrder) in sourceAssetIds.Select((assetId, sourceOrder) => (assetId, sourceOrder)))
+        {
+            var asset = assetsById[assetId];
+            if (!asset.ContentType.Equals("image/png", StringComparison.OrdinalIgnoreCase)
+                || !SpriteSheetPngCodec.TryReadRgba(asset.Data, out var width, out var height, out var rgba))
+            {
+                throw new InvalidOperationException("Sprite-sheet composition requires PNG source images.");
+            }
+
+            newFrameInputs.Add(new SpriteSheetFrameImageInput(
+                sourceOrder,
+                string.IsNullOrWhiteSpace(asset.Label) ? $"Frame {sourceOrder + 1}" : asset.Label,
+                rgba,
+                width,
+                height,
+                UsedWorkingImage: true,
+                asset.Id,
+                new SpriteSheetRect(0, 0, width, height)));
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        var now = DateTime.UtcNow;
+        SpriteSheetDefinition definition;
+        ArtAsset working;
+        SpriteSheetBackground background;
+        List<SpriteSheetFrameImageInput> inputs;
+
+        if (request.SpriteSheetId is Guid spriteSheetId && spriteSheetId != Guid.Empty)
+        {
+            (definition, working, var records) = await LoadSpriteSheetWorkingEntitiesAsync(projectId, spriteSheetId, cancellationToken);
+            if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var sheetWidth, out var sheetHeight, out var sheetRgba))
+                throw new InvalidOperationException("Sprite-sheet composition requires a PNG working image.");
+
+            background = EnsureSheetBackground(definition, sheetRgba, sheetWidth, sheetHeight);
+            var existingInputs = BuildSpriteFrameImageInputsFromRecords(
+                definition,
+                sheetRgba,
+                sheetWidth,
+                sheetHeight,
+                background,
+                records);
+            var insertAt = request.InsertAt is int requestedInsertAt
+                ? Math.Clamp(requestedInsertAt, 0, existingInputs.Count)
+                : existingInputs.Count;
+            inputs = existingInputs
+                .Take(insertAt)
+                .Concat(newFrameInputs)
+                .Concat(existingInputs.Skip(insertAt))
+                .Select((input, index) => input with { Index = index })
+                .ToList();
+        }
+        else
+        {
+            var firstAsset = assetsById[sourceAssetIds[0]];
+            background = SpriteSheetImageAnalyzer.ResolveBackground(newFrameInputs[0].Rgba, newFrameInputs[0].Width, newFrameInputs[0].Height);
+            definition = new SpriteSheetDefinition
+            {
+                ProjectId = projectId,
+                Label = CleanSpriteSheetLabel(request.Label ?? string.Empty, $"{firstAsset.Label} sheet"),
+                Rows = Math.Clamp(request.Rows ?? 1, 1, 32),
+                Columns = Math.Clamp(request.Columns ?? sourceAssetIds.Count, 1, 64),
+                CellWidth = Math.Max(1, newFrameInputs.Max(frame => frame.Width)),
+                CellHeight = Math.Max(1, newFrameInputs.Max(frame => frame.Height)),
+                Padding = Math.Clamp(request.Padding ?? 8, 0, 4096),
+                Gutter = Math.Clamp(request.Gutter ?? 16, 0, 4096),
+                Fps = Math.Clamp(request.Fps ?? 8, 1, 60),
+                Loop = request.Loop ?? true,
+                HorizontalAnchor = NormalizeHorizontalAnchor(request.HorizontalAnchor),
+                VerticalAnchor = NormalizeVerticalAnchor(request.VerticalAnchor),
+                BackgroundMode = background.Mode,
+                BackgroundColor = background.Mode.Equals("color", StringComparison.OrdinalIgnoreCase) ? BackgroundColor(background) : null,
+                FramesJson = "[]",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            inputs = newFrameInputs
+                .Select((input, index) => input with { Index = index })
+                .ToList();
+
+            var sourcePlaceholder = CreateAsset(
+                projectId,
+                $"{definition.Label} source",
+                $"sprite-sheet-source-{now:yyyyMMddHHmmss}.png",
+                ArtAssetKind.SpriteSheet,
+                "image/png",
+                newFrameInputs[0].Rgba.Length == 0
+                    ? []
+                    : SpriteSheetPngCodec.EncodeRgba(newFrameInputs[0].Width, newFrameInputs[0].Height, newFrameInputs[0].Rgba),
+                parentAssetId: null,
+                sourceBatchId: null,
+                promptRecipeId: null,
+                promptRecipeVersion: null,
+                prompt: string.Empty,
+                metadata: new
+                {
+                    Source = "sprite-sheet-composed-source",
+                    SpriteSheetDefinitionId = definition.Id,
+                    SourceImageAssetIds = sourceAssetIds,
+                });
+            definition.SourceAssetId = sourcePlaceholder.Id;
+            await db.ArtAssets.AddAsync(sourcePlaceholder, cancellationToken);
+
+            working = CreateAsset(
+                projectId,
+                definition.Label,
+                $"sprite-sheet-working-{now:yyyyMMddHHmmss}.png",
+                ArtAssetKind.SpriteSheet,
+                "image/png",
+                sourcePlaceholder.Data,
+                sourcePlaceholder.Id,
+                sourceBatchId: null,
+                promptRecipeId: null,
+                promptRecipeVersion: null,
+                prompt: string.Empty,
+                metadata: new
+                {
+                    Source = "sprite-sheet-working",
+                    SourceAssetId = sourcePlaceholder.Id,
+                    SpriteSheetDefinitionId = definition.Id,
+                    Mutable = true,
+                    SourceImageAssetIds = sourceAssetIds,
+                });
+            definition.OutputAssetId = working.Id;
+            await db.SpriteSheetDefinitions.AddAsync(definition, cancellationToken);
+            await db.ArtAssets.AddAsync(working, cancellationToken);
+        }
+
+        var (rows, columns) = GridCapacity(
+            request.Rows ?? definition.Rows,
+            request.Columns ?? definition.Columns,
+            inputs.Count);
+        var render = SpriteSheetServerRenderer.ReassembleIrregularFrames(
+            rows,
+            columns,
+            request.Padding is int padding ? Math.Clamp(padding, 0, 4096) : definition.Padding,
+            request.Gutter is int gutter ? Math.Clamp(gutter, 0, 4096) : definition.Gutter,
+            NormalizeHorizontalAnchor(request.HorizontalAnchor ?? definition.HorizontalAnchor),
+            NormalizeVerticalAnchor(request.VerticalAnchor ?? definition.VerticalAnchor),
+            background,
+            inputs);
+
+        UpdateSpriteSheetDefinition(
+            definition,
+            render.Rows,
+            render.Columns,
+            render.FrameWidth,
+            render.FrameHeight,
+            request.Padding is int renderPadding ? Math.Clamp(renderPadding, 0, 4096) : definition.Padding,
+            request.Gutter is int renderGutter ? Math.Clamp(renderGutter, 0, 4096) : definition.Gutter,
+            request.Fps is int fps ? Math.Clamp(fps, 1, 60) : definition.Fps,
+            request.Loop ?? definition.Loop,
+            request.HorizontalAnchor ?? definition.HorizontalAnchor,
+            request.VerticalAnchor ?? definition.VerticalAnchor);
+        UpdateWorkingSpriteAsset(working, new ImagePayload("image/png", render.PngData, render.Width, render.Height), definition, now);
+        await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, render.Frames, cancellationToken);
+
+        if (request.SpriteSheetId is null || request.SpriteSheetId == Guid.Empty)
+        {
+            var sourceAsset = await db.ArtAssets.FirstAsync(asset => asset.Id == definition.SourceAssetId, cancellationToken);
+            sourceAsset.ContentType = "image/png";
+            sourceAsset.Data = render.PngData;
+            sourceAsset.Width = render.Width;
+            sourceAsset.Height = render.Height;
+            sourceAsset.ThumbnailData = null;
+            sourceAsset.UpdatedAt = now;
+            sourceAsset.SourceMetadataJson = JsonSerializer.Serialize(new
+            {
+                Source = "sprite-sheet-composed-source",
+                SpriteSheetDefinitionId = definition.Id,
+                SourceImageAssetIds = sourceAssetIds,
+                definition.Rows,
+                definition.Columns,
+                definition.CellWidth,
+                definition.CellHeight,
+                frameCount = inputs.Count,
+            }, JsonOptions);
+        }
+
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveSpriteSheetId = definition.Id;
+        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+        project.UpdatedAt = now;
+        definition.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
+    }
+
     public async Task<SpriteSheetDefinitionView> AutosaveSpriteSheetLayoutAsync(
         Guid projectId,
         AutosaveSpriteSheetLayoutRequest request,
@@ -1655,7 +1866,15 @@ public sealed class ArtWorkflowService(
             {
                 if (!SpriteSheetPngCodec.TryReadRgba(record.WorkingData, out var width, out var height, out var rgba))
                     throw new InvalidOperationException($"Working image for frame {index + 1} must be a PNG.");
-                inputs.Add(new SpriteSheetFrameImageInput(index, record.Label, rgba, width, height, UsedWorkingImage: true));
+                inputs.Add(new SpriteSheetFrameImageInput(
+                    index,
+                    record.Label,
+                    rgba,
+                    width,
+                    height,
+                    UsedWorkingImage: true,
+                    record.SourceImageAssetId,
+                    SourceImageRectView(record)));
                 continue;
             }
 
@@ -1671,7 +1890,15 @@ public sealed class ArtWorkflowService(
                 margin: 0);
             if (!SpriteSheetPngCodec.TryReadRgba(extracted.PngData, out var extractedWidth, out var extractedHeight, out var extractedRgba))
                 throw new InvalidOperationException($"Extracted image for frame {index + 1} must be a PNG.");
-            inputs.Add(new SpriteSheetFrameImageInput(index, record.Label, extractedRgba, extractedWidth, extractedHeight, UsedWorkingImage: false));
+            inputs.Add(new SpriteSheetFrameImageInput(
+                index,
+                record.Label,
+                extractedRgba,
+                extractedWidth,
+                extractedHeight,
+                UsedWorkingImage: false,
+                record.SourceImageAssetId,
+                SourceImageRectView(record)));
         }
 
         var render = SpriteSheetServerRenderer.ReassembleIrregularFrames(
@@ -1822,6 +2049,8 @@ public sealed class ArtWorkflowService(
                 frame.Index,
                 label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label,
                 sourceRect = RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
+                frame.SourceImageAssetId,
+                sourceImageRect = SourceImageRectView(frame),
                 cellRect = RectView(frame.CellX, frame.CellY, frame.CellWidth, frame.CellHeight),
                 spriteRect = RectView(frame.SpriteX, frame.SpriteY, frame.SpriteWidth, frame.SpriteHeight),
                 shapePaths = DeserializeShapePaths(frame.ShapeJson),
@@ -2782,9 +3011,21 @@ public sealed class ArtWorkflowService(
             recipe.UpdatedAt = DateTime.UtcNow;
         }
 
+        var now = DateTime.UtcNow;
+        await db.SpriteSheetFrameRecords
+            .Where(frame => frame.ProjectId == projectId && frame.SourceImageAssetId == assetId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(frame => frame.SourceImageAssetId, (Guid?)null)
+                .SetProperty(frame => frame.SourceImageX, 0)
+                .SetProperty(frame => frame.SourceImageY, 0)
+                .SetProperty(frame => frame.SourceImageWidth, 0)
+                .SetProperty(frame => frame.SourceImageHeight, 0)
+                .SetProperty(frame => frame.UpdatedAt, now),
+                cancellationToken);
+
         db.ArtAssets.Remove(asset);
         var project = await GetProjectAsync(projectId, cancellationToken);
-        project.UpdatedAt = DateTime.UtcNow;
+        project.UpdatedAt = now;
         await db.SaveChangesAsync(cancellationToken);
     }
 
@@ -3298,7 +3539,9 @@ public sealed class ArtWorkflowService(
                     NormalizeShapePaths(frame.ShapePaths),
                     cellRect,
                     spriteRect,
-                    string.Empty);
+                    string.Empty,
+                    frame.SourceImageAssetId,
+                    frame.SourceImageRect);
             })
             .ToList();
     }
@@ -3308,7 +3551,9 @@ public sealed class ArtWorkflowService(
             frame.Index,
             frame.Label,
             RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
-            DeserializeShapePaths(frame.ShapeJson));
+            DeserializeShapePaths(frame.ShapeJson),
+            frame.SourceImageAssetId,
+            SourceImageRectView(frame));
 
     private async Task<(SpriteSheetDefinition Definition, ArtAsset Working, List<SpriteSheetFrameRecord> Records)> LoadSpriteSheetWorkingEntitiesAsync(
         Guid projectId,
@@ -3325,6 +3570,61 @@ public sealed class ArtWorkflowService(
             .OrderBy(frame => frame.Index)
             .ToListAsync(cancellationToken);
         return (definition, working, records);
+    }
+
+    private static List<SpriteSheetFrameImageInput> BuildSpriteFrameImageInputsFromRecords(
+        SpriteSheetDefinition definition,
+        byte[] sheetRgba,
+        int sheetWidth,
+        int sheetHeight,
+        SpriteSheetBackground background,
+        IReadOnlyList<SpriteSheetFrameRecord> records)
+    {
+        var updates = records.Select(FrameUpdateFromRecord).ToList();
+        var inputs = new List<SpriteSheetFrameImageInput>();
+        for (var index = 0; index < records.Count; index++)
+        {
+            var record = records[index];
+            if (record.WorkingData.Length > 0)
+            {
+                if (!SpriteSheetPngCodec.TryReadRgba(record.WorkingData, out var width, out var height, out var rgba))
+                    throw new InvalidOperationException($"Working image for frame {index + 1} must be a PNG.");
+                inputs.Add(new SpriteSheetFrameImageInput(
+                    index,
+                    record.Label,
+                    rgba,
+                    width,
+                    height,
+                    UsedWorkingImage: true,
+                    record.SourceImageAssetId,
+                    SourceImageRectView(record)));
+                continue;
+            }
+
+            var extracted = SpriteSheetServerRenderer.ExtractFrameRegion(
+                sheetRgba,
+                sheetWidth,
+                sheetHeight,
+                definition.Rows,
+                definition.Columns,
+                background,
+                updates,
+                index,
+                margin: 0);
+            if (!SpriteSheetPngCodec.TryReadRgba(extracted.PngData, out var extractedWidth, out var extractedHeight, out var extractedRgba))
+                throw new InvalidOperationException($"Extracted image for frame {index + 1} must be a PNG.");
+            inputs.Add(new SpriteSheetFrameImageInput(
+                index,
+                record.Label,
+                extractedRgba,
+                extractedWidth,
+                extractedHeight,
+                UsedWorkingImage: false,
+                record.SourceImageAssetId,
+                SourceImageRectView(record)));
+        }
+
+        return inputs;
     }
 
     private async Task<(SpriteSheetDefinition Definition, SpriteSheetFrameRecord Record)> EnsureFrameWorkingImageAsync(
@@ -3603,6 +3903,11 @@ public sealed class ArtWorkflowService(
                 frame.SourceWidth,
                 frame.SourceHeight,
                 frame.ShapeJson,
+                frame.SourceImageAssetId,
+                frame.SourceImageX,
+                frame.SourceImageY,
+                frame.SourceImageWidth,
+                frame.SourceImageHeight,
                 frame.CellX,
                 frame.CellY,
                 frame.CellWidth,
@@ -3743,6 +4048,8 @@ public sealed class ArtWorkflowService(
                 Label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label,
                 SourceRect = RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight),
                 ShapePaths = DeserializeShapePaths(frame.ShapeJson),
+                frame.SourceImageAssetId,
+                SourceImageRect = SourceImageRectView(frame),
                 CellRect = RectView(frame.CellX, frame.CellY, frame.CellWidth, frame.CellHeight),
                 SpriteRect = RectView(frame.SpriteX, frame.SpriteY, frame.SpriteWidth, frame.SpriteHeight),
             }), JsonOptions);
@@ -3760,6 +4067,8 @@ public sealed class ArtWorkflowService(
             frame.Label,
             frame.SourceRect,
             frame.ShapePaths,
+            frame.SourceImageAssetId,
+            frame.SourceImageRect,
             frame.CellRect,
             frame.SpriteRect,
         }), JsonOptions);
@@ -3802,7 +4111,21 @@ public sealed class ArtWorkflowService(
                 || record.SourceWidth != frame.SourceRect.Width
                 || record.SourceHeight != frame.SourceRect.Height
                 || !string.Equals(record.ShapeJson, shapeJson, StringComparison.Ordinal);
-            if (NormalizeFrameWorkingState(record.WorkingState) != "none" && geometryChanged)
+            var hasIncomingSourceImage = frame.SourceImageAssetId is not null || frame.SourceImageRect is not null;
+            var sourceImageAssetId = hasIncomingSourceImage ? frame.SourceImageAssetId : record.SourceImageAssetId;
+            var sourceImageRect = hasIncomingSourceImage
+                ? frame.SourceImageRect ?? frame.SourceRect
+                : SourceImageRectView(record);
+            if (sourceImageAssetId is null)
+                sourceImageRect = null;
+            var sourceImageChanged = record.SourceImageAssetId != sourceImageAssetId
+                || (sourceImageRect is null
+                    ? record.SourceImageWidth > 0 || record.SourceImageHeight > 0
+                    : record.SourceImageX != sourceImageRect.X
+                        || record.SourceImageY != sourceImageRect.Y
+                        || record.SourceImageWidth != sourceImageRect.Width
+                        || record.SourceImageHeight != sourceImageRect.Height);
+            if (NormalizeFrameWorkingState(record.WorkingState) != "none" && (geometryChanged || sourceImageChanged))
                 ClearFrameWorkingImage(record, "none");
 
             record.Index = frame.Index;
@@ -3812,6 +4135,11 @@ public sealed class ArtWorkflowService(
             record.SourceWidth = frame.SourceRect.Width;
             record.SourceHeight = frame.SourceRect.Height;
             record.ShapeJson = shapeJson;
+            record.SourceImageAssetId = sourceImageAssetId;
+            record.SourceImageX = sourceImageRect?.X ?? 0;
+            record.SourceImageY = sourceImageRect?.Y ?? 0;
+            record.SourceImageWidth = sourceImageRect?.Width ?? 0;
+            record.SourceImageHeight = sourceImageRect?.Height ?? 0;
             record.CellX = frame.CellRect.X;
             record.CellY = frame.CellRect.Y;
             record.CellWidth = frame.CellRect.Width;
@@ -4475,6 +4803,8 @@ public sealed class ArtWorkflowService(
             frame.Index,
             frame.Label,
             frame.SourceRect,
+            frame.SourceImageAssetId,
+            frame.SourceImageRect,
             frame.CellRect,
             frame.SpriteRect,
             hasShapePaths = HasShapePaths(frame.ShapePaths),
@@ -4649,7 +4979,9 @@ public sealed class ArtWorkflowService(
                     NormalizeShapePaths(frame.ShapePaths),
                     NormalizeSpriteRect(frame.CellRect, fallbackCell),
                     NormalizeSpriteRect(frame.SpriteRect, fallbackCell),
-                    frame.PreviewPngDataUrl);
+                    frame.PreviewPngDataUrl,
+                    frame.SourceImageAssetId,
+                    frame.SourceImageRect is null ? null : NormalizeSourceSpriteRect(frame.SourceImageRect));
             })
             .ToList();
     }
@@ -4876,6 +5208,11 @@ public sealed class ArtWorkflowService(
                 frame.SourceWidth,
                 frame.SourceHeight,
                 frame.ShapeJson,
+                frame.SourceImageAssetId,
+                frame.SourceImageX,
+                frame.SourceImageY,
+                frame.SourceImageWidth,
+                frame.SourceImageHeight,
                 frame.CellX,
                 frame.CellY,
                 frame.CellWidth,
@@ -4917,13 +5254,25 @@ public sealed class ArtWorkflowService(
             frame.WorkingHeight,
             frame.WorkingMargin,
             frame.WorkingUpdatedAt,
-            FrameDuration(spriteSheet.Fps));
+            FrameDuration(spriteSheet.Fps),
+            frame.SourceImageAssetId,
+            SourceImageRectView(frame));
 
     private static SpriteSheetRect RectView(int x, int y, int width, int height) =>
         new(Math.Max(0, x), Math.Max(0, y), Math.Max(1, width), Math.Max(1, height));
 
     private static SpriteSheetRect RectViewPreserveOrigin(int x, int y, int width, int height) =>
         new(x, y, Math.Max(1, width), Math.Max(1, height));
+
+    private static SpriteSheetRect? SourceImageRectView(SpriteSheetFrameRecord frame) =>
+        frame.SourceImageAssetId is null || frame.SourceImageWidth <= 0 || frame.SourceImageHeight <= 0
+            ? null
+            : RectViewPreserveOrigin(frame.SourceImageX, frame.SourceImageY, frame.SourceImageWidth, frame.SourceImageHeight);
+
+    private static SpriteSheetRect? SourceImageRectView(SpriteSheetFrameListItem frame) =>
+        frame.SourceImageAssetId is null || frame.SourceImageWidth <= 0 || frame.SourceImageHeight <= 0
+            ? null
+            : RectViewPreserveOrigin(frame.SourceImageX, frame.SourceImageY, frame.SourceImageWidth, frame.SourceImageHeight);
 
     private int ClampCount(int count) =>
         Math.Clamp(count <= 0 ? 1 : count, 1, Math.Max(1, imageOptions.Value.MaxOutputs));
@@ -5157,6 +5506,11 @@ public sealed class ArtWorkflowService(
             frame.SourceWidth,
             frame.SourceHeight,
             frame.ShapeJson,
+            frame.SourceImageAssetId,
+            frame.SourceImageX,
+            frame.SourceImageY,
+            frame.SourceImageWidth,
+            frame.SourceImageHeight,
             frame.CellX,
             frame.CellY,
             frame.CellWidth,
@@ -5473,6 +5827,11 @@ public sealed class ArtWorkflowService(
         int SourceWidth,
         int SourceHeight,
         string ShapeJson,
+        Guid? SourceImageAssetId,
+        int SourceImageX,
+        int SourceImageY,
+        int SourceImageWidth,
+        int SourceImageHeight,
         int CellX,
         int CellY,
         int CellWidth,

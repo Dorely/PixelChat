@@ -32,6 +32,7 @@ public interface IArtWorkflowService
     Task<SpriteSheetDetectionResult> DetectSpriteSheetFramesAsync(Guid projectId, SpriteSheetDetectionRequest request, CancellationToken cancellationToken = default);
     Task<RepairSpriteSheetFramesResult> RepairSpriteSheetFramesAsync(Guid projectId, RepairSpriteSheetFramesRequest request, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> StartSpriteSheetEditAsync(Guid projectId, Guid sourceAssetId, CancellationToken cancellationToken = default);
+    Task<SpriteSheetDefinitionView> ComposeSpriteSheetFromImagesAsync(Guid projectId, ComposeSpriteSheetFromImagesRequest request, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> AutosaveSpriteSheetLayoutAsync(Guid projectId, AutosaveSpriteSheetLayoutRequest request, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> NormalizeSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> ExpandSpriteSheetFramesToCellAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);

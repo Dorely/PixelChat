@@ -1119,8 +1119,15 @@ public sealed class AssistantChatService(
                 && shapeElement.ValueKind == JsonValueKind.Array
                 ? JsonSerializer.Deserialize<List<SpriteSheetShapePath>>(shapeElement.GetRawText(), JsonOptions) ?? []
                 : [];
+            var sourceImageAssetId = TryReadGuidProperty(frameElement, "sourceImageAssetId", out var sourceImageId)
+                ? sourceImageId
+                : (Guid?)null;
+            var sourceImageRect = frameElement.TryGetProperty("sourceImageRect", out var sourceImageRectElement)
+                && sourceImageRectElement.ValueKind == JsonValueKind.Object
+                ? JsonSerializer.Deserialize<SpriteSheetRect>(sourceImageRectElement.GetRawText(), JsonOptions)
+                : null;
 
-            frames.Add(new SpriteSheetFrameUpdateView(index, label, sourceRect, shapePaths));
+            frames.Add(new SpriteSheetFrameUpdateView(index, label, sourceRect, shapePaths, sourceImageAssetId, sourceImageRect));
         }
 
         return frames;

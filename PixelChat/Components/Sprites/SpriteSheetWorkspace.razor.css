@@ -17,6 +17,20 @@
     font-size: 0.8rem;
 }
 
+.sprite-file-control {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0;
+    color: #475467;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.sprite-file-control input[type="file"] {
+    max-width: 150px;
+}
+
 .sprite-editor-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
@@ -237,6 +251,19 @@
 .sprite-frame-row.is-selected {
     border-color: #2f80ed;
     box-shadow: 0 0 0 2px rgba(47, 128, 237, 0.12);
+}
+
+.frame-label-stack {
+    display: grid;
+    gap: 0.18rem;
+    min-width: 0;
+}
+
+.frame-label-stack small {
+    color: #667085;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .frame-thumb {

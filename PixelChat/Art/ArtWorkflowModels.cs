@@ -97,7 +97,9 @@ public sealed record SpriteSheetFrameRecordView(
     int WorkingHeight,
     int WorkingMargin,
     DateTime? WorkingUpdatedAt,
-    double Duration);
+    double Duration,
+    Guid? SourceImageAssetId = null,
+    SpriteSheetRect? SourceImageRect = null);
 
 public sealed record SpriteFrameWorkingView(
     Guid FrameId,
@@ -182,7 +184,9 @@ public sealed record SpriteSheetFrameView(
     IReadOnlyList<SpriteSheetShapePath> ShapePaths,
     SpriteSheetRect CellRect,
     SpriteSheetRect SpriteRect,
-    string PreviewPngDataUrl);
+    string PreviewPngDataUrl,
+    Guid? SourceImageAssetId = null,
+    SpriteSheetRect? SourceImageRect = null);
 
 public sealed record SpriteSheetRect(
     int X,
@@ -294,11 +298,27 @@ public sealed record UpdateSpriteSheetFramesRequest(
     string VerticalAnchor,
     IReadOnlyList<SpriteSheetFrameUpdateView> Frames);
 
+public sealed record ComposeSpriteSheetFromImagesRequest(
+    IReadOnlyList<Guid> AssetIds,
+    Guid? SpriteSheetId = null,
+    int? InsertAt = null,
+    string? Label = null,
+    int? Rows = null,
+    int? Columns = null,
+    int? Padding = null,
+    int? Gutter = null,
+    int? Fps = null,
+    bool? Loop = null,
+    string? HorizontalAnchor = null,
+    string? VerticalAnchor = null);
+
 public sealed record SpriteSheetFrameUpdateView(
     int Index,
     string Label,
     SpriteSheetRect SourceRect,
-    IReadOnlyList<SpriteSheetShapePath> ShapePaths);
+    IReadOnlyList<SpriteSheetShapePath> ShapePaths,
+    Guid? SourceImageAssetId = null,
+    SpriteSheetRect? SourceImageRect = null);
 
 public sealed record BackgroundRemovalExportCacheRequest(
     string RemovalMethod,
