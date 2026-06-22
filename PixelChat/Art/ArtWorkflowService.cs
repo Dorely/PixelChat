@@ -1183,6 +1183,7 @@ public sealed class ArtWorkflowService(
         var now = DateTime.UtcNow;
         SpriteSheetDefinition definition;
         ArtAsset working;
+        ArtAsset? composedSourceAsset = null;
         SpriteSheetBackground background;
         List<SpriteSheetFrameImageInput> inputs;
 
@@ -1259,6 +1260,7 @@ public sealed class ArtWorkflowService(
                     SourceImageAssetIds = sourceAssetIds,
                 });
             definition.SourceAssetId = sourcePlaceholder.Id;
+            composedSourceAsset = sourcePlaceholder;
             await db.ArtAssets.AddAsync(sourcePlaceholder, cancellationToken);
 
             working = CreateAsset(
@@ -1315,16 +1317,15 @@ public sealed class ArtWorkflowService(
         UpdateWorkingSpriteAsset(working, new ImagePayload("image/png", render.PngData, render.Width, render.Height), definition, now);
         await UpsertSpriteSheetFrameRecordsAsync(projectId, definition, render.Frames, cancellationToken);
 
-        if (request.SpriteSheetId is null || request.SpriteSheetId == Guid.Empty)
+        if (composedSourceAsset is not null)
         {
-            var sourceAsset = await db.ArtAssets.FirstAsync(asset => asset.Id == definition.SourceAssetId, cancellationToken);
-            sourceAsset.ContentType = "image/png";
-            sourceAsset.Data = render.PngData;
-            sourceAsset.Width = render.Width;
-            sourceAsset.Height = render.Height;
-            sourceAsset.ThumbnailData = null;
-            sourceAsset.UpdatedAt = now;
-            sourceAsset.SourceMetadataJson = JsonSerializer.Serialize(new
+            composedSourceAsset.ContentType = "image/png";
+            composedSourceAsset.Data = render.PngData;
+            composedSourceAsset.Width = render.Width;
+            composedSourceAsset.Height = render.Height;
+            composedSourceAsset.ThumbnailData = null;
+            composedSourceAsset.UpdatedAt = now;
+            composedSourceAsset.SourceMetadataJson = JsonSerializer.Serialize(new
             {
                 Source = "sprite-sheet-composed-source",
                 SpriteSheetDefinitionId = definition.Id,

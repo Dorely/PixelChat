@@ -24,6 +24,10 @@ public sealed class AssistantChatService(
 {
     private const string InitialAssistantGreeting =
         "Tell me what kind of 2D game art you are working on. I can analyze the active or attached images, shape style direction, draft generation and edit forms, and help build reusable prompt recipes for you to review.";
+    private const string InterruptedToolResult = "Error: PixelChat was interrupted before this tool call produced a saved result.";
+    private const string InterruptedToolError = "PixelChat was interrupted before this tool call produced a saved result.";
+    private const string CancelledToolResult = "Error: PixelChat was cancelled before this tool call produced a saved result.";
+    private const string CancelledToolError = "PixelChat was cancelled before this tool call produced a saved result.";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -58,6 +62,15 @@ public sealed class AssistantChatService(
     public async Task<IReadOnlyList<AssistantMessage>> LoadMessagesAsync(Guid conversationId, CancellationToken cancellationToken = default) =>
         await conversations.LoadMessagesAsync(conversationId, cancellationToken);
 
+    public async Task RecoverInterruptedToolCallsAsync(Guid projectId, CancellationToken cancellationToken = default)
+    {
+        var conversation = await conversations.GetCurrentAsync(projectId, cancellationToken);
+        if (conversation is null)
+            return;
+
+        await RecoverInterruptedToolCallsAsync(conversation, cancellationToken);
+    }
+
     public async Task<TokenContextEstimate?> EstimateNextRequestTokensAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
         var providerAvailability = await providerService.GetDefaultChatProviderAvailabilityAsync(cancellationToken);
@@ -88,6 +101,8 @@ public sealed class AssistantChatService(
             throw new ArgumentException("Message cannot be empty.", nameof(userText));
 
         var conversation = await GetOrCreateAsync(projectId, cancellationToken);
+        await RecoverInterruptedToolCallsAsync(conversation, cancellationToken);
+
         var providerAvailability = await providerService.GetDefaultChatProviderAvailabilityAsync(cancellationToken);
         if (!providerAvailability.IsAvailable || providerAvailability.Provider is null)
         {
@@ -335,10 +350,20 @@ public sealed class AssistantChatService(
 
             var resultContents = new List<AIContent>();
             var modelOnlyContents = new List<AIContent>();
+            var completedCallIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var pendingCall in pendingCalls)
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
+                    nextOrder = await PersistInterruptedToolResultsAsync(
+                        conversation.Id,
+                        nextOrder,
+                        pendingCalls,
+                        completedCallIds,
+                        CancelledToolResult,
+                        CancelledToolError,
+                        CancellationToken.None);
+                    yield return await BuildIdleTokenCountUpdateAsync(conversation.Id, projectId, modelName, CancellationToken.None);
                     yield return new AssistantTurnError("Cancelled.", Cancelled: true);
                     yield break;
                 }
@@ -346,6 +371,15 @@ public sealed class AssistantChatService(
                 var outcome = await InvokeToolAsync(aiTools, pendingCall, projectId, cancellationToken);
                 if (outcome.Cancelled)
                 {
+                    nextOrder = await PersistInterruptedToolResultsAsync(
+                        conversation.Id,
+                        nextOrder,
+                        pendingCalls,
+                        completedCallIds,
+                        CancelledToolResult,
+                        CancelledToolError,
+                        CancellationToken.None);
+                    yield return await BuildIdleTokenCountUpdateAsync(conversation.Id, projectId, modelName, CancellationToken.None);
                     yield return new AssistantTurnError("Cancelled.", Cancelled: true);
                     yield break;
                 }
@@ -357,6 +391,7 @@ public sealed class AssistantChatService(
                     pendingCall.Name,
                     outcome.Result,
                     outcome.Error);
+                completedCallIds.Add(pendingCall.CallId);
 
                 resultContents.Add(new FunctionResultContent(
                     pendingCall.CallId,
@@ -432,6 +467,132 @@ public sealed class AssistantChatService(
 
     private AssistantTokenCountUpdated BuildTokenCountUpdate(IReadOnlyList<ChatMessage> messages, string modelName) =>
         new(tokenEstimator.Count(messages, modelName));
+
+    private async Task RecoverInterruptedToolCallsAsync(
+        AssistantConversation conversation,
+        CancellationToken cancellationToken)
+    {
+        var history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
+        var syntheticMessages = BuildInterruptedToolResultMessages(conversation.Id, history);
+        if (syntheticMessages.Count == 0)
+            return;
+
+        var syntheticMessageIds = syntheticMessages
+            .Select(message => message.Id)
+            .ToHashSet();
+        var messages = history
+            .Concat(syntheticMessages)
+            .ToList();
+        RebuildConversationOrder(messages);
+
+        foreach (var message in syntheticMessages)
+            await conversations.AddMessageAsync(message, cancellationToken);
+
+        foreach (var message in messages.Where(message => !syntheticMessageIds.Contains(message.Id)))
+            conversations.UpdateMessage(message);
+
+        conversation.UpdatedAt = DateTime.UtcNow;
+        await conversations.SaveChangesAsync(cancellationToken);
+
+        logger.LogWarning(
+            "Recovered {ToolCallCount} interrupted assistant tool call(s) in conversation {ConversationId}.",
+            syntheticMessages.Count,
+            conversation.Id);
+    }
+
+    private static List<AssistantMessage> BuildInterruptedToolResultMessages(
+        Guid conversationId,
+        IReadOnlyList<AssistantMessage> history)
+    {
+        var existingToolCallIds = history
+            .Where(message => message.Role == AssistantMessageRole.Tool && message.ToolCallId is not null)
+            .Select(message => message.ToolCallId!)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var syntheticMessages = new List<AssistantMessage>();
+        foreach (var assistantMessage in history
+            .Where(message => message.Role == AssistantMessageRole.Assistant)
+            .OrderBy(message => message.Order)
+            .ThenBy(message => message.CreatedAt)
+            .ThenBy(message => message.Id))
+        {
+            foreach (var call in ReadPersistedToolCalls(assistantMessage.ToolCallsJson))
+            {
+                if (existingToolCallIds.Contains(call.CallId))
+                    continue;
+
+                existingToolCallIds.Add(call.CallId);
+                syntheticMessages.Add(new AssistantMessage
+                {
+                    ConversationId = conversationId,
+                    Role = AssistantMessageRole.Tool,
+                    Content = InterruptedToolResult,
+                    ToolCallId = call.CallId,
+                    ToolName = call.Name,
+                    Status = AssistantMessageStatus.Failed,
+                    ErrorMessage = InterruptedToolError,
+                });
+            }
+        }
+
+        return syntheticMessages;
+    }
+
+    private static void RebuildConversationOrder(List<AssistantMessage> messages)
+    {
+        var ordered = messages
+            .OrderBy(message => message.Order)
+            .ThenBy(message => message.CreatedAt)
+            .ThenBy(message => message.Id)
+            .ToList();
+        var ownedToolCallIds = ordered
+            .Where(message => message.Role == AssistantMessageRole.Assistant)
+            .SelectMany(message => ReadPersistedToolCalls(message.ToolCallsJson))
+            .Select(call => call.CallId)
+            .ToHashSet(StringComparer.Ordinal);
+        var toolRowsByCallId = ordered
+            .Where(message => message.Role == AssistantMessageRole.Tool && message.ToolCallId is not null)
+            .GroupBy(message => message.ToolCallId!, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderBy(message => message.Order)
+                    .ThenBy(message => message.CreatedAt)
+                    .ThenBy(message => message.Id)
+                    .ToList(),
+                StringComparer.Ordinal);
+        var consumedToolRows = new HashSet<Guid>();
+        var reordered = new List<AssistantMessage>(ordered.Count);
+
+        foreach (var message in ordered)
+        {
+            if (message.Role == AssistantMessageRole.Tool
+                && message.ToolCallId is not null
+                && ownedToolCallIds.Contains(message.ToolCallId))
+            {
+                continue;
+            }
+
+            reordered.Add(message);
+            if (message.Role != AssistantMessageRole.Assistant)
+                continue;
+
+            foreach (var call in ReadPersistedToolCalls(message.ToolCallsJson))
+            {
+                if (!toolRowsByCallId.TryGetValue(call.CallId, out var toolRows))
+                    continue;
+
+                foreach (var toolRow in toolRows)
+                {
+                    if (consumedToolRows.Add(toolRow.Id))
+                        reordered.Add(toolRow);
+                }
+            }
+        }
+
+        for (var index = 0; index < reordered.Count; index++)
+            reordered[index].Order = index;
+    }
 
     private async Task<List<ChatMessage>> BuildIdleModelMessagesAsync(
         IReadOnlyList<AssistantMessage> history,
@@ -1211,6 +1372,34 @@ public sealed class AssistantChatService(
             JsonElement { ValueKind: JsonValueKind.String } element when int.TryParse(element.GetString(), out var intValue) => intValue,
             _ => null,
         };
+    }
+
+    private async Task<int> PersistInterruptedToolResultsAsync(
+        Guid conversationId,
+        int nextOrder,
+        IReadOnlyList<PendingToolCall> pendingCalls,
+        ISet<string> completedCallIds,
+        string result,
+        string error,
+        CancellationToken cancellationToken)
+    {
+        foreach (var pendingCall in pendingCalls)
+        {
+            if (completedCallIds.Contains(pendingCall.CallId))
+                continue;
+
+            await PersistToolResultAsync(
+                conversationId,
+                nextOrder++,
+                pendingCall.CallId,
+                pendingCall.Name,
+                result,
+                error,
+                cancellationToken);
+            completedCallIds.Add(pendingCall.CallId);
+        }
+
+        return nextOrder;
     }
 
     private async Task PersistToolResultAsync(
