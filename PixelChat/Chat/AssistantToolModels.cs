@@ -43,7 +43,8 @@ public sealed record CompareReviewToolItem(
 public sealed record AnimationFrameMark(
     int FrameNumber,
     string Status,
-    string? Reason = null);
+    string? Reason = null,
+    bool ForceAccept = false);
 
 public sealed class AssistantTurnGenerationBudget(int maxRounds)
 {

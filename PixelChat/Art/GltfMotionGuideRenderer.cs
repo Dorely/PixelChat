@@ -68,16 +68,7 @@ internal static class GltfMotionGuideRenderer
     }
 
     public static double FacingToYawDegrees(string? facing) =>
-        MotionClipCatalog.Normalize(facing) switch
-        {
-            "front" or "center" => 0d,
-            "back" => 180d,
-            "side_right" or "right" => 90d,
-            "side_left" or "left" => -90d,
-            "3/4_front_right" or "three_quarter_front_right" or "front_right" => 45d,
-            "3/4_front_left" or "three_quarter_front_left" or "front_left" => -45d,
-            _ => 45d,
-        };
+        SpriteFacing.ToYawDegrees(facing);
 
     private static IReadOnlyList<MotionGuideFrameSample> Sample(GltfBinary gltf, MotionClipDefinition clip, int frameCount)
     {
@@ -255,9 +246,10 @@ internal static class GltfMotionGuideRenderer
             DrawLine(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Root.X, slot.SafeRect.Y, slot.Root.X, slot.BaselineY, 122, 122, 122, diagnostic ? (byte)165 : (byte)85);
             DrawCircle(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Root.X, slot.Root.Y, Math.Max(5, slot.Rect.Width / 96), 28, 86, 146, diagnostic ? (byte)230 : (byte)150);
 
+            DrawHandEnvelope(rgba, layout.CanvasWidth, layout.CanvasHeight, screen, slot, diagnostic);
+
             if (diagnostic)
             {
-                DrawHandEnvelope(rgba, layout.CanvasWidth, layout.CanvasHeight, screen, slot, diagnostic);
                 foreach (var (a, b) in BoneSegments)
                 {
                     if (screen.TryGetValue(a, out var start) && screen.TryGetValue(b, out var end))
@@ -395,7 +387,9 @@ internal static class GltfMotionGuideRenderer
 
     private static void DrawHandEnvelope(byte[] rgba, int width, int height, IReadOnlyDictionary<string, SpriteSheetPoint> screen, SlotSpec slot, bool diagnostic)
     {
-        var radius = Math.Max(10, slot.SafeRect.Width / 26);
+        var radius = diagnostic
+            ? Math.Max(12, slot.SafeRect.Width / 24)
+            : Math.Max(18, slot.SafeRect.Width / 14);
         if (screen.TryGetValue("leftHand", out var left))
             DrawCircle(rgba, width, height, left.X, left.Y, radius, 182, 116, 40, diagnostic ? (byte)80 : (byte)45);
         if (screen.TryGetValue("rightHand", out var right))

@@ -35,7 +35,8 @@ public sealed record MarkAnimationFramesRequest(
 public sealed record MarkAnimationFrameRequest(
     int FrameNumber,
     string Status,
-    string? Reason = null);
+    string? Reason = null,
+    bool ForceAccept = false);
 
 public sealed record RegenerateAnimationFramesRequest(
     Guid AssetAnimationJobId,

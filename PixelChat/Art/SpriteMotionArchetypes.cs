@@ -16,7 +16,7 @@ internal static class SpriteMotionArchetypes
         var normalizedAssetType = Normalize(assetType, "unit");
         var normalizedStructure = Normalize(structureType, DefaultStructure(normalizedAssetType));
         var normalizedKind = Normalize(animationKind, DefaultAnimation(normalizedAssetType));
-        var normalizedFacing = Normalize(facing, normalizedAssetType is "vfx" ? "center" : "right");
+        var normalizedFacing = SpriteFacing.Normalize(facing, normalizedAssetType is "vfx" ? SpriteFacing.Center : SpriteFacing.SideRight);
         var normalizedRootMotion = Normalize(rootMotion, "in_place");
         var frameCount = Math.Clamp(requestedFrameCount ?? DefaultFrameCount(normalizedAssetType, normalizedKind), 1, 16);
         var duration = Math.Max(1, (int)Math.Round(1000d / Math.Clamp(fps, 1, 60)));

@@ -203,7 +203,7 @@ public sealed class AssistantToolRegistry(
             method: (Guid assetAnimationJobId, AnimationFrameMark[] frames, CancellationToken cancellationToken = default) =>
                 MarkAnimationFramesAsync(projectId, assetAnimationJobId, frames, cancellationToken),
             name: "mark_animation_frames",
-            description: "Mark exact animation frames as accepted, rejected, warning, or repair_requested with short typed reasons. Use this after inspecting candidates; keep reasons concise because they feed repair routing."),
+            description: "Mark exact animation frames as accepted, rejected, warning, or repair_requested with short typed reasons. Raw QA repair_requested frames cannot be accepted unless forceAccept is true; use forceAccept only when deliberately accepting known clipping/slot warnings. Keep reasons concise because they feed repair routing."),
 
         AIFunctionFactory.Create(
             method: (Guid assetAnimationJobId, int[] frameNumbers, string? prompt = null, CancellationToken cancellationToken = default) =>
@@ -759,7 +759,7 @@ public sealed class AssistantToolRegistry(
     {
         var marks = (frames ?? [])
             .Where(frame => frame.FrameNumber > 0)
-            .Select(frame => new MarkAnimationFrameRequest(frame.FrameNumber, frame.Status ?? "warning", frame.Reason))
+            .Select(frame => new MarkAnimationFrameRequest(frame.FrameNumber, frame.Status ?? "warning", frame.Reason, frame.ForceAccept))
             .ToList();
         if (marks.Count == 0)
             return JsonSerializer.Serialize(new { error = "mark_animation_frames requires at least one frame mark." }, JsonOptions);

@@ -29,6 +29,21 @@ internal static class SpriteQualityInspector
                     failures.Add(SpriteFailure.MissingFrame);
                 else
                 {
+                    var safe = new SpriteSheetRect(
+                        Math.Max(0, slot.SafeRect.X - slot.Rect.X),
+                        Math.Max(0, slot.SafeRect.Y - slot.Rect.Y),
+                        Math.Min(slot.Rect.Width, slot.SafeRect.Width),
+                        Math.Min(slot.Rect.Height, slot.SafeRect.Height));
+                    if (safe.Width > 0
+                        && safe.Height > 0
+                        && (bounds.X < safe.X
+                            || bounds.Y < safe.Y
+                            || bounds.X + bounds.Width > safe.X + safe.Width
+                            || bounds.Y + bounds.Height > safe.Y + safe.Height))
+                    {
+                        failures.Add(SpriteFailure.SlotCrossing);
+                    }
+
                     if (bounds.X <= 4 || bounds.Y <= 4 || bounds.X + bounds.Width >= slot.Rect.Width - 4 || bounds.Y + bounds.Height >= slot.Rect.Height - 4)
                         failures.Add(SpriteFailure.Clipped);
                     if (bounds.Width < slot.Rect.Width / 12 || bounds.Height < slot.Rect.Height / 12)
@@ -38,15 +53,23 @@ internal static class SpriteQualityInspector
 
             var action = SpriteRepairRouter.Recommend(failures);
             results.Add(failures.Count == 0
-                ? new AssetAnimationFrameStatusView(slot.FrameIndex + 1, slot.FrameIndex, "pending", "", "extract_fixed_slots")
+                ? new AssetAnimationFrameStatusView(slot.FrameIndex + 1, slot.FrameIndex, "pending", "", "extract_animation_fixed_slots")
                 : new AssetAnimationFrameStatusView(slot.FrameIndex + 1, slot.FrameIndex, "repair_requested", string.Join(", ", failures), ToToken(action)));
         }
 
         return results;
     }
 
-    public static IReadOnlyList<AssetAnimationFrameStatusView> InspectExtracted(SpriteFixedSlotExtractionResult extraction)
+    public static IReadOnlyList<AssetAnimationFrameStatusView> InspectExtracted(
+        SpriteFixedSlotExtractionResult extraction,
+        IReadOnlyList<AssetAnimationFrameStatusView>? rawCandidateStatuses = null,
+        IReadOnlySet<int>? repairedFrameIndexes = null)
     {
+        var rawByIndex = rawCandidateStatuses?
+            .GroupBy(status => status.Index)
+            .ToDictionary(group => group.Key, group => group.First())
+            ?? [];
+        var repaired = repairedFrameIndexes ?? new HashSet<int>();
         var results = new List<AssetAnimationFrameStatusView>();
         foreach (var frame in extraction.Frames)
         {
@@ -54,7 +77,18 @@ internal static class SpriteQualityInspector
                 ? "repair_requested"
                 : "accepted";
             var reason = status == "accepted" ? "" : "no foreground after fixed-slot extraction";
-            results.Add(new AssetAnimationFrameStatusView(frame.Index + 1, frame.Index, status, reason, status == "accepted" ? "package" : "regenerate_frame"));
+            var action = status == "accepted" ? "package" : "regenerate_animation_frames";
+            if (status == "accepted"
+                && !repaired.Contains(frame.Index)
+                && rawByIndex.TryGetValue(frame.Index, out var raw)
+                && IsBlockingRawStatus(raw))
+            {
+                status = "repair_requested";
+                reason = $"raw candidate QA: {raw.Reason}";
+                action = NormalizeAction(raw.RecommendedAction);
+            }
+
+            results.Add(new AssetAnimationFrameStatusView(frame.Index + 1, frame.Index, status, reason, action));
         }
 
         return results;
@@ -63,8 +97,31 @@ internal static class SpriteQualityInspector
     private static AssetAnimationFrameStatusView Failure(int index, string status, string reason, SpriteRepairAction action) =>
         new(index + 1, index, status, reason, ToToken(action));
 
+    private static bool IsBlockingRawStatus(AssetAnimationFrameStatusView raw) =>
+        raw.Status.Equals("repair_requested", StringComparison.OrdinalIgnoreCase)
+        || raw.Status.Equals("rejected", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeAction(string action)
+    {
+        var normalized = action.Trim().ToLowerInvariant().Replace("-", "_").Replace(" ", "_");
+        if (normalized.Contains("strip", StringComparison.Ordinal) || normalized.Contains("switch", StringComparison.Ordinal))
+            return "run_animation_candidates";
+        if (normalized.Contains("frame", StringComparison.Ordinal))
+            return "regenerate_animation_frames";
+        return "run_animation_candidates";
+    }
+
     private static string ToToken(SpriteRepairAction action) =>
-        action.ToString().ToLowerInvariant();
+        action switch
+        {
+            SpriteRepairAction.RegenerateFrame => "regenerate_animation_frames",
+            SpriteRepairAction.RegenerateAdjacentFrames => "regenerate_animation_frames",
+            SpriteRepairAction.RegenerateStrip => "run_animation_candidates",
+            SpriteRepairAction.SwitchStrategy => "run_animation_candidates",
+            SpriteRepairAction.ReextractFixedSlots => "extract_animation_fixed_slots",
+            SpriteRepairAction.AcceptWithWarnings => "mark_animation_frames",
+            _ => "none",
+        };
 
     private static byte[] Crop(byte[] rgba, int width, int height, SpriteSheetRect rect)
     {

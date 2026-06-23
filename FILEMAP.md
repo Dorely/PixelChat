@@ -57,6 +57,7 @@
 | `IAssetAnimationWorkflowService.cs` / `AssetAnimationWorkflowService.cs` | Agent-owned asset-animation pipeline for profiles, motion plans, guide rendering, candidate generation, frame marking/repair, fixed-slot extraction, review, and packaging. |
 | `AssetAnimationContracts.cs` | Contracts for asset-animation profiles, jobs, specs, slots, frame status/provenance, typed failures, and repair actions. |
 | `SpriteAnimationOptions.cs` | Configurable defaults for asset-animation cell size, FPS, candidate/repair budgets, and optional image-model snapshot pin. |
+| `SpriteFacing.cs` | Canonical facing normalization, yaw mapping, and prompt-facing labels for sprite-animation planning and guide rendering. |
 | `SpriteMotionArchetypes.cs` | Static v1 motion/structure archetypes for units, towers, projectiles, and VFX. |
 | `MotionClipCatalog.cs` | Loads the vendored motion-clip manifest, resolves clip aliases/defaults, validates supported animation kinds, and exposes runtime asset paths. |
 | `GltfMotionGuideRenderer.cs` | Samples cataloged glTF/GLB animation channels, CPU-skins the Quaternius mannequin mesh, projects by facing yaw, and renders clean/diagnostic motion guides. |

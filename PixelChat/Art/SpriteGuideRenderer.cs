@@ -81,7 +81,7 @@ internal static class SpriteGuideRenderer
         DrawLine(rgba, width, height, headX - slot.SafeRect.Width / 10, torsoY + compression, headX - stride / 2, hipY + compression, 94, 124, 164, alpha);
         DrawLine(rgba, width, height, headX + slot.SafeRect.Width / 10, torsoY + compression, headX + stride / 2, hipY + compression, 94, 124, 164, alpha);
 
-        var cue = animation.Facing is "left" ? -1 : 1;
+        var cue = SpriteFacing.IsLeftFacing(animation.Facing) ? -1 : 1;
         DrawLine(rgba, width, height, headX, headY + compression, headX + cue * headRadius * 2, headY + compression, 70, 100, 140, alpha);
     }
 

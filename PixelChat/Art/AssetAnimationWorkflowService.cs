@@ -72,18 +72,20 @@ public sealed class AssetAnimationWorkflowService(
 
         var (targetWidth, targetHeight) = ParseSize(request.TargetCellSize, animationOptions.Value.DefaultFrameCellSize, 192, 192);
         var fps = Math.Clamp(request.Fps ?? animationOptions.Value.DefaultFps, 1, 60);
+        var facing = ResolveFacing(request.Facing, profile);
         var spec = SpriteMotionArchetypes.Build(
             profile.AssetType,
             profile.StructureType,
             request.AnimationKind,
-            request.Facing ?? DefaultFacing(profile.AssetType),
+            facing,
             request.RootMotion ?? "in_place",
             request.FrameCount,
             fps,
             targetWidth,
             targetHeight);
         spec = ResolveMotionClipSpec(spec, request);
-        var layout = BuildLayout(spec, profile.ChromaColor);
+        var layoutProfile = AnalyzeLayoutProfile(profile);
+        var layout = BuildLayout(spec, profile.ChromaColor, layoutProfile);
         var now = DateTime.UtcNow;
         var job = new AssetAnimationJob
         {
@@ -119,6 +121,13 @@ public sealed class AssetAnimationWorkflowService(
             guideRenderer = spec.GuideRenderer ?? "sprite_guide_renderer",
             motionClipId = spec.MotionClipId,
             sourcePackage = spec.GuideSourcePackage,
+            layoutProfile = new
+            {
+                layoutProfile.ForegroundAspect,
+                layoutProfile.NeedsLargeCells,
+                layoutProfile.NeedsTallCells,
+                layoutProfile.NeedsLargePadding,
+            },
         }, cancellationToken);
         await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
@@ -247,6 +256,7 @@ public sealed class AssetAnimationWorkflowService(
         job.GenerationRoundsUsed += count;
         job.Status = "generating";
         job.RecommendedAction = "wait_for_candidates";
+        job.MotionQaSummaryJson = "{}";
         job.UpdatedAt = DateTime.UtcNow;
         await AddEventAsync(projectId, job.Id, "candidate_batch_started", "info", "Candidate batch started.", new
         {
@@ -299,7 +309,7 @@ public sealed class AssetAnimationWorkflowService(
         if (candidates.Count > 0)
         {
             await db.AssetAnimationCandidates.AddRangeAsync(candidates, cancellationToken);
-            job.SelectedCandidateId ??= candidates[0].Id;
+            job.SelectedCandidateId = candidates[0].Id;
             job.FrameStatusesJson = candidates[0].RawQaSummaryJson;
             job.Status = "raw_qa";
             job.RecommendedAction = candidates[0].RawQaStatus == "pass" ? "extract_animation_fixed_slots" : "mark_animation_frames";
@@ -334,15 +344,29 @@ public sealed class AssetAnimationWorkflowService(
         var job = await LoadJobEntityAsync(projectId, request.AssetAnimationJobId, includeProfile: false, cancellationToken);
         var spec = ReadAnimationSpec(job);
         var existing = ReadFrameStatuses(job).ToDictionary(status => status.Index);
+        var rawQaByIndex = await LoadSelectedCandidateRawQaAsync(projectId, job, cancellationToken);
         foreach (var frame in request.Frames)
         {
             var index = Math.Max(0, frame.FrameNumber - 1);
+            var requestedStatus = NormalizeFrameStatus(frame.Status);
+            var reason = Clean(frame.Reason);
+            var blockedByRawQa = requestedStatus == "accepted"
+                && !frame.ForceAccept
+                && rawQaByIndex.TryGetValue(index, out var rawQa)
+                && IsBlockingRawQa(rawQa);
+            var finalStatus = blockedByRawQa ? "repair_requested" : requestedStatus;
+            var finalReason = blockedByRawQa
+                ? $"raw QA blocked acceptance: {rawQaByIndex[index].Reason}"
+                : reason;
+            var recommendedAction = blockedByRawQa
+                ? RecommendedActionForBlockedRawQa(rawQaByIndex[index], spec)
+                : RecommendedActionForStatus(frame.Status, frame.Reason, spec);
             existing[index] = new AssetAnimationFrameStatusView(
                 index + 1,
                 index,
-                NormalizeFrameStatus(frame.Status),
-                Clean(frame.Reason),
-                RecommendedActionForStatus(frame.Status, frame.Reason, spec));
+                finalStatus,
+                finalReason,
+                recommendedAction);
             var attemptNumber = await NextAttemptNumberAsync(projectId, job.Id, index, cancellationToken);
             await db.AssetAnimationFrameAttempts.AddAsync(new AssetAnimationFrameAttempt
             {
@@ -351,20 +375,23 @@ public sealed class AssetAnimationWorkflowService(
                 FrameIndex = index,
                 AttemptNumber = attemptNumber,
                 AttemptKind = "mark",
-                Status = NormalizeFrameStatus(frame.Status),
-                FailureReason = Clean(frame.Reason),
-                RepairHistoryJson = JsonSerializer.Serialize(new[] { Clean(frame.Reason) }, JsonOptions),
+                Status = finalStatus,
+                FailureReason = finalReason,
+                RepairHistoryJson = JsonSerializer.Serialize(new[] { finalReason }, JsonOptions),
             }, cancellationToken);
-            await AddEventAsync(projectId, job.Id, "frame_marked", "info", $"Frame {index + 1} marked {NormalizeFrameStatus(frame.Status)}.", new
+            await AddEventAsync(projectId, job.Id, "frame_marked", blockedByRawQa ? "warning" : "info", blockedByRawQa ? $"Frame {index + 1} acceptance blocked by raw QA." : $"Frame {index + 1} marked {finalStatus}.", new
             {
                 frameNumber = index + 1,
-                status = NormalizeFrameStatus(frame.Status),
-                reason = Clean(frame.Reason),
+                requestedStatus,
+                status = finalStatus,
+                reason = finalReason,
+                frame.ForceAccept,
             }, cancellationToken);
         }
 
         var statuses = existing.Values.OrderBy(status => status.Index).ToList();
         job.FrameStatusesJson = JsonSerializer.Serialize(statuses, JsonOptions);
+        job.MotionQaSummaryJson = "{}";
         job.Status = statuses.Any(status => status.Status == "repair_requested") ? "repair_required" : "frame_qa";
         job.RecommendedAction = statuses.Any(status => status.RecommendedAction == "run_animation_candidates")
             ? "run_animation_candidates"
@@ -455,6 +482,7 @@ public sealed class AssetAnimationWorkflowService(
             job.GenerationRoundsUsed++;
             job.Status = "generating";
             job.RecommendedAction = "wait_for_frame_repair";
+            job.MotionQaSummaryJson = "{}";
             job.UpdatedAt = DateTime.UtcNow;
             await AddEventAsync(projectId, job.Id, "repair_batch_started", "info", $"Frame {frameNumber} repair generation started.", new
             {
@@ -538,6 +566,7 @@ public sealed class AssetAnimationWorkflowService(
             })
             .ToList();
         job.FrameStatusesJson = JsonSerializer.Serialize(statuses, JsonOptions);
+        job.MotionQaSummaryJson = "{}";
         job.Status = "repair_required";
         job.RecommendedAction = "extract_animation_fixed_slots";
         job.UpdatedAt = DateTime.UtcNow;
@@ -581,6 +610,7 @@ public sealed class AssetAnimationWorkflowService(
             job.SelectedCandidateId = candidate.Id;
             job.FrameQaSummaryJson = JsonSerializer.Serialize(failedStatuses, JsonOptions);
             job.FrameStatusesJson = JsonSerializer.Serialize(failedStatuses, JsonOptions);
+            job.MotionQaSummaryJson = "{}";
             job.Status = "repair_required";
             job.RecommendedAction = "run_animation_candidates";
             job.UpdatedAt = DateTime.UtcNow;
@@ -596,11 +626,13 @@ public sealed class AssetAnimationWorkflowService(
             return await LoadJobViewAsync(projectId, job.Id, cancellationToken);
         }
         var sheet = await SaveFixedSlotSpriteSheetAsync(projectId, job, candidate, source, extraction, cancellationToken);
-        var statuses = SpriteQualityInspector.InspectExtracted(extraction);
+        var rawStatuses = ReadFrameStatuses(candidate.RawQaSummaryJson);
+        var statuses = SpriteQualityInspector.InspectExtracted(extraction, rawStatuses, overrides.Keys.ToHashSet());
         job.OutputSpriteSheetId = sheet.Id;
         job.SelectedCandidateId = candidate.Id;
         job.FrameQaSummaryJson = JsonSerializer.Serialize(statuses, JsonOptions);
         job.FrameStatusesJson = JsonSerializer.Serialize(statuses, JsonOptions);
+        job.MotionQaSummaryJson = "{}";
         job.Status = statuses.Any(status => status.Status == "repair_requested") ? "repair_required" : "motion_qa";
         job.RecommendedAction = statuses.Any(status => status.Status == "repair_requested")
             ? MotionClipCatalog.IsExternalMotionSpec(spec) ? "run_animation_candidates" : "regenerate_animation_frames"
@@ -652,9 +684,8 @@ public sealed class AssetAnimationWorkflowService(
         var job = await LoadJobEntityAsync(projectId, assetAnimationJobId, includeProfile: false, cancellationToken);
         if (job.OutputSpriteSheetId is null)
             throw new InvalidOperationException("Extract fixed slots before packaging.");
-        var spec = ReadAnimationSpec(job);
-        if (MotionClipCatalog.IsExternalMotionSpec(spec) && !MotionQaAllowsPackaging(job.MotionQaSummaryJson))
-            throw new InvalidOperationException("Run review_animation_job and resolve motion QA before packaging this sampled-motion animation.");
+        if (!MotionQaAllowsPackaging(job.MotionQaSummaryJson, job.OutputSpriteSheetId))
+            throw new InvalidOperationException("Run review_animation_job and resolve motion QA before packaging this animation.");
 
         await SetCompareReviewAsync(projectId, job, cancellationToken);
         var project = await db.Projects.FirstAsync(project => project.Id == projectId, cancellationToken);
@@ -933,6 +964,23 @@ public sealed class AssetAnimationWorkflowService(
                 });
     }
 
+    private async Task<Dictionary<int, AssetAnimationFrameStatusView>> LoadSelectedCandidateRawQaAsync(
+        Guid projectId,
+        AssetAnimationJob job,
+        CancellationToken cancellationToken)
+    {
+        if (job.SelectedCandidateId is not Guid selectedCandidateId)
+            return [];
+
+        var rawQaJson = await db.AssetAnimationCandidates
+            .AsNoTracking()
+            .Where(candidate => candidate.ProjectId == projectId && candidate.Id == selectedCandidateId)
+            .Select(candidate => candidate.RawQaSummaryJson)
+            .FirstOrDefaultAsync(cancellationToken);
+        return ReadFrameStatuses(rawQaJson ?? "[]")
+            .ToDictionary(status => status.Index);
+    }
+
     private async Task SetCompareReviewAsync(Guid projectId, AssetAnimationJob job, CancellationToken cancellationToken)
     {
         var reviewSet = await db.CompareReviewSets.FirstOrDefaultAsync(set => set.ProjectId == projectId, cancellationToken);
@@ -1084,15 +1132,22 @@ public sealed class AssetAnimationWorkflowService(
         static double CenterY(SpriteSheetFrameRecord record) => record.SpriteY + (record.SpriteHeight / 2d);
     }
 
-    private static bool MotionQaAllowsPackaging(string motionQaSummaryJson)
+    private static bool MotionQaAllowsPackaging(string motionQaSummaryJson, Guid? outputSpriteSheetId)
     {
-        if (string.IsNullOrWhiteSpace(motionQaSummaryJson))
+        if (string.IsNullOrWhiteSpace(motionQaSummaryJson) || outputSpriteSheetId is not Guid currentSheetId)
             return false;
         try
         {
             using var document = JsonDocument.Parse(motionQaSummaryJson);
-            return document.RootElement.TryGetProperty("status", out var status)
-                && string.Equals(status.GetString(), "pass", StringComparison.OrdinalIgnoreCase);
+            if (!document.RootElement.TryGetProperty("status", out var status)
+                || !string.Equals(status.GetString(), "pass", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return document.RootElement.TryGetProperty("outputSpriteSheetId", out var sheetIdElement)
+                && Guid.TryParse(sheetIdElement.GetString(), out var reviewedSheetId)
+                && reviewedSheetId == currentSheetId;
         }
         catch (JsonException)
         {
@@ -1207,34 +1262,107 @@ public sealed class AssetAnimationWorkflowService(
         };
     }
 
-    private static LayoutSpec BuildLayout(AnimationSpec spec, string chromaColor)
+    private static string ResolveFacing(string? requestedFacing, AssetProfile profile)
     {
-        var (columns, rows, canvasWidth, canvasHeight) = spec.FrameCount switch
+        var profileFacingHint = string.Join(
+            " ",
+            profile.Label,
+            profile.AssetType,
+            profile.StructureType,
+            profile.RequiredFeaturesJson,
+            profile.ForbiddenChangesJson);
+        return SpriteFacing.Normalize(
+            string.IsNullOrWhiteSpace(requestedFacing) ? profileFacingHint : requestedFacing,
+            DefaultFacing(profile.AssetType));
+    }
+
+    private static LayoutProfile AnalyzeLayoutProfile(AssetProfile profile)
+    {
+        var text = string.Join(
+            " ",
+            profile.Label,
+            profile.AssetType,
+            profile.StructureType,
+            profile.RequiredFeaturesJson,
+            profile.ForbiddenChangesJson).ToLowerInvariant();
+        var equippedOrWide = ContainsAny(text, "weapon", "axe", "sword", "shield", "bow", "spear", "staff", "gun", "rifle", "wand", "tail", "wing");
+        var bulky = ContainsAny(text, "bulky", "stocky", "large", "giant", "heavy", "wide", "broad", "shield");
+        var foregroundAspect = 1d;
+        var foregroundCoverage = 0d;
+        var foregroundWidth = 0;
+        var foregroundHeight = 0;
+        if (SpriteSheetPngCodec.TryReadRgba(profile.CanonicalAsset.Data, out var width, out var height, out var rgba))
         {
-            <= 1 => (1, 1, 1024, 1024),
-            2 => (2, 1, 1536, 1024),
-            <= 4 => (2, 2, 1024, 1024),
-            <= 6 => (3, 2, 1536, 1024),
-            <= 8 => (4, 2, 1536, 1024),
-            <= 12 => (4, 3, 1536, 1024),
-            _ => (4, 4, 1536, 1024),
-        };
-        var guideCellWidth = Math.Max(1, canvasWidth / columns);
-        var guideCellHeight = Math.Max(1, canvasHeight / rows);
+            var background = SpriteSheetImageAnalyzer.ResolveBackground(rgba, width, height);
+            if (SpriteSheetImageAnalyzer.ForegroundBounds(rgba, width, height, background) is { } bounds)
+            {
+                foregroundWidth = bounds.Width;
+                foregroundHeight = bounds.Height;
+                foregroundAspect = bounds.Height <= 0 ? 1d : bounds.Width / (double)bounds.Height;
+                foregroundCoverage = Math.Max(bounds.Width / (double)Math.Max(1, width), bounds.Height / (double)Math.Max(1, height));
+                equippedOrWide |= foregroundAspect >= 0.82d;
+                bulky |= foregroundCoverage >= 0.62d;
+            }
+        }
+
+        var needsTallCells = foregroundAspect <= 0.68d && !equippedOrWide;
+        return new LayoutProfile(
+            foregroundAspect,
+            foregroundCoverage,
+            foregroundWidth,
+            foregroundHeight,
+            NeedsLargeCells: equippedOrWide || bulky,
+            NeedsTallCells: needsTallCells,
+            NeedsLargePadding: equippedOrWide || bulky);
+    }
+
+    private static LayoutSpec BuildLayout(AnimationSpec spec, string chromaColor, LayoutProfile layoutProfile)
+    {
+        var (columns, rows) = GridForFrameCount(spec.FrameCount);
+        var (guideCellWidth, guideCellHeight) = GuideCellSize(spec.FrameCount, layoutProfile);
+        var canvasWidth = checked(columns * guideCellWidth);
+        var canvasHeight = checked(rows * guideCellHeight);
+        var safeMarginRatio = layoutProfile.NeedsLargePadding ? 0.14d : 0.11d;
         var slots = Enumerable.Range(0, spec.FrameCount)
             .Select(index =>
             {
-                var row = index / columns;
-                var col = index % columns;
                 var rect = CellRectForGrid(index, columns, rows, canvasWidth, canvasHeight);
-                var margin = Math.Max(16, Math.Min(rect.Width, rect.Height) / 10);
+                var margin = Math.Max(24, (int)Math.Round(Math.Min(rect.Width, rect.Height) * safeMarginRatio));
                 var safe = new SpriteSheetRect(rect.X + margin, rect.Y + margin, Math.Max(1, rect.Width - (margin * 2)), Math.Max(1, rect.Height - (margin * 2)));
-                var baseline = rect.Y + rect.Height * 5 / 6;
+                var baseline = rect.Y + (int)Math.Round(rect.Height * 0.83d);
                 var root = new SpriteSheetPoint(rect.X + rect.Width / 2, baseline);
                 return new SlotSpec(index, rect, root, baseline, safe);
             })
             .ToList();
         return new LayoutSpec(canvasWidth, canvasHeight, rows, columns, guideCellWidth, guideCellHeight, spec.TargetCellWidth, spec.TargetCellHeight, chromaColor, slots);
+    }
+
+    private static (int Columns, int Rows) GridForFrameCount(int frameCount) =>
+        frameCount switch
+        {
+            <= 1 => (1, 1),
+            2 => (2, 1),
+            <= 4 => (2, 2),
+            <= 6 => (3, 2),
+            <= 8 => (4, 2),
+            <= 12 => (4, 3),
+            _ => (4, 4),
+        };
+
+    private static (int Width, int Height) GuideCellSize(int frameCount, LayoutProfile layoutProfile)
+    {
+        if (frameCount <= 1)
+            return (1024, 1024);
+        if (frameCount == 2)
+            return layoutProfile.NeedsLargeCells ? (1024, 1024) : (768, 1024);
+        if (frameCount <= 4)
+            return layoutProfile.NeedsLargeCells ? (768, 768) : (512, 512);
+        if (frameCount <= 6)
+            return layoutProfile.NeedsLargeCells ? (768, 768) : (512, 512);
+        if (frameCount <= 8)
+            return layoutProfile.NeedsLargeCells || layoutProfile.NeedsTallCells ? (512, 768) : (512, 512);
+
+        return (512, 512);
     }
 
     private static LayoutSpec BuildSingleFrameLayout(AnimationSpec originalSpec, LayoutSpec originalLayout, FrameSpec frame)
@@ -1462,11 +1590,14 @@ public sealed class AssetAnimationWorkflowService(
         }
     }
 
-    private static List<AssetAnimationFrameStatusView> ReadFrameStatuses(AssetAnimationJob job)
+    private static List<AssetAnimationFrameStatusView> ReadFrameStatuses(AssetAnimationJob job) =>
+        ReadFrameStatuses(job.FrameStatusesJson);
+
+    private static List<AssetAnimationFrameStatusView> ReadFrameStatuses(string value)
     {
         try
         {
-            return JsonSerializer.Deserialize<List<AssetAnimationFrameStatusView>>(job.FrameStatusesJson, JsonOptions) ?? [];
+            return JsonSerializer.Deserialize<List<AssetAnimationFrameStatusView>>(value, JsonOptions) ?? [];
         }
         catch (JsonException)
         {
@@ -1505,6 +1636,18 @@ public sealed class AssetAnimationWorkflowService(
 
     private static string BuildCandidatePrompt(AssetAnimationJob job, AnimationSpec spec, LayoutSpec layout)
     {
+        var requiredFeatures = DeserializeStrings(job.AssetProfile.RequiredFeaturesJson);
+        var forbiddenChanges = DeserializeStrings(job.AssetProfile.ForbiddenChangesJson);
+        var taskSummary = string.IsNullOrWhiteSpace(job.PromptSummary)
+            ? "Animate the referenced asset while preserving its frozen profile."
+            : job.PromptSummary.Trim();
+        var requiredText = requiredFeatures.Count == 0
+            ? "Preserve all distinctive identity, outfit, equipment, silhouette, palette, and style details visible in Image 2."
+            : string.Join("; ", requiredFeatures);
+        var forbiddenText = forbiddenChanges.Count == 0
+            ? "Do not redesign, mirror, crop, recolor, simplify, or replace the asset."
+            : string.Join("; ", forbiddenChanges);
+        var facingText = SpriteFacing.ToPromptPhrase(spec.Facing);
         var guideRole = MotionClipCatalog.IsExternalMotionSpec(spec)
             ? $"Image 1 is a sampled real Quaternius glTF animation guide from clip {spec.MotionClipId}, rendered as a mannequin body in each sampled pose. It controls exact slot positions, frame order, root/pivot anchors, safe margins, humanoid body pose, foot contacts, and camera yaw. Do not reproduce guide marks."
             : "Image 1 controls exact slot positions, frame order, structure guide, root/pivot anchors, safe margins, and motion layout. Do not reproduce its guide marks.";
@@ -1516,16 +1659,24 @@ public sealed class AssetAnimationWorkflowService(
         GOAL
         Render a {spec.FrameCount}-frame {spec.AssetType} {spec.AnimationKind} animation as a {layout.Columns} column by {layout.Rows} row grid.
 
+        TASK REQUEST
+        {taskSummary}
+
         INPUT ROLES
         {guideRole}
-        Image 2 controls the asset identity and visual design.
+        Image 2 is the canonical frozen asset. It controls identity, camera/view, species, silhouette, proportions, palette, materials, outfit, equipment, handedness, and rendering style.
         Image 3, when present, controls style/material details.
 
         MOTION CONTRACT
-        Facing/direction: {spec.Facing}. Root motion: {spec.RootMotion}. {motionSource}
+        Facing/direction: {SpriteFacing.Normalize(spec.Facing)} ({facingText}). Root motion: {spec.RootMotion}. {motionSource}
+        Read frame order left-to-right across the top row, then left-to-right across lower rows. Do not mirror the guide, do not swap leading/trailing limbs, and do not turn the character to a different camera angle.
+
+        PROFILE CONTRACT
+        Required preserved features: {requiredText}.
+        Forbidden changes: {forbiddenText}.
 
         OUTPUT CONTRACT
-        Exactly {spec.FrameCount} complete frames, one subject per cell, no text, no labels, no borders, no extra poses, no overlap between cells, no cropping. Keep identity, apparent scale, camera, line style, and pivot/root position stable. Keep weapons, shields, hands, feet, and accessories inside the guided safe region.
+        Exactly {spec.FrameCount} complete frames, one subject per cell, no text, no labels, no borders, no extra poses, no overlap between cells, no cropping. Keep identity, apparent scale, camera, line style, and pivot/root position stable. Keep the full silhouette inside each guide cell's safe region, including weapons, shields, hands, feet, ears, hair, tails, wings, clothing, accessories, and effects. Do not reproduce guide lines, markers, mannequins, grid lines, safe boxes, root marks, or contact marks.
 
         BACKGROUND
         Use one flat opaque chroma color: {layout.BackgroundColor}. No shadows, floors, scenery, gradients, transparent checkerboards, glow-only backgrounds, or detached effects outside the guided subject.
@@ -1534,6 +1685,8 @@ public sealed class AssetAnimationWorkflowService(
 
     private static string BuildFrameRepairPrompt(AssetAnimationJob job, AnimationSpec spec, FrameSpec frame, LayoutSpec layout, string? extraPrompt)
     {
+        var requiredFeatures = DeserializeStrings(job.AssetProfile.RequiredFeaturesJson);
+        var forbiddenChanges = DeserializeStrings(job.AssetProfile.ForbiddenChangesJson);
         var motionNote = MotionClipCatalog.IsExternalMotionSpec(spec)
             ? "This is a Quaternius-sampled motion job. Use single-frame repair only for local clipping, chroma leakage, or small artifact cleanup. If gait, pose timing, root alignment, scale, facing, foot contact, or frame order is wrong, the correct repair is a full-strip regeneration, not a new invented pose for this one frame."
             : "Repair this one frame without changing the animation's intended timing.";
@@ -1549,7 +1702,9 @@ public sealed class AssetAnimationWorkflowService(
         Image 4, when present, controls style/material details.
 
         FRAME CONTRACT
-        Pose/state: {frame.PoseName}. Keep the same identity, scale, camera, line style, and pivot/root alignment as the animation. {motionNote}
+        Pose/state: {frame.PoseName}. Facing/direction: {SpriteFacing.Normalize(spec.Facing)} ({SpriteFacing.ToPromptPhrase(spec.Facing)}). Keep the same identity, scale, camera, line style, and pivot/root alignment as the animation. {motionNote}
+        Required preserved features: {(requiredFeatures.Count == 0 ? "all distinctive details from Image 2" : string.Join("; ", requiredFeatures))}.
+        Forbidden changes: {(forbiddenChanges.Count == 0 ? "no redesign, mirroring, cropping, recoloring, or replacement" : string.Join("; ", forbiddenChanges))}.
 
         BACKGROUND
         Use one flat opaque chroma color: {layout.BackgroundColor}. No text, labels, borders, shadows, scenery, gradients, or extra subjects.
@@ -1609,8 +1764,8 @@ public sealed class AssetAnimationWorkflowService(
     private static string DefaultFacing(string assetType) =>
         NormalizeToken(assetType, "unit") switch
         {
-            "tower" or "vfx" => "center",
-            _ => "right",
+            "tower" or "vfx" => SpriteFacing.Center,
+            _ => SpriteFacing.SideRight,
         };
 
     private static string DefaultStructure(string? assetType) =>
@@ -1637,6 +1792,25 @@ public sealed class AssetAnimationWorkflowService(
             _ => "warning",
         };
 
+    private static bool IsBlockingRawQa(AssetAnimationFrameStatusView rawQa) =>
+        NormalizeFrameStatus(rawQa.Status) is "repair_requested" or "rejected"
+        || IsStripLevelMotionReason(rawQa.Reason)
+        || NormalizeToken(rawQa.Reason, string.Empty).Contains("clipped", StringComparison.Ordinal);
+
+    private static string RecommendedActionForBlockedRawQa(AssetAnimationFrameStatusView rawQa, AnimationSpec spec)
+    {
+        if (MotionClipCatalog.IsExternalMotionSpec(spec) && IsStripLevelMotionReason(rawQa.Reason))
+            return "run_animation_candidates";
+
+        var action = NormalizeToken(rawQa.RecommendedAction, string.Empty);
+        if (action.Contains("strip", StringComparison.Ordinal) || action.Contains("switch", StringComparison.Ordinal))
+            return "run_animation_candidates";
+        if (action.Contains("frame", StringComparison.Ordinal))
+            return "regenerate_animation_frames";
+
+        return RecommendedActionForStatus("repair_requested", rawQa.Reason, spec);
+    }
+
     private static string RecommendedActionForStatus(string? value, string? reason, AnimationSpec spec) =>
         NormalizeFrameStatus(value) switch
         {
@@ -1658,8 +1832,21 @@ public sealed class AssetAnimationWorkflowService(
             || normalized.Contains("foot", StringComparison.Ordinal)
             || normalized.Contains("walk", StringComparison.Ordinal)
             || normalized.Contains("drift", StringComparison.Ordinal)
+            || normalized.Contains("slot", StringComparison.Ordinal)
             || normalized.Contains("cell_cross", StringComparison.Ordinal);
     }
+
+    private static bool ContainsAny(string value, params string[] needles) =>
+        needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
+
+    private sealed record LayoutProfile(
+        double ForegroundAspect,
+        double ForegroundCoverage,
+        int ForegroundWidth,
+        int ForegroundHeight,
+        bool NeedsLargeCells,
+        bool NeedsTallCells,
+        bool NeedsLargePadding);
 
     private sealed record MotionQaSummary(
         string Status,
