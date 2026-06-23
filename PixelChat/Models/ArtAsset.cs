@@ -42,5 +42,6 @@ public enum ArtAssetKind
     Imported,
     Edited,
     Cropped,
-    SpriteSheet
+    SpriteSheet,
+    SpriteGuide
 }

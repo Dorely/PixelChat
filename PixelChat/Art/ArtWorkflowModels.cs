@@ -99,7 +99,23 @@ public sealed record SpriteSheetFrameRecordView(
     DateTime? WorkingUpdatedAt,
     double Duration,
     Guid? SourceImageAssetId = null,
-    SpriteSheetRect? SourceImageRect = null);
+    SpriteSheetRect? SourceImageRect = null,
+    string PoseName = "",
+    double Phase = 0,
+    int RootOffsetX = 0,
+    int RootOffsetY = 0,
+    int DurationMs = 0,
+    IReadOnlyList<string>? FootContacts = null,
+    bool IsKeyframe = false,
+    int PivotX = 0,
+    int PivotY = 0,
+    Guid? SourceAnimationJobId = null,
+    Guid? SourceAnimationCandidateId = null,
+    double AppliedScale = 1,
+    int TranslationX = 0,
+    int TranslationY = 0,
+    string QaStatus = "",
+    IReadOnlyList<string>? RepairHistory = null);
 
 public sealed record SpriteFrameWorkingView(
     Guid FrameId,
@@ -514,7 +530,8 @@ public sealed record GenerateImagesRequest(
     string Background,
     Guid? PromptRecipeId,
     IReadOnlyList<Guid> ReferenceAssetIds,
-    Guid? ParentBatchId);
+    Guid? ParentBatchId,
+    string? ImageModel = null);
 
 public sealed record EditImageRequest(
     Guid SourceAssetId,

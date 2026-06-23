@@ -13,6 +13,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<StoredSecret> StoredSecrets => Set<StoredSecret>();
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<ArtAsset> ArtAssets => Set<ArtAsset>();
+    public DbSet<AssetProfile> AssetProfiles => Set<AssetProfile>();
+    public DbSet<AssetAnimationJob> AssetAnimationJobs => Set<AssetAnimationJob>();
+    public DbSet<AssetAnimationCandidate> AssetAnimationCandidates => Set<AssetAnimationCandidate>();
+    public DbSet<AssetAnimationFrameAttempt> AssetAnimationFrameAttempts => Set<AssetAnimationFrameAttempt>();
     public DbSet<BackgroundRemovalExportCache> BackgroundRemovalExportCaches => Set<BackgroundRemovalExportCache>();
     public DbSet<ExportStepCache> ExportStepCaches => Set<ExportStepCache>();
     public DbSet<GenerationBatch> GenerationBatches => Set<GenerationBatch>();
@@ -187,6 +191,140 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
+        modelBuilder.Entity<AssetProfile>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
+            entity.HasIndex(e => e.CanonicalAssetId);
+            entity.HasIndex(e => e.StyleAssetId);
+            entity.Property(e => e.AssetType).HasDefaultValue("unit");
+            entity.Property(e => e.StructureType).HasDefaultValue("biped");
+            entity.Property(e => e.ChromaColor).HasDefaultValue("#ff00ff");
+            entity.Property(e => e.PaletteJson).HasDefaultValue("[]");
+            entity.Property(e => e.RequiredFeaturesJson).HasDefaultValue("[]");
+            entity.Property(e => e.ForbiddenChangesJson).HasDefaultValue("[]");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.AssetProfiles)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.CanonicalAsset)
+                .WithMany()
+                .HasForeignKey(e => e.CanonicalAssetId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.StyleAsset)
+                .WithMany()
+                .HasForeignKey(e => e.StyleAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AssetAnimationJob>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
+            entity.HasIndex(e => e.AssetProfileId);
+            entity.HasIndex(e => e.OutputSpriteSheetId);
+            entity.HasIndex(e => e.SelectedCandidateId);
+            entity.Property(e => e.Status).HasDefaultValue("planned");
+            entity.Property(e => e.Strategy).HasDefaultValue("hybrid");
+            entity.Property(e => e.AnimationSpecJson).HasDefaultValue("{}");
+            entity.Property(e => e.LayoutSpecJson).HasDefaultValue("{}");
+            entity.Property(e => e.RawQaSummaryJson).HasDefaultValue("{}");
+            entity.Property(e => e.FrameQaSummaryJson).HasDefaultValue("{}");
+            entity.Property(e => e.MotionQaSummaryJson).HasDefaultValue("{}");
+            entity.Property(e => e.FrameStatusesJson).HasDefaultValue("[]");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.AssetAnimationJobs)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.AssetProfile)
+                .WithMany(p => p.AnimationJobs)
+                .HasForeignKey(e => e.AssetProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.GuideAsset)
+                .WithMany()
+                .HasForeignKey(e => e.GuideAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.DiagnosticGuideAsset)
+                .WithMany()
+                .HasForeignKey(e => e.DiagnosticGuideAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.OutputSpriteSheet)
+                .WithMany()
+                .HasForeignKey(e => e.OutputSpriteSheetId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.SelectedCandidate)
+                .WithMany()
+                .HasForeignKey(e => e.SelectedCandidateId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AssetAnimationCandidate>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.AssetAnimationJobId, e.CandidateIndex }).IsUnique();
+            entity.HasIndex(e => e.GenerationBatchId);
+            entity.HasIndex(e => e.OutputAssetId);
+            entity.Property(e => e.State).HasDefaultValue("generated");
+            entity.Property(e => e.RawQaStatus).HasDefaultValue("pending");
+            entity.Property(e => e.RawQaSummaryJson).HasDefaultValue("{}");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.AssetAnimationCandidates)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.AssetAnimationJob)
+                .WithMany(j => j.Candidates)
+                .HasForeignKey(e => e.AssetAnimationJobId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.GenerationBatch)
+                .WithMany()
+                .HasForeignKey(e => e.GenerationBatchId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.OutputAsset)
+                .WithMany()
+                .HasForeignKey(e => e.OutputAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AssetAnimationFrameAttempt>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.AssetAnimationJobId, e.FrameIndex, e.AttemptNumber });
+            entity.HasIndex(e => e.AssetAnimationCandidateId);
+            entity.HasIndex(e => e.SourceAssetId);
+            entity.Property(e => e.AttemptKind).HasDefaultValue("mark");
+            entity.Property(e => e.Status).HasDefaultValue("pending");
+            entity.Property(e => e.RepairHistoryJson).HasDefaultValue("[]");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.AssetAnimationFrameAttempts)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.AssetAnimationJob)
+                .WithMany(j => j.FrameAttempts)
+                .HasForeignKey(e => e.AssetAnimationJobId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.AssetAnimationCandidate)
+                .WithMany(c => c.FrameAttempts)
+                .HasForeignKey(e => e.AssetAnimationCandidateId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.SourceAsset)
+                .WithMany()
+                .HasForeignKey(e => e.SourceAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
         modelBuilder.Entity<PromptRecipe>(entity =>
         {
             entity.HasIndex(e => new { e.ProjectId, e.Name });
@@ -245,6 +383,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.Property(e => e.ShapeJson).HasDefaultValue("[]");
             entity.Property(e => e.WorkingState).HasDefaultValue("none");
             entity.Property(e => e.WorkingContentType).HasDefaultValue("image/png");
+            entity.Property(e => e.FootContactsJson).HasDefaultValue("[]");
+            entity.Property(e => e.AppliedScale).HasDefaultValue(1d);
+            entity.Property(e => e.RepairHistoryJson).HasDefaultValue("[]");
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.SpriteSheetFrameRecords)
@@ -259,6 +400,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasOne(e => e.SourceImageAsset)
                 .WithMany()
                 .HasForeignKey(e => e.SourceImageAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.SourceAnimationJob)
+                .WithMany()
+                .HasForeignKey(e => e.SourceAnimationJobId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.SourceAnimationCandidate)
+                .WithMany()
+                .HasForeignKey(e => e.SourceAnimationCandidateId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 

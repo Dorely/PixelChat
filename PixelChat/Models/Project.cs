@@ -12,6 +12,10 @@ public class Project
 
     public ICollection<ArtAsset> Assets { get; set; } = [];
     public ICollection<GenerationBatch> GenerationBatches { get; set; } = [];
+    public ICollection<AssetProfile> AssetProfiles { get; set; } = [];
+    public ICollection<AssetAnimationJob> AssetAnimationJobs { get; set; } = [];
+    public ICollection<AssetAnimationCandidate> AssetAnimationCandidates { get; set; } = [];
+    public ICollection<AssetAnimationFrameAttempt> AssetAnimationFrameAttempts { get; set; } = [];
     public ICollection<PromptRecipe> PromptRecipes { get; set; } = [];
     public ICollection<PromptRecipeVersion> PromptRecipeVersions { get; set; } = [];
     public ICollection<SpriteSheetDefinition> SpriteSheets { get; set; } = [];

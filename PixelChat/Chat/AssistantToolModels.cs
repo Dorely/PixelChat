@@ -40,6 +40,11 @@ public sealed record CompareReviewToolItem(
     string? Label = null,
     string? Notes = null);
 
+public sealed record AnimationFrameMark(
+    int FrameNumber,
+    string Status,
+    string? Reason = null);
+
 public sealed class AssistantTurnGenerationBudget(int maxRounds)
 {
     public int MaxRounds { get; } = Math.Max(0, maxRounds);
