@@ -255,6 +255,8 @@ public sealed class AssetAnimationWorkflowService(
         await db.SaveChangesAsync(cancellationToken);
 
         await imageRuntime.WaitForBatchCompletionAsync(batch.Id, TimeSpan.FromSeconds(Math.Max(60, imageOptions.Value.RequestTimeoutSeconds)), cancellationToken);
+        if (cancellationToken.IsCancellationRequested)
+            return await LoadJobViewAsync(projectId, job.Id, CancellationToken.None);
         var outputAssets = await db.ArtAssets
             .Where(asset => asset.ProjectId == projectId && asset.SourceBatchId == batch.Id)
             .OrderBy(asset => asset.CreatedAt)
@@ -459,6 +461,8 @@ public sealed class AssetAnimationWorkflowService(
             }, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             await imageRuntime.WaitForBatchCompletionAsync(batch.Id, TimeSpan.FromSeconds(Math.Max(60, imageOptions.Value.RequestTimeoutSeconds)), cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+                break;
             var output = await db.ArtAssets
                 .Where(asset => asset.ProjectId == projectId && asset.SourceBatchId == batch.Id)
                 .OrderBy(asset => asset.CreatedAt)
@@ -501,6 +505,9 @@ public sealed class AssetAnimationWorkflowService(
                 actualSize = $"{output.Width ?? singleLayout.CanvasWidth}x{output.Height ?? singleLayout.CanvasHeight}",
             }, cancellationToken);
         }
+
+        if (cancellationToken.IsCancellationRequested)
+            return await LoadJobViewAsync(projectId, job.Id, CancellationToken.None);
 
         var statuses = ReadFrameStatuses(job)
             .Select(status =>

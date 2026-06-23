@@ -118,6 +118,13 @@ public sealed class ImageGenerationRuntime(
         {
             return false;
         }
+        catch (OperationCanceledException)
+        {
+            // The caller (e.g. an assistant tool) was cancelled mid-request. Treat it like a
+            // non-completion and let the caller observe cancellation cooperatively rather than
+            // letting the cancellation exception propagate up through the tool-invocation framework.
+            return false;
+        }
     }
 
     public async Task ReconcileInterruptedBatchesAsync(CancellationToken cancellationToken = default)

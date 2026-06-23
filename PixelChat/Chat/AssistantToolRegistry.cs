@@ -665,6 +665,8 @@ public sealed class AssistantToolRegistry(
             ? 600
             : agentOptions.Value.GenerationRoundWaitTimeoutSeconds;
         var completed = await imageRuntime.WaitForBatchCompletionAsync(batch.Id, TimeSpan.FromSeconds(timeoutSeconds), cancellationToken);
+        if (cancellationToken.IsCancellationRequested)
+            return JsonSerializer.Serialize(new { round, budget.RoundsUsed, budget.MaxRounds, cancelled = true }, JsonOptions);
         var batchJson = await workflow.ReadGenerationBatchJsonAsync(projectId, batch.Id, cancellationToken);
         using var document = JsonDocument.Parse(batchJson);
         return JsonSerializer.Serialize(new

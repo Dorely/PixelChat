@@ -843,6 +843,13 @@ public sealed class AssistantChatService(
             var invokeResult = await aiFunction.InvokeAsync(
                 ToolCallArguments.Create(pendingCall.Content.Arguments, pendingCall.ArgumentsJson),
                 cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                // The turn was cancelled mid-tool. Tools handle cancellation cooperatively and may
+                // return a partial result instead of throwing, so flag the cancellation explicitly.
+                stopwatch.Stop();
+                return new ToolInvocationOutcome(string.Empty, Error: null, Cancelled: true, stopwatch.Elapsed.TotalMilliseconds, Array.Empty<AIContent>());
+            }
             var result = invokeResult?.ToString() ?? string.Empty;
             var modelOnlyContents = await BuildModelOnlyToolContentsAsync(pendingCall, projectId, result, cancellationToken);
             stopwatch.Stop();
