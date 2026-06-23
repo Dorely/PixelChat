@@ -6,6 +6,7 @@ internal sealed class MotionClipCatalog
 {
     public const string DefaultHumanoidWalkClipId = "quaternius.ual2.walk.carry.loop";
     public const string RendererId = "quaternius_gltf";
+    public const string SkinnedMannequinRenderStyle = "skinned_mannequin";
 
     private const string MotionClipRoot = "Assets/MotionClips";
     private const string ManifestRelativePath = $"{MotionClipRoot}/manifest.json";
@@ -73,6 +74,8 @@ internal sealed class MotionClipDefinition
     public string License { get; init; } = string.Empty;
     public string AssetPath { get; init; } = string.Empty;
     public string AnimationName { get; init; } = string.Empty;
+    public string? MeshNodeName { get; init; }
+    public int? SkinIndex { get; init; }
     public List<string> SupportedAnimationKinds { get; init; } = [];
     public List<string> SupportedAssetTypes { get; init; } = [];
     public int DefaultFps { get; init; } = 8;

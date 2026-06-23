@@ -11,6 +11,8 @@
       "license": "CC0-1.0",
       "assetPath": "Quaternius/UAL2/UAL2_Standard.glb",
       "animationName": "Walk_Carry_Loop",
+      "meshNodeName": "Mannequin",
+      "skinIndex": 0,
       "supportedAnimationKinds": [
         "walk",
         "walk_cycle",

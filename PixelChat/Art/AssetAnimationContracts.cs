@@ -111,6 +111,7 @@ public sealed record AnimationSpec(
     bool Loop,
     IReadOnlyList<FrameSpec> Frames,
     string? GuideRenderer = null,
+    string? GuideRenderStyle = null,
     string? MotionClipId = null,
     double? GuideCameraYawDegrees = null,
     string? MotionValidationProfile = null,

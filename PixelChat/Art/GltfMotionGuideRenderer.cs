@@ -49,6 +49,7 @@ internal static class GltfMotionGuideRenderer
         var yaw = spec.GuideCameraYawDegrees ?? FacingToYawDegrees(spec.Facing);
         var metadata = new MotionGuideRenderMetadata(
             MotionClipCatalog.RendererId,
+            MotionClipCatalog.SkinnedMannequinRenderStyle,
             clip.ClipId,
             clip.AnimationName,
             clip.SourcePackage,
@@ -92,6 +93,7 @@ internal static class GltfMotionGuideRenderer
             .ToDictionary(item => item.Key, item => nodeNameToIndex[item.Value], StringComparer.OrdinalIgnoreCase);
         if (!mappedNodes.ContainsKey("hips") && !mappedNodes.ContainsKey("root"))
             throw new InvalidOperationException("Motion clip bone map must include hips or root.");
+        var skinnedMesh = LoadSkinnedMesh(gltf, clip);
 
         var animationSamplers = animation.Samplers
             .Select(sampler => new SampledChannelData(
@@ -152,11 +154,15 @@ internal static class GltfMotionGuideRenderer
                 var point = joints[key];
                 joints[key] = new Vector3(point.X - root.X, point.Y, point.Z - root.Z);
             }
+            var meshPrimitives = skinnedMesh is null
+                ? []
+                : SkinMesh(skinnedMesh, worlds, root);
 
             samples.Add(new MotionGuideFrameSample(
                 frameIndex,
                 Math.Round(time, 4),
                 joints,
+                meshPrimitives,
                 DetectContacts(joints)));
         }
 
@@ -206,8 +212,11 @@ internal static class GltfMotionGuideRenderer
         bool diagnostic)
     {
         var rgba = NewCanvas(layout.CanvasWidth, layout.CanvasHeight, 248, 250, 252, 255);
+        var zBuffer = Enumerable.Repeat(double.NegativeInfinity, checked(layout.CanvasWidth * layout.CanvasHeight)).ToArray();
         var projected = samples.Select(sample => Project(sample, yawDegrees)).ToList();
-        var allPoints = projected.SelectMany(frame => frame.Points.Values).ToList();
+        var allPoints = projected
+            .SelectMany(frame => frame.Points.Values.Concat(frame.Meshes.SelectMany(mesh => mesh.Vertices).Select(vertex => vertex.Point)))
+            .ToList();
         var minY = allPoints.Count == 0 ? 0d : allPoints.Min(point => point.Y);
         var maxY = allPoints.Count == 0 ? 1d : allPoints.Max(point => point.Y);
         var maxAbsX = allPoints.Count == 0 ? 1d : allPoints.Max(point => Math.Abs(point.X));
@@ -239,18 +248,28 @@ internal static class GltfMotionGuideRenderer
                     slot.BaselineY - (int)Math.Round((item.Value.Y - minY) * scale)),
                 StringComparer.OrdinalIgnoreCase);
 
-            DrawHandEnvelope(rgba, layout.CanvasWidth, layout.CanvasHeight, screen, slot, diagnostic);
-            foreach (var (a, b) in BoneSegments)
+            DrawMannequin(rgba, zBuffer, layout.CanvasWidth, layout.CanvasHeight, frame.Meshes, slot, scale, minY, diagnostic);
+            DrawRect(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Rect, 178, 186, 196, diagnostic ? (byte)255 : (byte)150, 2);
+            DrawRect(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.SafeRect, 116, 142, 162, diagnostic ? (byte)220 : (byte)110, 2);
+            DrawLine(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Rect.X + 8, slot.BaselineY, slot.Rect.X + slot.Rect.Width - 8, slot.BaselineY, 56, 116, 164, diagnostic ? (byte)190 : (byte)120);
+            DrawLine(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Root.X, slot.SafeRect.Y, slot.Root.X, slot.BaselineY, 122, 122, 122, diagnostic ? (byte)165 : (byte)85);
+            DrawCircle(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Root.X, slot.Root.Y, Math.Max(5, slot.Rect.Width / 96), 28, 86, 146, diagnostic ? (byte)230 : (byte)150);
+
+            if (diagnostic)
             {
-                if (screen.TryGetValue(a, out var start) && screen.TryGetValue(b, out var end))
-                    DrawThickLine(rgba, layout.CanvasWidth, layout.CanvasHeight, start.X, start.Y, end.X, end.Y, diagnostic ? 4 : 3, 68, 98, 136, skeletonAlpha);
+                DrawHandEnvelope(rgba, layout.CanvasWidth, layout.CanvasHeight, screen, slot, diagnostic);
+                foreach (var (a, b) in BoneSegments)
+                {
+                    if (screen.TryGetValue(a, out var start) && screen.TryGetValue(b, out var end))
+                        DrawThickLine(rgba, layout.CanvasWidth, layout.CanvasHeight, start.X, start.Y, end.X, end.Y, 4, 68, 98, 136, skeletonAlpha);
+                }
+
+                foreach (var point in screen.Values)
+                    DrawCircle(rgba, layout.CanvasWidth, layout.CanvasHeight, point.X, point.Y, 4, 46, 82, 128, skeletonAlpha);
+
+                if (screen.TryGetValue("head", out var head))
+                    DrawCircle(rgba, layout.CanvasWidth, layout.CanvasHeight, head.X, head.Y, Math.Max(6, slot.SafeRect.Width / 36), 74, 105, 146, 140);
             }
-
-            foreach (var point in screen.Values)
-                DrawCircle(rgba, layout.CanvasWidth, layout.CanvasHeight, point.X, point.Y, diagnostic ? 4 : 3, 46, 82, 128, skeletonAlpha);
-
-            if (screen.TryGetValue("head", out var head))
-                DrawCircle(rgba, layout.CanvasWidth, layout.CanvasHeight, head.X, head.Y, Math.Max(6, slot.SafeRect.Width / 36), 74, 105, 146, diagnostic ? (byte)140 : (byte)86);
 
             DrawContactMarker(rgba, layout.CanvasWidth, layout.CanvasHeight, screen, frame.Contacts, "left_foot", "leftFoot", "leftToe", diagnostic);
             DrawContactMarker(rgba, layout.CanvasWidth, layout.CanvasHeight, screen, frame.Contacts, "right_foot", "rightFoot", "rightToe", diagnostic);
@@ -284,6 +303,19 @@ internal static class GltfMotionGuideRenderer
                     return new ProjectedPoint((point.X * cos) + (point.Z * sin), point.Y);
                 },
                 StringComparer.OrdinalIgnoreCase),
+            sample.Meshes.Select(mesh => new ProjectedMeshPrimitive(
+                mesh.Vertices.Select(vertex =>
+                {
+                    var point = vertex.Position;
+                    var normal = vertex.Normal;
+                    return new ProjectedMeshVertex(
+                        new ProjectedPoint((point.X * cos) + (point.Z * sin), point.Y),
+                        (point.Z * cos) - (point.X * sin),
+                        (normal.Z * cos) - (normal.X * sin),
+                        normal.Y);
+                }).ToArray(),
+                mesh.Indices,
+                mesh.MaterialIndex)).ToArray(),
             sample.Contacts);
     }
 
@@ -300,6 +332,65 @@ internal static class GltfMotionGuideRenderer
             (false, true) => "RIGHT",
             _ => "LIFT",
         };
+    }
+
+    private static void DrawMannequin(
+        byte[] rgba,
+        double[] zBuffer,
+        int width,
+        int height,
+        IReadOnlyList<ProjectedMeshPrimitive> meshes,
+        SlotSpec slot,
+        double scale,
+        double minY,
+        bool diagnostic)
+    {
+        foreach (var mesh in meshes)
+        {
+            for (var index = 0; index + 2 < mesh.Indices.Length; index += 3)
+            {
+                var i0 = mesh.Indices[index];
+                var i1 = mesh.Indices[index + 1];
+                var i2 = mesh.Indices[index + 2];
+                if ((uint)i0 >= mesh.Vertices.Count || (uint)i1 >= mesh.Vertices.Count || (uint)i2 >= mesh.Vertices.Count)
+                    continue;
+
+                var v0 = ToScreenVertex(mesh.Vertices[i0], slot, scale, minY);
+                var v1 = ToScreenVertex(mesh.Vertices[i1], slot, scale, minY);
+                var v2 = ToScreenVertex(mesh.Vertices[i2], slot, scale, minY);
+                var shade = TriangleShade(mesh.Vertices[i0], mesh.Vertices[i1], mesh.Vertices[i2]);
+                var baseColor = mesh.MaterialIndex == 1
+                    ? (R: 136d, G: 154d, B: 176d)
+                    : (R: 172d, G: 187d, B: 206d);
+                DrawTriangle(
+                    rgba,
+                    zBuffer,
+                    width,
+                    height,
+                    v0,
+                    v1,
+                    v2,
+                    (byte)Math.Clamp(baseColor.R * shade, 0, 255),
+                    (byte)Math.Clamp(baseColor.G * shade, 0, 255),
+                    (byte)Math.Clamp(baseColor.B * shade, 0, 255),
+                    diagnostic ? (byte)245 : (byte)235);
+            }
+        }
+    }
+
+    private static ScreenVertex ToScreenVertex(ProjectedMeshVertex vertex, SlotSpec slot, double scale, double minY) =>
+        new(
+            slot.Root.X + (vertex.Point.X * scale),
+            slot.BaselineY - ((vertex.Point.Y - minY) * scale),
+            vertex.Depth,
+            vertex.NormalDepth,
+            vertex.NormalY);
+
+    private static double TriangleShade(ProjectedMeshVertex a, ProjectedMeshVertex b, ProjectedMeshVertex c)
+    {
+        var normalDepth = Math.Abs((a.NormalDepth + b.NormalDepth + c.NormalDepth) / 3d);
+        var normalY = Math.Max(0d, (a.NormalY + b.NormalY + c.NormalY) / 3d);
+        return Math.Clamp(0.78d + (normalDepth * 0.16d) + (normalY * 0.08d), 0.72d, 1.08d);
     }
 
     private static void DrawHandEnvelope(byte[] rgba, int width, int height, IReadOnlyDictionary<string, SpriteSheetPoint> screen, SlotSpec slot, bool diagnostic)
@@ -365,6 +456,151 @@ internal static class GltfMotionGuideRenderer
         return parents;
     }
 
+    private static SkinnedMesh? LoadSkinnedMesh(GltfBinary gltf, MotionClipDefinition clip)
+    {
+        var meshNodeIndex = ResolveSkinnedMeshNodeIndex(gltf.Document, clip);
+        if (meshNodeIndex is null)
+            return null;
+
+        var meshNode = gltf.Document.Nodes[meshNodeIndex.Value];
+        if (meshNode.Mesh is not int meshIndex || meshIndex < 0 || meshIndex >= gltf.Document.Meshes.Count)
+            return null;
+        var skinIndex = clip.SkinIndex ?? meshNode.Skin;
+        if (skinIndex is not int resolvedSkinIndex || resolvedSkinIndex < 0 || resolvedSkinIndex >= gltf.Document.Skins.Count)
+            return null;
+
+        var skin = gltf.Document.Skins[resolvedSkinIndex];
+        var inverseBindMatrices = skin.InverseBindMatrices is int inverseBindAccessor
+            ? ReadMatrixAccessor(gltf, inverseBindAccessor)
+            : Enumerable.Repeat(Matrix4x4.Identity, skin.Joints.Count).ToArray();
+        if (inverseBindMatrices.Length < skin.Joints.Count)
+        {
+            inverseBindMatrices = inverseBindMatrices
+                .Concat(Enumerable.Repeat(Matrix4x4.Identity, skin.Joints.Count - inverseBindMatrices.Length))
+                .ToArray();
+        }
+
+        var mesh = gltf.Document.Meshes[meshIndex];
+        var primitives = new List<SkinnedMeshPrimitive>();
+        foreach (var primitive in mesh.Primitives)
+        {
+            if (!primitive.Attributes.TryGetValue("POSITION", out var positionAccessor)
+                || !primitive.Attributes.TryGetValue("JOINTS_0", out var jointsAccessor)
+                || !primitive.Attributes.TryGetValue("WEIGHTS_0", out var weightsAccessor)
+                || primitive.Indices is not int indicesAccessor)
+            {
+                continue;
+            }
+
+            var positions = ReadVector3Accessor(gltf, positionAccessor);
+            var normals = primitive.Attributes.TryGetValue("NORMAL", out var normalAccessor)
+                ? ReadVector3Accessor(gltf, normalAccessor)
+                : Enumerable.Repeat(Vector3.UnitY, positions.Length).ToArray();
+            var joints = ReadVector4IntAccessor(gltf, jointsAccessor);
+            var weights = ReadVector4Accessor(gltf, weightsAccessor);
+            var indices = ReadIntegerAccessor(gltf, indicesAccessor);
+            var vertexCount = new[] { positions.Length, normals.Length, joints.Length, weights.Length }.Min();
+            if (vertexCount == 0 || indices.Length < 3)
+                continue;
+
+            var vertices = new SkinnedMeshVertex[vertexCount];
+            for (var index = 0; index < vertexCount; index++)
+            {
+                var weight = weights[index];
+                var sum = weight.X + weight.Y + weight.Z + weight.W;
+                if (sum > 0.0001f)
+                    weight /= sum;
+                vertices[index] = new SkinnedMeshVertex(
+                    positions[index],
+                    Vector3.Normalize(normals[index] == Vector3.Zero ? Vector3.UnitY : normals[index]),
+                    joints[index],
+                    weight);
+            }
+
+            primitives.Add(new SkinnedMeshPrimitive(vertices, indices, primitive.Material ?? 0));
+        }
+
+        return primitives.Count == 0
+            ? null
+            : new SkinnedMesh(skin.Joints.ToArray(), inverseBindMatrices, primitives);
+    }
+
+    private static int? ResolveSkinnedMeshNodeIndex(GltfDocument document, MotionClipDefinition clip)
+    {
+        if (!string.IsNullOrWhiteSpace(clip.MeshNodeName))
+        {
+            for (var index = 0; index < document.Nodes.Count; index++)
+            {
+                if (string.Equals(document.Nodes[index].Name, clip.MeshNodeName, StringComparison.OrdinalIgnoreCase)
+                    && document.Nodes[index].Mesh is not null)
+                {
+                    return index;
+                }
+            }
+        }
+
+        for (var index = 0; index < document.Nodes.Count; index++)
+        {
+            if (document.Nodes[index].Mesh is not null && document.Nodes[index].Skin is not null)
+                return index;
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<MotionGuideSkinnedPrimitive> SkinMesh(SkinnedMesh mesh, Matrix4x4[] worlds, Vector3 root)
+    {
+        var jointMatrices = new Matrix4x4[mesh.JointNodeIndices.Length];
+        for (var index = 0; index < jointMatrices.Length; index++)
+        {
+            var nodeIndex = mesh.JointNodeIndices[index];
+            var world = nodeIndex >= 0 && nodeIndex < worlds.Length ? worlds[nodeIndex] : Matrix4x4.Identity;
+            var inverseBind = index < mesh.InverseBindMatrices.Length ? mesh.InverseBindMatrices[index] : Matrix4x4.Identity;
+            jointMatrices[index] = inverseBind * world;
+        }
+
+        return mesh.Primitives.Select(primitive =>
+        {
+            var vertices = new MotionGuideSkinnedVertex[primitive.Vertices.Length];
+            for (var index = 0; index < primitive.Vertices.Length; index++)
+            {
+                var vertex = primitive.Vertices[index];
+                var position = Vector3.Zero;
+                var normal = Vector3.Zero;
+                ApplySkinJoint(vertex.Position, vertex.Normal, vertex.Joints.X, vertex.Weights.X, jointMatrices, ref position, ref normal);
+                ApplySkinJoint(vertex.Position, vertex.Normal, vertex.Joints.Y, vertex.Weights.Y, jointMatrices, ref position, ref normal);
+                ApplySkinJoint(vertex.Position, vertex.Normal, vertex.Joints.Z, vertex.Weights.Z, jointMatrices, ref position, ref normal);
+                ApplySkinJoint(vertex.Position, vertex.Normal, vertex.Joints.W, vertex.Weights.W, jointMatrices, ref position, ref normal);
+                if (normal == Vector3.Zero)
+                    normal = Vector3.UnitY;
+                else
+                    normal = Vector3.Normalize(normal);
+                vertices[index] = new MotionGuideSkinnedVertex(
+                    new Vector3(position.X - root.X, position.Y, position.Z - root.Z),
+                    normal);
+            }
+
+            return new MotionGuideSkinnedPrimitive(vertices, primitive.Indices, primitive.MaterialIndex);
+        }).ToArray();
+    }
+
+    private static void ApplySkinJoint(
+        Vector3 sourcePosition,
+        Vector3 sourceNormal,
+        int jointIndex,
+        float weight,
+        Matrix4x4[] jointMatrices,
+        ref Vector3 position,
+        ref Vector3 normal)
+    {
+        if (weight <= 0.0001f || jointIndex < 0 || jointIndex >= jointMatrices.Length)
+            return;
+
+        var matrix = jointMatrices[jointIndex];
+        position += Vector3.Transform(sourcePosition, matrix) * weight;
+        normal += Vector3.TransformNormal(sourceNormal, matrix) * weight;
+    }
+
     private static float[] ReadAccessor(GltfBinary gltf, int accessorIndex)
     {
         if (accessorIndex < 0 || accessorIndex >= gltf.Document.Accessors.Count)
@@ -396,6 +632,91 @@ internal static class GltfMotionGuideRenderer
         return values;
     }
 
+    private static Vector3[] ReadVector3Accessor(GltfBinary gltf, int accessorIndex)
+    {
+        var values = ReadAccessor(gltf, accessorIndex);
+        var vectors = new Vector3[values.Length / 3];
+        for (var index = 0; index < vectors.Length; index++)
+            vectors[index] = new Vector3(values[index * 3], values[(index * 3) + 1], values[(index * 3) + 2]);
+        return vectors;
+    }
+
+    private static Vector4[] ReadVector4Accessor(GltfBinary gltf, int accessorIndex)
+    {
+        var values = ReadAccessor(gltf, accessorIndex);
+        var vectors = new Vector4[values.Length / 4];
+        for (var index = 0; index < vectors.Length; index++)
+            vectors[index] = new Vector4(values[index * 4], values[(index * 4) + 1], values[(index * 4) + 2], values[(index * 4) + 3]);
+        return vectors;
+    }
+
+    private static Vector4Int[] ReadVector4IntAccessor(GltfBinary gltf, int accessorIndex)
+    {
+        var values = ReadIntegerAccessor(gltf, accessorIndex);
+        var vectors = new Vector4Int[values.Length / 4];
+        for (var index = 0; index < vectors.Length; index++)
+            vectors[index] = new Vector4Int(values[index * 4], values[(index * 4) + 1], values[(index * 4) + 2], values[(index * 4) + 3]);
+        return vectors;
+    }
+
+    private static Matrix4x4[] ReadMatrixAccessor(GltfBinary gltf, int accessorIndex)
+    {
+        var values = ReadAccessor(gltf, accessorIndex);
+        var matrices = new Matrix4x4[values.Length / 16];
+        for (var index = 0; index < matrices.Length; index++)
+        {
+            var offset = index * 16;
+            matrices[index] = new Matrix4x4(
+                values[offset],
+                values[offset + 1],
+                values[offset + 2],
+                values[offset + 3],
+                values[offset + 4],
+                values[offset + 5],
+                values[offset + 6],
+                values[offset + 7],
+                values[offset + 8],
+                values[offset + 9],
+                values[offset + 10],
+                values[offset + 11],
+                values[offset + 12],
+                values[offset + 13],
+                values[offset + 14],
+                values[offset + 15]);
+        }
+
+        return matrices;
+    }
+
+    private static int[] ReadIntegerAccessor(GltfBinary gltf, int accessorIndex)
+    {
+        if (accessorIndex < 0 || accessorIndex >= gltf.Document.Accessors.Count)
+            throw new InvalidOperationException("GLB accessor index is out of range.");
+
+        var accessor = gltf.Document.Accessors[accessorIndex];
+        if (accessor.BufferView is not int bufferViewIndex || bufferViewIndex < 0 || bufferViewIndex >= gltf.Document.BufferViews.Count)
+            throw new InvalidOperationException("Integer accessor has no buffer view.");
+        var bufferView = gltf.Document.BufferViews[bufferViewIndex];
+        if ((bufferView.Buffer ?? 0) != 0)
+            throw new InvalidOperationException("Only single-buffer GLB files are supported.");
+
+        var componentCount = ComponentCount(accessor.Type);
+        var componentSize = ComponentSize(accessor.ComponentType);
+        var stride = bufferView.ByteStride ?? (componentCount * componentSize);
+        var start = (bufferView.ByteOffset ?? 0) + (accessor.ByteOffset ?? 0);
+        var values = new int[checked(accessor.Count * componentCount)];
+        for (var row = 0; row < accessor.Count; row++)
+        {
+            var sourceOffset = start + (row * stride);
+            for (var component = 0; component < componentCount; component++)
+            {
+                var byteOffset = sourceOffset + (component * componentSize);
+                values[(row * componentCount) + component] = ReadIntegerComponent(gltf.BinaryChunk, byteOffset, accessor.ComponentType);
+            }
+        }
+        return values;
+    }
+
     private static int ComponentCount(string? type) =>
         type switch
         {
@@ -405,6 +726,26 @@ internal static class GltfMotionGuideRenderer
             "VEC4" => 4,
             "MAT4" => 16,
             _ => throw new InvalidOperationException($"Unsupported accessor type '{type}'."),
+        };
+
+    private static int ComponentSize(int componentType) =>
+        componentType switch
+        {
+            5120 or 5121 => 1,
+            5122 or 5123 => 2,
+            5125 or 5126 => 4,
+            _ => throw new InvalidOperationException($"Unsupported accessor component type '{componentType}'."),
+        };
+
+    private static int ReadIntegerComponent(byte[] data, int byteOffset, int componentType) =>
+        componentType switch
+        {
+            5120 => unchecked((sbyte)data[byteOffset]),
+            5121 => data[byteOffset],
+            5122 => BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(byteOffset, 2)),
+            5123 => BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(byteOffset, 2)),
+            5125 => unchecked((int)BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(byteOffset, 4))),
+            _ => throw new InvalidOperationException($"Unsupported integer accessor component type '{componentType}'."),
         };
 
     private static Vector3 SampleVec3(SampledChannelData data, float time)
@@ -491,6 +832,56 @@ internal static class GltfMotionGuideRenderer
 
         return rgba;
     }
+
+    private static void DrawTriangle(
+        byte[] rgba,
+        double[] zBuffer,
+        int width,
+        int height,
+        ScreenVertex v0,
+        ScreenVertex v1,
+        ScreenVertex v2,
+        byte r,
+        byte g,
+        byte b,
+        byte a)
+    {
+        var minX = Math.Max(0, (int)Math.Floor(Math.Min(v0.X, Math.Min(v1.X, v2.X))));
+        var maxX = Math.Min(width - 1, (int)Math.Ceiling(Math.Max(v0.X, Math.Max(v1.X, v2.X))));
+        var minY = Math.Max(0, (int)Math.Floor(Math.Min(v0.Y, Math.Min(v1.Y, v2.Y))));
+        var maxY = Math.Min(height - 1, (int)Math.Ceiling(Math.Max(v0.Y, Math.Max(v1.Y, v2.Y))));
+        if (minX > maxX || minY > maxY)
+            return;
+
+        var area = Edge(v0.X, v0.Y, v1.X, v1.Y, v2.X, v2.Y);
+        if (Math.Abs(area) < 0.0001d)
+            return;
+
+        for (var y = minY; y <= maxY; y++)
+        {
+            for (var x = minX; x <= maxX; x++)
+            {
+                var px = x + 0.5d;
+                var py = y + 0.5d;
+                var w0 = Edge(v1.X, v1.Y, v2.X, v2.Y, px, py) / area;
+                var w1 = Edge(v2.X, v2.Y, v0.X, v0.Y, px, py) / area;
+                var w2 = Edge(v0.X, v0.Y, v1.X, v1.Y, px, py) / area;
+                if (w0 < -0.0001d || w1 < -0.0001d || w2 < -0.0001d)
+                    continue;
+
+                var depth = (v0.Depth * w0) + (v1.Depth * w1) + (v2.Depth * w2);
+                var offset = (y * width) + x;
+                if (depth < zBuffer[offset])
+                    continue;
+
+                zBuffer[offset] = depth;
+                Blend(rgba, width, height, x, y, r, g, b, a);
+            }
+        }
+    }
+
+    private static double Edge(double ax, double ay, double bx, double by, double px, double py) =>
+        ((px - ax) * (by - ay)) - ((py - ay) * (bx - ax));
 
     private static void DrawRect(byte[] rgba, int width, int height, SpriteSheetRect rect, byte r, byte g, byte b, byte a, int thickness)
     {
@@ -657,13 +1048,37 @@ internal static class GltfMotionGuideRenderer
 
     private readonly record struct ProjectedPoint(double X, double Y);
 
+    private readonly record struct ScreenVertex(double X, double Y, double Depth, double NormalDepth, double NormalY);
+
+    private readonly record struct Vector4Int(int X, int Y, int Z, int W);
+
+    private sealed record ProjectedMeshVertex(ProjectedPoint Point, double Depth, double NormalDepth, double NormalY);
+
+    private sealed record ProjectedMeshPrimitive(
+        IReadOnlyList<ProjectedMeshVertex> Vertices,
+        int[] Indices,
+        int MaterialIndex);
+
     private sealed record ProjectedFrame(
         int Index,
         double TimeSeconds,
         IReadOnlyDictionary<string, ProjectedPoint> Points,
+        IReadOnlyList<ProjectedMeshPrimitive> Meshes,
         IReadOnlyList<string> Contacts);
 
     private sealed record SampledChannelData(float[] Input, float[] Output, string Interpolation);
+
+    private sealed record SkinnedMesh(
+        int[] JointNodeIndices,
+        Matrix4x4[] InverseBindMatrices,
+        IReadOnlyList<SkinnedMeshPrimitive> Primitives);
+
+    private sealed record SkinnedMeshPrimitive(
+        SkinnedMeshVertex[] Vertices,
+        int[] Indices,
+        int MaterialIndex);
+
+    private sealed record SkinnedMeshVertex(Vector3 Position, Vector3 Normal, Vector4Int Joints, Vector4 Weights);
 
     private readonly record struct NodePose(Vector3 Translation, Quaternion Rotation, Vector3 Scale, Matrix4x4? Matrix)
     {
@@ -753,6 +1168,8 @@ internal static class GltfMotionGuideRenderer
         public List<GltfBufferView> BufferViews { get; init; } = [];
         public List<GltfAccessor> Accessors { get; init; } = [];
         public List<GltfNode> Nodes { get; init; } = [];
+        public List<GltfMesh> Meshes { get; init; } = [];
+        public List<GltfSkin> Skins { get; init; } = [];
         public List<GltfAnimation> Animations { get; init; } = [];
     }
 
@@ -776,11 +1193,33 @@ internal static class GltfMotionGuideRenderer
     private sealed class GltfNode
     {
         public string? Name { get; init; }
+        public int? Mesh { get; init; }
+        public int? Skin { get; init; }
         public List<int>? Children { get; init; }
         public float[]? Translation { get; init; }
         public float[]? Rotation { get; init; }
         public float[]? Scale { get; init; }
         public float[]? Matrix { get; init; }
+    }
+
+    private sealed class GltfMesh
+    {
+        public string? Name { get; init; }
+        public List<GltfMeshPrimitive> Primitives { get; init; } = [];
+    }
+
+    private sealed class GltfMeshPrimitive
+    {
+        public Dictionary<string, int> Attributes { get; init; } = [];
+        public int? Indices { get; init; }
+        public int? Material { get; init; }
+    }
+
+    private sealed class GltfSkin
+    {
+        public List<int> Joints { get; init; } = [];
+        public int? InverseBindMatrices { get; init; }
+        public int? Skeleton { get; init; }
     }
 
     private sealed class GltfAnimation
@@ -818,6 +1257,7 @@ internal sealed record MotionGuideRenderResult(
 
 internal sealed record MotionGuideRenderMetadata(
     string Renderer,
+    string RenderStyle,
     string ClipId,
     string AnimationName,
     string SourcePackage,
@@ -832,4 +1272,12 @@ internal sealed record MotionGuideFrameSample(
     int FrameIndex,
     double TimeSeconds,
     IReadOnlyDictionary<string, Vector3> Joints,
+    IReadOnlyList<MotionGuideSkinnedPrimitive> Meshes,
     IReadOnlyList<string> Contacts);
+
+internal readonly record struct MotionGuideSkinnedVertex(Vector3 Position, Vector3 Normal);
+
+internal sealed record MotionGuideSkinnedPrimitive(
+    IReadOnlyList<MotionGuideSkinnedVertex> Vertices,
+    int[] Indices,
+    int MaterialIndex);

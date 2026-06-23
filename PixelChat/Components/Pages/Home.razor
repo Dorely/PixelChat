@@ -697,7 +697,7 @@ else
                                 <dt>Strategy</dt>
                                 <dd>@selectedRun.Strategy</dd>
                                 <dt>Guide renderer</dt>
-                                <dd>@($"{selectedRun.GuideRenderer}{(string.IsNullOrWhiteSpace(selectedRun.MotionClipId) ? "" : $" / {selectedRun.MotionClipId}")}")</dd>
+                                <dd>@($"{selectedRun.GuideRenderer}{(string.IsNullOrWhiteSpace(selectedRun.GuideRenderStyle) ? "" : $" / {selectedRun.GuideRenderStyle}")}{(string.IsNullOrWhiteSpace(selectedRun.MotionClipId) ? "" : $" / {selectedRun.MotionClipId}")}")</dd>
                                 @if (selectedRun.GuideCameraYawDegrees is double yaw)
                                 {
                                     <dt>Facing yaw</dt>

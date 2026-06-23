@@ -830,6 +830,7 @@ public sealed class AssistantToolRegistry(
             guide = new
             {
                 renderer = job.AnimationSpec.GuideRenderer ?? "sprite_guide_renderer",
+                renderStyle = job.AnimationSpec.GuideRenderStyle,
                 motionClipId = job.AnimationSpec.MotionClipId,
                 cameraYawDegrees = job.AnimationSpec.GuideCameraYawDegrees,
                 sourcePackage = job.AnimationSpec.GuideSourcePackage,

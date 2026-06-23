@@ -4979,6 +4979,7 @@ public sealed class ArtWorkflowService(
             spec?.Fps ?? 0,
             spec?.Loop ?? false,
             spec?.GuideRenderer ?? "sprite_guide_renderer",
+            spec?.GuideRenderStyle ?? string.Empty,
             spec?.MotionClipId ?? string.Empty,
             spec?.GuideCameraYawDegrees,
             spec?.GuideSourcePackage ?? string.Empty,

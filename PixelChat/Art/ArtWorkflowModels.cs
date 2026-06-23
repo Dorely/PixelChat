@@ -41,6 +41,7 @@ public sealed record AssetAnimationRunView(
     int Fps,
     bool Loop,
     string GuideRenderer,
+    string GuideRenderStyle,
     string MotionClipId,
     double? GuideCameraYawDegrees,
     string GuideSourcePackage,

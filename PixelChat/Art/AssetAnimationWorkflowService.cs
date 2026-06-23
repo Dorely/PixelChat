@@ -158,6 +158,7 @@ public sealed class AssetAnimationWorkflowService(
             {
                 Source = "asset-animation-guide",
                 Renderer = renderer,
+                RenderStyle = motionRender?.Metadata.RenderStyle,
                 AssetAnimationJobId = job.Id,
                 job.AnimationKind,
                 MotionClipId = motionRender?.Metadata.ClipId,
@@ -184,6 +185,7 @@ public sealed class AssetAnimationWorkflowService(
             {
                 Source = "asset-animation-diagnostic-guide",
                 Renderer = renderer,
+                RenderStyle = motionRender?.Metadata.RenderStyle,
                 AssetAnimationJobId = job.Id,
                 MotionClipId = motionRender?.Metadata.ClipId,
                 MotionClipSampleCount = motionRender?.Metadata.SampleCount,
@@ -201,6 +203,7 @@ public sealed class AssetAnimationWorkflowService(
             diagnosticGuideAssetId = diagnosticAsset.Id,
             canvas = $"{layout.CanvasWidth}x{layout.CanvasHeight}",
             renderer,
+            renderStyle = motionRender?.Metadata.RenderStyle,
             motionClipId = motionRender?.Metadata.ClipId,
             sourcePackage = motionRender?.Metadata.SourcePackage,
             sourceLicense = motionRender?.Metadata.SourceLicense,
@@ -686,6 +689,8 @@ public sealed class AssetAnimationWorkflowService(
                 clip.SourcePackage,
                 clip.SourceUrl,
                 clip.License,
+                clip.MeshNodeName,
+                clip.SkinIndex,
                 supportedAnimationKinds = clip.SupportedAnimationKinds,
                 supportedAssetTypes = clip.SupportedAssetTypes,
                 allowedSampleCounts = clip.AllowedSampleCounts,
@@ -746,6 +751,7 @@ public sealed class AssetAnimationWorkflowService(
                     guide = spec is null ? null : new
                     {
                         renderer = spec.GuideRenderer ?? "sprite_guide_renderer",
+                        renderStyle = spec.GuideRenderStyle,
                         motionClipId = spec.MotionClipId,
                         yaw = spec.GuideCameraYawDegrees,
                         sourcePackage = spec.GuideSourcePackage,
@@ -1131,6 +1137,7 @@ public sealed class AssetAnimationWorkflowService(
         return spec with
         {
             GuideRenderer = MotionClipCatalog.RendererId,
+            GuideRenderStyle = MotionClipCatalog.SkinnedMannequinRenderStyle,
             MotionClipId = clip.ClipId,
             GuideCameraYawDegrees = GltfMotionGuideRenderer.FacingToYawDegrees(spec.Facing),
             MotionValidationProfile = "humanoid_walk",
@@ -1339,6 +1346,7 @@ public sealed class AssetAnimationWorkflowService(
         guide = new
         {
             renderer = job.AnimationSpec.GuideRenderer ?? "sprite_guide_renderer",
+            renderStyle = job.AnimationSpec.GuideRenderStyle,
             motionClipId = job.AnimationSpec.MotionClipId,
             cameraYawDegrees = job.AnimationSpec.GuideCameraYawDegrees,
             sourcePackage = job.AnimationSpec.GuideSourcePackage,
@@ -1498,7 +1506,7 @@ public sealed class AssetAnimationWorkflowService(
     private static string BuildCandidatePrompt(AssetAnimationJob job, AnimationSpec spec, LayoutSpec layout)
     {
         var guideRole = MotionClipCatalog.IsExternalMotionSpec(spec)
-            ? $"Image 1 is a sampled real Quaternius glTF animation guide from clip {spec.MotionClipId}. It controls exact slot positions, frame order, root/pivot anchors, safe margins, sampled skeleton/capsule poses, foot contacts, and camera yaw. Do not reproduce guide marks."
+            ? $"Image 1 is a sampled real Quaternius glTF animation guide from clip {spec.MotionClipId}, rendered as a mannequin body in each sampled pose. It controls exact slot positions, frame order, root/pivot anchors, safe margins, humanoid body pose, foot contacts, and camera yaw. Do not reproduce guide marks."
             : "Image 1 controls exact slot positions, frame order, structure guide, root/pivot anchors, safe margins, and motion layout. Do not reproduce its guide marks.";
         var motionSource = MotionClipCatalog.IsExternalMotionSpec(spec)
             ? $"Motion source: {spec.MotionClipId} from {spec.GuideSourcePackage} ({spec.GuideSourceLicense}), sampled to {spec.FrameCount} frames at yaw {(spec.GuideCameraYawDegrees ?? 0d):0.#} degrees."

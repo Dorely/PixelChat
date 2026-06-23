@@ -59,7 +59,7 @@
 | `SpriteAnimationOptions.cs` | Configurable defaults for asset-animation cell size, FPS, candidate/repair budgets, and optional image-model snapshot pin. |
 | `SpriteMotionArchetypes.cs` | Static v1 motion/structure archetypes for units, towers, projectiles, and VFX. |
 | `MotionClipCatalog.cs` | Loads the vendored motion-clip manifest, resolves clip aliases/defaults, validates supported animation kinds, and exposes runtime asset paths. |
-| `GltfMotionGuideRenderer.cs` | Samples cataloged glTF/GLB animation channels, projects mapped humanoid joints by facing yaw, and renders clean/diagnostic sampled skeleton guides. |
+| `GltfMotionGuideRenderer.cs` | Samples cataloged glTF/GLB animation channels, CPU-skins the Quaternius mannequin mesh, projects by facing yaw, and renders clean/diagnostic motion guides. |
 | `SpriteGuideRenderer.cs` | Server-side renderer for model-facing structure/layout guides and diagnostic guide overlays. |
 | `SpriteChromaSelector.cs` | Palette-aware chroma-key selector for animation profiles. |
 | `SpriteFrameExtractor.cs` | Fixed-slot extractor/registrar that scales planned layout slots to actual candidate size, removes chroma, and assembles animation slots into a sprite sheet. |
