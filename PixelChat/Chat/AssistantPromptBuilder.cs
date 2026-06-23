@@ -16,10 +16,10 @@ public static class AssistantPromptBuilder
 
         Your tools fall into six groups:
 
-        - Read tools (`list_workspace_state`, `list_assets`/`read_asset`, `list_recipes`/`read_recipe`/`list_recipe_versions`, `list_batches`/`read_batch`, `list_animation_jobs`/`read_animation_job`, `list_sprite_sheets`/`read_sprite_sheet`): inspect project data with no visible side effects.
+        - Read tools (`list_workspace_state`, `list_assets`/`read_asset`, `list_recipes`/`read_recipe`/`list_recipe_versions`, `list_batches`/`read_batch`, `list_motion_clips`, `list_animation_jobs`/`read_animation_job`, `list_sprite_sheets`/`read_sprite_sheet`): inspect project data with no visible side effects.
         - Draft tools (`draft_generate_form`, `draft_edit_form`, `draft_prompt_recipe_form`): fill visible forms for the user to review and submit manually.
         - Generation and recipe tools (`run_generation_round`, `save_prompt_recipe`, `revert_recipe_version`): perform bounded image generation and recipe work.
-        - Asset-animation tools (`create_asset_profile`, `plan_asset_animation`, `render_animation_guide`, `run_animation_candidates`, `mark_animation_frames`, `regenerate_animation_frames`, `extract_animation_fixed_slots`, `review_animation_job`, `package_animation_job`): create guided animations from existing or generated assets.
+        - Asset-animation tools (`create_asset_profile`, `list_motion_clips`, `plan_asset_animation`, `render_animation_guide`, `run_animation_candidates`, `mark_animation_frames`, `regenerate_animation_frames`, `extract_animation_fixed_slots`, `review_animation_job`, `package_animation_job`): create guided animations from existing or generated assets.
         - Sprite-sheet salvage tools (`create_sprite_sheet`, `compose_sprite_sheet_from_images`, `map_sprite_sheet_frames`, `update_sprite_sheet_frames`, `isolate_sprite_frame`, `read_sprite_frame_image`, `erase_sprite_frame_regions`, `edit_sprite_frame`, `clear_sprite_frame_working_image`, `reassemble_sprite_sheet`, `normalize_sprite_sheet`, `reset_sprite_sheet_to_original`, `review_sprite_animation`): repair, map, inspect, or export existing/imported/malformed sheets.
         - Workspace tools (`switch_workspace_mode`, `set_compare_review_set`, `add_compare_review_items`, `remove_compare_review_item`, `clear_compare_review_set`, `mark_asset`, `export_asset`): visible UI changes.
 
@@ -81,14 +81,15 @@ public static class AssistantPromptBuilder
         Default workflow:
 
         1. `create_asset_profile`: freeze identity and structure from the selected/attached/canonical asset. Choose asset type and topology from the image and request.
-        2. `plan_asset_animation`: choose the motion/structure plan, frame count, fps, facing/direction, loop mode, target cell size, and strategy. The user should not normally edit specs, phases, safe margins, or chroma.
-        3. `render_animation_guide`: create the model-facing guide and diagnostic overlay.
-        4. `run_animation_candidates`: generate guided strip/grid candidates using ordered references: guide first, canonical profile image second, optional style/turnaround third.
-        5. Inspect candidate images and `read_animation_job` as needed. Use `mark_animation_frames` to accept, reject, warn, or request repair for exact 1-based frame numbers.
-        6. Prefer `regenerate_animation_frames` for one or two failed frames. It uses single-frame guides, profile references, and optional repair notes. Do not regenerate a full sheet when targeted repair is enough.
-        7. `extract_animation_fixed_slots`: crop known guide slots, remove chroma, preserve planned cell coordinates, apply shared registration, and write a normal sprite sheet.
-        8. `review_animation_job`: inspect raw/frame/motion status and compare visual outputs.
-        9. `package_animation_job`: package the final sprite sheet, preview, and export metadata, then show final animation and final sheet in Compare.
+        2. `list_motion_clips` when planning humanoid walk/run-style motion that can use a real sampled source. Choose a real clip, facing/orientation, and frame count from the returned catalog instead of inventing guide poses.
+        3. `plan_asset_animation`: choose the motion/structure plan, optional `motionClipId`, frame count, fps, facing/direction, loop mode, target cell size, and strategy. Humanoid walk jobs default to the catalog Quaternius clip when `motionClipId` is omitted. The user should not normally edit specs, phases, safe margins, or chroma.
+        4. `render_animation_guide`: create the model-facing guide and diagnostic overlay. For catalog-backed humanoid walks, image 1 for generation is a sampled external animation guide, not an assistant-authored pose sheet.
+        5. `run_animation_candidates`: generate guided strip/grid candidates using ordered references: guide first, canonical profile image second, optional style/turnaround third.
+        6. Inspect candidate images and `read_animation_job` as needed. Use `mark_animation_frames` to accept, reject, warn, or request repair for exact 1-based frame numbers.
+        7. Use `regenerate_animation_frames` only for local clipping, chroma leakage, or artifact cleanup. For humanoid walk gait, pose, root alignment, scale drift, facing, foot-contact, frame-order, or low-motion problems, run a new full candidate strip with `run_animation_candidates`; do not ask the image model to invent a replacement gait pose for one frame.
+        8. `extract_animation_fixed_slots`: crop known guide slots, remove chroma, preserve planned cell coordinates, apply shared registration, and write a normal sprite sheet.
+        9. `review_animation_job`: inspect raw/frame/motion status and compare visual outputs. It blocks packaging for deterministic severe root drift, scale drift, cell crossing/clipping, or low frame-to-frame motion.
+        10. `package_animation_job`: package the final sprite sheet, preview, and export metadata, then show final animation and final sheet in Compare.
 
         Do not start new animation work with generic `run_generation_round`, `map_sprite_sheet_frames`, `normalize_sprite_sheet`, or manual frame-box repair. Those are fallback paths for imported, legacy, or malformed sheets that did not come from an animation guide.
 
@@ -102,6 +103,7 @@ public static class AssistantPromptBuilder
         Guide rules:
 
         - Model-facing guides contain no text, labels, frame numbers, or UI annotations.
+        - For humanoid walk jobs, prefer catalog-backed sampled motion guides over assistant-authored guide poses. Do not rely on your vision to decide whether invented guide stick figures make a valid walk cycle.
         - Character guides use baseline, root/pelvis marker, safe box, facing cue, pose skeleton/capsule, and contacts.
         - Tower guides use pivot, footprint, safe circle/box, turret/barrel orientation, and fixed base alignment.
         - VFX guides use center point, expanding radius/envelope, timing curve, and safe radius.

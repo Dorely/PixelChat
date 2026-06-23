@@ -21,7 +21,8 @@ public sealed record PlanAssetAnimationRequest(
     int? Fps = null,
     string? RootMotion = null,
     string? PromptSummary = null,
-    string? TargetCellSize = null);
+    string? TargetCellSize = null,
+    string? MotionClipId = null);
 
 public sealed record RunAnimationCandidatesRequest(
     Guid AssetAnimationJobId,
@@ -108,7 +109,13 @@ public sealed record AnimationSpec(
     int TargetCellWidth,
     int TargetCellHeight,
     bool Loop,
-    IReadOnlyList<FrameSpec> Frames);
+    IReadOnlyList<FrameSpec> Frames,
+    string? GuideRenderer = null,
+    string? MotionClipId = null,
+    double? GuideCameraYawDegrees = null,
+    string? MotionValidationProfile = null,
+    string? GuideSourcePackage = null,
+    string? GuideSourceLicense = null);
 
 public sealed record FrameSpec(
     int Index,

@@ -589,6 +589,7 @@ else
                                 <span><strong>@($"{selectedRun.GenerationRoundsUsed}/{selectedRun.MaxGenerationRounds}")</strong><small>Budget</small></span>
                                 <span><strong>@($"{selectedRun.Columns}x{selectedRun.Rows}")</strong><small>Guide grid</small></span>
                                 <span><strong>@selectedRun.TargetCellSize</strong><small>Export cells</small></span>
+                                <span><strong>@(string.IsNullOrWhiteSpace(selectedRun.MotionClipId) ? selectedRun.GuideRenderer : selectedRun.MotionClipId)</strong><small>Guide source</small></span>
                             </div>
                         </div>
 
@@ -695,6 +696,18 @@ else
                                 <dd>@($"{selectedRun.ProfileLabel} / {selectedRun.AssetType} / {selectedRun.StructureType}")</dd>
                                 <dt>Strategy</dt>
                                 <dd>@selectedRun.Strategy</dd>
+                                <dt>Guide renderer</dt>
+                                <dd>@($"{selectedRun.GuideRenderer}{(string.IsNullOrWhiteSpace(selectedRun.MotionClipId) ? "" : $" / {selectedRun.MotionClipId}")}")</dd>
+                                @if (selectedRun.GuideCameraYawDegrees is double yaw)
+                                {
+                                    <dt>Facing yaw</dt>
+                                    <dd>@($"{selectedRun.AnimationKind} / {yaw:0.#} degrees")</dd>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(selectedRun.GuideSourcePackage))
+                                {
+                                    <dt>Motion source</dt>
+                                    <dd>@($"{selectedRun.GuideSourcePackage} / {selectedRun.GuideSourceLicense}")</dd>
+                                }
                                 <dt>Layout</dt>
                                 <dd>@($"{selectedRun.LayoutSize} guide, {selectedRun.TargetCellSize} target cells, {selectedRun.ChromaColor} chroma")</dd>
                                 <dt>Prompt summary</dt>

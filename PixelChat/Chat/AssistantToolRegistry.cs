@@ -163,10 +163,11 @@ public sealed class AssistantToolRegistry(
                 string? rootMotion = null,
                 string? promptSummary = null,
                 string? targetCellSize = null,
+                string? motionClipId = null,
                 CancellationToken cancellationToken = default) =>
-                PlanAssetAnimationAsync(projectId, assetProfileId, animationKind, facing, strategy, frameCount, fps, rootMotion, promptSummary, targetCellSize, cancellationToken),
+                PlanAssetAnimationAsync(projectId, assetProfileId, animationKind, facing, strategy, frameCount, fps, rootMotion, promptSummary, targetCellSize, motionClipId, cancellationToken),
             name: "plan_asset_animation",
-            description: "Compile the internal animation contract for a profile: motion/structure plan, frame specs, grid, slots, pivots, safe regions, chroma, and job budget. Use this before any new guided animation generation."),
+            description: "Compile the internal animation contract for a profile: motion/structure plan, optional catalog motion clip id, frame specs, grid, slots, pivots, safe regions, chroma, and job budget. Humanoid walk jobs default to the catalog Quaternius clip when motionClipId is omitted. Use this before any new guided animation generation."),
 
         AIFunctionFactory.Create(
             method: (Guid assetAnimationJobId, CancellationToken cancellationToken = default) =>
@@ -179,6 +180,12 @@ public sealed class AssistantToolRegistry(
                 RunAnimationCandidatesAsync(projectId, assetAnimationJobId, candidateCount, cancellationToken),
             name: "run_animation_candidates",
             description: "Generate guided strip/grid candidates for an animation job using ordered references: guide, canonical profile image, optional style reference. Uses the animation job budget, not the normal chat-turn round budget. The Runs tab is the visible monitoring surface; tool output stays concise."),
+
+        AIFunctionFactory.Create(
+            method: (CancellationToken cancellationToken = default) =>
+                assetAnimation.ListMotionClipsJsonAsync(cancellationToken),
+            name: "list_motion_clips",
+            description: "List available real motion clips that can drive sampled animation guides, including clip ids, source packages, licenses, supported animation kinds, and allowed sample counts. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (int? limit = null, CancellationToken cancellationToken = default) =>
@@ -202,7 +209,7 @@ public sealed class AssistantToolRegistry(
             method: (Guid assetAnimationJobId, int[] frameNumbers, string? prompt = null, CancellationToken cancellationToken = default) =>
                 RegenerateAnimationFramesAsync(projectId, assetAnimationJobId, frameNumbers, prompt, cancellationToken),
             name: "regenerate_animation_frames",
-            description: "Regenerate exact failed frame numbers using single-frame guides plus profile references. Prefer this over full-strip regeneration when one or two frames fail. Returns concise status and model-only repair images."),
+            description: "Regenerate exact failed frame numbers using single-frame guides plus profile/current-strip/profile references. Use only for local clipping, chroma leakage, or artifact cleanup. For gait, pose, root, scale, facing, foot-contact, frame-order, or low-motion failures, run a new full candidate strip instead. Returns concise status and model-only repair images."),
 
         AIFunctionFactory.Create(
             method: (Guid assetAnimationJobId, Guid? candidateId = null, CancellationToken cancellationToken = default) =>
@@ -717,6 +724,7 @@ public sealed class AssistantToolRegistry(
         string? rootMotion,
         string? promptSummary,
         string? targetCellSize,
+        string? motionClipId,
         CancellationToken cancellationToken)
     {
         var job = await assetAnimation.PlanAssetAnimationAsync(projectId, new PlanAssetAnimationRequest(
@@ -728,7 +736,8 @@ public sealed class AssistantToolRegistry(
             fps,
             rootMotion,
             promptSummary,
-            targetCellSize), cancellationToken);
+            targetCellSize,
+            motionClipId), cancellationToken);
         return CompactAnimationJobJson(job, "Animation plan compiled.");
     }
 
@@ -815,6 +824,14 @@ public sealed class AssistantToolRegistry(
                 job.AnimationSpec.FrameCount,
                 job.AnimationSpec.Fps,
                 targetCell = $"{job.AnimationSpec.TargetCellWidth}x{job.AnimationSpec.TargetCellHeight}",
+            },
+            guide = new
+            {
+                renderer = job.AnimationSpec.GuideRenderer ?? "sprite_guide_renderer",
+                motionClipId = job.AnimationSpec.MotionClipId,
+                cameraYawDegrees = job.AnimationSpec.GuideCameraYawDegrees,
+                sourcePackage = job.AnimationSpec.GuideSourcePackage,
+                sourceLicense = job.AnimationSpec.GuideSourceLicense,
             },
             layout = new
             {

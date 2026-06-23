@@ -24,7 +24,7 @@
 
 | File | Description |
 |------|-------------|
-| `PixelChat.csproj` | `net10.0` Blazor Web project with Electron.NET, EF Core SQLite, Microsoft.Extensions.AI, OpenAI SDK, runtime IDs, and warnings-as-errors. |
+| `PixelChat.csproj` | `net10.0` Blazor Web project with Electron.NET, EF Core SQLite, Microsoft.Extensions.AI, OpenAI SDK, SharpGLTF, SQLitePCLRaw bundle pin, runtime IDs, warnings-as-errors, and motion-clip content copying. |
 | `Program.cs` | App host setup: Electron mode detection/window launch, Blazor Interactive Server, DI wiring, asset-animation services, EF migrations, OAuth/media endpoints, and routing. |
 | `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OAuth redirect URI, SQLite, Blazor hub size, agent/tool limits, image-generation defaults, sprite-animation defaults, and local background-removal sidecar/model defaults. |
 | `Properties/launchSettings.json` | Local launch profiles for browser-hosted HTTP and Electron desktop mode on `localhost:1455`. |
@@ -58,6 +58,8 @@
 | `AssetAnimationContracts.cs` | Contracts for asset-animation profiles, jobs, specs, slots, frame status/provenance, typed failures, and repair actions. |
 | `SpriteAnimationOptions.cs` | Configurable defaults for asset-animation cell size, FPS, candidate/repair budgets, and optional image-model snapshot pin. |
 | `SpriteMotionArchetypes.cs` | Static v1 motion/structure archetypes for units, towers, projectiles, and VFX. |
+| `MotionClipCatalog.cs` | Loads the vendored motion-clip manifest, resolves clip aliases/defaults, validates supported animation kinds, and exposes runtime asset paths. |
+| `GltfMotionGuideRenderer.cs` | Samples cataloged glTF/GLB animation channels, projects mapped humanoid joints by facing yaw, and renders clean/diagnostic sampled skeleton guides. |
 | `SpriteGuideRenderer.cs` | Server-side renderer for model-facing structure/layout guides and diagnostic guide overlays. |
 | `SpriteChromaSelector.cs` | Palette-aware chroma-key selector for animation profiles. |
 | `SpriteFrameExtractor.cs` | Fixed-slot extractor/registrar that scales planned layout slots to actual candidate size, removes chroma, and assembles animation slots into a sprite sheet. |
@@ -230,3 +232,10 @@
 | `app.css` | App-wide CSS from the Blazor template with PixelChat layout adjustments. |
 | `favicon.png` | Site/app icon from the Blazor template. |
 | `lib/bootstrap/` | Vendored Bootstrap distribution used by first-slice UI. |
+
+### Assets/
+
+| File | Description |
+|------|-------------|
+| `MotionClips/manifest.json` | Catalog of vendored motion clips, aliases, supported animation kinds/frame counts, source/license metadata, and humanoid bone mappings. |
+| `MotionClips/Quaternius/UAL2/` | Minimal vendored CC0 Quaternius Universal Animation Library 2 subset: `UAL2_Standard.glb`, upstream license, and source/hash notes for sampled guide POC. |
