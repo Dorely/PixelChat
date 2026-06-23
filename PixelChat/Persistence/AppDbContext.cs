@@ -17,6 +17,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<AssetAnimationJob> AssetAnimationJobs => Set<AssetAnimationJob>();
     public DbSet<AssetAnimationCandidate> AssetAnimationCandidates => Set<AssetAnimationCandidate>();
     public DbSet<AssetAnimationFrameAttempt> AssetAnimationFrameAttempts => Set<AssetAnimationFrameAttempt>();
+    public DbSet<AssetAnimationEvent> AssetAnimationEvents => Set<AssetAnimationEvent>();
     public DbSet<BackgroundRemovalExportCache> BackgroundRemovalExportCaches => Set<BackgroundRemovalExportCache>();
     public DbSet<ExportStepCache> ExportStepCaches => Set<ExportStepCache>();
     public DbSet<GenerationBatch> GenerationBatches => Set<GenerationBatch>();
@@ -323,6 +324,24 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .WithMany()
                 .HasForeignKey(e => e.SourceAssetId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AssetAnimationEvent>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
+            entity.HasIndex(e => new { e.AssetAnimationJobId, e.CreatedAt });
+            entity.Property(e => e.Severity).HasDefaultValue("info");
+            entity.Property(e => e.PayloadJson).HasDefaultValue("{}");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.AssetAnimationEvents)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.AssetAnimationJob)
+                .WithMany(j => j.Events)
+                .HasForeignKey(e => e.AssetAnimationJobId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<PromptRecipe>(entity =>

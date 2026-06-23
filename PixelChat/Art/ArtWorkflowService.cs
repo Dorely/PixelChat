@@ -213,6 +213,35 @@ public sealed class ArtWorkflowService(
                 .OrderBy(item => item.SortOrder)
                 .ThenBy(item => item.CreatedAt)
                 .ToListAsync(cancellationToken);
+        var animationJobs = await db.AssetAnimationJobs
+            .AsNoTracking()
+            .Include(job => job.AssetProfile)
+            .Where(job => job.ProjectId == selected.Id)
+            .OrderByDescending(job => job.UpdatedAt)
+            .Take(40)
+            .ToListAsync(cancellationToken);
+        var animationJobIds = animationJobs.Select(job => job.Id).ToList();
+        var animationCandidates = new List<AssetAnimationCandidate>();
+        var animationAttempts = new List<AssetAnimationFrameAttempt>();
+        var animationEvents = new List<AssetAnimationEvent>();
+        if (animationJobIds.Count > 0)
+        {
+            animationCandidates = await db.AssetAnimationCandidates
+                .AsNoTracking()
+                .Where(candidate => candidate.ProjectId == selected.Id && animationJobIds.Contains(candidate.AssetAnimationJobId))
+                .OrderBy(candidate => candidate.CandidateIndex)
+                .ToListAsync(cancellationToken);
+            animationAttempts = await db.AssetAnimationFrameAttempts
+                .AsNoTracking()
+                .Where(attempt => attempt.ProjectId == selected.Id && animationJobIds.Contains(attempt.AssetAnimationJobId))
+                .ToListAsync(cancellationToken);
+            animationEvents = await db.AssetAnimationEvents
+                .AsNoTracking()
+                .Where(item => item.ProjectId == selected.Id && animationJobIds.Contains(item.AssetAnimationJobId))
+                .OrderByDescending(item => item.CreatedAt)
+                .Take(240)
+                .ToListAsync(cancellationToken);
+        }
 
         var currentRecipeVersions = await LoadCurrentRecipeVersionsAsync(selected.Id, recipes.Select(recipe => recipe.Id).ToList(), cancellationToken);
         var assetViews = assets.Select(AssetView).ToList();
@@ -226,6 +255,13 @@ public sealed class ArtWorkflowService(
         var spriteSheetViews = spriteSheets
             .Select(sheet => SpriteSheetViewFromListItems(sheet, spriteSheetFramesBySheet.GetValueOrDefault(sheet.Id, [])))
             .ToList();
+        var animationRunViews = animationJobs
+            .Select(job => AssetAnimationRunView(
+                job,
+                animationCandidates.Where(candidate => candidate.AssetAnimationJobId == job.Id).ToList(),
+                animationAttempts.Where(attempt => attempt.AssetAnimationJobId == job.Id).ToList(),
+                animationEvents.Where(item => item.AssetAnimationJobId == job.Id).Take(20).ToList()))
+            .ToList();
         var maskViews = masks.Select(MaskView).ToList();
         var attachmentViews = attachments.Select(AttachmentView).ToList();
 
@@ -235,6 +271,7 @@ public sealed class ArtWorkflowService(
             projects.Select(ProjectView).ToList(),
             assetViews,
             batchViews,
+            animationRunViews,
             recipeViews,
             spriteSheetViews,
             maskViews,
@@ -4890,6 +4927,93 @@ public sealed class ArtWorkflowService(
     private static ProjectView ProjectView(Project project) =>
         new(project.Id, project.Name, project.ActiveWorkspaceMode, project.ActiveBatchId, project.ActiveSpriteSheetId);
 
+    private static AssetAnimationRunView AssetAnimationRunView(
+        AssetAnimationJob job,
+        IReadOnlyList<AssetAnimationCandidate> candidates,
+        IReadOnlyList<AssetAnimationFrameAttempt> attempts,
+        IReadOnlyList<AssetAnimationEvent> events)
+    {
+        var spec = DeserializeAnimationSpecOrNull(job.AnimationSpecJson);
+        var layout = DeserializeLayoutSpecOrNull(job.LayoutSpecJson);
+        var statuses = DeserializeAnimationFrameStatuses(job.FrameStatusesJson);
+        if (statuses.Count == 0 && spec is not null)
+        {
+            statuses = spec.Frames
+                .Select(frame => new AssetAnimationFrameStatusView(frame.Index + 1, frame.Index, "planned", frame.PoseName, job.RecommendedAction))
+                .ToList();
+        }
+
+        var latestAttemptsByFrame = attempts
+            .Where(attempt => attempt.SourceAssetId is not null)
+            .GroupBy(attempt => attempt.FrameIndex)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(attempt => attempt.AttemptNumber).First());
+        var attemptCountsByFrame = attempts
+            .GroupBy(attempt => attempt.FrameIndex)
+            .ToDictionary(group => group.Key, group => group.Count());
+        var latestError = events
+            .Where(item => string.Equals(item.Severity, "error", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(item => item.CreatedAt)
+            .Select(item => item.Summary)
+            .FirstOrDefault() ?? string.Empty;
+        return new AssetAnimationRunView(
+            job.Id,
+            job.AssetProfileId,
+            job.AssetProfile.CanonicalAssetId,
+            job.AssetProfile.StyleAssetId,
+            job.AssetProfile.Label,
+            job.AssetProfile.AssetType,
+            job.AssetProfile.StructureType,
+            job.GuideAssetId,
+            job.DiagnosticGuideAssetId,
+            job.OutputSpriteSheetId,
+            job.SelectedCandidateId,
+            job.Status,
+            job.AnimationKind,
+            job.Strategy,
+            job.PromptSummary,
+            job.RecommendedAction,
+            job.MaxGenerationRounds,
+            job.GenerationRoundsUsed,
+            job.MaxRepairAttemptsPerFrame,
+            spec?.FrameCount ?? statuses.Count,
+            spec?.Fps ?? 0,
+            spec?.Loop ?? false,
+            spec is null ? "" : $"{spec.TargetCellWidth}x{spec.TargetCellHeight}",
+            layout is null ? "" : $"{layout.CanvasWidth}x{layout.CanvasHeight}",
+            layout?.Rows ?? 0,
+            layout?.Columns ?? 0,
+            layout?.BackgroundColor ?? job.AssetProfile.ChromaColor,
+            candidates.Select(candidate => new AssetAnimationRunCandidateView(
+                candidate.Id,
+                candidate.GenerationBatchId,
+                candidate.OutputAssetId,
+                candidate.CandidateIndex,
+                candidate.State,
+                candidate.RawQaStatus)).ToList(),
+            statuses.Select(status =>
+            {
+                latestAttemptsByFrame.TryGetValue(status.Index, out var attempt);
+                return new AssetAnimationRunFrameStatusView(
+                    status.FrameNumber,
+                    status.Index,
+                    status.Status,
+                    status.Reason,
+                    status.RecommendedAction,
+                    status.SourceAssetId ?? attempt?.SourceAssetId,
+                    attemptCountsByFrame.GetValueOrDefault(status.Index));
+            }).ToList(),
+            events.Select(item => new AssetAnimationRunEventView(
+                item.Id,
+                item.EventType,
+                item.Severity,
+                item.Summary,
+                item.PayloadJson,
+                item.CreatedAt)).ToList(),
+            latestError,
+            job.CreatedAt,
+            job.UpdatedAt);
+    }
+
     private static ArtAssetView AssetView(ArtAsset asset) =>
         AssetView(AssetListItem(asset));
 
@@ -5750,6 +5874,48 @@ public sealed class ArtWorkflowService(
         try
         {
             return JsonSerializer.Deserialize<List<string>>(value) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static AnimationSpec? DeserializeAnimationSpecOrNull(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize<AnimationSpec>(value, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static LayoutSpec? DeserializeLayoutSpecOrNull(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize<LayoutSpec>(value, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static List<AssetAnimationFrameStatusView> DeserializeAnimationFrameStatuses(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<AssetAnimationFrameStatusView>>(value, JsonOptions) ?? [];
         }
         catch (JsonException)
         {

@@ -178,13 +178,19 @@ public sealed class AssistantToolRegistry(
             method: (Guid assetAnimationJobId, int? candidateCount = null, CancellationToken cancellationToken = default) =>
                 RunAnimationCandidatesAsync(projectId, assetAnimationJobId, candidateCount, cancellationToken),
             name: "run_animation_candidates",
-            description: "Generate guided strip/grid candidates for an animation job using ordered references: guide, canonical profile image, optional style reference. Uses the animation job budget, not the normal chat-turn round budget. Returns concise candidate/frame status JSON and model-only candidate images."),
+            description: "Generate guided strip/grid candidates for an animation job using ordered references: guide, canonical profile image, optional style reference. Uses the animation job budget, not the normal chat-turn round budget. The Runs tab is the visible monitoring surface; tool output stays concise."),
+
+        AIFunctionFactory.Create(
+            method: (int? limit = null, CancellationToken cancellationToken = default) =>
+                assetAnimation.ListAnimationJobsJsonAsync(projectId, limit, cancellationToken),
+            name: "list_animation_jobs",
+            description: "List recent asset-animation jobs with compact IDs, status, budget, latest error, and next action. Use this to recover job IDs without reading full specs. This is read-only and omits image bytes."),
 
         AIFunctionFactory.Create(
             method: (Guid assetAnimationJobId, CancellationToken cancellationToken = default) =>
                 assetAnimation.ReadAnimationJobJsonAsync(projectId, assetAnimationJobId, cancellationToken),
             name: "read_animation_job",
-            description: "Read concise state for one asset-animation job: status, IDs, budget, frame statuses, candidates, and next recommended action. This is read-only and intentionally omits full specs, prompts, and image bytes."),
+            description: "Read concise state for one asset-animation job: status, IDs, budget, frame statuses, candidates, latest error, and next recommended action. This is read-only and intentionally omits full specs, prompts, and image bytes."),
 
         AIFunctionFactory.Create(
             method: (Guid assetAnimationJobId, AnimationFrameMark[] frames, CancellationToken cancellationToken = default) =>
@@ -261,7 +267,7 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (string mode) => SwitchWorkspaceModeAsync(projectId, mode),
             name: "switch_workspace_mode",
-            description: "Switch the visible workspace mode. Allowed values: generate, compare, edit, sprites, recipes, assets."),
+            description: "Switch the visible workspace mode. Allowed values: generate, runs, compare, edit, sprites, recipes, assets."),
 
         AIFunctionFactory.Create(
             method: (string? title = null, string? summary = null, CompareReviewToolItem[]? items = null, bool switchToCompare = true, CancellationToken cancellationToken = default) =>
@@ -799,6 +805,7 @@ public sealed class AssistantToolRegistry(
             diagnosticGuideAssetId = job.DiagnosticGuideAssetId,
             outputSpriteSheetId = job.OutputSpriteSheetId,
             selectedCandidateId = job.SelectedCandidateId,
+            latestError = job.LatestError,
             animation = new
             {
                 job.AnimationSpec.AssetType,
@@ -1645,6 +1652,7 @@ public sealed class AssistantToolRegistry(
         NormalizeToken(mode) switch
         {
             "generate" => WorkspaceMode.Generate,
+            "runs" or "run" or "jobs" or "job" => WorkspaceMode.Runs,
             "compare" => WorkspaceMode.Compare,
             "edit" => WorkspaceMode.Edit,
             "sprites" or "sprite" or "spritesheet" or "spritesheets" => WorkspaceMode.Sprites,

@@ -43,6 +43,7 @@ public sealed record WorkspaceVisibleStateSnapshot(
     WorkspaceGenerateVisibleState? Generate,
     WorkspaceEditVisibleState? Edit,
     WorkspaceCompareVisibleState? Compare,
+    WorkspaceRunsVisibleState? Runs,
     WorkspaceSpritesVisibleState? Sprites,
     WorkspaceRecipeVisibleState? Recipes,
     WorkspaceAssetsVisibleState? Assets,
@@ -76,6 +77,22 @@ public sealed record WorkspaceCompareVisibleState(
     WorkspaceBatchSummary? ActiveBatch,
     IReadOnlyList<WorkspaceBatchSummary> VisibleRecentBatches,
     WorkspaceCompareReviewSetSummary? ReviewSet);
+
+public sealed record WorkspaceRunsVisibleState(
+    Guid? SelectedJobId,
+    int AnimationJobCount,
+    int RecentBatchCount,
+    IReadOnlyList<WorkspaceRunSummary> RecentRuns);
+
+public sealed record WorkspaceRunSummary(
+    Guid Id,
+    string Status,
+    string AnimationKind,
+    string RecommendedAction,
+    int GenerationRoundsUsed,
+    int MaxGenerationRounds,
+    string LatestError,
+    DateTime UpdatedAt);
 
 public sealed record WorkspaceSpritesVisibleState(
     WorkspaceSpriteSheetSummary? ActiveSpriteSheet);

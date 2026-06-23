@@ -42,7 +42,7 @@
 |------|-------------|
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, autonomous generation budget wiring/model-only outputs, Shellmate-style tool streaming/execution, form drafts, and transcript replay. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, throttles streaming state notifications, commits finished turns, and applies workspace/form side effects. |
-| `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact all-tab records including recipe example/version context used by assistant tools. |
+| `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact all-tab records including Runs/job summaries and recipe example/version context used by assistant tools. |
 | `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt: autonomous iteration, asset-animation default workflow, sprite-sheet salvage playbook, frame-cleanup discipline, recipes, and export guidance. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records, form draft payloads, animation frame mark payloads, and per-turn autonomous generation budget state. |
 | `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipe saves/versioning, autonomous generation rounds, asset-animation tools, sprite salvage tools, Compare review sets, favorites, and exports. |
@@ -53,15 +53,16 @@
 | File | Description |
 |------|-------------|
 | `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Compare review sets, sprite sheets/reviews/compose/normalize with animation metadata, exports, recipes, masks, import, crop, and edits. |
-| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, lazy media URLs/binaries, sprite-sheet composition/provenance/animation metadata, per-frame isolation/reassembly, recipe-versioned generation/edit, recipe management, and assistant tools. |
+| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, Runs operator views, lazy media URLs/binaries, sprite-sheet composition/provenance/animation metadata, per-frame isolation/reassembly, recipe-versioned generation/edit, recipe management, and assistant tools. |
 | `IAssetAnimationWorkflowService.cs` / `AssetAnimationWorkflowService.cs` | Agent-owned asset-animation pipeline for profiles, motion plans, guide rendering, candidate generation, frame marking/repair, fixed-slot extraction, review, and packaging. |
 | `AssetAnimationContracts.cs` | Contracts for asset-animation profiles, jobs, specs, slots, frame status/provenance, typed failures, and repair actions. |
 | `SpriteAnimationOptions.cs` | Configurable defaults for asset-animation cell size, FPS, candidate/repair budgets, and optional image-model snapshot pin. |
 | `SpriteMotionArchetypes.cs` | Static v1 motion/structure archetypes for units, towers, projectiles, and VFX. |
 | `SpriteGuideRenderer.cs` | Server-side renderer for model-facing structure/layout guides and diagnostic guide overlays. |
 | `SpriteChromaSelector.cs` | Palette-aware chroma-key selector for animation profiles. |
-| `SpriteFrameExtractor.cs` | Fixed-slot extractor/registrar that removes chroma and assembles planned animation slots into a sprite sheet. |
-| `SpriteQualityInspector.cs` | Deterministic raw-candidate and extracted-frame QA for asset-animation jobs. |
+| `SpriteFrameExtractor.cs` | Fixed-slot extractor/registrar that scales planned layout slots to actual candidate size, removes chroma, and assembles animation slots into a sprite sheet. |
+| `SpriteLayoutScaler.cs` | Shared helper that maps planned animation layout slots, safe regions, and root anchors onto actual provider output dimensions. |
+| `SpriteQualityInspector.cs` | Deterministic raw-candidate and extracted-frame QA for asset-animation jobs using the same scaled layout geometry as extraction. |
 | `SpriteRepairRouter.cs` | Maps typed sprite-animation failures to compact repair actions. |
 | `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, masks, and sprite-frame previews. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
@@ -111,7 +112,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, chat attachments, shared image preview modal, review-set Compare UI, recipe-aware Generate/Edit, Sprites/Recipes/Assets tabs, canvas helpers, and exports. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, chat attachments, Runs operator view, shared image preview modal, review-set Compare UI, recipe-aware Generate/Edit, Sprites/Recipes/Assets tabs, canvas helpers, and exports. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, thinking modes, defaults, API-key updates, and child model rows. |
@@ -151,10 +152,10 @@
 
 | File | Description |
 |------|-------------|
-| `Project.cs` | EF entity for art workbench projects, active batch/sprite sheet/workspace mode, and owned assets, sprite sheets, recipes, and asset-animation jobs. |
+| `Project.cs` | EF entity for art workbench projects, active batch/sprite sheet/workspace mode, and owned assets, sprite sheets, recipes, and asset-animation runs/events. |
 | `ArtAsset.cs` | EF entity for imported, generated, edited, cropped, sprite-guide, and sprite-sheet image BLOBs plus lineage, source recipe version, favorite flag, prompt, and metadata. |
 | `AssetProfile.cs` | EF entity for frozen animation identity/structure profiles, palette/chroma choices, and required/forbidden feature metadata. |
-| `AssetAnimationJob.cs` | EF entities for animation jobs, generated candidates, and per-frame attempts/repair provenance. |
+| `AssetAnimationJob.cs` | EF entities for animation jobs, generated candidates, per-frame attempts/repair provenance, and compact run timeline events. |
 | `BackgroundRemovalExportCache.cs` | EF entity for cached Local AI export PNGs keyed by source asset bytes, model, rembg version, and processing options. |
 | `ExportStepCache.cs` | EF entity for persisted applied export-step PNGs per source asset and source image hash. |
 | `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, output errors, lineage, status, and stamped recipe version. |
@@ -204,6 +205,7 @@
 | `20260622190840_CompareReviewSet.cs` / `.Designer.cs` | EF migration adding project-scoped Compare review sets and ordered review items. |
 | `20260622205745_SpriteFrameSourceImageProvenance.cs` / `.Designer.cs` | EF migration adding nullable per-frame source image provenance columns and a SetNull asset reference. |
 | `20260623044535_AssetAnimationPipeline.cs` / `.Designer.cs` | EF migration adding asset-animation profiles/jobs/candidates/frame attempts and sprite-frame animation metadata. |
+| `20260623175122_AssetAnimationRunEvents.cs` / `.Designer.cs` | EF migration adding asset-animation timeline events for the Runs operator view. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

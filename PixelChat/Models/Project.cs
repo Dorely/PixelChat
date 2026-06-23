@@ -16,6 +16,7 @@ public class Project
     public ICollection<AssetAnimationJob> AssetAnimationJobs { get; set; } = [];
     public ICollection<AssetAnimationCandidate> AssetAnimationCandidates { get; set; } = [];
     public ICollection<AssetAnimationFrameAttempt> AssetAnimationFrameAttempts { get; set; } = [];
+    public ICollection<AssetAnimationEvent> AssetAnimationEvents { get; set; } = [];
     public ICollection<PromptRecipe> PromptRecipes { get; set; } = [];
     public ICollection<PromptRecipeVersion> PromptRecipeVersions { get; set; } = [];
     public ICollection<SpriteSheetDefinition> SpriteSheets { get; set; } = [];
@@ -29,6 +30,7 @@ public class Project
 public enum WorkspaceMode
 {
     Generate,
+    Runs,
     Compare,
     Edit,
     Sprites,

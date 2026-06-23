@@ -7,6 +7,7 @@ public sealed record WorkbenchView(
     IReadOnlyList<ProjectView> Projects,
     IReadOnlyList<ArtAssetView> Assets,
     IReadOnlyList<GenerationBatchView> Batches,
+    IReadOnlyList<AssetAnimationRunView> AnimationRuns,
     IReadOnlyList<PromptRecipeView> Recipes,
     IReadOnlyList<SpriteSheetDefinitionView> SpriteSheets,
     IReadOnlyList<ImageMaskView> Masks,
@@ -15,6 +16,66 @@ public sealed record WorkbenchView(
     GenerationBatchView? ActiveBatch,
     SpriteSheetDefinitionView? ActiveSpriteSheet,
     ProviderStatusView ImageProviderStatus);
+
+public sealed record AssetAnimationRunView(
+    Guid Id,
+    Guid AssetProfileId,
+    Guid CanonicalAssetId,
+    Guid? StyleAssetId,
+    string ProfileLabel,
+    string AssetType,
+    string StructureType,
+    Guid? GuideAssetId,
+    Guid? DiagnosticGuideAssetId,
+    Guid? OutputSpriteSheetId,
+    Guid? SelectedCandidateId,
+    string Status,
+    string AnimationKind,
+    string Strategy,
+    string PromptSummary,
+    string RecommendedAction,
+    int MaxGenerationRounds,
+    int GenerationRoundsUsed,
+    int MaxRepairAttemptsPerFrame,
+    int FrameCount,
+    int Fps,
+    bool Loop,
+    string TargetCellSize,
+    string LayoutSize,
+    int Rows,
+    int Columns,
+    string ChromaColor,
+    IReadOnlyList<AssetAnimationRunCandidateView> Candidates,
+    IReadOnlyList<AssetAnimationRunFrameStatusView> Frames,
+    IReadOnlyList<AssetAnimationRunEventView> Events,
+    string LatestError,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
+public sealed record AssetAnimationRunCandidateView(
+    Guid Id,
+    Guid? GenerationBatchId,
+    Guid? OutputAssetId,
+    int CandidateIndex,
+    string State,
+    string RawQaStatus);
+
+public sealed record AssetAnimationRunFrameStatusView(
+    int FrameNumber,
+    int Index,
+    string Status,
+    string Reason,
+    string RecommendedAction,
+    Guid? SourceAssetId,
+    int AttemptCount);
+
+public sealed record AssetAnimationRunEventView(
+    Guid Id,
+    string EventType,
+    string Severity,
+    string Summary,
+    string PayloadJson,
+    DateTime CreatedAt);
 
 public sealed record ProjectView(
     Guid Id,

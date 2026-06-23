@@ -78,6 +78,7 @@ public sealed record AssetAnimationJobView(
     LayoutSpec LayoutSpec,
     IReadOnlyList<AssetAnimationCandidateView> Candidates,
     IReadOnlyList<AssetAnimationFrameStatusView> FrameStatuses,
+    string LatestError,
     DateTime UpdatedAt);
 
 public sealed record AssetAnimationCandidateView(

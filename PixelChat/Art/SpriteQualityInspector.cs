@@ -11,12 +11,13 @@ internal static class SpriteQualityInspector
                 .ToList();
         }
 
+        var sourceLayout = SpriteLayoutScaler.ScaleToSource(layout, width, height).Layout;
         var background = SpriteSheetImageAnalyzer.ResolveBackground(rgba, width, height, layout.BackgroundColor);
         var results = new List<AssetAnimationFrameStatusView>();
-        foreach (var slot in layout.Slots)
+        foreach (var slot in sourceLayout.Slots)
         {
             var failures = new List<SpriteFailure>();
-            if (slot.Rect.X + slot.Rect.Width > width || slot.Rect.Y + slot.Rect.Height > height)
+            if (slot.Rect.Width < 4 || slot.Rect.Height < 4 || slot.Rect.X + slot.Rect.Width > width || slot.Rect.Y + slot.Rect.Height > height)
             {
                 failures.Add(SpriteFailure.MissingFrame);
             }

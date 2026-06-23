@@ -40,6 +40,7 @@ public class AssetAnimationJob
 
     public ICollection<AssetAnimationCandidate> Candidates { get; set; } = [];
     public ICollection<AssetAnimationFrameAttempt> FrameAttempts { get; set; } = [];
+    public ICollection<AssetAnimationEvent> Events { get; set; } = [];
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
@@ -102,4 +103,22 @@ public class AssetAnimationFrameAttempt
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
+public class AssetAnimationEvent
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public Guid ProjectId { get; set; }
+    public Project Project { get; set; } = null!;
+
+    public Guid AssetAnimationJobId { get; set; }
+    public AssetAnimationJob AssetAnimationJob { get; set; } = null!;
+
+    public string EventType { get; set; } = string.Empty;
+    public string Severity { get; set; } = "info";
+    public string Summary { get; set; } = string.Empty;
+    public string PayloadJson { get; set; } = "{}";
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

@@ -11,16 +11,19 @@ internal static class SpriteFrameExtractor
         if (!SpriteSheetPngCodec.TryReadRgba(sourceData, out var sourceWidth, out var sourceHeight, out var sourceRgba))
             throw new InvalidOperationException("Animation candidate must be a PNG image.");
 
-        if (sourceWidth < layout.CanvasWidth || sourceHeight < layout.CanvasHeight)
-            throw new InvalidOperationException("Animation candidate is smaller than the planned layout canvas.");
+        var scaledLayout = SpriteLayoutScaler.ScaleToSource(layout, sourceWidth, sourceHeight);
+        var sourceLayout = scaledLayout.Layout;
 
         var (cr, cg, cb) = ParseHex(layout.BackgroundColor);
         var frames = new List<SpriteFixedSlotFrame>();
         var outputWidth = checked(layout.Columns * layout.TargetCellWidth);
         var outputHeight = checked(layout.Rows * layout.TargetCellHeight);
         var outputRgba = NewTransparent(outputWidth, outputHeight);
-        foreach (var slot in layout.Slots.OrderBy(slot => slot.FrameIndex))
+        foreach (var slot in sourceLayout.Slots.OrderBy(slot => slot.FrameIndex))
         {
+            if (slot.Rect.Width < 4 || slot.Rect.Height < 4)
+                throw new InvalidOperationException($"Frame {slot.FrameIndex + 1} slot is too small after scaling.");
+
             var frameSpec = animation.Frames.First(frame => frame.Index == slot.FrameIndex);
             byte[] cell;
             SpriteSheetRect sourceRect;
@@ -29,14 +32,14 @@ internal static class SpriteFrameExtractor
             {
                 if (!SpriteSheetPngCodec.TryReadRgba(replacement.Data, out var replacementWidth, out var replacementHeight, out var replacementRgba))
                     throw new InvalidOperationException($"Replacement frame {slot.FrameIndex + 1} must be a PNG image.");
-                cell = ResizeToCell(RemoveChroma(replacementRgba, replacementWidth, replacementHeight, cr, cg, cb), replacementWidth, replacementHeight, layout.TargetCellWidth, layout.TargetCellHeight);
+                cell = FitToCell(RemoveChroma(replacementRgba, replacementWidth, replacementHeight, cr, cg, cb), replacementWidth, replacementHeight, layout.TargetCellWidth, layout.TargetCellHeight);
                 sourceRect = replacement.SourceRect;
                 sourceAssetId = replacement.SourceAssetId;
             }
             else
             {
                 var cropped = Crop(sourceRgba, sourceWidth, sourceHeight, slot.Rect);
-                cell = ResizeToCell(RemoveChroma(cropped, slot.Rect.Width, slot.Rect.Height, cr, cg, cb), slot.Rect.Width, slot.Rect.Height, layout.TargetCellWidth, layout.TargetCellHeight);
+                cell = FitToCell(RemoveChroma(cropped, slot.Rect.Width, slot.Rect.Height, cr, cg, cb), slot.Rect.Width, slot.Rect.Height, layout.TargetCellWidth, layout.TargetCellHeight);
                 sourceRect = slot.Rect;
             }
 
@@ -61,7 +64,12 @@ internal static class SpriteFrameExtractor
                 frameSpec));
         }
 
-        return new SpriteFixedSlotExtractionResult(outputWidth, outputHeight, SpriteSheetPngCodec.EncodeRgba(outputWidth, outputHeight, outputRgba), frames);
+        return new SpriteFixedSlotExtractionResult(
+            outputWidth,
+            outputHeight,
+            SpriteSheetPngCodec.EncodeRgba(outputWidth, outputHeight, outputRgba),
+            frames,
+            scaledLayout.Warning);
     }
 
     private static byte[] RemoveChroma(byte[] rgba, int width, int height, byte cr, byte cg, byte cb)
@@ -82,17 +90,25 @@ internal static class SpriteFrameExtractor
         return output;
     }
 
-    private static byte[] ResizeToCell(byte[] rgba, int width, int height, int targetWidth, int targetHeight)
+    private static byte[] FitToCell(byte[] rgba, int width, int height, int targetWidth, int targetHeight)
     {
         var output = NewTransparent(targetWidth, targetHeight);
-        for (var y = 0; y < targetHeight; y++)
+        if (width <= 0 || height <= 0 || targetWidth <= 0 || targetHeight <= 0)
+            return output;
+
+        var scale = Math.Min(targetWidth / (double)width, targetHeight / (double)height);
+        var drawWidth = Math.Max(1, (int)Math.Round(width * scale));
+        var drawHeight = Math.Max(1, (int)Math.Round(height * scale));
+        var destX = (targetWidth - drawWidth) / 2;
+        var destY = (targetHeight - drawHeight) / 2;
+        for (var y = 0; y < drawHeight; y++)
         {
-            var sourceY = Math.Min(height - 1, (int)Math.Floor(y * (height / (double)targetHeight)));
-            for (var x = 0; x < targetWidth; x++)
+            var sourceY = Math.Min(height - 1, (int)Math.Floor(y / scale));
+            for (var x = 0; x < drawWidth; x++)
             {
-                var sourceX = Math.Min(width - 1, (int)Math.Floor(x * (width / (double)targetWidth)));
+                var sourceX = Math.Min(width - 1, (int)Math.Floor(x / scale));
                 var sourceOffset = ((sourceY * width) + sourceX) * 4;
-                var targetOffset = ((y * targetWidth) + x) * 4;
+                var targetOffset = (((destY + y) * targetWidth) + destX + x) * 4;
                 output[targetOffset] = rgba[sourceOffset];
                 output[targetOffset + 1] = rgba[sourceOffset + 1];
                 output[targetOffset + 2] = rgba[sourceOffset + 2];
@@ -176,7 +192,8 @@ internal sealed record SpriteFixedSlotExtractionResult(
     int Width,
     int Height,
     byte[] PngData,
-    IReadOnlyList<SpriteFixedSlotFrame> Frames);
+    IReadOnlyList<SpriteFixedSlotFrame> Frames,
+    string LayoutWarning = "");
 
 internal sealed record SpriteFixedSlotFrame(
     int Index,

@@ -11,5 +11,6 @@ public interface IAssetAnimationWorkflowService
     Task<AssetAnimationJobView> ExtractAnimationFixedSlotsAsync(Guid projectId, ExtractAnimationFixedSlotsRequest request, CancellationToken cancellationToken = default);
     Task<AssetAnimationJobView> ReviewAnimationJobAsync(Guid projectId, Guid assetAnimationJobId, CancellationToken cancellationToken = default);
     Task<AssetAnimationJobView> PackageAnimationJobAsync(Guid projectId, Guid assetAnimationJobId, CancellationToken cancellationToken = default);
+    Task<string> ListAnimationJobsJsonAsync(Guid projectId, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadAnimationJobJsonAsync(Guid projectId, Guid assetAnimationJobId, CancellationToken cancellationToken = default);
 }

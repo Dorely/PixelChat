@@ -105,6 +105,16 @@ public sealed class AssetAnimationWorkflowService(
             UpdatedAt = now,
         };
         await db.AssetAnimationJobs.AddAsync(job, cancellationToken);
+        await AddEventAsync(projectId, job.Id, "planned", "info", "Animation plan compiled.", new
+        {
+            job.AnimationKind,
+            spec.FrameCount,
+            spec.Fps,
+            layout.Rows,
+            layout.Columns,
+            canvas = $"{layout.CanvasWidth}x{layout.CanvasHeight}",
+        }, cancellationToken);
+        await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return await LoadJobViewAsync(projectId, job.Id, cancellationToken);
     }
@@ -159,6 +169,13 @@ public sealed class AssetAnimationWorkflowService(
         job.Status = "guides_ready";
         job.RecommendedAction = "run_animation_candidates";
         job.UpdatedAt = now;
+        await AddEventAsync(projectId, job.Id, "guide_rendered", "info", "Guide and diagnostic guide rendered.", new
+        {
+            guideAssetId = guideAsset.Id,
+            diagnosticGuideAssetId = diagnosticAsset.Id,
+            canvas = $"{layout.CanvasWidth}x{layout.CanvasHeight}",
+        }, cancellationToken);
+        await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return await LoadJobViewAsync(projectId, job.Id, cancellationToken);
     }
@@ -198,6 +215,13 @@ public sealed class AssetAnimationWorkflowService(
         job.Status = "generating";
         job.RecommendedAction = "wait_for_candidates";
         job.UpdatedAt = DateTime.UtcNow;
+        await AddEventAsync(projectId, job.Id, "candidate_batch_started", "info", "Candidate batch started.", new
+        {
+            batchId = batch.Id,
+            count,
+            requestedSize = $"{layout.CanvasWidth}x{layout.CanvasHeight}",
+        }, cancellationToken);
+        await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
 
         await imageRuntime.WaitForBatchCompletionAsync(batch.Id, TimeSpan.FromSeconds(Math.Max(60, imageOptions.Value.RequestTimeoutSeconds)), cancellationToken);
@@ -213,6 +237,8 @@ public sealed class AssetAnimationWorkflowService(
         {
             var frameStatuses = SpriteQualityInspector.InspectRawCandidate(asset.Data, layout);
             var rawStatus = frameStatuses.Any(frame => frame.Status is "reject" or "repair_requested") ? "warning" : "pass";
+            var dimensions = ActualDimensions(asset);
+            var scaledLayout = SpriteLayoutScaler.ScaleToSource(layout, dimensions.Width, dimensions.Height);
             candidates.Add(new AssetAnimationCandidate
             {
                 ProjectId = projectId,
@@ -224,6 +250,15 @@ public sealed class AssetAnimationWorkflowService(
                 RawQaStatus = rawStatus,
                 RawQaSummaryJson = JsonSerializer.Serialize(frameStatuses, JsonOptions),
             });
+            await AddEventAsync(projectId, job.Id, "candidate_completed", scaledLayout.Scaled ? "warning" : "info", scaledLayout.Scaled ? scaledLayout.Warning : "Candidate completed.", new
+            {
+                assetId = asset.Id,
+                batchId = batch.Id,
+                candidateIndex = existingCandidateCount + index,
+                rawStatus,
+                actualSize = $"{dimensions.Width}x{dimensions.Height}",
+                requestedSize = $"{layout.CanvasWidth}x{layout.CanvasHeight}",
+            }, cancellationToken);
         }
 
         if (candidates.Count > 0)
@@ -238,9 +273,20 @@ public sealed class AssetAnimationWorkflowService(
         {
             job.Status = "repair_required";
             job.RecommendedAction = "run_animation_candidates";
+            await AddEventAsync(projectId, job.Id, "candidate_batch_failed", "error", "Candidate batch completed without usable outputs.", new
+            {
+                batchId = batch.Id,
+            }, cancellationToken);
         }
 
         job.UpdatedAt = DateTime.UtcNow;
+        await AddEventAsync(projectId, job.Id, "raw_qa", candidates.Count == 0 ? "error" : "info", candidates.Count == 0 ? "No candidate outputs available." : "Raw candidate QA recorded.", new
+        {
+            candidateCount = candidates.Count,
+            selectedCandidateId = job.SelectedCandidateId,
+            next = job.RecommendedAction,
+        }, cancellationToken);
+        await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return await LoadJobViewAsync(projectId, job.Id, cancellationToken);
     }
@@ -273,6 +319,12 @@ public sealed class AssetAnimationWorkflowService(
                 FailureReason = Clean(frame.Reason),
                 RepairHistoryJson = JsonSerializer.Serialize(new[] { Clean(frame.Reason) }, JsonOptions),
             }, cancellationToken);
+            await AddEventAsync(projectId, job.Id, "frame_marked", "info", $"Frame {index + 1} marked {NormalizeFrameStatus(frame.Status)}.", new
+            {
+                frameNumber = index + 1,
+                status = NormalizeFrameStatus(frame.Status),
+                reason = Clean(frame.Reason),
+            }, cancellationToken);
         }
 
         var statuses = existing.Values.OrderBy(status => status.Index).ToList();
@@ -280,6 +332,7 @@ public sealed class AssetAnimationWorkflowService(
         job.Status = statuses.Any(status => status.Status == "repair_requested") ? "repair_required" : "frame_qa";
         job.RecommendedAction = statuses.Any(status => status.Status == "repair_requested") ? "regenerate_animation_frames" : "extract_animation_fixed_slots";
         job.UpdatedAt = DateTime.UtcNow;
+        await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return await LoadJobViewAsync(projectId, job.Id, cancellationToken);
     }
@@ -329,6 +382,12 @@ public sealed class AssetAnimationWorkflowService(
                     FrameNumber = frameNumber,
                 });
             await db.ArtAssets.AddAsync(guideAsset, cancellationToken);
+            await AddEventAsync(projectId, job.Id, "repair_guide_rendered", "info", $"Frame {frameNumber} repair guide rendered.", new
+            {
+                frameNumber,
+                guideAssetId = guideAsset.Id,
+            }, cancellationToken);
+            await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
 
             var references = new List<Guid> { guideAsset.Id, job.AssetProfile.CanonicalAssetId };
@@ -345,6 +404,15 @@ public sealed class AssetAnimationWorkflowService(
                 ParentBatchId: null,
                 ImageModel: PreferredAnimationModel()), cancellationToken);
             job.GenerationRoundsUsed++;
+            job.Status = "generating";
+            job.RecommendedAction = "wait_for_frame_repair";
+            job.UpdatedAt = DateTime.UtcNow;
+            await AddEventAsync(projectId, job.Id, "repair_batch_started", "info", $"Frame {frameNumber} repair generation started.", new
+            {
+                frameNumber,
+                batchId = batch.Id,
+                requestedSize = $"{singleLayout.CanvasWidth}x{singleLayout.CanvasHeight}",
+            }, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             await imageRuntime.WaitForBatchCompletionAsync(batch.Id, TimeSpan.FromSeconds(Math.Max(60, imageOptions.Value.RequestTimeoutSeconds)), cancellationToken);
             var output = await db.ArtAssets
@@ -352,7 +420,14 @@ public sealed class AssetAnimationWorkflowService(
                 .OrderBy(asset => asset.CreatedAt)
                 .FirstOrDefaultAsync(cancellationToken);
             if (output is null)
+            {
+                await AddEventAsync(projectId, job.Id, "repair_batch_failed", "error", $"Frame {frameNumber} repair generation produced no output.", new
+                {
+                    frameNumber,
+                    batchId = batch.Id,
+                }, cancellationToken);
                 continue;
+            }
             repairedAssets[frameNumber - 1] = output.Id;
 
             var attemptNumber = await NextAttemptNumberAsync(projectId, job.Id, frameNumber - 1, cancellationToken);
@@ -374,23 +449,45 @@ public sealed class AssetAnimationWorkflowService(
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             }, cancellationToken);
+            await AddEventAsync(projectId, job.Id, "repair_frame_generated", "info", $"Frame {frameNumber} repair output saved.", new
+            {
+                frameNumber,
+                assetId = output.Id,
+                batchId = batch.Id,
+                actualSize = $"{output.Width ?? singleLayout.CanvasWidth}x{output.Height ?? singleLayout.CanvasHeight}",
+            }, cancellationToken);
         }
 
         var statuses = ReadFrameStatuses(job)
-            .Select(status => frames.Contains(status.FrameNumber)
-                ? status with
+            .Select(status =>
+            {
+                if (!frames.Contains(status.FrameNumber))
+                    return status;
+                if (repairedAssets.TryGetValue(status.Index, out var sourceAssetId))
                 {
-                    Status = "repair_generated",
-                    Reason = "single-frame regeneration available",
-                    RecommendedAction = "extract_animation_fixed_slots",
-                    SourceAssetId = repairedAssets.TryGetValue(status.Index, out var sourceAssetId) ? sourceAssetId : null
+                    return status with
+                    {
+                        Status = "repair_generated",
+                        Reason = "single-frame regeneration available",
+                        RecommendedAction = "extract_animation_fixed_slots",
+                        SourceAssetId = sourceAssetId,
+                    };
                 }
-                : status)
+
+                return status with
+                {
+                    Status = "repair_requested",
+                    Reason = "single-frame regeneration did not produce an output",
+                    RecommendedAction = "regenerate_animation_frames",
+                    SourceAssetId = null,
+                };
+            })
             .ToList();
         job.FrameStatusesJson = JsonSerializer.Serialize(statuses, JsonOptions);
         job.Status = "repair_required";
         job.RecommendedAction = "extract_animation_fixed_slots";
         job.UpdatedAt = DateTime.UtcNow;
+        await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return await LoadJobViewAsync(projectId, job.Id, cancellationToken);
     }
@@ -412,7 +509,38 @@ public sealed class AssetAnimationWorkflowService(
         var spec = ReadAnimationSpec(job);
         var layout = ReadLayoutSpec(job);
         var overrides = await LoadFrameOverridesAsync(projectId, job.Id, cancellationToken);
-        var extraction = SpriteFrameExtractor.Extract(source.Data, layout, spec, overrides);
+        SpriteFixedSlotExtractionResult extraction;
+        try
+        {
+            extraction = SpriteFrameExtractor.Extract(source.Data, layout, spec, overrides);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            var failedStatuses = spec.Frames
+                .Select(frame => new AssetAnimationFrameStatusView(
+                    frame.Index + 1,
+                    frame.Index,
+                    "repair_requested",
+                    $"extraction failed: {ex.Message}",
+                    "run_animation_candidates"))
+                .ToList();
+            job.SelectedCandidateId = candidate.Id;
+            job.FrameQaSummaryJson = JsonSerializer.Serialize(failedStatuses, JsonOptions);
+            job.FrameStatusesJson = JsonSerializer.Serialize(failedStatuses, JsonOptions);
+            job.Status = "repair_required";
+            job.RecommendedAction = "run_animation_candidates";
+            job.UpdatedAt = DateTime.UtcNow;
+            await AddEventAsync(projectId, job.Id, "extraction_failed", "error", ex.Message, new
+            {
+                candidateId = candidate.Id,
+                outputAssetId,
+                actualSize = $"{source.Width ?? 0}x{source.Height ?? 0}",
+                plannedSize = $"{layout.CanvasWidth}x{layout.CanvasHeight}",
+            }, cancellationToken);
+            await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+            return await LoadJobViewAsync(projectId, job.Id, cancellationToken);
+        }
         var sheet = await SaveFixedSlotSpriteSheetAsync(projectId, job, candidate, source, extraction, cancellationToken);
         var statuses = SpriteQualityInspector.InspectExtracted(extraction);
         job.OutputSpriteSheetId = sheet.Id;
@@ -422,6 +550,13 @@ public sealed class AssetAnimationWorkflowService(
         job.Status = statuses.Any(status => status.Status == "repair_requested") ? "repair_required" : "motion_qa";
         job.RecommendedAction = statuses.Any(status => status.Status == "repair_requested") ? "regenerate_animation_frames" : "review_animation_job";
         job.UpdatedAt = DateTime.UtcNow;
+        await AddEventAsync(projectId, job.Id, "extraction_completed", string.IsNullOrWhiteSpace(extraction.LayoutWarning) ? "info" : "warning", string.IsNullOrWhiteSpace(extraction.LayoutWarning) ? "Fixed-slot extraction completed." : extraction.LayoutWarning, new
+        {
+            candidateId = candidate.Id,
+            outputSpriteSheetId = sheet.Id,
+            frameCount = extraction.Frames.Count,
+        }, cancellationToken);
+        await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return await LoadJobViewAsync(projectId, job.Id, cancellationToken);
     }
@@ -445,6 +580,12 @@ public sealed class AssetAnimationWorkflowService(
             outputSpriteSheetId = job.OutputSpriteSheetId,
         }, JsonOptions);
         job.UpdatedAt = DateTime.UtcNow;
+        await AddEventAsync(projectId, job.Id, "motion_qa", "info", "Motion review recorded.", new
+        {
+            job.OutputSpriteSheetId,
+            next = job.RecommendedAction,
+        }, cancellationToken);
+        await SetProjectModeAsync(projectId, WorkspaceMode.Runs, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return await LoadJobViewAsync(projectId, job.Id, cancellationToken);
     }
@@ -466,8 +607,68 @@ public sealed class AssetAnimationWorkflowService(
         job.Status = "packaged";
         job.RecommendedAction = "done";
         job.UpdatedAt = DateTime.UtcNow;
+        await AddEventAsync(projectId, job.Id, "package_completed", "info", "Animation packaged for review.", new
+        {
+            job.OutputSpriteSheetId,
+        }, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return await LoadJobViewAsync(projectId, job.Id, cancellationToken);
+    }
+
+    public async Task<string> ListAnimationJobsJsonAsync(Guid projectId, int? limit = null, CancellationToken cancellationToken = default)
+    {
+        var take = Math.Clamp(limit ?? 12, 1, 50);
+        var jobs = await db.AssetAnimationJobs
+            .AsNoTracking()
+            .Where(job => job.ProjectId == projectId)
+            .OrderByDescending(job => job.UpdatedAt)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+        var jobIds = jobs.Select(job => job.Id).ToList();
+        var latestErrors = new Dictionary<Guid, string>();
+        if (jobIds.Count > 0)
+        {
+            var errorEvents = await db.AssetAnimationEvents
+                .AsNoTracking()
+                .Where(item => item.ProjectId == projectId && jobIds.Contains(item.AssetAnimationJobId) && item.Severity == "error")
+                .OrderByDescending(item => item.CreatedAt)
+                .Select(item => new { item.AssetAnimationJobId, item.Summary })
+                .ToListAsync(cancellationToken);
+            latestErrors = errorEvents
+                .GroupBy(item => item.AssetAnimationJobId)
+                .ToDictionary(group => group.Key, group => group.First().Summary);
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            jobs = jobs.Select(job =>
+            {
+                var spec = TryReadAnimationSpec(job);
+                var layout = TryReadLayoutSpec(job);
+                return new
+                {
+                    jobId = job.Id,
+                    profileId = job.AssetProfileId,
+                    job.Status,
+                    job.AnimationKind,
+                    job.Strategy,
+                    job.RecommendedAction,
+                    job.SelectedCandidateId,
+                    job.OutputSpriteSheetId,
+                    budget = new
+                    {
+                        used = job.GenerationRoundsUsed,
+                        max = job.MaxGenerationRounds,
+                        remaining = Math.Max(0, job.MaxGenerationRounds - job.GenerationRoundsUsed),
+                    },
+                    frameCount = spec?.FrameCount ?? 0,
+                    fps = spec?.Fps ?? 0,
+                    layout = layout is null ? "" : $"{layout.Columns}x{layout.Rows} {layout.CanvasWidth}x{layout.CanvasHeight}",
+                    latestError = latestErrors.GetValueOrDefault(job.Id, string.Empty),
+                    job.UpdatedAt,
+                };
+            }),
+        }, JsonOptions);
     }
 
     public async Task<string> ReadAnimationJobJsonAsync(Guid projectId, Guid assetAnimationJobId, CancellationToken cancellationToken = default)
@@ -571,7 +772,9 @@ public sealed class AssetAnimationWorkflowService(
                 PivotY = layout.TargetCellHeight * 4 / 5,
                 SourceAnimationJobId = job.Id,
                 SourceAnimationCandidateId = candidate.Id,
-                AppliedScale = layout.TargetCellWidth / (double)Math.Max(1, layout.GuideCellWidth),
+                AppliedScale = Math.Min(
+                    layout.TargetCellWidth / (double)Math.Max(1, layout.GuideCellWidth),
+                    layout.TargetCellHeight / (double)Math.Max(1, layout.GuideCellHeight)),
                 QaStatus = "pending",
                 RepairHistoryJson = "[]",
                 CreatedAt = now,
@@ -593,7 +796,7 @@ public sealed class AssetAnimationWorkflowService(
         }), JsonOptions);
         var project = await db.Projects.FirstAsync(project => project.Id == projectId, cancellationToken);
         project.ActiveSpriteSheetId = definition.Id;
-        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+        project.ActiveWorkspaceMode = WorkspaceMode.Runs;
         project.UpdatedAt = now;
         await db.SaveChangesAsync(cancellationToken);
         return definition;
@@ -695,39 +898,52 @@ public sealed class AssetAnimationWorkflowService(
 
     private static LayoutSpec BuildLayout(AnimationSpec spec, string chromaColor)
     {
-        var (columns, rows, guideCell) = spec.FrameCount switch
+        var (columns, rows, canvasWidth, canvasHeight) = spec.FrameCount switch
         {
-            <= 1 => (1, 1, 768),
-            2 => (2, 1, 768),
-            <= 4 => (2, 2, 768),
-            <= 6 => (3, 2, 768),
-            _ => (4, (int)Math.Ceiling(spec.FrameCount / 4d), 512),
+            <= 1 => (1, 1, 1024, 1024),
+            2 => (2, 1, 1536, 1024),
+            <= 4 => (2, 2, 1024, 1024),
+            <= 6 => (3, 2, 1536, 1024),
+            <= 8 => (4, 2, 1536, 1024),
+            <= 12 => (4, 3, 1536, 1024),
+            _ => (4, 4, 1536, 1024),
         };
-        var canvasWidth = columns * guideCell;
-        var canvasHeight = rows * guideCell;
+        var guideCellWidth = Math.Max(1, canvasWidth / columns);
+        var guideCellHeight = Math.Max(1, canvasHeight / rows);
         var slots = Enumerable.Range(0, spec.FrameCount)
             .Select(index =>
             {
                 var row = index / columns;
                 var col = index % columns;
-                var rect = new SpriteSheetRect(col * guideCell, row * guideCell, guideCell, guideCell);
-                var margin = Math.Max(24, guideCell / 12);
-                var safe = new SpriteSheetRect(rect.X + margin, rect.Y + margin, guideCell - (margin * 2), guideCell - (margin * 2));
-                var baseline = rect.Y + guideCell * 5 / 6;
-                var root = new SpriteSheetPoint(rect.X + guideCell / 2, baseline);
+                var rect = CellRectForGrid(index, columns, rows, canvasWidth, canvasHeight);
+                var margin = Math.Max(16, Math.Min(rect.Width, rect.Height) / 10);
+                var safe = new SpriteSheetRect(rect.X + margin, rect.Y + margin, Math.Max(1, rect.Width - (margin * 2)), Math.Max(1, rect.Height - (margin * 2)));
+                var baseline = rect.Y + rect.Height * 5 / 6;
+                var root = new SpriteSheetPoint(rect.X + rect.Width / 2, baseline);
                 return new SlotSpec(index, rect, root, baseline, safe);
             })
             .ToList();
-        return new LayoutSpec(canvasWidth, canvasHeight, rows, columns, guideCell, guideCell, spec.TargetCellWidth, spec.TargetCellHeight, chromaColor, slots);
+        return new LayoutSpec(canvasWidth, canvasHeight, rows, columns, guideCellWidth, guideCellHeight, spec.TargetCellWidth, spec.TargetCellHeight, chromaColor, slots);
     }
 
     private static LayoutSpec BuildSingleFrameLayout(AnimationSpec originalSpec, LayoutSpec originalLayout, FrameSpec frame)
     {
-        const int cell = 768;
-        var safe = new SpriteSheetRect(64, 64, cell - 128, cell - 128);
+        const int cell = 1024;
+        var safe = new SpriteSheetRect(96, 96, cell - 192, cell - 192);
         var root = new SpriteSheetPoint(cell / 2, cell * 5 / 6);
         var slot = new SlotSpec(0, new SpriteSheetRect(0, 0, cell, cell), root, root.Y, safe);
         return new LayoutSpec(cell, cell, 1, 1, cell, cell, originalSpec.TargetCellWidth, originalSpec.TargetCellHeight, originalLayout.BackgroundColor, [slot]);
+    }
+
+    private static SpriteSheetRect CellRectForGrid(int index, int columns, int rows, int canvasWidth, int canvasHeight)
+    {
+        var row = index / columns;
+        var col = index % columns;
+        var x0 = col * canvasWidth / columns;
+        var x1 = (col + 1) * canvasWidth / columns;
+        var y0 = row * canvasHeight / rows;
+        var y1 = (row + 1) * canvasHeight / rows;
+        return new SpriteSheetRect(x0, y0, Math.Max(1, x1 - x0), Math.Max(1, y1 - y0));
     }
 
     private async Task<AssetAnimationJob> LoadJobEntityAsync(Guid projectId, Guid id, bool includeProfile, CancellationToken cancellationToken)
@@ -757,6 +973,12 @@ public sealed class AssetAnimationWorkflowService(
                 candidate.State,
                 candidate.RawQaStatus))
             .ToListAsync(cancellationToken);
+        var latestError = await db.AssetAnimationEvents
+            .AsNoTracking()
+            .Where(item => item.ProjectId == projectId && item.AssetAnimationJobId == job.Id && item.Severity == "error")
+            .OrderByDescending(item => item.CreatedAt)
+            .Select(item => item.Summary)
+            .FirstOrDefaultAsync(cancellationToken) ?? string.Empty;
         return new AssetAnimationJobView(
             job.Id,
             job.AssetProfileId,
@@ -776,6 +998,7 @@ public sealed class AssetAnimationWorkflowService(
             ReadLayoutSpec(job),
             candidates,
             ReadFrameStatuses(job),
+            latestError,
             job.UpdatedAt);
     }
 
@@ -798,6 +1021,7 @@ public sealed class AssetAnimationWorkflowService(
         diagnosticGuideAssetId = job.DiagnosticGuideAssetId,
         outputSpriteSheetId = job.OutputSpriteSheetId,
         selectedCandidateId = job.SelectedCandidateId,
+        latestError = job.LatestError,
         animation = new
         {
             job.AnimationSpec.AssetType,
@@ -826,6 +1050,51 @@ public sealed class AssetAnimationWorkflowService(
         frames = job.FrameStatuses,
     };
 
+    private async Task AddEventAsync(
+        Guid projectId,
+        Guid jobId,
+        string eventType,
+        string severity,
+        string summary,
+        object? payload,
+        CancellationToken cancellationToken)
+    {
+        var cleanSeverity = NormalizeToken(severity, "info");
+        if (cleanSeverity is not ("info" or "warning" or "error"))
+            cleanSeverity = "info";
+        await db.AssetAnimationEvents.AddAsync(new AssetAnimationEvent
+        {
+            ProjectId = projectId,
+            AssetAnimationJobId = jobId,
+            EventType = NormalizeToken(eventType, "event"),
+            Severity = cleanSeverity,
+            Summary = TrimForEvent(Clean(summary), 260),
+            PayloadJson = payload is null ? "{}" : JsonSerializer.Serialize(payload, JsonOptions),
+            CreatedAt = DateTime.UtcNow,
+        }, cancellationToken);
+    }
+
+    private async Task SetProjectModeAsync(Guid projectId, WorkspaceMode mode, CancellationToken cancellationToken)
+    {
+        var project = await db.Projects.FirstAsync(project => project.Id == projectId, cancellationToken);
+        project.ActiveWorkspaceMode = mode;
+        project.UpdatedAt = DateTime.UtcNow;
+    }
+
+    private static (int Width, int Height) ActualDimensions(ArtAsset asset)
+    {
+        if (asset.Width is > 0 && asset.Height is > 0)
+            return (asset.Width.Value, asset.Height.Value);
+        var (width, height) = ImageMetadataReader.TryReadSize(asset.Data, asset.ContentType);
+        return (Math.Max(1, width ?? 1), Math.Max(1, height ?? 1));
+    }
+
+    private static string TrimForEvent(string value, int maxLength)
+    {
+        var cleaned = value.Trim();
+        return cleaned.Length <= maxLength ? cleaned : cleaned[..maxLength].TrimEnd();
+    }
+
     private static AssetProfileView ToProfileView(AssetProfile profile) =>
         new(
             profile.Id,
@@ -848,6 +1117,30 @@ public sealed class AssetAnimationWorkflowService(
     private static LayoutSpec ReadLayoutSpec(AssetAnimationJob job) =>
         JsonSerializer.Deserialize<LayoutSpec>(job.LayoutSpecJson, JsonOptions)
         ?? throw new InvalidOperationException("Layout spec is invalid.");
+
+    private static AnimationSpec? TryReadAnimationSpec(AssetAnimationJob job)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<AnimationSpec>(job.AnimationSpecJson, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static LayoutSpec? TryReadLayoutSpec(AssetAnimationJob job)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<LayoutSpec>(job.LayoutSpecJson, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     private static List<AssetAnimationFrameStatusView> ReadFrameStatuses(AssetAnimationJob job)
     {
