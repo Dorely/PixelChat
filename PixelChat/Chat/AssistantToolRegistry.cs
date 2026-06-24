@@ -10,7 +10,6 @@ namespace PixelChat.Chat;
 
 public sealed class AssistantToolRegistry(
     IArtWorkflowService workflow,
-    IAssetAnimationWorkflowService assetAnimation,
     IWorkspaceVisibleStateStore visibleState,
     IImageGenerationRuntime imageRuntime,
     IOptions<AgentOptions> agentOptions)
@@ -34,25 +33,20 @@ public sealed class AssistantToolRegistry(
         "reset_sprite_sheet_to_original",
         "run_generation_round",
         "save_prompt_recipe",
+        "save_animation_recipe",
         "revert_recipe_version",
+        "generate_sprite_sheet_candidates",
         "create_sprite_sheet",
         "compose_sprite_sheet_from_images",
         "map_sprite_sheet_frames",
+        "detect_sprite_frame_boxes",
         "review_sprite_animation",
+        "split_sprite_sheet_frames",
         "isolate_sprite_frame",
         "erase_sprite_frame_regions",
         "edit_sprite_frame",
         "clear_sprite_frame_working_image",
         "reassemble_sprite_sheet",
-        "create_asset_profile",
-        "plan_asset_animation",
-        "render_animation_guide",
-        "run_animation_candidates",
-        "mark_animation_frames",
-        "regenerate_animation_frames",
-        "extract_animation_fixed_slots",
-        "review_animation_job",
-        "package_animation_job",
     };
 
     public IList<AITool> Build(Guid projectId, AssistantTurnGenerationBudget budget) =>
@@ -85,6 +79,17 @@ public sealed class AssistantToolRegistry(
             description: "Read a saved prompt recipe's full reusable guide, durable rules, avoid rules, notes, preferred defaults, current version, and single example image id. This is read-only."),
 
         AIFunctionFactory.Create(
+            method: (string? query = null, int? limit = null) =>
+                workflow.ListAnimationRecipesJsonAsync(projectId, query, limit),
+            name: "list_animation_recipes",
+            description: "List compact saved animation recipes for reusable motion, guide, frame layout, anchor, prompt scaffold, timing, and export defaults. Animation recipes are independent of art style."),
+
+        AIFunctionFactory.Create(
+            method: (Guid recipeId) => workflow.ReadAnimationRecipeJsonAsync(projectId, recipeId),
+            name: "read_animation_recipe",
+            description: "Read one animation recipe's guide asset id, animation kind, facing, frame order, expected boxes, anchor strategy, prompt scaffold, timing, export defaults, notes, and primary successful example. This is read-only."),
+
+        AIFunctionFactory.Create(
             method: (Guid? recipeId,
                 string name,
                 string promptTemplate,
@@ -104,6 +109,34 @@ public sealed class AssistantToolRegistry(
             method: (Guid recipeId) => workflow.ListPromptRecipeVersionsJsonAsync(projectId, recipeId),
             name: "list_recipe_versions",
             description: "List the append-only version history for a saved prompt recipe. This is read-only."),
+
+        AIFunctionFactory.Create(
+            method: (Guid recipeId) => workflow.ListAnimationRecipeVersionsJsonAsync(projectId, recipeId),
+            name: "list_animation_recipe_versions",
+            description: "List the append-only version history for a saved animation recipe. This is read-only."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid? recipeId,
+                string name,
+                string animationKind,
+                string promptScaffold,
+                string changeSummary,
+                string? facing = null,
+                int frameCount = 0,
+                int[]? frameOrder = null,
+                int fps = 8,
+                bool loop = true,
+                Guid? guideAssetId = null,
+                SpriteSheetRect[]? expectedFrameBoxes = null,
+                string? anchorStrategy = null,
+                string? exportDefaultsJson = null,
+                string? notes = null,
+                Guid? primaryExampleSpriteSheetId = null,
+                CancellationToken cancellationToken = default) =>
+                SaveAnimationRecipeToolAsync(projectId, recipeId, name, animationKind, promptScaffold, changeSummary, facing, frameCount, frameOrder, fps, loop, guideAssetId, expectedFrameBoxes, anchorStrategy, exportDefaultsJson, notes, primaryExampleSpriteSheetId, cancellationToken),
+            name: "save_animation_recipe",
+            description: "Create or update a durable animation recipe for reusable motion/layout work. Include generic guide/layout guidance, expected frame boxes if known, frame order, fps/loop, anchor strategy, prompt scaffold, export defaults, notes, and a primary successful sprite-sheet example when available. Do not put art style rules here unless the recipe is intentionally style-specific. Always provide changeSummary."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId, int version, CancellationToken cancellationToken = default) =>
@@ -135,104 +168,26 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 RunGenerationRoundAsync(projectId, budget, specificRequest, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId, recipeId, cancellationToken),
             name: "run_generation_round",
-            description: "Run one generic autonomous generation or edit round and wait for completion. Do not use this as the first path for new animation requests such as walk cycles, tower rotations, projectiles, or explosions; use the asset-animation tools instead. For recipe tests, first save the recipe revision and pass recipeId. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
+            description: "Run one generic autonomous generation or edit round and wait for completion. Use for starter assets, art recipe tests, focused variations, and non-sheet image edits. For recipe tests, first save the art recipe revision and pass recipeId. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
 
         AIFunctionFactory.Create(
             method: (
-                Guid canonicalAssetId,
-                Guid? styleAssetId = null,
-                string? label = null,
-                string? assetType = null,
-                string? structureType = null,
-                string[]? requiredFeatures = null,
-                string[]? forbiddenChanges = null,
-                bool frozen = true,
+                string prompt,
+                Guid[]? referenceAssetIds = null,
+                Guid? artRecipeId = null,
+                string? negativePrompt = null,
+                string? size = null,
+                string? background = null,
+                int count = 2,
                 CancellationToken cancellationToken = default) =>
-                CreateAssetProfileAsync(projectId, canonicalAssetId, styleAssetId, label, assetType, structureType, requiredFeatures, forbiddenChanges, frozen, cancellationToken),
-            name: "create_asset_profile",
-            description: "Create a frozen asset profile from an existing canonical image before starting a new animation job. Use this for units, towers, projectiles, VFX, and prop-state animations. Returns concise profile metadata including selected chroma color; no image bytes."),
-
-        AIFunctionFactory.Create(
-            method: (
-                Guid assetProfileId,
-                string animationKind,
-                string? facing = null,
-                string? strategy = null,
-                int? frameCount = null,
-                int? fps = null,
-                string? rootMotion = null,
-                string? promptSummary = null,
-                string? targetCellSize = null,
-                string? motionClipId = null,
-                CancellationToken cancellationToken = default) =>
-                PlanAssetAnimationAsync(projectId, assetProfileId, animationKind, facing, strategy, frameCount, fps, rootMotion, promptSummary, targetCellSize, motionClipId, cancellationToken),
-            name: "plan_asset_animation",
-            description: "Compile the internal animation contract for a profile: motion/structure plan, optional catalog motion clip id, frame specs, grid, slots, pivots, safe regions, chroma, and job budget. Humanoid walk jobs default to the catalog Quaternius clip when motionClipId is omitted. Use this before any new guided animation generation."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetAnimationJobId, CancellationToken cancellationToken = default) =>
-                RenderAnimationGuideAsync(projectId, assetAnimationJobId, cancellationToken),
-            name: "render_animation_guide",
-            description: "Render the model-facing structure/layout guide for an animation job. Guides contain no text labels and are returned as model-only images after the tool result. Use before candidate generation."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetAnimationJobId, int? candidateCount = null, CancellationToken cancellationToken = default) =>
-                RunAnimationCandidatesAsync(projectId, assetAnimationJobId, candidateCount, cancellationToken),
-            name: "run_animation_candidates",
-            description: "Generate guided strip/grid candidates for an animation job using ordered references: guide, canonical profile image, optional style reference. Uses the animation job budget, not the normal chat-turn round budget. The Runs tab is the visible monitoring surface; tool output stays concise."),
-
-        AIFunctionFactory.Create(
-            method: (CancellationToken cancellationToken = default) =>
-                assetAnimation.ListMotionClipsJsonAsync(cancellationToken),
-            name: "list_motion_clips",
-            description: "List available real motion clips that can drive sampled animation guides, including clip ids, source packages, licenses, supported animation kinds, and allowed sample counts. This is read-only."),
-
-        AIFunctionFactory.Create(
-            method: (int? limit = null, CancellationToken cancellationToken = default) =>
-                assetAnimation.ListAnimationJobsJsonAsync(projectId, limit, cancellationToken),
-            name: "list_animation_jobs",
-            description: "List recent asset-animation jobs with compact IDs, status, budget, latest error, and next action. Use this to recover job IDs without reading full specs. This is read-only and omits image bytes."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetAnimationJobId, CancellationToken cancellationToken = default) =>
-                assetAnimation.ReadAnimationJobJsonAsync(projectId, assetAnimationJobId, cancellationToken),
-            name: "read_animation_job",
-            description: "Read concise state for one asset-animation job: status, IDs, budget, frame statuses, candidates, latest error, and next recommended action. This is read-only and intentionally omits full specs, prompts, and image bytes."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetAnimationJobId, AnimationFrameMark[] frames, CancellationToken cancellationToken = default) =>
-                MarkAnimationFramesAsync(projectId, assetAnimationJobId, frames, cancellationToken),
-            name: "mark_animation_frames",
-            description: "Mark exact animation frames as accepted, rejected, warning, or repair_requested with short typed reasons. Raw QA repair_requested frames cannot be accepted unless forceAccept is true; use forceAccept only when deliberately accepting known clipping/slot warnings. Keep reasons concise because they feed repair routing."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetAnimationJobId, int[] frameNumbers, string? prompt = null, CancellationToken cancellationToken = default) =>
-                RegenerateAnimationFramesAsync(projectId, assetAnimationJobId, frameNumbers, prompt, cancellationToken),
-            name: "regenerate_animation_frames",
-            description: "Regenerate exact failed frame numbers using single-frame guides plus profile/current-strip/profile references. Use only for local clipping, chroma leakage, or artifact cleanup. For gait, pose, root, scale, facing, foot-contact, frame-order, or low-motion failures, run a new full candidate strip instead. Returns concise status and model-only repair images."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetAnimationJobId, Guid? candidateId = null, CancellationToken cancellationToken = default) =>
-                ExtractAnimationFixedSlotsAsync(projectId, assetAnimationJobId, candidateId, cancellationToken),
-            name: "extract_animation_fixed_slots",
-            description: "Extract accepted scaffolded animation frames by known layout slots into a normal sprite sheet. This preserves slot geometry and avoids per-frame alpha-bounds scaling. Returns concise frame QA and model-only sheet/preview feedback."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetAnimationJobId, CancellationToken cancellationToken = default) =>
-                ReviewAnimationJobAsync(projectId, assetAnimationJobId, cancellationToken),
-            name: "review_animation_job",
-            description: "Run/record motion review for a fixed-slot animation job after extraction. Returns concise next action and model-only animation review images when a sprite sheet exists."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetAnimationJobId, CancellationToken cancellationToken = default) =>
-                PackageAnimationJobAsync(projectId, assetAnimationJobId, cancellationToken),
-            name: "package_animation_job",
-            description: "Finalize an extracted animation job, put the animation and sheet in Compare, and leave the packaged sheet in the Sprites workspace for export."),
+                RunGenerationRoundAsync(projectId, budget, prompt, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, cancellationToken),
+            name: "generate_sprite_sheet_candidates",
+            description: "Generate sprite-sheet candidates from a concise prompt plus ordered references. Put guide/layout references first, starter/reference sprite second, and optional style reference/art recipe after that. The prompt should define frame count/order, boundaries, no overlap, preservation, and guide-mark cleanup. Returns model-only candidate images; add promising batches/assets to Review for the user."),
 
         AIFunctionFactory.Create(
             method: (int? limit = null) => workflow.ListSpriteSheetsJsonAsync(projectId, limit),
             name: "list_sprite_sheets",
-            description: "List compact sprite-sheet definitions for the current project. For new animation jobs use read_animation_job; use sprite-sheet reads for packaged results or salvage/manual sheet work."),
+            description: "List compact sprite-sheet definitions for the current project. Use this for generated candidates that have been selected for frame detection, splitting, repair, review, or export."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
@@ -244,7 +199,7 @@ public sealed class AssistantToolRegistry(
             method: (Guid sourceAssetId, CancellationToken cancellationToken = default) =>
                 CreateSpriteSheetAsync(projectId, sourceAssetId, cancellationToken),
             name: "create_sprite_sheet",
-            description: "Salvage/import tool: create or select a sprite-sheet definition from an existing generated or imported asset and switch to Sprites. For new animation requests, use the asset-animation tools instead."),
+            description: "Create or select a sprite-sheet definition from an existing generated or imported asset and switch to Sprites. Use after choosing the best candidate sheet or when importing a sheet."),
 
         AIFunctionFactory.Create(
             method: (
@@ -263,7 +218,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 ComposeSpriteSheetFromImagesAsync(projectId, assetIds, spriteSheetId, insertAt, label, rows, columns, padding, gutter, fps, loop, horizontalAnchor, verticalAnchor, cancellationToken),
             name: "compose_sprite_sheet_from_images",
-            description: "Salvage/manual tool: create or extend a sprite sheet from ordered individual PNG assets. For new generated animation jobs, prefer package_animation_job after fixed-slot extraction. Use this when frames already exist as separate PNG assets or the user explicitly wants manual composition."),
+            description: "Create or extend a sprite sheet from ordered individual PNG assets. Use this when frames already exist as separate PNG assets or the user explicitly wants manual composition."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId = null, int maxFrames = 12, CancellationToken cancellationToken = default) =>
@@ -274,31 +229,31 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (string mode) => SwitchWorkspaceModeAsync(projectId, mode),
             name: "switch_workspace_mode",
-            description: "Switch the visible workspace mode. Allowed values: generate, runs, compare, edit, sprites, recipes, assets."),
+            description: "Switch the visible workspace mode. Allowed values: generate, activity, review, edit, sprites, recipes, assets. Legacy aliases runs and compare are accepted."),
 
         AIFunctionFactory.Create(
             method: (string? title = null, string? summary = null, CompareReviewToolItem[]? items = null, bool switchToCompare = true, CancellationToken cancellationToken = default) =>
                 SetCompareReviewSetAsync(projectId, title, summary, items, switchToCompare, cancellationToken),
             name: "set_compare_review_set",
-            description: "Replace the current Compare tab review set with an ordered set of user-visible review items. Item kind values: asset, generationBatch, spriteSheet, spriteAnimation, spriteFrame. This does not attach images to chat or send them back as model context."),
+            description: "Replace the current Review workspace set with ordered user-visible review items. Item kind values: asset, generationBatch, spriteSheet, spriteAnimation, spriteFrame. This does not attach images to chat or send them back as model context."),
 
         AIFunctionFactory.Create(
             method: (CompareReviewToolItem[]? items = null, string? title = null, string? summary = null, bool switchToCompare = true, CancellationToken cancellationToken = default) =>
                 AddCompareReviewItemsAsync(projectId, items, title, summary, switchToCompare, cancellationToken),
             name: "add_compare_review_items",
-            description: "Append or update items in the current Compare tab review set. Item kind values: asset, generationBatch, spriteSheet, spriteAnimation, spriteFrame. This is for grouping things the user should review visually, not for model image context."),
+            description: "Append or update items in the current Review workspace set. Item kind values: asset, generationBatch, spriteSheet, spriteAnimation, spriteFrame. This is for grouping things the user should review visually, not for model image context."),
 
         AIFunctionFactory.Create(
             method: (Guid itemId, CancellationToken cancellationToken = default) =>
                 RemoveCompareReviewItemAsync(projectId, itemId, cancellationToken),
             name: "remove_compare_review_item",
-            description: "Remove one item from the current Compare tab review set by review item id."),
+            description: "Remove one item from the current Review workspace set by review item id."),
 
         AIFunctionFactory.Create(
             method: (CancellationToken cancellationToken = default) =>
                 ClearCompareReviewSetAsync(projectId, cancellationToken),
             name: "clear_compare_review_set",
-            description: "Clear the current Compare tab review set."),
+            description: "Clear the current Review workspace set."),
 
         AIFunctionFactory.Create(
             method: (
@@ -348,7 +303,20 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 MapSpriteSheetFramesAsync(projectId, mode, sourceAssetId, spriteSheetId, expectedFrames, layoutHint, backgroundMode, targetFrameNumbers, apply, cancellationToken),
             name: "map_sprite_sheet_frames",
-            description: "Salvage/import tool: heuristically map frame boxes on an unscaffolded or imported PNG sprite sheet. Do not use this as the first path for new generated animations; use the asset-animation guide and fixed-slot extraction tools. Give this heuristic one attempt, inspect model-only feedback, then move to manual repair if needed."),
+            description: "Heuristically map frame boxes on a generated or imported PNG sprite sheet. Give this heuristic one attempt with expectedFrames/layoutHint, inspect model-only feedback, then move to manual box repair or isolated frames."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid? sourceAssetId = null,
+                Guid? spriteSheetId = null,
+                int? expectedFrames = null,
+                string? layoutHint = null,
+                string? backgroundMode = null,
+                bool apply = true,
+                CancellationToken cancellationToken = default) =>
+                MapSpriteSheetFramesAsync(projectId, "auto", sourceAssetId, spriteSheetId, expectedFrames, layoutHint, backgroundMode, targetFrameNumbers: null, apply, cancellationToken),
+            name: "detect_sprite_frame_boxes",
+            description: "Auto-detect candidate frame boxes for a sheet and optionally apply them. Use after choosing a candidate sheet and before splitting frames. If detection is close but imperfect, apply then adjust frame boxes instead of repeatedly detecting."),
 
         AIFunctionFactory.Create(
             method: (
@@ -366,13 +334,19 @@ public sealed class AssistantToolRegistry(
                 string? verticalAnchor = null,
                 CancellationToken cancellationToken = default) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, frames, padding, gutter, fps, loop, horizontalAnchor, verticalAnchor, cancellationToken),
             name: "update_sprite_sheet_frames",
-            description: "Manual salvage tool: replace the visible Sprites workspace frame set and layout without changing working image bytes. Do not use for new scaffolded animation jobs unless fixed-slot extraction failed and the user/agent is deliberately repairing a malformed sheet."),
+            description: "Replace the visible Sprites workspace frame set and layout without changing working image bytes. Use after detection when boxes need manual correction, ordering changes, or precise geometry updates."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId, int frameNumber, int? margin = null, CancellationToken cancellationToken = default) =>
                 IsolateSpriteFrameAsync(projectId, spriteSheetId, frameNumber, margin, cancellationToken),
             name: "isolate_sprite_frame",
             description: "Extract one saved sprite frame source region into a hidden working PNG with optional margin. frameNumber is 1-based. The source sheet can be irregular; this does not require equal source cells. Returns compact state JSON plus model-only images of the isolated working frame: a clean copy for judging pixels and a coordinate-grid companion for computing region coordinates. The reported workingMargin pads all sides, so sprite content starts at (margin, margin)."),
+
+        AIFunctionFactory.Create(
+            method: (Guid? spriteSheetId = null, int? margin = null, CancellationToken cancellationToken = default) =>
+                SplitSpriteSheetFramesAsync(projectId, spriteSheetId, margin, cancellationToken),
+            name: "split_sprite_sheet_frames",
+            description: "Split every saved frame region in the selected sprite sheet into hidden isolated working PNGs for alignment and repair. Use this after boxes are applied and before detailed frame cleanup. Returns compact frame state; use read_sprite_frame_image or review_sprite_animation to inspect pixels."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId, int frameNumber, CancellationToken cancellationToken = default) =>
@@ -413,13 +387,13 @@ public sealed class AssistantToolRegistry(
             method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
                 ReassembleSpriteSheetAsync(projectId, spriteSheetId, cancellationToken),
             name: "reassemble_sprite_sheet",
-            description: "Salvage/manual tool: normalize irregular source regions or hidden working frame images into equal animation frames, then stitch a new working sprite sheet. For new scaffolded animation jobs, use extract_animation_fixed_slots instead because it preserves planned slot geometry."),
+            description: "Normalize irregular source regions or hidden working frame images into equal animation frames, then stitch a new one-row working sprite sheet for export."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
                 NormalizeSpriteSheetAsync(projectId, spriteSheetId, cancellationToken),
             name: "normalize_sprite_sheet",
-            description: "Salvage/manual tool: normalize an existing selected PNG sprite sheet by copying saved source rects and rebasing frame boxes/shapes. Do not use this as the first path for new guided animation jobs."),
+            description: "Normalize an existing selected PNG sprite sheet by copying saved source rects and rebasing frame boxes/shapes. Use when the current working sheet needs a clean normalized intermediate before split/review/export."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
@@ -496,13 +470,13 @@ public sealed class AssistantToolRegistry(
     private async Task<string> RemoveCompareReviewItemAsync(Guid projectId, Guid itemId, CancellationToken cancellationToken)
     {
         await workflow.RemoveCompareReviewItemAsync(projectId, itemId, cancellationToken);
-        return $"Compare review item {itemId} removed.";
+        return $"Review item {itemId} removed.";
     }
 
     private async Task<string> ClearCompareReviewSetAsync(Guid projectId, CancellationToken cancellationToken)
     {
         await workflow.ClearCompareReviewSetAsync(projectId, cancellationToken);
-        return "Compare review set cleared.";
+        return "Review set cleared.";
     }
 
     private async Task<string> SavePromptRecipeToolAsync(
@@ -560,6 +534,84 @@ public sealed class AssistantToolRegistry(
             version = saved.CurrentVersion,
             saved.ExampleAssetId,
             message = "Prompt recipe saved and versioned.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> SaveAnimationRecipeToolAsync(
+        Guid projectId,
+        Guid? recipeId,
+        string name,
+        string animationKind,
+        string promptScaffold,
+        string changeSummary,
+        string? facing,
+        int frameCount,
+        int[]? frameOrder,
+        int fps,
+        bool loop,
+        Guid? guideAssetId,
+        SpriteSheetRect[]? expectedFrameBoxes,
+        string? anchorStrategy,
+        string? exportDefaultsJson,
+        string? notes,
+        Guid? primaryExampleSpriteSheetId,
+        CancellationToken cancellationToken)
+    {
+        AnimationRecipeView saved;
+        if (recipeId is Guid existingRecipeId)
+        {
+            saved = await workflow.UpdateAnimationRecipeAsync(projectId, existingRecipeId, new UpdateAnimationRecipeRequest(
+                name,
+                animationKind,
+                facing ?? string.Empty,
+                frameCount,
+                frameOrder ?? [],
+                Math.Clamp(fps <= 0 ? 8 : fps, 1, 60),
+                loop,
+                guideAssetId,
+                expectedFrameBoxes ?? [],
+                anchorStrategy ?? "recipe-defined",
+                promptScaffold,
+                exportDefaultsJson ?? "{}",
+                notes ?? string.Empty,
+                primaryExampleSpriteSheetId,
+                "assistant",
+                changeSummary), cancellationToken);
+        }
+        else
+        {
+            saved = await workflow.SaveAnimationRecipeAsync(projectId, new SaveAnimationRecipeRequest(
+                name,
+                animationKind,
+                facing ?? string.Empty,
+                frameCount,
+                frameOrder ?? [],
+                Math.Clamp(fps <= 0 ? 8 : fps, 1, 60),
+                loop,
+                guideAssetId,
+                expectedFrameBoxes ?? [],
+                anchorStrategy ?? "recipe-defined",
+                promptScaffold,
+                exportDefaultsJson ?? "{}",
+                notes ?? string.Empty,
+                primaryExampleSpriteSheetId,
+                "assistant",
+                changeSummary), cancellationToken);
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            animationRecipeId = saved.Id,
+            saved.Name,
+            saved.AnimationKind,
+            saved.Facing,
+            saved.FrameCount,
+            saved.Fps,
+            saved.Loop,
+            saved.CurrentVersion,
+            saved.GuideAssetId,
+            saved.PrimaryExampleSpriteSheetId,
+            message = "Animation recipe saved and versioned.",
         }, JsonOptions);
     }
 
@@ -679,182 +731,6 @@ public sealed class AssistantToolRegistry(
             batch = document.RootElement.Clone(),
         }, JsonOptions);
     }
-
-    private async Task<string> CreateAssetProfileAsync(
-        Guid projectId,
-        Guid canonicalAssetId,
-        Guid? styleAssetId,
-        string? label,
-        string? assetType,
-        string? structureType,
-        string[]? requiredFeatures,
-        string[]? forbiddenChanges,
-        bool frozen,
-        CancellationToken cancellationToken)
-    {
-        var profile = await assetAnimation.CreateAssetProfileAsync(projectId, new CreateAssetProfileRequest(
-            canonicalAssetId,
-            styleAssetId,
-            label,
-            assetType,
-            structureType,
-            requiredFeatures ?? [],
-            forbiddenChanges ?? [],
-            frozen), cancellationToken);
-        return JsonSerializer.Serialize(new
-        {
-            profileId = profile.Id,
-            profile.CanonicalAssetId,
-            profile.StyleAssetId,
-            profile.Label,
-            profile.AssetType,
-            profile.StructureType,
-            profile.ChromaColor,
-            profile.Frozen,
-            message = "Asset profile created.",
-        }, JsonOptions);
-    }
-
-    private async Task<string> PlanAssetAnimationAsync(
-        Guid projectId,
-        Guid assetProfileId,
-        string animationKind,
-        string? facing,
-        string? strategy,
-        int? frameCount,
-        int? fps,
-        string? rootMotion,
-        string? promptSummary,
-        string? targetCellSize,
-        string? motionClipId,
-        CancellationToken cancellationToken)
-    {
-        var job = await assetAnimation.PlanAssetAnimationAsync(projectId, new PlanAssetAnimationRequest(
-            assetProfileId,
-            animationKind,
-            facing,
-            strategy,
-            frameCount,
-            fps,
-            rootMotion,
-            promptSummary,
-            targetCellSize,
-            motionClipId), cancellationToken);
-        return CompactAnimationJobJson(job, "Animation plan compiled.");
-    }
-
-    private async Task<string> RenderAnimationGuideAsync(Guid projectId, Guid assetAnimationJobId, CancellationToken cancellationToken)
-    {
-        var job = await assetAnimation.RenderAnimationGuideAsync(projectId, assetAnimationJobId, cancellationToken);
-        return CompactAnimationJobJson(job, "Animation guide rendered. Model-only guide images are supplied separately.");
-    }
-
-    private async Task<string> RunAnimationCandidatesAsync(Guid projectId, Guid assetAnimationJobId, int? candidateCount, CancellationToken cancellationToken)
-    {
-        var job = await assetAnimation.RunAnimationCandidatesAsync(projectId, new RunAnimationCandidatesRequest(assetAnimationJobId, candidateCount), cancellationToken);
-        return CompactAnimationJobJson(job, "Animation candidates generated.");
-    }
-
-    private async Task<string> MarkAnimationFramesAsync(Guid projectId, Guid assetAnimationJobId, AnimationFrameMark[]? frames, CancellationToken cancellationToken)
-    {
-        var marks = (frames ?? [])
-            .Where(frame => frame.FrameNumber > 0)
-            .Select(frame => new MarkAnimationFrameRequest(frame.FrameNumber, frame.Status ?? "warning", frame.Reason, frame.ForceAccept))
-            .ToList();
-        if (marks.Count == 0)
-            return JsonSerializer.Serialize(new { error = "mark_animation_frames requires at least one frame mark." }, JsonOptions);
-
-        var job = await assetAnimation.MarkAnimationFramesAsync(projectId, new MarkAnimationFramesRequest(assetAnimationJobId, marks), cancellationToken);
-        return CompactAnimationJobJson(job, "Animation frames marked.");
-    }
-
-    private async Task<string> RegenerateAnimationFramesAsync(Guid projectId, Guid assetAnimationJobId, int[]? frameNumbers, string? prompt, CancellationToken cancellationToken)
-    {
-        var numbers = (frameNumbers ?? []).Where(number => number > 0).Distinct().ToList();
-        if (numbers.Count == 0)
-            return JsonSerializer.Serialize(new { error = "regenerate_animation_frames requires at least one 1-based frame number." }, JsonOptions);
-
-        var job = await assetAnimation.RegenerateAnimationFramesAsync(projectId, new RegenerateAnimationFramesRequest(assetAnimationJobId, numbers, prompt), cancellationToken);
-        return CompactAnimationJobJson(job, "Requested animation frames regenerated.");
-    }
-
-    private async Task<string> ExtractAnimationFixedSlotsAsync(Guid projectId, Guid assetAnimationJobId, Guid? candidateId, CancellationToken cancellationToken)
-    {
-        var job = await assetAnimation.ExtractAnimationFixedSlotsAsync(projectId, new ExtractAnimationFixedSlotsRequest(assetAnimationJobId, candidateId), cancellationToken);
-        return CompactAnimationJobJson(job, "Animation extracted by fixed slots.");
-    }
-
-    private async Task<string> ReviewAnimationJobAsync(Guid projectId, Guid assetAnimationJobId, CancellationToken cancellationToken)
-    {
-        var job = await assetAnimation.ReviewAnimationJobAsync(projectId, assetAnimationJobId, cancellationToken);
-        return CompactAnimationJobJson(job, "Animation job reviewed.");
-    }
-
-    private async Task<string> PackageAnimationJobAsync(Guid projectId, Guid assetAnimationJobId, CancellationToken cancellationToken)
-    {
-        var job = await assetAnimation.PackageAnimationJobAsync(projectId, assetAnimationJobId, cancellationToken);
-        return CompactAnimationJobJson(job, "Animation job packaged.");
-    }
-
-    private static string CompactAnimationJobJson(AssetAnimationJobView job, string message) =>
-        JsonSerializer.Serialize(new
-        {
-            jobId = job.Id,
-            profileId = job.AssetProfileId,
-            job.Status,
-            job.AnimationKind,
-            job.Strategy,
-            job.RecommendedAction,
-            budget = new
-            {
-                used = job.GenerationRoundsUsed,
-                max = job.MaxGenerationRounds,
-                remaining = Math.Max(0, job.MaxGenerationRounds - job.GenerationRoundsUsed),
-                repairAttemptsPerFrame = job.MaxRepairAttemptsPerFrame,
-            },
-            guideAssetId = job.GuideAssetId,
-            diagnosticGuideAssetId = job.DiagnosticGuideAssetId,
-            outputSpriteSheetId = job.OutputSpriteSheetId,
-            selectedCandidateId = job.SelectedCandidateId,
-            latestError = job.LatestError,
-            animation = new
-            {
-                job.AnimationSpec.AssetType,
-                job.AnimationSpec.StructureType,
-                job.AnimationSpec.AnimationKind,
-                job.AnimationSpec.Facing,
-                job.AnimationSpec.FrameCount,
-                job.AnimationSpec.Fps,
-                targetCell = $"{job.AnimationSpec.TargetCellWidth}x{job.AnimationSpec.TargetCellHeight}",
-            },
-            guide = new
-            {
-                renderer = job.AnimationSpec.GuideRenderer ?? "sprite_guide_renderer",
-                renderStyle = job.AnimationSpec.GuideRenderStyle,
-                motionClipId = job.AnimationSpec.MotionClipId,
-                cameraYawDegrees = job.AnimationSpec.GuideCameraYawDegrees,
-                sourcePackage = job.AnimationSpec.GuideSourcePackage,
-                sourceLicense = job.AnimationSpec.GuideSourceLicense,
-            },
-            layout = new
-            {
-                job.LayoutSpec.Rows,
-                job.LayoutSpec.Columns,
-                canvas = $"{job.LayoutSpec.CanvasWidth}x{job.LayoutSpec.CanvasHeight}",
-                chroma = job.LayoutSpec.BackgroundColor,
-            },
-            candidates = job.Candidates.Select(candidate => new
-            {
-                candidate.Id,
-                candidate.OutputAssetId,
-                candidate.CandidateIndex,
-                candidate.State,
-                candidate.RawQaStatus,
-            }),
-            frames = job.FrameStatuses,
-            modelOnlyImages = "Relevant guide/candidate/sheet/review images are supplied separately when this tool produces visual artifacts.",
-            message,
-        }, JsonOptions);
 
     private async Task<string> CreateSpriteSheetAsync(
         Guid projectId,
@@ -1464,6 +1340,36 @@ public sealed class AssistantToolRegistry(
         return JsonSerializer.Serialize(CompactFrameWorkingResult(frame, "Sprite frame isolated."), JsonOptions);
     }
 
+    private async Task<string> SplitSpriteSheetFramesAsync(
+        Guid projectId,
+        Guid? spriteSheetId,
+        int? margin,
+        CancellationToken cancellationToken)
+    {
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var frames = await workflow.SplitSpriteSheetFramesAsync(projectId, resolution.SpriteSheetId!.Value, margin, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            spriteSheetId = resolution.SpriteSheetId.Value,
+            frameCount = frames.Count,
+            frames = frames.Select(frame => new
+            {
+                frameNumber = frame.Index + 1,
+                frame.Index,
+                frame.Label,
+                frame.State,
+                frame.WorkingWidth,
+                frame.WorkingHeight,
+                frame.WorkingMargin,
+                frame.WorkingUpdatedAt,
+            }),
+            message = "Sprite sheet frames split into isolated working images. Use read_sprite_frame_image for exact frames or review_sprite_animation for motion review.",
+        }, JsonOptions);
+    }
+
     private async Task<string> ReadSpriteFrameImageAsync(
         Guid projectId,
         Guid? spriteSheetId,
@@ -1609,7 +1515,7 @@ public sealed class AssistantToolRegistry(
             }),
             warnings = result.Warnings,
             modelOnlyImages = "This mutation returns model-only annotated sheet and compact filmstrip/contact imagery after the tool result.",
-            message = "Sprite sheet reassembled from irregular frame regions.",
+            message = "Sprite sheet reassembled as one horizontal equal-cell row.",
         }, JsonOptions);
     }
 
@@ -1672,8 +1578,8 @@ public sealed class AssistantToolRegistry(
         NormalizeToken(mode) switch
         {
             "generate" => WorkspaceMode.Generate,
-            "runs" or "run" or "jobs" or "job" => WorkspaceMode.Runs,
-            "compare" => WorkspaceMode.Compare,
+            "activity" or "activities" or "runs" or "run" or "jobs" or "job" => WorkspaceMode.Runs,
+            "review" or "compare" => WorkspaceMode.Compare,
             "edit" => WorkspaceMode.Edit,
             "sprites" or "sprite" or "spritesheet" or "spritesheets" => WorkspaceMode.Sprites,
             "recipes" or "recipe" => WorkspaceMode.Recipes,

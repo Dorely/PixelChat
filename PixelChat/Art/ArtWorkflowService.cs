@@ -120,6 +120,11 @@ public sealed class ArtWorkflowService(
             .Where(r => r.ProjectId == selected.Id)
             .OrderBy(r => r.Name)
             .ToListAsync(cancellationToken);
+        var animationRecipes = await db.AnimationRecipes
+            .AsNoTracking()
+            .Where(r => r.ProjectId == selected.Id)
+            .OrderBy(r => r.Name)
+            .ToListAsync(cancellationToken);
         var spriteSheets = await db.SpriteSheetDefinitions
             .AsNoTracking()
             .Where(s => s.ProjectId == selected.Id)
@@ -172,8 +177,6 @@ public sealed class ArtWorkflowService(
                     f.IsKeyframe,
                     f.PivotX,
                     f.PivotY,
-                    f.SourceAnimationJobId,
-                    f.SourceAnimationCandidateId,
                     f.AppliedScale,
                     f.TranslationX,
                     f.TranslationY,
@@ -213,41 +216,37 @@ public sealed class ArtWorkflowService(
                 .OrderBy(item => item.SortOrder)
                 .ThenBy(item => item.CreatedAt)
                 .ToListAsync(cancellationToken);
-        var animationJobs = await db.AssetAnimationJobs
+        var activityRuns = await db.ActivityRuns
             .AsNoTracking()
-            .Include(job => job.AssetProfile)
-            .Where(job => job.ProjectId == selected.Id)
-            .OrderByDescending(job => job.UpdatedAt)
-            .Take(40)
+            .Where(run => run.ProjectId == selected.Id)
+            .OrderByDescending(run => run.UpdatedAt)
+            .Take(60)
             .ToListAsync(cancellationToken);
-        var animationJobIds = animationJobs.Select(job => job.Id).ToList();
-        var animationCandidates = new List<AssetAnimationCandidate>();
-        var animationAttempts = new List<AssetAnimationFrameAttempt>();
-        var animationEvents = new List<AssetAnimationEvent>();
-        if (animationJobIds.Count > 0)
-        {
-            animationCandidates = await db.AssetAnimationCandidates
+        var activityRunIds = activityRuns.Select(run => run.Id).ToList();
+        var activitySteps = activityRunIds.Count == 0
+            ? new List<ActivityStep>()
+            : await db.ActivitySteps
                 .AsNoTracking()
-                .Where(candidate => candidate.ProjectId == selected.Id && animationJobIds.Contains(candidate.AssetAnimationJobId))
-                .OrderBy(candidate => candidate.CandidateIndex)
+                .Where(step => step.ProjectId == selected.Id && activityRunIds.Contains(step.ActivityRunId))
+                .OrderBy(step => step.SortOrder)
+                .ThenBy(step => step.CreatedAt)
                 .ToListAsync(cancellationToken);
-            animationAttempts = await db.AssetAnimationFrameAttempts
+        var activityArtifacts = activityRunIds.Count == 0
+            ? new List<ActivityArtifact>()
+            : await db.ActivityArtifacts
                 .AsNoTracking()
-                .Where(attempt => attempt.ProjectId == selected.Id && animationJobIds.Contains(attempt.AssetAnimationJobId))
+                .Where(artifact => artifact.ProjectId == selected.Id && activityRunIds.Contains(artifact.ActivityRunId))
+                .OrderBy(artifact => artifact.SortOrder)
+                .ThenBy(artifact => artifact.CreatedAt)
                 .ToListAsync(cancellationToken);
-            animationEvents = await db.AssetAnimationEvents
-                .AsNoTracking()
-                .Where(item => item.ProjectId == selected.Id && animationJobIds.Contains(item.AssetAnimationJobId))
-                .OrderByDescending(item => item.CreatedAt)
-                .Take(240)
-                .ToListAsync(cancellationToken);
-        }
-
         var currentRecipeVersions = await LoadCurrentRecipeVersionsAsync(selected.Id, recipes.Select(recipe => recipe.Id).ToList(), cancellationToken);
         var assetViews = assets.Select(AssetView).ToList();
         var batchViews = batches.Select(batch => BatchView(batch, assets)).ToList();
         var recipeViews = recipes
             .Select(recipe => RecipeView(recipe, currentRecipeVersions.GetValueOrDefault(recipe.Id)))
+            .ToList();
+        var animationRecipeViews = animationRecipes
+            .Select(AnimationRecipeView)
             .ToList();
         var spriteSheetFramesBySheet = spriteSheetFrameRecords
             .GroupBy(frame => frame.SpriteSheetDefinitionId)
@@ -255,12 +254,11 @@ public sealed class ArtWorkflowService(
         var spriteSheetViews = spriteSheets
             .Select(sheet => SpriteSheetViewFromListItems(sheet, spriteSheetFramesBySheet.GetValueOrDefault(sheet.Id, [])))
             .ToList();
-        var animationRunViews = animationJobs
-            .Select(job => AssetAnimationRunView(
-                job,
-                animationCandidates.Where(candidate => candidate.AssetAnimationJobId == job.Id).ToList(),
-                animationAttempts.Where(attempt => attempt.AssetAnimationJobId == job.Id).ToList(),
-                animationEvents.Where(item => item.AssetAnimationJobId == job.Id).Take(20).ToList()))
+        var activityRunViews = activityRuns
+            .Select(run => ActivityRunView(
+                run,
+                activitySteps.Where(step => step.ActivityRunId == run.Id).ToList(),
+                activityArtifacts.Where(artifact => artifact.ActivityRunId == run.Id).ToList()))
             .ToList();
         var maskViews = masks.Select(MaskView).ToList();
         var attachmentViews = attachments.Select(AttachmentView).ToList();
@@ -271,8 +269,9 @@ public sealed class ArtWorkflowService(
             projects.Select(ProjectView).ToList(),
             assetViews,
             batchViews,
-            animationRunViews,
+            activityRunViews,
             recipeViews,
+            animationRecipeViews,
             spriteSheetViews,
             maskViews,
             attachmentViews,
@@ -497,6 +496,54 @@ public sealed class ArtWorkflowService(
 
         var currentVersion = await GetCurrentRecipeVersionAsync(recipe.Id, cancellationToken) ?? 0;
         return JsonSerializer.Serialize(RecipeView(recipe, currentVersion), JsonOptions);
+    }
+
+    public async Task<string> ListAnimationRecipesJsonAsync(
+        Guid projectId,
+        string? query = null,
+        int? limit = null,
+        CancellationToken cancellationToken = default)
+    {
+        var max = NormalizeToolLimit(limit, 20, 50);
+        var recipes = db.AnimationRecipes
+            .AsNoTracking()
+            .Where(r => r.ProjectId == projectId);
+
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var pattern = $"%{query.Trim()}%";
+            recipes = recipes.Where(r =>
+                EF.Functions.Like(r.Name, pattern)
+                || EF.Functions.Like(r.AnimationKind, pattern)
+                || EF.Functions.Like(r.Facing, pattern)
+                || EF.Functions.Like(r.PromptScaffold, pattern)
+                || EF.Functions.Like(r.Notes, pattern));
+        }
+
+        var results = await recipes
+            .OrderBy(r => r.AnimationKind)
+            .ThenBy(r => r.Facing)
+            .ThenBy(r => r.Name)
+            .Take(max)
+            .ToListAsync(cancellationToken);
+
+        return JsonSerializer.Serialize(new
+        {
+            animationRecipes = results.Select(CompactAnimationRecipe),
+            returned = results.Count,
+            limit = max,
+            note = "Use read_animation_recipe with a recipe id for full reusable motion, layout, guide, and prompt scaffold details.",
+        }, JsonOptions);
+    }
+
+    public async Task<string> ReadAnimationRecipeJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default)
+    {
+        var recipe = await db.AnimationRecipes
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+            ?? throw new InvalidOperationException("Animation recipe was not found.");
+
+        return JsonSerializer.Serialize(AnimationRecipeView(recipe), JsonOptions);
     }
 
     public async Task<string> ListGenerationBatchesJsonAsync(
@@ -1753,6 +1800,64 @@ public sealed class ArtWorkflowService(
         return FrameWorkingView(definition, record);
     }
 
+    public async Task<IReadOnlyList<SpriteFrameWorkingView>> SplitSpriteSheetFramesAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        int? margin = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (definition, working, records) = await LoadSpriteSheetWorkingEntitiesAsync(projectId, spriteSheetId, cancellationToken);
+        if (records.Count == 0)
+            throw new InvalidOperationException("At least one sprite frame is required.");
+        if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Sprite-frame splitting requires a PNG working image.");
+
+        var background = EnsureSheetBackground(definition, rgba, width, height);
+        var marginValue = NormalizeFrameWorkingMargin(margin, definition.Padding);
+        var updates = records.Select(FrameUpdateFromRecord).ToList();
+        var now = DateTime.UtcNow;
+        foreach (var record in records.OrderBy(record => record.Index))
+        {
+            var extracted = SpriteSheetServerRenderer.ExtractFrameRegion(
+                rgba,
+                width,
+                height,
+                definition.Rows,
+                definition.Columns,
+                background,
+                updates,
+                record.Index,
+                marginValue);
+            ApplyFrameWorkingImage(record, "isolated", extracted.PngData, extracted.Width, extracted.Height, marginValue, now);
+            record.UpdatedAt = now;
+        }
+
+        definition.UpdatedAt = now;
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveSpriteSheetId = definition.Id;
+        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+        project.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+        await LogActivityAsync(
+            projectId,
+            "Sprite frames split",
+            $"Isolated {records.Count} frame(s) for alignment and repair.",
+            "sprite-sheet",
+            "user",
+            "completed",
+            "Frames isolated",
+            $"Margin: {marginValue}px.",
+            "spriteSheet",
+            definition.Id,
+            definition.Label,
+            cancellationToken);
+
+        return records
+            .OrderBy(record => record.Index)
+            .Select(record => FrameWorkingView(definition, record))
+            .ToList();
+    }
+
     public async Task<SpriteFrameWorkingView> GetSpriteFrameWorkingImageAsync(
         Guid projectId,
         Guid spriteSheetId,
@@ -1956,8 +2061,8 @@ public sealed class ArtWorkflowService(
         }
 
         var render = SpriteSheetServerRenderer.ReassembleIrregularFrames(
-            definition.Rows,
-            definition.Columns,
+            rows: 1,
+            columns: records.Count,
             definition.Padding,
             definition.Gutter,
             definition.HorizontalAnchor,
@@ -1997,6 +2102,19 @@ public sealed class ArtWorkflowService(
         project.UpdatedAt = now;
         definition.UpdatedAt = now;
         await db.SaveChangesAsync(cancellationToken);
+        await LogActivityAsync(
+            projectId,
+            "Sprite sheet reassembled",
+            $"Reassembled {records.Count} isolated frame(s) into one equal-cell row.",
+            "sprite-sheet",
+            "user",
+            "completed",
+            "Single-row export sheet created",
+            $"Rows: 1, columns: {records.Count}, cell: {render.FrameWidth}x{render.FrameHeight}.",
+            "spriteSheet",
+            definition.Id,
+            definition.Label,
+            cancellationToken);
 
         var saved = await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
         return new ReassembleSpriteSheetResult(
@@ -2120,8 +2238,6 @@ public sealed class ArtWorkflowService(
                 rootOffset = new { x = frame.RootOffsetX, y = frame.RootOffsetY },
                 footContacts = DeserializeStrings(frame.FootContactsJson),
                 frame.IsKeyframe,
-                sourceAnimationJobId = frame.SourceAnimationJobId,
-                sourceAnimationCandidateId = frame.SourceAnimationCandidateId,
                 appliedScale = frame.AppliedScale,
                 translation = new { x = frame.TranslationX, y = frame.TranslationY },
                 qaStatus = Clean(frame.QaStatus),
@@ -2199,6 +2315,19 @@ public sealed class ArtWorkflowService(
         project.ActiveWorkspaceMode = WorkspaceMode.Compare;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
+        await LogActivityAsync(
+            projectId,
+            "Image generation",
+            $"Started {count} image candidate(s).",
+            "generate",
+            "user",
+            "running",
+            "Generation batch started",
+            Preview(prompt, 500),
+            "generationBatch",
+            batch.Id,
+            batch.Label,
+            cancellationToken);
 
         logger.LogDebug(
             "Image generation batch created: projectId={ProjectId}, batchId={BatchId}, count={Count}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, promptChars={PromptChars}",
@@ -2624,6 +2753,19 @@ public sealed class ArtWorkflowService(
         project.ActiveWorkspaceMode = WorkspaceMode.Compare;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
+        await LogActivityAsync(
+            projectId,
+            "Image edit",
+            $"Started {count} edited candidate(s).",
+            "edit",
+            "user",
+            "running",
+            "Edit batch started",
+            Preview(prompt, 500),
+            "generationBatch",
+            batch.Id,
+            batch.Label,
+            cancellationToken);
 
         logger.LogDebug(
             "Image edit batch created: projectId={ProjectId}, batchId={BatchId}, sourceAssetId={SourceAssetId}, count={Count}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, hasMask={HasMask}, promptChars={PromptChars}",
@@ -3025,6 +3167,146 @@ public sealed class ArtWorkflowService(
         await db.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<AnimationRecipeView> SaveAnimationRecipeAsync(
+        Guid projectId,
+        SaveAnimationRecipeRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        _ = await GetProjectAsync(projectId, cancellationToken);
+        await ValidateAnimationRecipeReferencesAsync(projectId, request.GuideAssetId, request.PrimaryExampleSpriteSheetId, cancellationToken);
+
+        var recipe = new AnimationRecipe
+        {
+            ProjectId = projectId,
+            Name = CleanRequired(request.Name, "Animation recipe name is required."),
+        };
+        ApplyAnimationRecipeRequest(recipe, request);
+        await db.AnimationRecipes.AddAsync(recipe, cancellationToken);
+        await AppendAnimationRecipeVersionAsync(recipe, request.Source, request.ChangeSummary, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return AnimationRecipeView(recipe);
+    }
+
+    public async Task<AnimationRecipeView> UpdateAnimationRecipeAsync(
+        Guid projectId,
+        Guid recipeId,
+        UpdateAnimationRecipeRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var recipe = await db.AnimationRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+            ?? throw new InvalidOperationException("Animation recipe was not found.");
+        await ValidateAnimationRecipeReferencesAsync(projectId, request.GuideAssetId, request.PrimaryExampleSpriteSheetId, cancellationToken);
+
+        ApplyAnimationRecipeRequest(recipe, request);
+        recipe.UpdatedAt = DateTime.UtcNow;
+        await AppendAnimationRecipeVersionAsync(recipe, request.Source, request.ChangeSummary, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return AnimationRecipeView(recipe);
+    }
+
+    public async Task<IReadOnlyList<AnimationRecipeVersionView>> ListAnimationRecipeVersionsAsync(
+        Guid projectId,
+        Guid recipeId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!await db.AnimationRecipes.AnyAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken))
+            throw new InvalidOperationException("Animation recipe was not found.");
+
+        var versions = await db.AnimationRecipeVersions
+            .AsNoTracking()
+            .Where(v => v.ProjectId == projectId && v.AnimationRecipeId == recipeId)
+            .OrderByDescending(v => v.Version)
+            .ToListAsync(cancellationToken);
+        return versions.Select(AnimationRecipeVersionView).ToList();
+    }
+
+    public async Task<string> ListAnimationRecipeVersionsJsonAsync(
+        Guid projectId,
+        Guid recipeId,
+        CancellationToken cancellationToken = default)
+    {
+        var versions = await ListAnimationRecipeVersionsAsync(projectId, recipeId, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            animationRecipeId = recipeId,
+            versions,
+            returned = versions.Count,
+        }, JsonOptions);
+    }
+
+    public async Task DeleteAnimationRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default)
+    {
+        var recipe = await db.AnimationRecipes.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken);
+        if (recipe is null)
+            return;
+
+        db.AnimationRecipes.Remove(recipe);
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<ActivityRunView> LogActivityAsync(
+        Guid projectId,
+        string title,
+        string summary,
+        string workflowKind,
+        string actor,
+        string status,
+        string stepTitle,
+        string stepDetail,
+        string artifactKind,
+        Guid? artifactId,
+        string artifactLabel,
+        CancellationToken cancellationToken = default)
+    {
+        _ = await GetProjectAsync(projectId, cancellationToken);
+        var now = DateTime.UtcNow;
+        var run = new ActivityRun
+        {
+            ProjectId = projectId,
+            Title = Clean(title),
+            Summary = Clean(summary),
+            WorkflowKind = Clean(workflowKind),
+            Actor = string.IsNullOrWhiteSpace(actor) ? "system" : actor.Trim(),
+            Status = string.IsNullOrWhiteSpace(status) ? "completed" : status.Trim(),
+            PrimaryArtifactKind = Clean(artifactKind),
+            PrimaryArtifactId = artifactId,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var step = new ActivityStep
+        {
+            ProjectId = projectId,
+            ActivityRunId = run.Id,
+            SortOrder = 0,
+            Kind = string.IsNullOrWhiteSpace(workflowKind) ? "workflow" : workflowKind.Trim(),
+            Status = run.Status,
+            Title = string.IsNullOrWhiteSpace(stepTitle) ? run.Title : stepTitle.Trim(),
+            Detail = Clean(stepDetail),
+            CreatedAt = now,
+        };
+        await db.ActivityRuns.AddAsync(run, cancellationToken);
+        await db.ActivitySteps.AddAsync(step, cancellationToken);
+
+        ActivityArtifact? artifact = null;
+        if (artifactId is Guid refId && !string.IsNullOrWhiteSpace(artifactKind))
+        {
+            artifact = new ActivityArtifact
+            {
+                ProjectId = projectId,
+                ActivityRunId = run.Id,
+                Kind = artifactKind.Trim(),
+                RefId = refId,
+                Label = string.IsNullOrWhiteSpace(artifactLabel) ? artifactKind.Trim() : artifactLabel.Trim(),
+                SortOrder = 0,
+                CreatedAt = now,
+            };
+            await db.ActivityArtifacts.AddAsync(artifact, cancellationToken);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        return ActivityRunView(run, [step], artifact is null ? [] : [artifact]);
+    }
+
     public async Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default)
     {
         var asset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
@@ -3239,15 +3521,33 @@ public sealed class ArtWorkflowService(
                 .OrderBy(item => item.SortOrder)
                 .ThenBy(item => item.CreatedAt)
                 .ToListAsync(cancellationToken);
+        var activityRuns = await db.ActivityRuns
+            .AsNoTracking()
+            .Where(run => run.ProjectId == projectId)
+            .OrderByDescending(run => run.UpdatedAt)
+            .Take(12)
+            .ToListAsync(cancellationToken);
         var providerStatus = await BuildProviderStatusAsync(cancellationToken);
 
         return JsonSerializer.Serialize(new
         {
             snapshotMissing = true,
-            note = "No live UI snapshot has been published. This fallback only includes persisted project, active ids, visible chat attachments, current compare review set, and provider status.",
+            note = "No live UI snapshot has been published. This fallback only includes persisted project, active ids, visible chat attachments, current review set, recent activity, and provider status.",
             project = ProjectView(project),
             chatAttachments = attachments.Select(AttachmentView),
-            compareReviewSet = compareReviewSet is null ? null : CompareReviewSetView(compareReviewSet, compareReviewItems),
+            reviewSet = compareReviewSet is null ? null : CompareReviewSetView(compareReviewSet, compareReviewItems),
+            activity = activityRuns.Select(run => new
+            {
+                run.Id,
+                run.Title,
+                run.Summary,
+                run.Status,
+                run.Actor,
+                run.WorkflowKind,
+                run.PrimaryArtifactKind,
+                run.PrimaryArtifactId,
+                run.UpdatedAt,
+            }),
             provider = providerStatus,
         }, JsonOptions);
     }
@@ -4000,8 +4300,6 @@ public sealed class ArtWorkflowService(
                 frame.IsKeyframe,
                 frame.PivotX,
                 frame.PivotY,
-                frame.SourceAnimationJobId,
-                frame.SourceAnimationCandidateId,
                 frame.AppliedScale,
                 frame.TranslationX,
                 frame.TranslationY,
@@ -4262,6 +4560,25 @@ public sealed class ArtWorkflowService(
 
         if (!await db.ArtAssets.AnyAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken))
             throw new InvalidOperationException("Recipe example image was not found in this project.");
+    }
+
+    private async Task ValidateAnimationRecipeReferencesAsync(
+        Guid projectId,
+        Guid? guideAssetId,
+        Guid? primaryExampleSpriteSheetId,
+        CancellationToken cancellationToken)
+    {
+        if (guideAssetId is Guid assetId
+            && !await db.ArtAssets.AnyAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken))
+        {
+            throw new InvalidOperationException("Animation recipe guide asset was not found in this project.");
+        }
+
+        if (primaryExampleSpriteSheetId is Guid spriteSheetId
+            && !await db.SpriteSheetDefinitions.AnyAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken))
+        {
+            throw new InvalidOperationException("Animation recipe example sprite sheet was not found in this project.");
+        }
     }
 
     private async Task<Dictionary<Guid, int>> LoadCurrentRecipeVersionsAsync(
@@ -4663,6 +4980,44 @@ public sealed class ArtWorkflowService(
         recipe.Notes = Clean(request.Notes);
     }
 
+    private static void ApplyAnimationRecipeRequest(AnimationRecipe recipe, SaveAnimationRecipeRequest request)
+    {
+        var frameCount = NormalizeFrameCount(request.FrameCount, request.ExpectedFrameBoxes.Count);
+        recipe.Name = CleanRequired(request.Name, "Animation recipe name is required.");
+        recipe.AnimationKind = CleanRequired(request.AnimationKind, "Animation kind is required.");
+        recipe.Facing = Clean(request.Facing);
+        recipe.FrameCount = frameCount;
+        recipe.FrameOrderJson = SerializeFrameOrder(request.FrameOrder, frameCount);
+        recipe.Fps = Math.Clamp(request.Fps <= 0 ? 8 : request.Fps, 1, 60);
+        recipe.Loop = request.Loop;
+        recipe.GuideAssetId = request.GuideAssetId;
+        recipe.ExpectedFrameBoxesJson = SerializeFrameBoxes(request.ExpectedFrameBoxes);
+        recipe.AnchorStrategy = string.IsNullOrWhiteSpace(request.AnchorStrategy) ? "recipe-defined" : request.AnchorStrategy.Trim();
+        recipe.PromptScaffold = CleanRequired(request.PromptScaffold, "Prompt scaffold is required.");
+        recipe.ExportDefaultsJson = NormalizeJsonObject(request.ExportDefaultsJson);
+        recipe.Notes = Clean(request.Notes);
+        recipe.PrimaryExampleSpriteSheetId = request.PrimaryExampleSpriteSheetId;
+    }
+
+    private static void ApplyAnimationRecipeRequest(AnimationRecipe recipe, UpdateAnimationRecipeRequest request)
+    {
+        var frameCount = NormalizeFrameCount(request.FrameCount, request.ExpectedFrameBoxes.Count);
+        recipe.Name = CleanRequired(request.Name, "Animation recipe name is required.");
+        recipe.AnimationKind = CleanRequired(request.AnimationKind, "Animation kind is required.");
+        recipe.Facing = Clean(request.Facing);
+        recipe.FrameCount = frameCount;
+        recipe.FrameOrderJson = SerializeFrameOrder(request.FrameOrder, frameCount);
+        recipe.Fps = Math.Clamp(request.Fps <= 0 ? 8 : request.Fps, 1, 60);
+        recipe.Loop = request.Loop;
+        recipe.GuideAssetId = request.GuideAssetId;
+        recipe.ExpectedFrameBoxesJson = SerializeFrameBoxes(request.ExpectedFrameBoxes);
+        recipe.AnchorStrategy = string.IsNullOrWhiteSpace(request.AnchorStrategy) ? "recipe-defined" : request.AnchorStrategy.Trim();
+        recipe.PromptScaffold = CleanRequired(request.PromptScaffold, "Prompt scaffold is required.");
+        recipe.ExportDefaultsJson = NormalizeJsonObject(request.ExportDefaultsJson);
+        recipe.Notes = Clean(request.Notes);
+        recipe.PrimaryExampleSpriteSheetId = request.PrimaryExampleSpriteSheetId;
+    }
+
     private async Task<int> AppendPromptRecipeVersionAsync(
         PromptRecipe recipe,
         string? source,
@@ -4696,6 +5051,50 @@ public sealed class ArtWorkflowService(
             PreferredSize = recipe.PreferredSize,
             ExportDefaultsJson = recipe.ExportDefaultsJson,
             Notes = recipe.Notes,
+            Source = normalizedSource,
+            ChangeSummary = normalizedSummary,
+            CreatedAt = DateTime.UtcNow,
+        }, cancellationToken);
+        return nextVersion;
+    }
+
+    private async Task<int> AppendAnimationRecipeVersionAsync(
+        AnimationRecipe recipe,
+        string? source,
+        string? changeSummary,
+        CancellationToken cancellationToken)
+    {
+        var latestVersion = await db.AnimationRecipeVersions
+            .Where(version => version.AnimationRecipeId == recipe.Id)
+            .Select(version => (int?)version.Version)
+            .MaxAsync(cancellationToken)
+            ?? 0;
+        var normalizedSource = NormalizeRecipeVersionSource(source);
+        var normalizedSummary = string.IsNullOrWhiteSpace(changeSummary)
+            ? $"Saved by {normalizedSource}."
+            : changeSummary.Trim();
+
+        var nextVersion = latestVersion + 1;
+        recipe.CurrentVersion = nextVersion;
+        await db.AnimationRecipeVersions.AddAsync(new AnimationRecipeVersion
+        {
+            ProjectId = recipe.ProjectId,
+            AnimationRecipeId = recipe.Id,
+            Version = nextVersion,
+            Name = recipe.Name,
+            AnimationKind = recipe.AnimationKind,
+            Facing = recipe.Facing,
+            FrameCount = recipe.FrameCount,
+            FrameOrderJson = recipe.FrameOrderJson,
+            Fps = recipe.Fps,
+            Loop = recipe.Loop,
+            GuideAssetId = recipe.GuideAssetId,
+            ExpectedFrameBoxesJson = recipe.ExpectedFrameBoxesJson,
+            AnchorStrategy = recipe.AnchorStrategy,
+            PromptScaffold = recipe.PromptScaffold,
+            ExportDefaultsJson = recipe.ExportDefaultsJson,
+            Notes = recipe.Notes,
+            PrimaryExampleSpriteSheetId = recipe.PrimaryExampleSpriteSheetId,
             Source = normalizedSource,
             ChangeSummary = normalizedSummary,
             CreatedAt = DateTime.UtcNow,
@@ -4805,6 +5204,26 @@ public sealed class ArtWorkflowService(
         recipe.PreferredProvider,
         recipe.PreferredModel,
         recipe.PreferredSize,
+        notesPreview = Preview(recipe.Notes, 220),
+        recipe.CreatedAt,
+    };
+
+    private static object CompactAnimationRecipe(AnimationRecipe recipe) => new
+    {
+        recipe.Id,
+        recipe.Name,
+        recipe.CurrentVersion,
+        recipe.AnimationKind,
+        recipe.Facing,
+        recipe.FrameCount,
+        frameOrder = DeserializeFrameOrder(recipe.FrameOrderJson, recipe.FrameCount),
+        recipe.Fps,
+        recipe.Loop,
+        recipe.GuideAssetId,
+        expectedFrameBoxCount = DeserializeFrameBoxes(recipe.ExpectedFrameBoxesJson).Count,
+        recipe.AnchorStrategy,
+        promptPreview = Preview(recipe.PromptScaffold, 320),
+        recipe.PrimaryExampleSpriteSheetId,
         notesPreview = Preview(recipe.Notes, 220),
         recipe.CreatedAt,
     };
@@ -4926,99 +5345,6 @@ public sealed class ArtWorkflowService(
 
     private static ProjectView ProjectView(Project project) =>
         new(project.Id, project.Name, project.ActiveWorkspaceMode, project.ActiveBatchId, project.ActiveSpriteSheetId);
-
-    private static AssetAnimationRunView AssetAnimationRunView(
-        AssetAnimationJob job,
-        IReadOnlyList<AssetAnimationCandidate> candidates,
-        IReadOnlyList<AssetAnimationFrameAttempt> attempts,
-        IReadOnlyList<AssetAnimationEvent> events)
-    {
-        var spec = DeserializeAnimationSpecOrNull(job.AnimationSpecJson);
-        var layout = DeserializeLayoutSpecOrNull(job.LayoutSpecJson);
-        var statuses = DeserializeAnimationFrameStatuses(job.FrameStatusesJson);
-        if (statuses.Count == 0 && spec is not null)
-        {
-            statuses = spec.Frames
-                .Select(frame => new AssetAnimationFrameStatusView(frame.Index + 1, frame.Index, "planned", frame.PoseName, job.RecommendedAction))
-                .ToList();
-        }
-
-        var latestAttemptsByFrame = attempts
-            .Where(attempt => attempt.SourceAssetId is not null)
-            .GroupBy(attempt => attempt.FrameIndex)
-            .ToDictionary(group => group.Key, group => group.OrderByDescending(attempt => attempt.AttemptNumber).First());
-        var attemptCountsByFrame = attempts
-            .GroupBy(attempt => attempt.FrameIndex)
-            .ToDictionary(group => group.Key, group => group.Count());
-        var latestError = events
-            .Where(item => string.Equals(item.Severity, "error", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(item => item.CreatedAt)
-            .Select(item => item.Summary)
-            .FirstOrDefault() ?? string.Empty;
-        return new AssetAnimationRunView(
-            job.Id,
-            job.AssetProfileId,
-            job.AssetProfile.CanonicalAssetId,
-            job.AssetProfile.StyleAssetId,
-            job.AssetProfile.Label,
-            job.AssetProfile.AssetType,
-            job.AssetProfile.StructureType,
-            job.GuideAssetId,
-            job.DiagnosticGuideAssetId,
-            job.OutputSpriteSheetId,
-            job.SelectedCandidateId,
-            job.Status,
-            job.AnimationKind,
-            job.Strategy,
-            job.PromptSummary,
-            job.RecommendedAction,
-            job.MaxGenerationRounds,
-            job.GenerationRoundsUsed,
-            job.MaxRepairAttemptsPerFrame,
-            spec?.FrameCount ?? statuses.Count,
-            spec?.Fps ?? 0,
-            spec?.Loop ?? false,
-            spec?.GuideRenderer ?? "sprite_guide_renderer",
-            spec?.GuideRenderStyle ?? string.Empty,
-            spec?.MotionClipId ?? string.Empty,
-            spec?.GuideCameraYawDegrees,
-            spec?.GuideSourcePackage ?? string.Empty,
-            spec?.GuideSourceLicense ?? string.Empty,
-            spec is null ? "" : $"{spec.TargetCellWidth}x{spec.TargetCellHeight}",
-            layout is null ? "" : $"{layout.CanvasWidth}x{layout.CanvasHeight}",
-            layout?.Rows ?? 0,
-            layout?.Columns ?? 0,
-            layout?.BackgroundColor ?? job.AssetProfile.ChromaColor,
-            candidates.Select(candidate => new AssetAnimationRunCandidateView(
-                candidate.Id,
-                candidate.GenerationBatchId,
-                candidate.OutputAssetId,
-                candidate.CandidateIndex,
-                candidate.State,
-                candidate.RawQaStatus)).ToList(),
-            statuses.Select(status =>
-            {
-                latestAttemptsByFrame.TryGetValue(status.Index, out var attempt);
-                return new AssetAnimationRunFrameStatusView(
-                    status.FrameNumber,
-                    status.Index,
-                    status.Status,
-                    status.Reason,
-                    status.RecommendedAction,
-                    status.SourceAssetId ?? attempt?.SourceAssetId,
-                    attemptCountsByFrame.GetValueOrDefault(status.Index));
-            }).ToList(),
-            events.Select(item => new AssetAnimationRunEventView(
-                item.Id,
-                item.EventType,
-                item.Severity,
-                item.Summary,
-                item.PayloadJson,
-                item.CreatedAt)).ToList(),
-            latestError,
-            job.CreatedAt,
-            job.UpdatedAt);
-    }
 
     private static ArtAssetView AssetView(ArtAsset asset) =>
         AssetView(AssetListItem(asset));
@@ -5211,6 +5537,78 @@ public sealed class ArtWorkflowService(
         }
     }
 
+    private static int NormalizeFrameCount(int frameCount, int expectedBoxCount) =>
+        Math.Clamp(frameCount > 0 ? frameCount : expectedBoxCount, 1, 120);
+
+    private static string SerializeFrameOrder(IReadOnlyList<int>? frameOrder, int frameCount) =>
+        JsonSerializer.Serialize(NormalizeFrameOrder(frameOrder, frameCount), JsonOptions);
+
+    private static IReadOnlyList<int> DeserializeFrameOrder(string? value, int frameCount)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return DefaultFrameOrder(frameCount);
+
+        try
+        {
+            return NormalizeFrameOrder(JsonSerializer.Deserialize<List<int>>(value, JsonOptions), frameCount);
+        }
+        catch (JsonException)
+        {
+            return DefaultFrameOrder(frameCount);
+        }
+    }
+
+    private static IReadOnlyList<int> NormalizeFrameOrder(IReadOnlyList<int>? frameOrder, int frameCount)
+    {
+        var count = NormalizeFrameCount(frameCount, 0);
+        var order = (frameOrder ?? [])
+            .Where(index => index >= 0 && index < count)
+            .Distinct()
+            .ToList();
+        if (order.Count == 0)
+            return DefaultFrameOrder(count);
+
+        foreach (var index in DefaultFrameOrder(count))
+        {
+            if (!order.Contains(index))
+                order.Add(index);
+        }
+
+        return order;
+    }
+
+    private static IReadOnlyList<int> DefaultFrameOrder(int frameCount) =>
+        Enumerable.Range(0, NormalizeFrameCount(frameCount, 0)).ToList();
+
+    private static string SerializeFrameBoxes(IReadOnlyList<SpriteSheetRect>? boxes) =>
+        JsonSerializer.Serialize(NormalizeFrameBoxes(boxes), JsonOptions);
+
+    private static IReadOnlyList<SpriteSheetRect> DeserializeFrameBoxes(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+
+        try
+        {
+            return NormalizeFrameBoxes(JsonSerializer.Deserialize<List<SpriteSheetRect>>(value, JsonOptions));
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static IReadOnlyList<SpriteSheetRect> NormalizeFrameBoxes(IReadOnlyList<SpriteSheetRect>? boxes)
+    {
+        if (boxes is null || boxes.Count == 0)
+            return [];
+
+        return boxes
+            .Where(box => box.Width > 0 && box.Height > 0)
+            .Select(NormalizeSpriteRect)
+            .ToList();
+    }
+
     private static string NormalizeHorizontalAnchor(string? value) =>
         value?.Trim().ToLowerInvariant() switch
         {
@@ -5325,6 +5723,91 @@ public sealed class ArtWorkflowService(
             version.ExampleAssetId,
             version.CreatedAt);
 
+    private static AnimationRecipeView AnimationRecipeView(AnimationRecipe recipe) =>
+        new(
+            recipe.Id,
+            recipe.Name,
+            recipe.AnimationKind,
+            recipe.Facing,
+            recipe.FrameCount,
+            DeserializeFrameOrder(recipe.FrameOrderJson, recipe.FrameCount),
+            recipe.Fps,
+            recipe.Loop,
+            recipe.GuideAssetId,
+            DeserializeFrameBoxes(recipe.ExpectedFrameBoxesJson),
+            recipe.AnchorStrategy,
+            recipe.PromptScaffold,
+            recipe.ExportDefaultsJson,
+            recipe.Notes,
+            recipe.PrimaryExampleSpriteSheetId,
+            recipe.CurrentVersion,
+            recipe.CreatedAt,
+            recipe.UpdatedAt);
+
+    private static AnimationRecipeVersionView AnimationRecipeVersionView(AnimationRecipeVersion version) =>
+        new(
+            version.Id,
+            version.AnimationRecipeId,
+            version.Version,
+            version.Name,
+            version.AnimationKind,
+            version.Facing,
+            version.FrameCount,
+            DeserializeFrameOrder(version.FrameOrderJson, version.FrameCount),
+            version.Fps,
+            version.Loop,
+            version.GuideAssetId,
+            DeserializeFrameBoxes(version.ExpectedFrameBoxesJson),
+            version.AnchorStrategy,
+            version.PromptScaffold,
+            version.ExportDefaultsJson,
+            version.Notes,
+            version.PrimaryExampleSpriteSheetId,
+            version.Source,
+            version.ChangeSummary,
+            version.CreatedAt);
+
+    private static ActivityRunView ActivityRunView(
+        ActivityRun run,
+        IReadOnlyList<ActivityStep> steps,
+        IReadOnlyList<ActivityArtifact> artifacts) =>
+        new(
+            run.Id,
+            run.Title,
+            run.Summary,
+            run.Status,
+            run.Actor,
+            run.WorkflowKind,
+            run.PrimaryArtifactId,
+            run.PrimaryArtifactKind,
+            steps
+                .OrderBy(step => step.SortOrder)
+                .ThenBy(step => step.CreatedAt)
+                .Select(step => new ActivityStepView(
+                    step.Id,
+                    step.SortOrder,
+                    step.Kind,
+                    step.Status,
+                    step.Title,
+                    step.Detail,
+                    step.PayloadJson,
+                    step.CreatedAt))
+                .ToList(),
+            artifacts
+                .OrderBy(artifact => artifact.SortOrder)
+                .ThenBy(artifact => artifact.CreatedAt)
+                .Select(artifact => new ActivityArtifactView(
+                    artifact.Id,
+                    artifact.Kind,
+                    artifact.RefId,
+                    artifact.Label,
+                    artifact.Notes,
+                    artifact.SortOrder,
+                    artifact.CreatedAt))
+                .ToList(),
+            run.CreatedAt,
+            run.UpdatedAt);
+
     private static ImageMaskView MaskView(ImageMask mask) =>
         MaskView(ToImageMaskListItem(mask));
 
@@ -5414,8 +5897,6 @@ public sealed class ArtWorkflowService(
                  frame.IsKeyframe,
                  frame.PivotX,
                  frame.PivotY,
-                 frame.SourceAnimationJobId,
-                 frame.SourceAnimationCandidateId,
                  frame.AppliedScale,
                  frame.TranslationX,
                  frame.TranslationY,
@@ -5459,8 +5940,6 @@ public sealed class ArtWorkflowService(
             frame.IsKeyframe,
             frame.PivotX,
             frame.PivotY,
-            frame.SourceAnimationJobId,
-            frame.SourceAnimationCandidateId,
             frame.AppliedScale,
             frame.TranslationX,
             frame.TranslationY,
@@ -5509,6 +5988,24 @@ public sealed class ArtWorkflowService(
         if (string.IsNullOrWhiteSpace(trimmed))
             throw new InvalidOperationException(error);
         return trimmed;
+    }
+
+    private static string NormalizeJsonObject(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "{}";
+
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                ? JsonSerializer.Serialize(document.RootElement, JsonOptions)
+                : "{}";
+        }
+        catch (JsonException)
+        {
+            return "{}";
+        }
     }
 
     private static string CleanSpriteSheetLabel(string value, string sourceLabel)
@@ -5744,8 +6241,6 @@ public sealed class ArtWorkflowService(
             frame.IsKeyframe,
             frame.PivotX,
             frame.PivotY,
-            frame.SourceAnimationJobId,
-            frame.SourceAnimationCandidateId,
             frame.AppliedScale,
             frame.TranslationX,
             frame.TranslationY,
@@ -5880,48 +6375,6 @@ public sealed class ArtWorkflowService(
         try
         {
             return JsonSerializer.Deserialize<List<string>>(value) ?? [];
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-    }
-
-    private static AnimationSpec? DeserializeAnimationSpecOrNull(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-        try
-        {
-            return JsonSerializer.Deserialize<AnimationSpec>(value, JsonOptions);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static LayoutSpec? DeserializeLayoutSpecOrNull(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-        try
-        {
-            return JsonSerializer.Deserialize<LayoutSpec>(value, JsonOptions);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static List<AssetAnimationFrameStatusView> DeserializeAnimationFrameStatuses(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return [];
-        try
-        {
-            return JsonSerializer.Deserialize<List<AssetAnimationFrameStatusView>>(value, JsonOptions) ?? [];
         }
         catch (JsonException)
         {
@@ -6123,8 +6576,6 @@ public sealed class ArtWorkflowService(
         bool IsKeyframe = false,
         int PivotX = 0,
         int PivotY = 0,
-        Guid? SourceAnimationJobId = null,
-        Guid? SourceAnimationCandidateId = null,
         double AppliedScale = 1,
         int TranslationX = 0,
         int TranslationY = 0,

@@ -58,10 +58,6 @@ public class SpriteSheetFrameRecord
     public bool IsKeyframe { get; set; }
     public int PivotX { get; set; }
     public int PivotY { get; set; }
-    public Guid? SourceAnimationJobId { get; set; }
-    public AssetAnimationJob? SourceAnimationJob { get; set; }
-    public Guid? SourceAnimationCandidateId { get; set; }
-    public AssetAnimationCandidate? SourceAnimationCandidate { get; set; }
     public double AppliedScale { get; set; } = 1d;
     public int TranslationX { get; set; }
     public int TranslationY { get; set; }

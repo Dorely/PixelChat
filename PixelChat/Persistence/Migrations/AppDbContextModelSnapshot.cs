@@ -17,6 +17,337 @@ namespace PixelChat.Persistence.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
 
+            modelBuilder.Entity("PixelChat.Models.ActivityArtifact", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ActivityRunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("RefId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActivityRunId", "SortOrder");
+
+                    b.HasIndex("ProjectId", "Kind", "RefId");
+
+                    b.ToTable("ActivityArtifacts");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.ActivityRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("system");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("PrimaryArtifactId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PrimaryArtifactKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("running");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WorkflowKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "UpdatedAt");
+
+                    b.HasIndex("ProjectId", "WorkflowKind");
+
+                    b.ToTable("ActivityRuns");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.ActivityStep", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ActivityRunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Detail")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("{}");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("completed");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId");
+
+                    b.HasIndex("ActivityRunId", "SortOrder");
+
+                    b.ToTable("ActivitySteps");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.AnimationRecipe", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AnchorStrategy")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("recipe-defined");
+
+                    b.Property<string>("AnimationKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("CurrentVersion")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ExpectedFrameBoxesJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]");
+
+                    b.Property<string>("ExportDefaultsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("{}");
+
+                    b.Property<string>("Facing")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Fps")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("FrameCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("FrameOrderJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]");
+
+                    b.Property<Guid?>("GuideAssetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Loop")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("PrimaryExampleSpriteSheetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PromptScaffold")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GuideAssetId");
+
+                    b.HasIndex("PrimaryExampleSpriteSheetId");
+
+                    b.HasIndex("ProjectId", "Name");
+
+                    b.ToTable("AnimationRecipes");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.AnimationRecipeVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AnchorStrategy")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("recipe-defined");
+
+                    b.Property<string>("AnimationKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("AnimationRecipeId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChangeSummary")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExpectedFrameBoxesJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]");
+
+                    b.Property<string>("ExportDefaultsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("{}");
+
+                    b.Property<string>("Facing")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Fps")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("FrameCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("FrameOrderJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]");
+
+                    b.Property<Guid?>("GuideAssetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Loop")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("PrimaryExampleSpriteSheetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PromptScaffold")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AnimationRecipeId", "Version")
+                        .IsUnique();
+
+                    b.HasIndex("ProjectId", "AnimationRecipeId");
+
+                    b.ToTable("AnimationRecipeVersions");
+                });
+
             modelBuilder.Entity("PixelChat.Models.ArtAsset", b =>
                 {
                     b.Property<Guid>("Id")
@@ -99,377 +430,6 @@ namespace PixelChat.Persistence.Migrations
                     b.HasIndex("ProjectId", "CreatedAt");
 
                     b.ToTable("ArtAssets");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetAnimationCandidate", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("AssetAnimationJobId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("CandidateIndex")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid?>("GenerationBatchId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid?>("OutputAssetId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("ProjectId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("RawQaStatus")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("pending");
-
-                    b.Property<string>("RawQaSummaryJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("{}");
-
-                    b.Property<string>("State")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("generated");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AssetAnimationJobId");
-
-                    b.HasIndex("GenerationBatchId");
-
-                    b.HasIndex("OutputAssetId");
-
-                    b.HasIndex("ProjectId", "AssetAnimationJobId", "CandidateIndex")
-                        .IsUnique();
-
-                    b.ToTable("AssetAnimationCandidates");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetAnimationEvent", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("AssetAnimationJobId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("EventType")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PayloadJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("{}");
-
-                    b.Property<Guid>("ProjectId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Severity")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("info");
-
-                    b.Property<string>("Summary")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AssetAnimationJobId", "CreatedAt");
-
-                    b.HasIndex("ProjectId", "CreatedAt");
-
-                    b.ToTable("AssetAnimationEvents");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetAnimationFrameAttempt", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid?>("AssetAnimationCandidateId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("AssetAnimationJobId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AttemptKind")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("mark");
-
-                    b.Property<int>("AttemptNumber")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("FailureReason")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("FrameIndex")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<Guid>("ProjectId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("RepairHistoryJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("[]");
-
-                    b.Property<Guid?>("SourceAssetId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("SourceHeight")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("SourceWidth")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("SourceX")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("SourceY")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("pending");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AssetAnimationCandidateId");
-
-                    b.HasIndex("AssetAnimationJobId");
-
-                    b.HasIndex("SourceAssetId");
-
-                    b.HasIndex("ProjectId", "AssetAnimationJobId", "FrameIndex", "AttemptNumber");
-
-                    b.ToTable("AssetAnimationFrameAttempts");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetAnimationJob", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AnimationKind")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AnimationSpecJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("{}");
-
-                    b.Property<Guid>("AssetProfileId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid?>("DiagnosticGuideAssetId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("FrameQaSummaryJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("{}");
-
-                    b.Property<string>("FrameStatusesJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("[]");
-
-                    b.Property<int>("GenerationRoundsUsed")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<Guid?>("GuideAssetId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("LayoutSpecJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("{}");
-
-                    b.Property<int>("MaxGenerationRounds")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("MaxRepairAttemptsPerFrame")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("MotionQaSummaryJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("{}");
-
-                    b.Property<Guid?>("OutputSpriteSheetId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("ProjectId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PromptSummary")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("RawQaSummaryJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("{}");
-
-                    b.Property<string>("RecommendedAction")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid?>("SelectedCandidateId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("planned");
-
-                    b.Property<string>("Strategy")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("hybrid");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AssetProfileId");
-
-                    b.HasIndex("DiagnosticGuideAssetId");
-
-                    b.HasIndex("GuideAssetId");
-
-                    b.HasIndex("OutputSpriteSheetId");
-
-                    b.HasIndex("SelectedCandidateId");
-
-                    b.HasIndex("ProjectId", "CreatedAt");
-
-                    b.ToTable("AssetAnimationJobs");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetProfile", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AssetType")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("unit");
-
-                    b.Property<Guid>("CanonicalAssetId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ChromaColor")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("#ff00ff");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ForbiddenChangesJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("[]");
-
-                    b.Property<bool>("Frozen")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Label")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PaletteJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("[]");
-
-                    b.Property<Guid>("ProjectId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("RequiredFeaturesJson")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("[]");
-
-                    b.Property<string>("StructureType")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("biped");
-
-                    b.Property<Guid?>("StyleAssetId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CanonicalAssetId");
-
-                    b.HasIndex("StyleAssetId");
-
-                    b.HasIndex("ProjectId", "CreatedAt");
-
-                    b.ToTable("AssetProfiles");
                 });
 
             modelBuilder.Entity("PixelChat.Models.AssistantConversation", b =>
@@ -1421,12 +1381,6 @@ namespace PixelChat.Persistence.Migrations
                         .HasColumnType("TEXT")
                         .HasDefaultValue("[]");
 
-                    b.Property<Guid?>("SourceAnimationCandidateId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid?>("SourceAnimationJobId")
-                        .HasColumnType("TEXT");
-
                     b.Property<int>("SourceHeight")
                         .HasColumnType("INTEGER");
 
@@ -1508,10 +1462,6 @@ namespace PixelChat.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("SourceAnimationCandidateId");
-
-                    b.HasIndex("SourceAnimationJobId");
-
                     b.HasIndex("SourceImageAssetId");
 
                     b.HasIndex("SpriteSheetDefinitionId");
@@ -1550,6 +1500,99 @@ namespace PixelChat.Persistence.Migrations
                     b.ToTable("StoredSecrets");
                 });
 
+            modelBuilder.Entity("PixelChat.Models.ActivityArtifact", b =>
+                {
+                    b.HasOne("PixelChat.Models.ActivityRun", "ActivityRun")
+                        .WithMany("Artifacts")
+                        .HasForeignKey("ActivityRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PixelChat.Models.Project", "Project")
+                        .WithMany("ActivityArtifacts")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ActivityRun");
+
+                    b.Navigation("Project");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.ActivityRun", b =>
+                {
+                    b.HasOne("PixelChat.Models.Project", "Project")
+                        .WithMany("ActivityRuns")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Project");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.ActivityStep", b =>
+                {
+                    b.HasOne("PixelChat.Models.ActivityRun", "ActivityRun")
+                        .WithMany("Steps")
+                        .HasForeignKey("ActivityRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PixelChat.Models.Project", "Project")
+                        .WithMany("ActivitySteps")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ActivityRun");
+
+                    b.Navigation("Project");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.AnimationRecipe", b =>
+                {
+                    b.HasOne("PixelChat.Models.ArtAsset", "GuideAsset")
+                        .WithMany()
+                        .HasForeignKey("GuideAssetId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("PixelChat.Models.SpriteSheetDefinition", "PrimaryExampleSpriteSheet")
+                        .WithMany()
+                        .HasForeignKey("PrimaryExampleSpriteSheetId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("PixelChat.Models.Project", "Project")
+                        .WithMany("AnimationRecipes")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("GuideAsset");
+
+                    b.Navigation("PrimaryExampleSpriteSheet");
+
+                    b.Navigation("Project");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.AnimationRecipeVersion", b =>
+                {
+                    b.HasOne("PixelChat.Models.AnimationRecipe", "AnimationRecipe")
+                        .WithMany("Versions")
+                        .HasForeignKey("AnimationRecipeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PixelChat.Models.Project", "Project")
+                        .WithMany("AnimationRecipeVersions")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("AnimationRecipe");
+
+                    b.Navigation("Project");
+                });
+
             modelBuilder.Entity("PixelChat.Models.ArtAsset", b =>
                 {
                     b.HasOne("PixelChat.Models.ArtAsset", "ParentAsset")
@@ -1580,164 +1623,6 @@ namespace PixelChat.Persistence.Migrations
                     b.Navigation("SourceBatch");
 
                     b.Navigation("SourcePromptRecipe");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetAnimationCandidate", b =>
-                {
-                    b.HasOne("PixelChat.Models.AssetAnimationJob", "AssetAnimationJob")
-                        .WithMany("Candidates")
-                        .HasForeignKey("AssetAnimationJobId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PixelChat.Models.GenerationBatch", "GenerationBatch")
-                        .WithMany()
-                        .HasForeignKey("GenerationBatchId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("PixelChat.Models.ArtAsset", "OutputAsset")
-                        .WithMany()
-                        .HasForeignKey("OutputAssetId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("PixelChat.Models.Project", "Project")
-                        .WithMany("AssetAnimationCandidates")
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("AssetAnimationJob");
-
-                    b.Navigation("GenerationBatch");
-
-                    b.Navigation("OutputAsset");
-
-                    b.Navigation("Project");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetAnimationEvent", b =>
-                {
-                    b.HasOne("PixelChat.Models.AssetAnimationJob", "AssetAnimationJob")
-                        .WithMany("Events")
-                        .HasForeignKey("AssetAnimationJobId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PixelChat.Models.Project", "Project")
-                        .WithMany("AssetAnimationEvents")
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("AssetAnimationJob");
-
-                    b.Navigation("Project");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetAnimationFrameAttempt", b =>
-                {
-                    b.HasOne("PixelChat.Models.AssetAnimationCandidate", "AssetAnimationCandidate")
-                        .WithMany("FrameAttempts")
-                        .HasForeignKey("AssetAnimationCandidateId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("PixelChat.Models.AssetAnimationJob", "AssetAnimationJob")
-                        .WithMany("FrameAttempts")
-                        .HasForeignKey("AssetAnimationJobId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PixelChat.Models.Project", "Project")
-                        .WithMany("AssetAnimationFrameAttempts")
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PixelChat.Models.ArtAsset", "SourceAsset")
-                        .WithMany()
-                        .HasForeignKey("SourceAssetId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("AssetAnimationCandidate");
-
-                    b.Navigation("AssetAnimationJob");
-
-                    b.Navigation("Project");
-
-                    b.Navigation("SourceAsset");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetAnimationJob", b =>
-                {
-                    b.HasOne("PixelChat.Models.AssetProfile", "AssetProfile")
-                        .WithMany("AnimationJobs")
-                        .HasForeignKey("AssetProfileId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PixelChat.Models.ArtAsset", "DiagnosticGuideAsset")
-                        .WithMany()
-                        .HasForeignKey("DiagnosticGuideAssetId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("PixelChat.Models.ArtAsset", "GuideAsset")
-                        .WithMany()
-                        .HasForeignKey("GuideAssetId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("PixelChat.Models.SpriteSheetDefinition", "OutputSpriteSheet")
-                        .WithMany()
-                        .HasForeignKey("OutputSpriteSheetId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("PixelChat.Models.Project", "Project")
-                        .WithMany("AssetAnimationJobs")
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PixelChat.Models.AssetAnimationCandidate", "SelectedCandidate")
-                        .WithMany()
-                        .HasForeignKey("SelectedCandidateId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("AssetProfile");
-
-                    b.Navigation("DiagnosticGuideAsset");
-
-                    b.Navigation("GuideAsset");
-
-                    b.Navigation("OutputSpriteSheet");
-
-                    b.Navigation("Project");
-
-                    b.Navigation("SelectedCandidate");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetProfile", b =>
-                {
-                    b.HasOne("PixelChat.Models.ArtAsset", "CanonicalAsset")
-                        .WithMany()
-                        .HasForeignKey("CanonicalAssetId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PixelChat.Models.Project", "Project")
-                        .WithMany("AssetProfiles")
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PixelChat.Models.ArtAsset", "StyleAsset")
-                        .WithMany()
-                        .HasForeignKey("StyleAssetId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("CanonicalAsset");
-
-                    b.Navigation("Project");
-
-                    b.Navigation("StyleAsset");
                 });
 
             modelBuilder.Entity("PixelChat.Models.AssistantConversation", b =>
@@ -1945,16 +1830,6 @@ namespace PixelChat.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("PixelChat.Models.AssetAnimationCandidate", "SourceAnimationCandidate")
-                        .WithMany()
-                        .HasForeignKey("SourceAnimationCandidateId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("PixelChat.Models.AssetAnimationJob", "SourceAnimationJob")
-                        .WithMany()
-                        .HasForeignKey("SourceAnimationJobId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("PixelChat.Models.ArtAsset", "SourceImageAsset")
                         .WithMany()
                         .HasForeignKey("SourceImageAssetId")
@@ -1968,37 +1843,26 @@ namespace PixelChat.Persistence.Migrations
 
                     b.Navigation("Project");
 
-                    b.Navigation("SourceAnimationCandidate");
-
-                    b.Navigation("SourceAnimationJob");
-
                     b.Navigation("SourceImageAsset");
 
                     b.Navigation("SpriteSheetDefinition");
                 });
 
+            modelBuilder.Entity("PixelChat.Models.ActivityRun", b =>
+                {
+                    b.Navigation("Artifacts");
+
+                    b.Navigation("Steps");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.AnimationRecipe", b =>
+                {
+                    b.Navigation("Versions");
+                });
+
             modelBuilder.Entity("PixelChat.Models.ArtAsset", b =>
                 {
                     b.Navigation("ChildAssets");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetAnimationCandidate", b =>
-                {
-                    b.Navigation("FrameAttempts");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetAnimationJob", b =>
-                {
-                    b.Navigation("Candidates");
-
-                    b.Navigation("Events");
-
-                    b.Navigation("FrameAttempts");
-                });
-
-            modelBuilder.Entity("PixelChat.Models.AssetProfile", b =>
-                {
-                    b.Navigation("AnimationJobs");
                 });
 
             modelBuilder.Entity("PixelChat.Models.AssistantConversation", b =>
@@ -2027,15 +1891,15 @@ namespace PixelChat.Persistence.Migrations
 
             modelBuilder.Entity("PixelChat.Models.Project", b =>
                 {
-                    b.Navigation("AssetAnimationCandidates");
+                    b.Navigation("ActivityArtifacts");
 
-                    b.Navigation("AssetAnimationEvents");
+                    b.Navigation("ActivityRuns");
 
-                    b.Navigation("AssetAnimationFrameAttempts");
+                    b.Navigation("ActivitySteps");
 
-                    b.Navigation("AssetAnimationJobs");
+                    b.Navigation("AnimationRecipeVersions");
 
-                    b.Navigation("AssetProfiles");
+                    b.Navigation("AnimationRecipes");
 
                     b.Navigation("Assets");
 

@@ -52,8 +52,8 @@ else
 
             <nav class="mode-tabs" aria-label="Workspace mode">
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Generate)" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">Generate</button>
-                <button type="button" class="@ModeButtonClass(WorkspaceMode.Runs)" @onclick="() => SetModeAsync(WorkspaceMode.Runs)">Runs</button>
-                <button type="button" class="@ModeButtonClass(WorkspaceMode.Compare)" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Compare</button>
+                <button type="button" class="@ModeButtonClass(WorkspaceMode.Runs)" @onclick="() => SetModeAsync(WorkspaceMode.Runs)">Activity</button>
+                <button type="button" class="@ModeButtonClass(WorkspaceMode.Compare)" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Review</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Edit)" @onclick="() => SetModeAsync(WorkspaceMode.Edit)">Edit</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Sprites)" @onclick="() => SetModeAsync(WorkspaceMode.Sprites)">Sprites</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Recipes)" @onclick="() => SetModeAsync(WorkspaceMode.Recipes)">Recipes</button>
@@ -149,7 +149,6 @@ else
     private ImageGenerationRuntimeSnapshot _generationRuntimeSnapshot = new([]);
     private WorkspaceMode _activeWorkspaceMode = WorkspaceMode.Generate;
     private Guid? _activeWorkspaceProjectId;
-    private Guid? _selectedRunJobId;
     private int _workspaceModePersistRequestVersion;
     private int _workspaceModePersistCompleteVersion;
     private ChatLiveTurn? _live;
@@ -313,8 +312,6 @@ else
             _editAssetId = null;
         if (_exportAsset is { } exportAsset && !_workbench.Assets.Any(asset => asset.Id == exportAsset.Id))
             ResetExportModal();
-        if (_selectedRunJobId is not Guid selectedRunJobId || !_workbench.AnimationRuns.Any(run => run.Id == selectedRunJobId))
-            _selectedRunJobId = _workbench.AnimationRuns.FirstOrDefault()?.Id;
         _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
         if (_recipeExampleAssetId is Guid recipeExampleAssetId && !_workbench.Assets.Any(asset => asset.Id == recipeExampleAssetId))
             _recipeExampleAssetId = null;
@@ -382,7 +379,6 @@ else
         _input = string.Empty;
         _loadedEditorAssetId = null;
         _draftReferenceAssetIds.Clear();
-        _selectedRunJobId = null;
         _editAssetId = null;
         _assetDeleteCandidateId = null;
         ResetExportModal();
@@ -447,7 +443,7 @@ else
 
                 <div class="form-grid">
                     <label>
-                        <span>Recipe</span>
+                        <span>Art Recipe</span>
                         <select class="form-select" value="@_generateRecipeText" @onchange="OnGenerateRecipeChanged">
                             <option value="">None</option>
                             @foreach (var recipe in _workbench.Recipes)
@@ -513,45 +509,39 @@ else
 
     private RenderFragment RenderRunsWorkspace() => __builder =>
     {
-        var runs = _workbench!.AnimationRuns
+        var activityRuns = _workbench!.ActivityRuns
             .OrderByDescending(run => run.UpdatedAt)
             .ToList();
-        var selectedRun = SelectedRun();
 
         <div class="workspace-panel runs-panel">
             <div class="panel-head">
                 <div>
-                    <h1>Runs</h1>
-                    <span>@($"{runs.Count} animation job(s), {_workbench.Batches.Count} generation batch(es)")</span>
+                    <h1>Activity</h1>
+                    <span>@($"{activityRuns.Count} workflow event(s), {_workbench.Batches.Count} generation batch(es)")</span>
                 </div>
                 <div class="panel-actions">
-                    <button type="button" class="btn btn-outline-secondary" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Compare</button>
+                    <button type="button" class="btn btn-outline-secondary" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Review</button>
                     <button type="button" class="btn btn-outline-secondary" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">Generate</button>
                 </div>
             </div>
 
             <div class="runs-layout">
                 <aside class="runs-sidebar">
-                    <div class="section-title">Animation Jobs</div>
-                    @if (runs.Count == 0)
+                    <div class="section-title">Workflow Activity</div>
+                    @if (activityRuns.Count == 0)
                     {
-                        <div class="empty-context">No animation jobs yet.</div>
+                        <div class="empty-context">No activity has been recorded yet.</div>
                     }
                     else
                     {
-                        @foreach (var run in runs)
+                        @foreach (var activity in activityRuns.Take(24))
                         {
-                            <button type="button"
-                                    class="run-list-row @(run.Id == selectedRun?.Id ? "is-active" : "")"
-                                    @onclick="() => SelectRun(run.Id)">
-                                <span class="run-list-title">@run.AnimationKind</span>
-                                <span class="@RunStatusClass(run.Status)">@run.Status</span>
-                                <small>@($"{run.FrameCount} frames / {run.Fps} fps")</small>
-                                @if (!string.IsNullOrWhiteSpace(run.LatestError))
-                                {
-                                    <small class="run-error-line">@run.LatestError</small>
-                                }
-                            </button>
+                            <div class="run-list-row">
+                                <span class="run-list-title">@activity.Title</span>
+                                <span class="@RunStatusClass(activity.Status)">@activity.Status</span>
+                                <small>@(string.IsNullOrWhiteSpace(activity.Summary) ? activity.WorkflowKind : activity.Summary)</small>
+                                <small>@activity.UpdatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)</small>
+                            </div>
                         }
                     }
 
@@ -569,242 +559,71 @@ else
                 </aside>
 
                 <section class="runs-detail">
-                    @if (selectedRun is null)
-                    {
-                        <div class="empty-state">Start an animation job or generation batch to see run progress here.</div>
-                        @RenderRunBatchesSection()
-                    }
-                    else
-                    {
-                        <div class="run-summary">
-                            <div>
-                                <div class="asset-title-row">
-                                    <strong>@selectedRun.AnimationKind</strong>
-                                    <span class="@RunStatusClass(selectedRun.Status)">@selectedRun.Status</span>
-                                </div>
-                                <p>@(string.IsNullOrWhiteSpace(selectedRun.PromptSummary) ? selectedRun.ProfileLabel : selectedRun.PromptSummary)</p>
-                            </div>
-                            <div class="run-stat-grid">
-                                <span><strong>@selectedRun.RecommendedAction</strong><small>Next action</small></span>
-                                <span><strong>@($"{selectedRun.GenerationRoundsUsed}/{selectedRun.MaxGenerationRounds}")</strong><small>Budget</small></span>
-                                <span><strong>@($"{selectedRun.Columns}x{selectedRun.Rows}")</strong><small>Guide grid</small></span>
-                                <span><strong>@selectedRun.TargetCellSize</strong><small>Export cells</small></span>
-                                <span><strong>@(string.IsNullOrWhiteSpace(selectedRun.MotionClipId) ? selectedRun.GuideRenderer : selectedRun.MotionClipId)</strong><small>Guide source</small></span>
-                            </div>
-                        </div>
-
-                        @if (!string.IsNullOrWhiteSpace(selectedRun.LatestError))
-                        {
-                            <div class="provider-warning">@selectedRun.LatestError</div>
-                        }
-
-                        @RenderRunArtifacts(selectedRun)
-
-                        <section class="run-section">
-                            <div class="section-title">Candidates</div>
-                            @if (selectedRun.Candidates.Count == 0)
-                            {
-                                <div class="empty-context">No completed candidates yet. Running batches appear in Recent Batches while they are active.</div>
-                            }
-                            else
-                            {
-                                <div class="run-candidate-grid">
-                                    @foreach (var candidate in selectedRun.Candidates)
-                                    {
-                                        @RenderRunCandidateCard(candidate)
-                                    }
-                                </div>
-                            }
-                        </section>
-
-                        <section class="run-section">
-                            <div class="section-title">Frames</div>
-                            @if (selectedRun.Frames.Count == 0)
-                            {
-                                <div class="empty-context">No frame decisions have been recorded.</div>
-                            }
-                            else
-                            {
-                                <div class="run-frame-table">
-                                    <div class="run-frame-header">
-                                        <span>Frame</span>
-                                        <span>Status</span>
-                                        <span>Reason</span>
-                                        <span>Source</span>
-                                        <span>Attempts</span>
-                                    </div>
-                                    @foreach (var frame in selectedRun.Frames.OrderBy(frame => frame.Index))
-                                    {
-                                        var sourceAsset = frame.SourceAssetId is Guid sourceAssetId
-                                            ? _workbench.Assets.FirstOrDefault(asset => asset.Id == sourceAssetId)
-                                            : null;
-                                        <div class="run-frame-row">
-                                            <span>@frame.FrameNumber</span>
-                                            <span class="@RunStatusClass(frame.Status)">@frame.Status</span>
-                                            <span>@(string.IsNullOrWhiteSpace(frame.Reason) ? frame.RecommendedAction : frame.Reason)</span>
-                                            <span>
-                                                @if (sourceAsset is not null)
-                                                {
-                                                    <button type="button" class="run-thumb-button" @onclick="() => OpenAssetReviewPreview(sourceAsset)">
-                                                        <LazyImage Src="@sourceAsset.PreviewImageUrl" Alt="@sourceAsset.Label" Width="40" Height="40" />
-                                                    </button>
-                                                }
-                                                else
-                                                {
-                                                    <small>Candidate</small>
-                                                }
-                                            </span>
-                                            <span>@frame.AttemptCount</span>
-                                        </div>
-                                    }
-                                </div>
-                            }
-                        </section>
-
-                        <section class="run-section">
-                            <div class="section-title">Timeline</div>
-                            @if (selectedRun.Events.Count == 0)
-                            {
-                                <div class="empty-context">No timeline entries yet.</div>
-                            }
-                            else
-                            {
-                                <div class="run-timeline">
-                                    @foreach (var item in selectedRun.Events.OrderByDescending(item => item.CreatedAt))
-                                    {
-                                        <details class="run-event">
-                                            <summary>
-                                                <span class="@RunStatusClass(item.Severity)">@item.Severity</span>
-                                                <strong>@item.EventType</strong>
-                                                <span>@item.Summary</span>
-                                                <small>@item.CreatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)</small>
-                                            </summary>
-                                            @if (!string.IsNullOrWhiteSpace(item.PayloadJson) && item.PayloadJson != "{}")
-                                            {
-                                                <pre>@item.PayloadJson</pre>
-                                            }
-                                        </details>
-                                    }
-                                </div>
-                            }
-                        </section>
-
-                        <details class="run-details">
-                            <summary>Prompt and plan details</summary>
-                            <dl>
-                                <dt>Profile</dt>
-                                <dd>@($"{selectedRun.ProfileLabel} / {selectedRun.AssetType} / {selectedRun.StructureType}")</dd>
-                                <dt>Strategy</dt>
-                                <dd>@selectedRun.Strategy</dd>
-                                <dt>Guide renderer</dt>
-                                <dd>@($"{selectedRun.GuideRenderer}{(string.IsNullOrWhiteSpace(selectedRun.GuideRenderStyle) ? "" : $" / {selectedRun.GuideRenderStyle}")}{(string.IsNullOrWhiteSpace(selectedRun.MotionClipId) ? "" : $" / {selectedRun.MotionClipId}")}")</dd>
-                                @if (selectedRun.GuideCameraYawDegrees is double yaw)
-                                {
-                                    <dt>Facing yaw</dt>
-                                    <dd>@($"{selectedRun.AnimationKind} / {yaw:0.#} degrees")</dd>
-                                }
-                                @if (!string.IsNullOrWhiteSpace(selectedRun.GuideSourcePackage))
-                                {
-                                    <dt>Motion source</dt>
-                                    <dd>@($"{selectedRun.GuideSourcePackage} / {selectedRun.GuideSourceLicense}")</dd>
-                                }
-                                <dt>Layout</dt>
-                                <dd>@($"{selectedRun.LayoutSize} guide, {selectedRun.TargetCellSize} target cells, {selectedRun.ChromaColor} chroma")</dd>
-                                <dt>Prompt summary</dt>
-                                <dd>@(string.IsNullOrWhiteSpace(selectedRun.PromptSummary) ? "Not provided." : selectedRun.PromptSummary)</dd>
-                            </dl>
-                        </details>
-
-                        @RenderRunBatchesSection()
-                    }
+                    <div class="empty-state">Workflow activity appears here as the assistant and editor create candidates, split frames, repair, review, and export.</div>
+                    @RenderActivityDetailSection(activityRuns)
+                    @RenderRunBatchesSection()
                 </section>
             </div>
         </div>
     };
 
-    private RenderFragment RenderRunArtifacts(AssetAnimationRunView run) => __builder =>
+    private RenderFragment RenderActivityDetailSection(IReadOnlyList<ActivityRunView> activityRuns) => __builder =>
     {
-        var canonical = _workbench!.Assets.FirstOrDefault(asset => asset.Id == run.CanonicalAssetId);
-        var style = run.StyleAssetId is Guid styleAssetId ? _workbench.Assets.FirstOrDefault(asset => asset.Id == styleAssetId) : null;
-        var guide = run.GuideAssetId is Guid guideAssetId ? _workbench.Assets.FirstOrDefault(asset => asset.Id == guideAssetId) : null;
-        var diagnostic = run.DiagnosticGuideAssetId is Guid diagnosticId ? _workbench.Assets.FirstOrDefault(asset => asset.Id == diagnosticId) : null;
-        var sheet = run.OutputSpriteSheetId is Guid sheetId ? _workbench.SpriteSheets.FirstOrDefault(item => item.Id == sheetId) : null;
-        var sheetAsset = sheet is null ? null : ReviewSpriteSheetAsset(sheet);
-
         <section class="run-section">
-            <div class="section-title">Artifacts</div>
-            <div class="run-artifact-strip">
-                @RenderRunArtifactButton("Profile", canonical)
-                @RenderRunArtifactButton("Style", style)
-                @RenderRunArtifactButton("Guide", guide)
-                @RenderRunArtifactButton("Diagnostic", diagnostic)
-                @RenderRunArtifactButton("Sheet", sheetAsset)
-            </div>
-            @if (sheet is not null)
+            <div class="section-title">Recent Activity</div>
+            @if (activityRuns.Count == 0)
             {
-                <div class="run-final-preview">
-                    <SpriteAnimationPreview Sheet="@sheet" CssClass="run-animation-canvas" Title="@run.AnimationKind" />
+                <div class="empty-context">No workflow steps have been recorded.</div>
+            }
+            else
+            {
+                <div class="run-timeline">
+                    @foreach (var activity in activityRuns.Take(20))
+                    {
+                        <details class="run-event" open="@(activity == activityRuns.First())">
+                            <summary>
+                                <span class="@RunStatusClass(activity.Status)">@activity.Status</span>
+                                <strong>@activity.Title</strong>
+                                <span>@activity.Summary</span>
+                                <small>@activity.UpdatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)</small>
+                            </summary>
+                            @if (activity.Steps.Count > 0)
+                            {
+                                <div class="run-frame-table">
+                                    <div class="run-frame-header">
+                                        <span>Step</span>
+                                        <span>Status</span>
+                                        <span>Detail</span>
+                                        <span>Time</span>
+                                    </div>
+                                    @foreach (var step in activity.Steps.OrderBy(step => step.SortOrder))
+                                    {
+                                        <div class="run-frame-row">
+                                            <span>@step.Title</span>
+                                            <span class="@RunStatusClass(step.Status)">@step.Status</span>
+                                            <span>@step.Detail</span>
+                                            <span>@step.CreatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)</span>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            @if (activity.Artifacts.Count > 0)
+                            {
+                                <div class="run-artifact-strip">
+                                    @foreach (var artifact in activity.Artifacts)
+                                    {
+                                        <div class="run-artifact">
+                                            <span>@artifact.Kind</span>
+                                            <small>@artifact.Label</small>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </details>
+                    }
                 </div>
             }
         </section>
-    };
-
-    private RenderFragment RenderRunArtifactButton(string label, ArtAssetView? asset) => __builder =>
-    {
-        <div class="run-artifact">
-            <span>@label</span>
-            @if (asset is null)
-            {
-                <div class="run-artifact-empty">None</div>
-            }
-            else
-            {
-                <button type="button" class="run-artifact-thumb" @onclick="() => OpenAssetReviewPreview(asset)">
-                    <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" Width="88" Height="88" />
-                </button>
-                <small>@asset.Label</small>
-            }
-        </div>
-    };
-
-    private RenderFragment RenderRunCandidateCard(AssetAnimationRunCandidateView candidate) => __builder =>
-    {
-        var asset = candidate.OutputAssetId is Guid assetId ? _workbench!.Assets.FirstOrDefault(item => item.Id == assetId) : null;
-        var batch = candidate.GenerationBatchId is Guid batchId ? _workbench!.Batches.FirstOrDefault(item => item.Id == batchId) : null;
-        var outputIndex = asset?.BatchOutputIndex ?? Math.Max(0, candidate.CandidateIndex);
-        var runtimeOutput = candidate.GenerationBatchId is Guid runtimeBatchId
-            ? _generationRuntimeSnapshot.Batches
-                .FirstOrDefault(item => item.BatchId == runtimeBatchId)
-                ?.Outputs
-                .FirstOrDefault(output => output.OutputIndex == outputIndex)
-            : null;
-        <article class="run-candidate-card">
-            <div class="asset-title-row">
-                <strong>@($"Candidate {candidate.CandidateIndex + 1}")</strong>
-                <span class="@RunStatusClass(candidate.RawQaStatus)">@candidate.RawQaStatus</span>
-            </div>
-            @if (asset is not null)
-            {
-                <button type="button" class="run-candidate-thumb" @onclick="() => OpenAssetReviewPreview(asset)">
-                    <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" />
-                </button>
-                <p>@($"{candidate.State} / {FormatDimensions(asset)}")</p>
-            }
-            else if (!string.IsNullOrWhiteSpace(runtimeOutput?.PartialImageDataUrl))
-            {
-                <button type="button"
-                        class="run-candidate-thumb"
-                        @onclick="() => OpenGenerationPartialReviewPreview(new GenerationOutputStateView(outputIndex, runtimeOutput.Status, runtimeOutput.Attempt, runtimeOutput.Message), runtimeOutput.PartialImageDataUrl!, runtimeOutput.Status.ToString())">
-                    <img src="@runtimeOutput.PartialImageDataUrl" alt="@($"Partial candidate {candidate.CandidateIndex + 1}")" />
-                </button>
-                <p>@runtimeOutput.Message</p>
-            }
-            else
-            {
-                <div class="run-candidate-pending">@((batch is null ? "No batch" : batch.Status.ToString()))</div>
-            }
-            <small>@(batch is null ? "No generation batch" : $"{batch.Label} / {batch.Status}")</small>
-        </article>
     };
 
     private RenderFragment RenderRunBatchesSection() => __builder =>
@@ -931,7 +750,7 @@ else
         <div class="workspace-panel compare-panel">
             <div class="panel-head">
                 <div>
-                    <h1>Compare</h1>
+                    <h1>Review</h1>
                     <span>@(activeBatch?.Label ?? "No active batch")</span>
                 </div>
                 @if (activeBatch is not null)
@@ -1239,7 +1058,7 @@ else
                         </label>
                         <div class="form-grid">
                             <label>
-                                <span>Recipe</span>
+                                <span>Art Recipe</span>
                                 <select class="form-select" value="@_editRecipeText" @onchange="OnEditRecipeChanged">
                                     <option value="">None</option>
                                     @foreach (var recipe in _workbench!.Recipes)
@@ -1304,16 +1123,17 @@ else
             <div class="panel-head">
                 <div>
                     <h1>Recipes</h1>
-                    <span>@_workbench!.Recipes.Count saved recipe(s)</span>
+                    <span>@($"{_workbench!.Recipes.Count} art recipe(s), {_workbench.AnimationRecipes.Count} animation recipe(s)")</span>
                 </div>
-                <button type="button" class="btn btn-outline-primary" @onclick="NewRecipeDraft">New Recipe</button>
+                <button type="button" class="btn btn-outline-primary" @onclick="NewRecipeDraft">New Art Recipe</button>
             </div>
 
             <div class="recipes-layout">
                 <section class="recipe-list-panel">
+                    <div class="section-title">Art Recipes</div>
                     @if (_workbench.Recipes.Count == 0)
                     {
-                        <div class="empty-state">No prompt recipes saved yet.</div>
+                        <div class="empty-state">No art recipes saved yet.</div>
                     }
                     else
                     {
@@ -1326,6 +1146,28 @@ else
                                     <span>@recipe.Name</span>
                                     <small>@(string.IsNullOrWhiteSpace(recipe.AssetType) ? "Unspecified" : recipe.AssetType)</small>
                                 </button>
+                            }
+                        </div>
+                    }
+
+                    <div class="section-title">Animation Recipes</div>
+                    @if (_workbench.AnimationRecipes.Count == 0)
+                    {
+                        <div class="empty-context">No animation recipes saved yet.</div>
+                    }
+                    else
+                    {
+                        <div class="recipe-list">
+                            @foreach (var recipe in _workbench.AnimationRecipes)
+                            {
+                                <div class="recipe-row">
+                                    <span>@recipe.Name</span>
+                                    <small>@($"{recipe.AnimationKind} / {recipe.FrameCount} frames / {recipe.Fps} fps")</small>
+                                    @if (!string.IsNullOrWhiteSpace(recipe.Facing))
+                                    {
+                                        <small>@recipe.Facing</small>
+                                    }
+                                </div>
                             }
                         </div>
                     }
@@ -1352,7 +1194,7 @@ else
                                 </select>
                             </label>
                             <label class="recipe-template-field">
-                                <span>Recipe Prompt</span>
+                                <span>Art Recipe Prompt</span>
                                 <textarea class="form-control" rows="6" @bind="_recipePromptTemplate" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
                             </label>
                             <label>
@@ -1371,7 +1213,7 @@ else
 
                         <div class="recipe-action-row">
                             <button type="button" class="btn btn-primary" disabled="@(!CanSaveRecipe)" @onclick="SaveRecipeAsync">
-                                @(_editingRecipeId is null ? "Save Recipe" : "Update Recipe")
+                                @(_editingRecipeId is null ? "Save Art Recipe" : "Update Art Recipe")
                             </button>
                             <button type="button" class="btn btn-outline-secondary" disabled="@(_editingRecipeId is null)" @onclick="DuplicateRecipeAsync">Duplicate</button>
                             <button type="button" class="btn btn-outline-danger" disabled="@(_editingRecipeId is null)" @onclick="DeleteRecipeAsync">Delete</button>
@@ -1550,7 +1392,7 @@ else
                 </div>
                 <div class="asset-filters">
                     <button type="button" class="@AssetOrganizationClass("latest")" @onclick='() => SetAssetOrganization("latest")'>Latest</button>
-                    <button type="button" class="@AssetOrganizationClass("recipe")" @onclick='() => SetAssetOrganization("recipe")'>Recipe</button>
+                    <button type="button" class="@AssetOrganizationClass("recipe")" @onclick='() => SetAssetOrganization("recipe")'>Art Recipe</button>
                 </div>
             </div>
 
@@ -4079,7 +3921,7 @@ else
             BuildGenerateVisibleState(),
             BuildEditVisibleState(),
             BuildCompareVisibleState(),
-            BuildRunsVisibleState(),
+            BuildActivityVisibleState(),
             BuildSpritesVisibleState(),
             BuildRecipeVisibleState(),
             BuildAssetsVisibleState(),
@@ -4126,22 +3968,22 @@ else
             _workbench?.Batches.Take(8).Select(BatchSummary).ToList() ?? [],
             _workbench?.CompareReviewSet is null ? null : CompareReviewSetSummary(_workbench.CompareReviewSet));
 
-    private WorkspaceRunsVisibleState BuildRunsVisibleState() =>
+    private WorkspaceActivityVisibleState BuildActivityVisibleState() =>
         new(
-            SelectedRun()?.Id,
-            _workbench?.AnimationRuns.Count ?? 0,
+            _workbench?.ActivityRuns.Count ?? 0,
             _workbench?.Batches.Count ?? 0,
-            _workbench?.AnimationRuns
+            _workbench?.ActivityRuns
                 .OrderByDescending(run => run.UpdatedAt)
-                .Take(8)
-                .Select(run => new WorkspaceRunSummary(
+                .Take(12)
+                .Select(run => new WorkspaceActivitySummary(
                     run.Id,
+                    run.Title,
+                    run.Summary,
                     run.Status,
-                    run.AnimationKind,
-                    run.RecommendedAction,
-                    run.GenerationRoundsUsed,
-                    run.MaxGenerationRounds,
-                    run.LatestError,
+                    run.Actor,
+                    run.WorkflowKind,
+                    run.PrimaryArtifactId,
+                    run.PrimaryArtifactKind,
                     run.UpdatedAt))
                 .ToList() ?? []);
 
@@ -4332,17 +4174,6 @@ else
         _editAssetId is Guid assetId
             ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId)
             : null;
-
-    private AssetAnimationRunView? SelectedRun() =>
-        _selectedRunJobId is Guid jobId
-            ? _workbench?.AnimationRuns.FirstOrDefault(run => run.Id == jobId) ?? _workbench?.AnimationRuns.FirstOrDefault()
-            : _workbench?.AnimationRuns.FirstOrDefault();
-
-    private void SelectRun(Guid jobId)
-    {
-        _selectedRunJobId = jobId;
-        PublishVisibleState();
-    }
 
     private ImageMaskView? CurrentEditMask() =>
         _editAssetId is Guid assetId

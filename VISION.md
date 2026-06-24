@@ -1,37 +1,46 @@
 # Vision
 
-This project is an AI-assisted 2D game art workbench designed to help game developers generate, refine, edit, and reuse visual assets through a focused creative workflow.
+PixelChat is an AI-assisted 2D game art workbench for turning rough ideas, references, and generated images into usable game assets.
 
-The goal is not to build another general-purpose image generator. The goal is to create a production-oriented tool for turning AI-generated images into usable game assets: sprites, icons, props, characters, tiles, backgrounds, masks, and sprite sheets.
+The goal is not to build a general-purpose image generator. The goal is to help game developers move from promptable art direction to production-ready sprites, icons, props, tiles, backgrounds, masks, and animation sprite sheets with less friction and more repeatability.
 
-The tool combines three core capabilities:
+## Product Direction
+
+PixelChat should feel like a sprite-editing environment with AI assistance woven into the creative workflow. The user should be able to start from a prompt, a reference, an imported asset, or an existing image, then iteratively shape the result into something that can be used in a game.
+
+The app should make the path from idea to asset visible and controllable. AI should help generate options, diagnose problems, propose repairs, and preserve useful lessons, but the user remains able to inspect, override, refine, and finish the work manually.
+
+## Creative Memory
+
+PixelChat should help users preserve what worked.
+
+Successful style direction, production constraints, prompt language, references, and motion/layout guidance should be reusable without forcing every future asset into the same mold. Visual style knowledge and animation/motion knowledge should remain conceptually distinct so a user can reuse either one independently.
+
+Recipes are not just saved prompts. They are reusable creative guidance: a way to carry forward a style, constraint set, asset-production lesson, or animation approach that produced useful results.
+
+## Core Capabilities
 
 1. **Agentic creative guidance**
-   A chat-based assistant helps users explore visual direction, generate and refine prompts, compare results, diagnose failures, and develop reusable prompt recipes that match the needs of a specific game project.
+   A chat assistant helps users explore visual direction, generate and refine prompts, compare results, diagnose failures, carry out bounded repair work, and save reusable creative lessons.
 
 2. **AI-powered image generation and editing**
-   The system integrates with image generation APIs to create new assets, produce variations, and perform targeted edits on generated or imported images. The initial proof of concept focuses on OpenAI models and APIs, while the architecture should remain flexible enough to support other language models and image generation providers over time.
+   The system integrates with image generation APIs to create new assets, produce variations, and perform targeted edits on generated or imported images. The architecture should stay provider-agnostic.
 
-3. **A focused 2D asset editor**
-   The editor provides practical tools for game-art workflows, including cropping, masking, bounding-box selection, sprite-sheet detection, prompt-guided image edits, and asset export. It should support the parts of image editing that matter most when preparing AI-generated art for use in games.
+3. **A focused sprite editor**
+   The editor should provide practical game-art tools for isolating, aligning, cleaning, masking, previewing, and exporting sprites and animation frames. It should prioritize workflows that make assets usable in game engines, not just visually appealing in a gallery.
 
-A key feature of the project is an agentic iteration mode. In this mode, the assistant helps the user test prompts, evaluate outputs, isolate what is working, adjust what is not, and save successful prompt patterns for future reuse. Over time, each project should develop its own library of proven prompts, style rules, asset recipes, and generation history.
+4. **Transparent collaboration**
+   Users should be able to follow what the assistant is doing, see intermediate outputs, understand why a step was taken, and take over the work at any point.
 
-This project should treat AI generation as only one step in a larger creative pipeline. The real value is in helping developers move from rough ideas to consistent, reusable, game-ready assets with less friction.
+## Human Control
 
-The long-term vision is to create a workspace where game developers can:
+Every important AI-assisted operation should have a visible manual counterpart when that is practical and safe. The assistant should operate through understandable actions, not hidden magic.
 
-* Generate new art assets from natural language.
-* Import and edit existing assets.
-* Use masks and selections to request targeted AI edits.
-* Build consistent visual styles across a game project.
-* Create and reuse prompt templates.
-* Slice and prepare sprite sheets.
-* Track successful and failed generations.
-* Export assets in formats suitable for game development.
-* Swap between AI providers without changing the core workflow.
+The user should be able to review outputs, inspect intermediate states, correct mistakes, delete unwanted results, and repeat successful workflows with different source material.
 
-This project will begin with OpenAI-powered agentic chat and image generation as the proof-of-concept foundation. However, the system should be designed around provider-agnostic interfaces so it can eventually support other LLMs, image models, local generation tools, and custom pipelines.
+## Design Direction
+
+PixelChat should borrow from proven sprite and pixel-art tools: timelines, onion skinning, transforms, selections, pivots, slices, preview playback, and sprite-sheet export. It should adapt those ideas for an AI-assisted workflow rather than copying a traditional editor wholesale.
 
 The guiding principle is simple:
 

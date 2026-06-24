@@ -43,7 +43,7 @@ public sealed record WorkspaceVisibleStateSnapshot(
     WorkspaceGenerateVisibleState? Generate,
     WorkspaceEditVisibleState? Edit,
     WorkspaceCompareVisibleState? Compare,
-    WorkspaceRunsVisibleState? Runs,
+    WorkspaceActivityVisibleState? Activity,
     WorkspaceSpritesVisibleState? Sprites,
     WorkspaceRecipeVisibleState? Recipes,
     WorkspaceAssetsVisibleState? Assets,
@@ -78,20 +78,20 @@ public sealed record WorkspaceCompareVisibleState(
     IReadOnlyList<WorkspaceBatchSummary> VisibleRecentBatches,
     WorkspaceCompareReviewSetSummary? ReviewSet);
 
-public sealed record WorkspaceRunsVisibleState(
-    Guid? SelectedJobId,
-    int AnimationJobCount,
+public sealed record WorkspaceActivityVisibleState(
+    int ActivityCount,
     int RecentBatchCount,
-    IReadOnlyList<WorkspaceRunSummary> RecentRuns);
+    IReadOnlyList<WorkspaceActivitySummary> RecentActivity);
 
-public sealed record WorkspaceRunSummary(
+public sealed record WorkspaceActivitySummary(
     Guid Id,
+    string Title,
+    string Summary,
     string Status,
-    string AnimationKind,
-    string RecommendedAction,
-    int GenerationRoundsUsed,
-    int MaxGenerationRounds,
-    string LatestError,
+    string Actor,
+    string WorkflowKind,
+    Guid? PrimaryArtifactId,
+    string PrimaryArtifactKind,
     DateTime UpdatedAt);
 
 public sealed record WorkspaceSpritesVisibleState(

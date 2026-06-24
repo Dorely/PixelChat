@@ -16,6 +16,8 @@ public interface IArtWorkflowService
     Task<string> ReadAssetJsonAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<string> ListPromptRecipesJsonAsync(Guid projectId, string? query = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadPromptRecipeJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<string> ListAnimationRecipesJsonAsync(Guid projectId, string? query = null, int? limit = null, CancellationToken cancellationToken = default);
+    Task<string> ReadAnimationRecipeJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<string> ListGenerationBatchesJsonAsync(Guid projectId, string? status = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadGenerationBatchJsonAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
     Task<string> ListSpriteSheetsJsonAsync(Guid projectId, int? limit = null, CancellationToken cancellationToken = default);
@@ -41,6 +43,7 @@ public interface IArtWorkflowService
     Task<SpriteSheetDefinitionView> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteAnimationReviewImageView> BuildSpriteSheetRepairAnnotatedSheetAsync(Guid projectId, RepairSpriteSheetFramesResult repair, CancellationToken cancellationToken = default);
     Task<SpriteFrameWorkingView> IsolateSpriteFrameAsync(Guid projectId, Guid spriteSheetId, int frameIndex, int? margin = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<SpriteFrameWorkingView>> SplitSpriteSheetFramesAsync(Guid projectId, Guid spriteSheetId, int? margin = null, CancellationToken cancellationToken = default);
     Task<SpriteFrameWorkingView> GetSpriteFrameWorkingImageAsync(Guid projectId, Guid spriteSheetId, int frameIndex, CancellationToken cancellationToken = default);
     Task<SpriteAnimationReviewImageView?> BuildSpriteFrameGridImageAsync(Guid projectId, Guid spriteSheetId, int frameIndex, CancellationToken cancellationToken = default);
     Task<SpriteFrameWorkingView> EraseSpriteFrameRegionsAsync(Guid projectId, EraseSpriteFrameRegionsRequest request, CancellationToken cancellationToken = default);
@@ -73,6 +76,12 @@ public interface IArtWorkflowService
     Task<string> ListPromptRecipeVersionsJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<PromptRecipeView> RevertPromptRecipeAsync(Guid projectId, Guid recipeId, int version, string source, CancellationToken cancellationToken = default);
     Task DeletePromptRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<AnimationRecipeView> SaveAnimationRecipeAsync(Guid projectId, SaveAnimationRecipeRequest request, CancellationToken cancellationToken = default);
+    Task<AnimationRecipeView> UpdateAnimationRecipeAsync(Guid projectId, Guid recipeId, UpdateAnimationRecipeRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<AnimationRecipeVersionView>> ListAnimationRecipeVersionsAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<string> ListAnimationRecipeVersionsJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task DeleteAnimationRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<ActivityRunView> LogActivityAsync(Guid projectId, string title, string summary, string workflowKind, string actor, string status, string stepTitle, string stepDetail, string artifactKind, Guid? artifactId, string artifactLabel, CancellationToken cancellationToken = default);
     Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default);
     Task DeleteAssetAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<ChatContextAttachmentView> AttachContextAsync(Guid projectId, ChatContextAttachmentType type, Guid refId, string? label = null, CancellationToken cancellationToken = default);

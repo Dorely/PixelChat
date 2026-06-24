@@ -47,6 +47,7 @@
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Draw)" title="@ToolTitle(SpriteEditTool.Draw)" aria-pressed="@(_tool == SpriteEditTool.Draw)" @onclick="() => SetToolAsync(SpriteEditTool.Draw)">Draw Box</button>
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Outline)" title="@ToolTitle(SpriteEditTool.Outline)" aria-pressed="@(_tool == SpriteEditTool.Outline)" @onclick="() => SetToolAsync(SpriteEditTool.Outline)">Outline</button>
                         <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_frames.Count == 0 || _framePersistenceRunning)" @onclick="ExpandToCellsAsync">Expand to Cells</button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_frames.Count == 0 || _frameEditRunning || _framePersistenceRunning)" @onclick="SplitAllFramesAsync">Split Frames</button>
                         <button type="button" class="btn btn-sm btn-primary" disabled="@(_frames.Count == 0 || _frameEditRunning || _framePersistenceRunning)" @onclick="ReassembleSheetAsync">Reassemble</button>
                         <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_selectedFrameIndex < 0 || _frames.Count == 0 || _framePersistenceRunning)" @onclick="DeleteSelectedFrameAsync">Delete</button>
                     </div>
@@ -597,6 +598,43 @@
         {
             _error = ex.Message;
             _status = string.Empty;
+        }
+    }
+
+    private async Task SplitAllFramesAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is not { } active || _frames.Count == 0)
+            return;
+
+        _error = null;
+        _status = "Splitting frames into isolated working images...";
+        _frameEditRunning = true;
+        try
+        {
+            NormalizeLayout();
+            await AutosaveLayoutNowAsync();
+            if (!string.IsNullOrWhiteSpace(_error))
+                return;
+
+            await Workflow.SplitSpriteSheetFramesAsync(Workbench.Project.Id, active.Id, Math.Max(16, _padding));
+            _loadedSpriteSheetId = null;
+            _loadedSpriteSheetUpdatedAt = null;
+            _loadedFrameWorkIndex = null;
+            _frameWorkImageDataUrl = string.Empty;
+            _frameWorkImageWidth = 0;
+            _frameWorkImageHeight = 0;
+            ResetFrameEraseMode();
+            _status = "Frames split into isolated working images.";
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+        finally
+        {
+            _frameEditRunning = false;
         }
     }
 

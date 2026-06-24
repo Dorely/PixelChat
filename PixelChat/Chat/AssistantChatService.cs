@@ -893,9 +893,6 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal))
                 return await BuildGenerationRoundModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
-            if (IsAssetAnimationImageTool(pendingCall.Name))
-                return await BuildAssetAnimationModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
-
             if (IsSpriteFrameWorkingImageTool(pendingCall.Name))
                 return await BuildSpriteFrameWorkingModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
@@ -919,77 +916,6 @@ public sealed class AssistantChatService(
         }
 
         return Array.Empty<AIContent>();
-    }
-
-    private async Task<IReadOnlyList<AIContent>> BuildAssetAnimationModelOnlyContentsAsync(
-        Guid projectId,
-        string toolResult,
-        CancellationToken cancellationToken)
-    {
-        using var document = JsonDocument.Parse(toolResult);
-        var root = document.RootElement;
-        var contents = new List<AIContent>
-        {
-            new TextContent("Model-only images for the asset-animation job. These images are not attached to visible chat context."),
-        };
-        var assetIds = new List<Guid>();
-        if (TryReadGuidProperty(root, "guideAssetId", out var guideAssetId))
-            assetIds.Add(guideAssetId);
-        if (TryReadGuidProperty(root, "diagnosticGuideAssetId", out var diagnosticGuideAssetId))
-            assetIds.Add(diagnosticGuideAssetId);
-        if (root.TryGetProperty("candidates", out var candidates) && candidates.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var candidate in candidates.EnumerateArray().Take(3))
-            {
-                if (TryReadGuidProperty(candidate, "outputAssetId", out var candidateAssetId))
-                    assetIds.Add(candidateAssetId);
-            }
-        }
-        if (root.TryGetProperty("frames", out var frames) && frames.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var frame in frames.EnumerateArray())
-            {
-                if (TryReadGuidProperty(frame, "sourceAssetId", out var repairAssetId))
-                    assetIds.Add(repairAssetId);
-            }
-        }
-
-        foreach (var assetId in assetIds.Distinct().Take(8))
-        {
-            try
-            {
-                var asset = await workflow.GetAssetForExportAsync(projectId, assetId, cancellationToken);
-                contents.Add(new DataContent(asset.DataUrl, asset.ContentType)
-                {
-                    Name = asset.FileName,
-                });
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogDebug(ex, "Could not attach asset-animation model-only asset {AssetId}.", assetId);
-            }
-        }
-
-        if (TryReadGuidProperty(root, "outputSpriteSheetId", out var spriteSheetId))
-        {
-            try
-            {
-                var review = await workflow.BuildSpriteAnimationReviewAsync(projectId, spriteSheetId, 12, cancellationToken);
-                foreach (var image in SelectCompactMutationReviewImages(review, includeSheetView: true))
-                {
-                    contents.Add(new DataContent(image.DataUrl, image.ContentType)
-                    {
-                        Name = image.FileName,
-                    });
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogDebug(ex, "Could not attach asset-animation review images for sprite sheet {SpriteSheetId}.", spriteSheetId);
-            }
-        }
-
-        return contents.Count > 1 ? contents : Array.Empty<AIContent>();
     }
 
     private async Task<IReadOnlyList<AIContent>> BuildGenerationRoundModelOnlyContentsAsync(
@@ -1270,14 +1196,6 @@ public sealed class AssistantChatService(
             or "normalize_sprite_sheet"
             or "reset_sprite_sheet_to_original"
             or "reassemble_sprite_sheet";
-
-    private static bool IsAssetAnimationImageTool(string toolName) =>
-        toolName is "render_animation_guide"
-            or "run_animation_candidates"
-            or "regenerate_animation_frames"
-            or "extract_animation_fixed_slots"
-            or "review_animation_job"
-            or "package_animation_job";
 
     private static bool IsSpriteFrameWorkingImageTool(string toolName) =>
         toolName is "isolate_sprite_frame"

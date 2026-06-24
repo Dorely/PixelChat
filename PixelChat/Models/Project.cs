@@ -12,13 +12,13 @@ public class Project
 
     public ICollection<ArtAsset> Assets { get; set; } = [];
     public ICollection<GenerationBatch> GenerationBatches { get; set; } = [];
-    public ICollection<AssetProfile> AssetProfiles { get; set; } = [];
-    public ICollection<AssetAnimationJob> AssetAnimationJobs { get; set; } = [];
-    public ICollection<AssetAnimationCandidate> AssetAnimationCandidates { get; set; } = [];
-    public ICollection<AssetAnimationFrameAttempt> AssetAnimationFrameAttempts { get; set; } = [];
-    public ICollection<AssetAnimationEvent> AssetAnimationEvents { get; set; } = [];
     public ICollection<PromptRecipe> PromptRecipes { get; set; } = [];
     public ICollection<PromptRecipeVersion> PromptRecipeVersions { get; set; } = [];
+    public ICollection<AnimationRecipe> AnimationRecipes { get; set; } = [];
+    public ICollection<AnimationRecipeVersion> AnimationRecipeVersions { get; set; } = [];
+    public ICollection<ActivityRun> ActivityRuns { get; set; } = [];
+    public ICollection<ActivityStep> ActivitySteps { get; set; } = [];
+    public ICollection<ActivityArtifact> ActivityArtifacts { get; set; } = [];
     public ICollection<SpriteSheetDefinition> SpriteSheets { get; set; } = [];
     public ICollection<SpriteSheetFrameRecord> SpriteSheetFrameRecords { get; set; } = [];
     public ICollection<ImageMask> Masks { get; set; } = [];

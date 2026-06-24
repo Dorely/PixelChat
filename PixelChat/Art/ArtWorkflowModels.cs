@@ -7,8 +7,9 @@ public sealed record WorkbenchView(
     IReadOnlyList<ProjectView> Projects,
     IReadOnlyList<ArtAssetView> Assets,
     IReadOnlyList<GenerationBatchView> Batches,
-    IReadOnlyList<AssetAnimationRunView> AnimationRuns,
+    IReadOnlyList<ActivityRunView> ActivityRuns,
     IReadOnlyList<PromptRecipeView> Recipes,
+    IReadOnlyList<AnimationRecipeView> AnimationRecipes,
     IReadOnlyList<SpriteSheetDefinitionView> SpriteSheets,
     IReadOnlyList<ImageMaskView> Masks,
     IReadOnlyList<ChatContextAttachmentView> Attachments,
@@ -17,70 +18,37 @@ public sealed record WorkbenchView(
     SpriteSheetDefinitionView? ActiveSpriteSheet,
     ProviderStatusView ImageProviderStatus);
 
-public sealed record AssetAnimationRunView(
+public sealed record ActivityRunView(
     Guid Id,
-    Guid AssetProfileId,
-    Guid CanonicalAssetId,
-    Guid? StyleAssetId,
-    string ProfileLabel,
-    string AssetType,
-    string StructureType,
-    Guid? GuideAssetId,
-    Guid? DiagnosticGuideAssetId,
-    Guid? OutputSpriteSheetId,
-    Guid? SelectedCandidateId,
+    string Title,
+    string Summary,
     string Status,
-    string AnimationKind,
-    string Strategy,
-    string PromptSummary,
-    string RecommendedAction,
-    int MaxGenerationRounds,
-    int GenerationRoundsUsed,
-    int MaxRepairAttemptsPerFrame,
-    int FrameCount,
-    int Fps,
-    bool Loop,
-    string GuideRenderer,
-    string GuideRenderStyle,
-    string MotionClipId,
-    double? GuideCameraYawDegrees,
-    string GuideSourcePackage,
-    string GuideSourceLicense,
-    string TargetCellSize,
-    string LayoutSize,
-    int Rows,
-    int Columns,
-    string ChromaColor,
-    IReadOnlyList<AssetAnimationRunCandidateView> Candidates,
-    IReadOnlyList<AssetAnimationRunFrameStatusView> Frames,
-    IReadOnlyList<AssetAnimationRunEventView> Events,
-    string LatestError,
+    string Actor,
+    string WorkflowKind,
+    Guid? PrimaryArtifactId,
+    string PrimaryArtifactKind,
+    IReadOnlyList<ActivityStepView> Steps,
+    IReadOnlyList<ActivityArtifactView> Artifacts,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
-public sealed record AssetAnimationRunCandidateView(
+public sealed record ActivityStepView(
     Guid Id,
-    Guid? GenerationBatchId,
-    Guid? OutputAssetId,
-    int CandidateIndex,
-    string State,
-    string RawQaStatus);
-
-public sealed record AssetAnimationRunFrameStatusView(
-    int FrameNumber,
-    int Index,
+    int SortOrder,
+    string Kind,
     string Status,
-    string Reason,
-    string RecommendedAction,
-    Guid? SourceAssetId,
-    int AttemptCount);
-
-public sealed record AssetAnimationRunEventView(
-    Guid Id,
-    string EventType,
-    string Severity,
-    string Summary,
+    string Title,
+    string Detail,
     string PayloadJson,
+    DateTime CreatedAt);
+
+public sealed record ActivityArtifactView(
+    Guid Id,
+    string Kind,
+    Guid RefId,
+    string Label,
+    string Notes,
+    int SortOrder,
     DateTime CreatedAt);
 
 public sealed record ProjectView(
@@ -176,8 +144,6 @@ public sealed record SpriteSheetFrameRecordView(
     bool IsKeyframe = false,
     int PivotX = 0,
     int PivotY = 0,
-    Guid? SourceAnimationJobId = null,
-    Guid? SourceAnimationCandidateId = null,
     double AppliedScale = 1,
     int TranslationX = 0,
     int TranslationY = 0,
@@ -546,6 +512,26 @@ public sealed record PromptRecipeView(
     int CurrentVersion,
     DateTime CreatedAt);
 
+public sealed record AnimationRecipeView(
+    Guid Id,
+    string Name,
+    string AnimationKind,
+    string Facing,
+    int FrameCount,
+    IReadOnlyList<int> FrameOrder,
+    int Fps,
+    bool Loop,
+    Guid? GuideAssetId,
+    IReadOnlyList<SpriteSheetRect> ExpectedFrameBoxes,
+    string AnchorStrategy,
+    string PromptScaffold,
+    string ExportDefaultsJson,
+    string Notes,
+    Guid? PrimaryExampleSpriteSheetId,
+    int CurrentVersion,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
 public sealed record ImageMaskView(
     Guid Id,
     Guid AssetId,
@@ -668,6 +654,42 @@ public sealed record UpdatePromptRecipeRequest(
     string Source = "user",
     string ChangeSummary = "");
 
+public sealed record SaveAnimationRecipeRequest(
+    string Name,
+    string AnimationKind,
+    string Facing,
+    int FrameCount,
+    IReadOnlyList<int> FrameOrder,
+    int Fps,
+    bool Loop,
+    Guid? GuideAssetId,
+    IReadOnlyList<SpriteSheetRect> ExpectedFrameBoxes,
+    string AnchorStrategy,
+    string PromptScaffold,
+    string ExportDefaultsJson,
+    string Notes,
+    Guid? PrimaryExampleSpriteSheetId,
+    string Source = "user",
+    string ChangeSummary = "");
+
+public sealed record UpdateAnimationRecipeRequest(
+    string Name,
+    string AnimationKind,
+    string Facing,
+    int FrameCount,
+    IReadOnlyList<int> FrameOrder,
+    int Fps,
+    bool Loop,
+    Guid? GuideAssetId,
+    IReadOnlyList<SpriteSheetRect> ExpectedFrameBoxes,
+    string AnchorStrategy,
+    string PromptScaffold,
+    string ExportDefaultsJson,
+    string Notes,
+    Guid? PrimaryExampleSpriteSheetId,
+    string Source = "user",
+    string ChangeSummary = "");
+
 public sealed record PromptRecipeVersionView(
     Guid Id,
     Guid RecipeId,
@@ -676,4 +698,26 @@ public sealed record PromptRecipeVersionView(
     string Source,
     string ChangeSummary,
     Guid? ExampleAssetId,
+    DateTime CreatedAt);
+
+public sealed record AnimationRecipeVersionView(
+    Guid Id,
+    Guid AnimationRecipeId,
+    int Version,
+    string Name,
+    string AnimationKind,
+    string Facing,
+    int FrameCount,
+    IReadOnlyList<int> FrameOrder,
+    int Fps,
+    bool Loop,
+    Guid? GuideAssetId,
+    IReadOnlyList<SpriteSheetRect> ExpectedFrameBoxes,
+    string AnchorStrategy,
+    string PromptScaffold,
+    string ExportDefaultsJson,
+    string Notes,
+    Guid? PrimaryExampleSpriteSheetId,
+    string Source,
+    string ChangeSummary,
     DateTime CreatedAt);
