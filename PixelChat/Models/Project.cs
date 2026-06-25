@@ -7,6 +7,7 @@ public class Project
     public WorkspaceMode ActiveWorkspaceMode { get; set; } = WorkspaceMode.Generate;
     public Guid? ActiveBatchId { get; set; }
     public Guid? ActiveSpriteSheetId { get; set; }
+    public Guid? ActiveFrameSetId { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
@@ -21,6 +22,14 @@ public class Project
     public ICollection<ActivityArtifact> ActivityArtifacts { get; set; } = [];
     public ICollection<SpriteSheetDefinition> SpriteSheets { get; set; } = [];
     public ICollection<SpriteSheetFrameRecord> SpriteSheetFrameRecords { get; set; } = [];
+    public ICollection<SpriteRegion> SpriteRegions { get; set; } = [];
+    public ICollection<StandaloneAsset> StandaloneAssets { get; set; } = [];
+    public ICollection<FrameSet> FrameSets { get; set; } = [];
+    public ICollection<Frame> Frames { get; set; } = [];
+    public ICollection<Anchor> Anchors { get; set; } = [];
+    public ICollection<SheetLayout> SheetLayouts { get; set; } = [];
+    public ICollection<BuiltSheet> BuiltSheets { get; set; } = [];
+    public ICollection<HistoryTask> HistoryTasks { get; set; } = [];
     public ICollection<ImageMask> Masks { get; set; } = [];
     public ICollection<ChatContextAttachment> ChatContextAttachments { get; set; } = [];
     public ICollection<CompareReviewSet> CompareReviewSets { get; set; } = [];

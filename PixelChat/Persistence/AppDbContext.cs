@@ -25,6 +25,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<ActivityArtifact> ActivityArtifacts => Set<ActivityArtifact>();
     public DbSet<SpriteSheetDefinition> SpriteSheetDefinitions => Set<SpriteSheetDefinition>();
     public DbSet<SpriteSheetFrameRecord> SpriteSheetFrameRecords => Set<SpriteSheetFrameRecord>();
+    public DbSet<SpriteRegion> SpriteRegions => Set<SpriteRegion>();
+    public DbSet<StandaloneAsset> StandaloneAssets => Set<StandaloneAsset>();
+    public DbSet<FrameSet> FrameSets => Set<FrameSet>();
+    public DbSet<Frame> Frames => Set<Frame>();
+    public DbSet<Anchor> Anchors => Set<Anchor>();
+    public DbSet<SheetLayout> SheetLayouts => Set<SheetLayout>();
+    public DbSet<BuiltSheet> BuiltSheets => Set<BuiltSheet>();
+    public DbSet<HistoryTask> HistoryTasks => Set<HistoryTask>();
     public DbSet<ImageMask> ImageMasks => Set<ImageMask>();
     public DbSet<ChatContextAttachment> ChatContextAttachments => Set<ChatContextAttachment>();
     public DbSet<CompareReviewSet> CompareReviewSets => Set<CompareReviewSet>();
@@ -363,10 +371,178 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
+        modelBuilder.Entity<SpriteRegion>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.SourceAssetId, e.Order });
+            entity.HasIndex(e => e.SourceAssetId);
+            entity.Property(e => e.ShapeJson).HasDefaultValue("[]");
+            entity.Property(e => e.RegionType).HasDefaultValue("frame");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.SpriteRegions)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.SourceAsset)
+                .WithMany()
+                .HasForeignKey(e => e.SourceAssetId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<StandaloneAsset>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
+            entity.HasIndex(e => e.SourceRegionId);
+            entity.HasIndex(e => e.OutputAssetId);
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.StandaloneAssets)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.SourceRegion)
+                .WithMany()
+                .HasForeignKey(e => e.SourceRegionId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.OutputAsset)
+                .WithMany()
+                .HasForeignKey(e => e.OutputAssetId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.BitmapRevisionAsset)
+                .WithMany()
+                .HasForeignKey(e => e.BitmapRevisionAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<FrameSet>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.UpdatedAt });
+            entity.HasIndex(e => e.SourceAssetId);
+            entity.Property(e => e.OrderedFrameIdsJson).HasDefaultValue("[]");
+            entity.Property(e => e.PlaybackSettingsJson).HasDefaultValue("{}");
+            entity.Property(e => e.AlignmentSettingsJson).HasDefaultValue("{}");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.FrameSets)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.SourceAsset)
+                .WithMany()
+                .HasForeignKey(e => e.SourceAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<Frame>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.FrameSetId, e.Index }).IsUnique();
+            entity.HasIndex(e => e.FrameSetId);
+            entity.HasIndex(e => e.SourceRegionId);
+            entity.Property(e => e.ShapeJson).HasDefaultValue("[]");
+            entity.Property(e => e.WorkingState).HasDefaultValue("none");
+            entity.Property(e => e.WorkingContentType).HasDefaultValue("image/png");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.Frames)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.FrameSet)
+                .WithMany(s => s.Frames)
+                .HasForeignKey(e => e.FrameSetId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.SourceRegion)
+                .WithMany()
+                .HasForeignKey(e => e.SourceRegionId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.BitmapRevisionAsset)
+                .WithMany()
+                .HasForeignKey(e => e.BitmapRevisionAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<Anchor>(entity =>
+        {
+            entity.HasIndex(e => new { e.FrameId, e.Name });
+            entity.Property(e => e.Source).HasDefaultValue("manual");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.Anchors)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Frame)
+                .WithMany(f => f.Anchors)
+                .HasForeignKey(e => e.FrameId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SheetLayout>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.FrameSetId });
+            entity.Property(e => e.Ordering).HasDefaultValue("rowMajor");
+            entity.Property(e => e.HorizontalAnchor).HasDefaultValue("center");
+            entity.Property(e => e.VerticalAnchor).HasDefaultValue("bottom");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.SheetLayouts)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.FrameSet)
+                .WithMany(s => s.SheetLayouts)
+                .HasForeignKey(e => e.FrameSetId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<BuiltSheet>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.UpdatedAt });
+            entity.HasIndex(e => e.SheetLayoutId);
+            entity.HasIndex(e => e.OutputAssetId);
+            entity.Property(e => e.ManifestJson).HasDefaultValue("{}");
+            entity.Property(e => e.LinkedFrameIdsJson).HasDefaultValue("[]");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.BuiltSheets)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.SheetLayout)
+                .WithMany(l => l.BuiltSheets)
+                .HasForeignKey(e => e.SheetLayoutId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.OutputAsset)
+                .WithMany()
+                .HasForeignKey(e => e.OutputAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<HistoryTask>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.StartedAt });
+            entity.Property(e => e.Source).HasDefaultValue("user");
+            entity.Property(e => e.OperationsJson).HasDefaultValue("[]");
+            entity.Property(e => e.Status).HasDefaultValue("running");
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.HistoryTasks)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<ImageMask>(entity =>
         {
             entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
             entity.HasIndex(e => e.AssetId);
+            entity.HasIndex(e => new { e.OwnerKind, e.OwnerId });
+            entity.Property(e => e.OwnerKind).HasDefaultValue("asset");
+            entity.Property(e => e.CoordinateSpace).HasDefaultValue("source");
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.Masks)

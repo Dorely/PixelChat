@@ -1,294 +1,342 @@
 @namespace PixelChat.Components.Sprites
 @using PixelChat.Art
+@using PixelChat.Chat
 @using PixelChat.Models
 @implements IAsyncDisposable
 @inject IArtWorkflowService Workflow
+@inject IFrameSetService FrameSets
 @inject IJSRuntime JS
 
 <div class="sprite-workspace">
-    <div class="panel-head">
-        <div>
-            <h1>Sprites</h1>
-            <span>@HeaderSummary()</span>
+    <div class="sprite-toolbar">
+        <div class="sprite-toolbar-lead">
+            <div class="sprite-title">
+                <h1>Sprites</h1>
+                <span>@HeaderSummary()</span>
+            </div>
+            <div class="sprite-history-group" role="group" aria-label="History">
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="Undo - coming soon">Undo</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="Redo - coming soon">Redo</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="History - coming soon">History</button>
+            </div>
         </div>
-        <div class="sprite-head-actions">
+
+        <div class="sprite-mode-tabs" role="tablist" aria-label="Editor mode">
+            @foreach (var mode in SpriteModes)
+            {
+                <button type="button" class="@ModeTabClass(mode)" role="tab" aria-selected="@(_mode == mode)" @onclick="() => SetModeAsync(mode)">@ModeLabel(mode)</button>
+            }
+        </div>
+
+        <div class="sprite-toolbar-actions">
             <label class="sprite-file-control">
-                <span>Import Sheet</span>
+                <span>Import Image</span>
                 <InputFile OnChange="ImportSourceAsync" accept="image/png,image/jpeg" />
             </label>
-            <label class="sprite-file-control">
-                <span>Import Frames</span>
-                <InputFile OnChange="ImportFramesAsync" accept="image/png" multiple />
-            </label>
-            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet || _framePersistenceRunning)" @onclick="AutoDetectAsync">Auto Detect</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(!HasActiveSheet || _framePersistenceRunning)" @onclick="ResetToOriginalAsync">Reset</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet)" @onclick="PreviewSheetAsync">Preview Sheet</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet)" @onclick="AddSheetToReviewAsync">Add Sheet to Review</button>
-            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(CurrentWorkingAsset() is null)" @onclick="ExportWorkingAsync">Export...</button>
         </div>
     </div>
 
-    @if (!HasActiveSheet)
-    {
-        <div class="empty-state">Select Sprite Sheet on an asset card or import an image to start.</div>
-    }
-    else
-    {
-        <div class="sprite-editor-grid">
-            <section class="sprite-editor-main">
-                <div class="sprite-canvas-panel">
-                    <div class="section-title">Source Regions</div>
-                    <canvas class="sprite-source-canvas" @ref="_sourceCanvas"></canvas>
+    <div class="sprite-editor-body">
+        <div class="sprite-stage-row">
+            <nav class="sprite-tool-rail" aria-label="Tools">
+                @if (_mode == SpriteMode.Source)
+                {
+                    <button type="button" class="@ToolButtonClass(_sourceTool, "select")" title="Select/move regions" @onclick='() => SetSourceToolAsync("select")'>Select</button>
+                    <button type="button" class="@ToolButtonClass(_sourceTool, "draw")" title="Draw rectangular region" @onclick='() => SetSourceToolAsync("draw")'>Rect</button>
+                    <button type="button" class="@ToolButtonClass(_sourceTool, "polygon")" title="Draw polygon region" @onclick='() => SetSourceToolAsync("polygon")'>Poly</button>
+                    <button type="button" class="@ToolButtonClass(_sourceTool, "pan")" title="Pan canvas" @onclick='() => SetSourceToolAsync("pan")'>Pan</button>
+                }
+                else if (_mode == SpriteMode.Frames)
+                {
+                    <button type="button" class="@ToolButtonClass(_frameTool, "content")" title="Move frame content" @onclick='() => SetFrameToolAsync("content")'>Move</button>
+                    <button type="button" class="@ToolButtonClass(_frameTool, "mask")" title="Paint frame mask" @onclick='() => SetFrameToolAsync("mask")'>Mask</button>
+                    <button type="button" class="@ToolButtonClass(_frameTool, "eraseMask")" title="Erase frame mask" @onclick='() => SetFrameToolAsync("eraseMask")'>Erase</button>
+                    <button type="button" class="@ToolButtonClass(_frameTool, "pan")" title="Pan canvas" @onclick='() => SetFrameToolAsync("pan")'>Pan</button>
+                }
+                else
+                {
+                    <span class="sprite-tool-rail-hint">@ToolRailHint()</span>
+                }
+            </nav>
+
+            <section class="sprite-stage">
+                <div class="sprite-section-title-row">
+                    <div class="section-title">@StageTitle()</div>
+                    @if (_busy)
+                    {
+                        <span class="sprite-busy-pill">Working...</span>
+                    }
                 </div>
 
-                <div class="sprite-tool-strip">
-                    <div class="tool-button-row">
-                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Select)" title="@ToolTitle(SpriteEditTool.Select)" aria-pressed="@(_tool == SpriteEditTool.Select)" @onclick="() => SetToolAsync(SpriteEditTool.Select)">Select</button>
-                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Draw)" title="@ToolTitle(SpriteEditTool.Draw)" aria-pressed="@(_tool == SpriteEditTool.Draw)" @onclick="() => SetToolAsync(SpriteEditTool.Draw)">Draw Box</button>
-                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Outline)" title="@ToolTitle(SpriteEditTool.Outline)" aria-pressed="@(_tool == SpriteEditTool.Outline)" @onclick="() => SetToolAsync(SpriteEditTool.Outline)">Outline</button>
-                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Anchor)" title="@ToolTitle(SpriteEditTool.Anchor)" aria-pressed="@(_tool == SpriteEditTool.Anchor)" @onclick="() => SetToolAsync(SpriteEditTool.Anchor)">Anchor</button>
-                        <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_frames.Count == 0 || _framePersistenceRunning)" @onclick="ExpandToCellsAsync">Expand to Cells</button>
-                        <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_frames.Count == 0 || _frameEditRunning || _framePersistenceRunning)" @onclick="SplitAllFramesAsync">Split Frames</button>
-                        <button type="button" class="btn btn-sm btn-primary" disabled="@(_frames.Count == 0 || _frameEditRunning || _framePersistenceRunning)" @onclick="ReassembleSheetAsync">Reassemble</button>
-                        <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_selectedFrameIndex < 0 || _frames.Count == 0 || _framePersistenceRunning)" @onclick="DeleteSelectedFrameAsync">Delete</button>
-                    </div>
-
-                    <div class="selected-frame-readout">
-                        @if (SelectedFrame() is { } selected)
+                <div class="sprite-stage-canvas">
+                    @if (_mode == SpriteMode.Source)
+                    {
+                        @if (SourceImageUrl() is not null)
                         {
-                            <span>@selected.Label</span>
-                            <span class="@GeometryReadoutClass(selected)">@FrameGeometryLabel(selected)</span>
-                            <span>X @selected.X</span>
-                            <span>Y @selected.Y</span>
-                            <span>W @selected.Width</span>
-                            <span>H @selected.Height</span>
-                            <span>@WorkingStateLabel(selected)</span>
-                            @if (Workbench.ActiveSpriteSheet?.Stabilization is { } stabilization)
-                            {
-                                <span>Stabilized F@stabilization.ReferenceFrameNumber</span>
-                                <span>@stabilization.AnchorRect.X,@stabilization.AnchorRect.Y @stabilization.AnchorRect.Width x @stabilization.AnchorRect.Height</span>
-                                <span>@StabilizationAppliedCount(stabilization) applied</span>
-                                <span>@StabilizationLowConfidenceCount(stabilization) low</span>
-                            }
+                            <canvas class="sprite-canvas" @ref="_sourceCanvas" tabindex="0"></canvas>
                         }
                         else
                         {
-                            <span>No frame selected</span>
+                            <div class="empty-state compact">Import an image or choose a source asset.</div>
                         }
-                    </div>
-                    @if (!string.IsNullOrWhiteSpace(_status))
-                    {
-                        <div class="sprite-status">@_status</div>
                     }
-                    @if (!string.IsNullOrWhiteSpace(_error))
+                    else if (_mode == SpriteMode.Frames)
                     {
-                        <div class="sprite-error">@_error</div>
-                    }
-                </div>
-            </section>
-
-            <aside class="sprite-side-panel">
-                <div class="sprite-canvas-panel sprite-animation-panel">
-                    <div class="sprite-section-title-row">
-                        <div class="section-title">Animation</div>
-                        <div class="sprite-section-actions">
-                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet || _frames.Count == 0)" @onclick="PreviewAnimationAsync">Preview</button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasActiveSheet || _frames.Count == 0)" @onclick="AddAnimationToReviewAsync">Add to Review</button>
-                        </div>
-                    </div>
-                    <canvas class="@AnimationCanvasClass()" @ref="_animationCanvas" @onclick="PreviewAnimationAsync"></canvas>
-                </div>
-
-                <div class="sprite-settings-panel sprite-stabilization-panel">
-                    <div class="sprite-section-title-row">
-                        <div class="section-title">Stabilization</div>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasSavedStabilization || _stabilizationRunning)" @onclick="ClearStabilizationAsync">Clear</button>
-                    </div>
-                    <div class="stabilization-readout">
-                        @if (_stabilizationAnchor is { } anchor)
+                        @if (SelectedFrame() is not null)
                         {
-                            <span>Reference F@ReferenceFrameNumber()</span>
-                            <span>X @anchor.X</span>
-                            <span>Y @anchor.Y</span>
-                            <span>W @anchor.Width</span>
-                            <span>H @anchor.Height</span>
+                            <canvas class="sprite-canvas" @ref="_frameCanvas" tabindex="0"></canvas>
                         }
                         else
                         {
-                            <span>No anchor</span>
+                            <div class="empty-state compact">Create a frame set, then select a frame.</div>
                         }
-                    </div>
-                    <div class="sprite-grid-controls">
-                        <label>
-                            <span>Search</span>
-                            <input class="form-control form-control-sm" type="number" min="0" max="512" @bind="_stabilizationSearchPadding" @bind:after="OnStabilizationSettingsChanged" />
-                        </label>
-                        <label>
-                            <span>Min Score</span>
-                            <input class="form-control form-control-sm" type="number" min="-1" max="1" step="0.01" @bind="_stabilizationMinScore" @bind:after="OnStabilizationSettingsChanged" />
-                        </label>
-                    </div>
-                    <div class="stabilization-actions">
-                        <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(!CanRunStabilization())" @onclick="PreviewStabilizationAsync">Preview Stabilize</button>
-                        <button type="button" class="btn btn-sm btn-primary" disabled="@(!CanApplyStabilization())" @onclick="ApplyStabilizationAsync">Apply</button>
-                    </div>
-                    @if (_stabilizationPreview is { } preview)
+                    }
+                    else if (_mode == SpriteMode.Sheet)
                     {
-                        <div class="stabilization-summary">
-                            <span>@preview.Stabilization.Matches.Count match(es)</span>
-                            <span>@StabilizationLowConfidenceCount(preview.Stabilization) low confidence</span>
-                            <span>@StabilizationClippedCount(preview.Stabilization) clipped</span>
-                        </div>
-                        @if (preview.Warnings.Count > 0)
+                        @if (_builtSheetAssetId is { } builtId)
                         {
-                            <ul class="stabilization-warnings">
-                                @foreach (var warning in preview.Warnings.Take(4))
-                                {
-                                    <li>@warning</li>
-                                }
-                            </ul>
+                            <img class="sprite-stage-image" src="@AssetFullUrl(builtId)" alt="Built sheet" />
                         }
-                        <img class="stabilization-diagnostic" src="@preview.DiagnosticImage.DataUrl" alt="Stabilization diagnostic" />
-                        <div class="stabilization-match-list">
-                            @foreach (var match in preview.Stabilization.Matches.OrderBy(match => match.Index))
-                            {
-                                <div class="stabilization-match-row @(match.LowConfidence ? "is-low-confidence" : "")">
-                                    <span>F@match.FrameNumber</span>
-                                    <span>@match.Score.ToString("0.000")</span>
-                                    <span>dx @match.DeltaX</span>
-                                    <span>dy @match.DeltaY</span>
-                                </div>
-                            }
-                        </div>
-                    }
-                </div>
-
-                <div class="sprite-settings-panel">
-                    <div class="section-title">Sheet Settings</div>
-                    <div class="sprite-grid-controls">
-                        <label>
-                            <span>Rows</span>
-                            <input class="form-control form-control-sm" type="number" min="1" max="32" @bind="_rows" @bind:after="OnLayoutFieldChangedAsync" />
-                        </label>
-                        <label>
-                            <span>Columns</span>
-                            <input class="form-control form-control-sm" type="number" min="1" max="64" @bind="_columns" @bind:after="OnLayoutFieldChangedAsync" />
-                        </label>
-                        <label>
-                            <span>Output W</span>
-                            <input class="form-control form-control-sm" type="number" min="1" max="8192" @bind="_cellWidth" @bind:after="OnLayoutFieldChangedAsync" />
-                        </label>
-                        <label>
-                            <span>Output H</span>
-                            <input class="form-control form-control-sm" type="number" min="1" max="8192" @bind="_cellHeight" @bind:after="OnLayoutFieldChangedAsync" />
-                        </label>
-                        <label>
-                            <span>Padding</span>
-                            <input class="form-control form-control-sm" type="number" min="0" max="2048" @bind="_padding" @bind:after="OnLayoutFieldChangedAsync" />
-                        </label>
-                        <label>
-                            <span>Gutter</span>
-                            <input class="form-control form-control-sm" type="number" min="0" max="2048" @bind="_gutter" @bind:after="OnLayoutFieldChangedAsync" />
-                        </label>
-                        <label>
-                            <span>FPS</span>
-                            <input class="form-control form-control-sm" type="number" min="1" max="60" @bind="_fps" @bind:after="OnLayoutFieldChangedAsync" />
-                        </label>
-                        <label class="sprite-loop-toggle">
-                            <input type="checkbox" @bind="_loop" @bind:after="OnLayoutFieldChangedAsync" />
-                            <span>Loop</span>
-                        </label>
-                        <label>
-                            <span>H Anchor</span>
-                            <select class="form-select form-select-sm" @bind="_horizontalAnchor" @bind:after="OnLayoutFieldChangedAsync">
-                                <option value="left">Left</option>
-                                <option value="center">Center</option>
-                                <option value="right">Right</option>
-                            </select>
-                        </label>
-                        <label>
-                            <span>V Anchor</span>
-                            <select class="form-select form-select-sm" @bind="_verticalAnchor" @bind:after="OnLayoutFieldChangedAsync">
-                                <option value="top">Top</option>
-                                <option value="middle">Middle</option>
-                                <option value="bottom">Bottom</option>
-                            </select>
-                        </label>
-                    </div>
-                </div>
-
-                <div class="frame-list-head">
-                    <span>@_frames.Count frame(s)</span>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_frames.Count == 0)" @onclick="AttachAllFramesAsync">Attach all</button>
-                </div>
-
-                <div class="sprite-frame-list">
-                    @foreach (var frame in _frames)
-                    {
-                        <div class="sprite-frame-row @(frame.Index == _selectedFrameIndex ? "is-selected" : "")">
-                            <button type="button" class="frame-thumb" @onclick="() => SelectFrameAsync(frame.Index)" @ondblclick="() => PreviewFrameAsync(frame)">
-                                @if (!string.IsNullOrWhiteSpace(frame.PreviewImageUrl))
-                                {
-                                    <LazyImage Src="@frame.PreviewImageUrl" Alt="@frame.Label" Width="58" Height="58" />
-                                }
-                                else
-                                {
-                                    <span>@(frame.Index + 1)</span>
-                                }
-                                <span class="@FrameMarkerClass(frame)" title="@FrameGeometryLabel(frame)" aria-hidden="true"></span>
-                            </button>
-                            <div class="frame-label-stack">
-                                <input class="form-control form-control-sm" @bind="frame.Label" @bind:after="OnFrameLabelChangedAsync" />
-                                @if (!string.IsNullOrWhiteSpace(FrameSourceLabel(frame)))
-                                {
-                                    <small>@FrameSourceLabel(frame)</small>
-                                }
-                            </div>
-                            <span class="@WorkingBadgeClass(frame)">@WorkingStateLabel(frame)</span>
-                            <div class="frame-row-actions">
-                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Move up" disabled="@(frame.Index == 0)" @onclick="() => MoveFrameAsync(frame.Index, -1)">Up</button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Move down" disabled="@(frame.Index >= _frames.Count - 1)" @onclick="() => MoveFrameAsync(frame.Index, 1)">Down</button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Preview frame" disabled="@(!CanPreviewFrame(frame))" @onclick="() => PreviewFrameAsync(frame)">Preview</button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Attach frame" disabled="@(frame.Id is null)" @onclick="() => AttachFrameAsync(frame)">Attach</button>
-                            </div>
-                        </div>
-                    }
-                </div>
-
-                <div class="frame-work-panel">
-                    <div class="section-title">Frame Work</div>
-                    @if (SelectedFrame() is { } selectedFrame)
-                    {
-                        <div class="frame-work-meta">
-                            <span>@selectedFrame.Label</span>
-                            <span>@WorkingStateLabel(selectedFrame)</span>
-                            @if (_frameWorkImageWidth > 0 && _frameWorkImageHeight > 0)
-                            {
-                                <span>@_frameWorkImageWidth x @_frameWorkImageHeight</span>
-                            }
-                        </div>
-                        <canvas class="@FrameWorkCanvasClass()" @ref="_frameWorkCanvas"></canvas>
-                        <div class="frame-work-actions">
-                            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@_frameEditRunning" @onclick="IsolateSelectedFrameAsync">@(HasWorkingImage(selectedFrame) ? "Re-isolate" : "Isolate")</button>
-                            <div class="frame-erase-controls" role="group" aria-label="Frame erase mode">
-                                <button type="button" class="@FrameEraseButtonClass(FrameWorkEraseMode.Rect)" disabled="@FrameEraseModeDisabled(selectedFrame)" @onclick="() => SetFrameEraseModeAsync(FrameWorkEraseMode.Rect)">Rect</button>
-                                <button type="button" class="@FrameEraseButtonClass(FrameWorkEraseMode.Polygon)" disabled="@FrameEraseModeDisabled(selectedFrame)" @onclick="() => SetFrameEraseModeAsync(FrameWorkEraseMode.Polygon)">Polygon</button>
-                                <button type="button" class="@FrameEraseButtonClass(FrameWorkEraseMode.Lasso)" disabled="@FrameEraseModeDisabled(selectedFrame)" @onclick="() => SetFrameEraseModeAsync(FrameWorkEraseMode.Lasso)">Lasso</button>
-                            </div>
-                            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(!HasWorkingImage(selectedFrame) || _frameEditRunning)" @onclick="ClearSelectedFrameWorkAsync">Revert</button>
-                        </div>
-                        <textarea class="form-control form-control-sm frame-edit-prompt" rows="2" placeholder="Frame edit prompt" @bind="_frameEditPrompt"></textarea>
-                        <button type="button" class="btn btn-sm btn-primary frame-edit-button" disabled="@(_frameEditRunning || string.IsNullOrWhiteSpace(_frameEditPrompt))" @onclick="EditSelectedFrameAsync">AI Edit</button>
+                        else if (_frameSet?.LatestBuiltSheetAssetId is { } latestBuilt)
+                        {
+                            <img class="sprite-stage-image" src="@AssetFullUrl(latestBuilt)" alt="Built sheet" />
+                        }
+                        else
+                        {
+                            <div class="empty-state compact">Build the sheet to preview it here.</div>
+                        }
                     }
                     else
                     {
-                        <div class="empty-state compact">Select a frame.</div>
+                        <div class="sprite-export-pane">
+                            <p>Export turns the opaque built sheet into engine-ready files.</p>
+                            <p class="sprite-export-note">Background removal, transparency, and edge cleanup happen here, not while editing Source, Frames, or Sheet.</p>
+                            <button type="button" class="btn btn-sm btn-primary" disabled="@(BuiltSheetAssetId() is null)" @onclick="ExportBuiltSheetAsync">Export...</button>
+                        </div>
                     }
                 </div>
 
+                @if (!string.IsNullOrWhiteSpace(_status))
+                {
+                    <div class="sprite-status">@_status</div>
+                }
+                @if (!string.IsNullOrWhiteSpace(_error))
+                {
+                    <div class="sprite-error">@_error</div>
+                }
+            </section>
+
+            <aside class="sprite-inspector">
+                @if (_mode == SpriteMode.Source)
+                {
+                    <div class="sprite-settings-panel">
+                        <div class="section-title">Source</div>
+                        <label class="sprite-source-pick">
+                            <span>Source asset</span>
+                            <select class="form-select form-select-sm" value="@_sourceAssetIdText" @onchange="OnSourceAssetChangedAsync">
+                                <option value="">- select -</option>
+                                @foreach (var asset in CandidateSourceAssets())
+                                {
+                                    <option value="@asset.Id">@asset.Label</option>
+                                }
+                            </select>
+                        </label>
+                        <div class="sprite-inspector-actions">
+                            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_busy || SelectedSourceAssetId() is null)" @onclick="DetectRegionsAsync">Detect Regions</button>
+                            <button type="button" class="btn btn-sm btn-primary" disabled="@(_busy || SelectedSourceAssetId() is null || _regions.Count == 0)" @onclick="CreateFrameSetFromRegionsAsync">Create Frame Set</button>
+                        </div>
+                    </div>
+
+                    <div class="sprite-settings-panel">
+                        <div class="section-title">Region</div>
+                        @if (SelectedRegion() is { } region)
+                        {
+                            <label>
+                                <span>Name</span>
+                                <input class="form-control form-control-sm" value="@region.Name" @onchange="(e) => RenameRegionAsync(region.Id, e.Value?.ToString())" />
+                            </label>
+                            <div class="sprite-grid-controls">
+                                <label><span>X</span><input class="form-control form-control-sm" type="number" value="@region.X" @onchange='(e) => UpdateSelectedRegionNumberAsync(region.Id, "x", e)' /></label>
+                                <label><span>Y</span><input class="form-control form-control-sm" type="number" value="@region.Y" @onchange='(e) => UpdateSelectedRegionNumberAsync(region.Id, "y", e)' /></label>
+                                <label><span>W</span><input class="form-control form-control-sm" type="number" min="1" value="@region.Width" @onchange='(e) => UpdateSelectedRegionNumberAsync(region.Id, "w", e)' /></label>
+                                <label><span>H</span><input class="form-control form-control-sm" type="number" min="1" value="@region.Height" @onchange='(e) => UpdateSelectedRegionNumberAsync(region.Id, "h", e)' /></label>
+                            </div>
+                            <div class="sprite-inspector-actions">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="ExtractSelectedRegionAsAssetAsync">Extract as Asset</button>
+                                <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_busy" @onclick="DeleteSelectedRegionsAsync">Delete</button>
+                            </div>
+                        }
+                        else
+                        {
+                            <p class="sprite-inspector-hint">Draw or select a region on the source image.</p>
+                        }
+                    </div>
+                }
+                else if (_mode == SpriteMode.Frames)
+                {
+                    <div class="sprite-settings-panel">
+                        <div class="section-title">Frame Set</div>
+                        <div class="sprite-grid-controls">
+                            <label><span>Cell W</span><input class="form-control form-control-sm" type="number" min="1" max="8192" @bind="_cellWidth" /></label>
+                            <label><span>Cell H</span><input class="form-control form-control-sm" type="number" min="1" max="8192" @bind="_cellHeight" /></label>
+                        </div>
+                        <div class="sprite-inspector-actions">
+                            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_busy || _frameSet is null)" @onclick="() => NormalizeCellSizeAsync(false)">Normalize</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_busy || _frameSet is null)" @onclick="() => NormalizeCellSizeAsync(true)">Auto Cell</button>
+                        </div>
+                    </div>
+
+                    <div class="sprite-settings-panel">
+                        <div class="section-title">Align Frames</div>
+                        <label class="sprite-source-pick">
+                            <span>Anchor</span>
+                            <select class="form-select form-select-sm" @bind="_alignAnchor">
+                                <option value="feet">Feet</option>
+                                <option value="bottom">Bottom</option>
+                                <option value="center">Center</option>
+                                <option value="top">Top</option>
+                                <option value="left">Left edge</option>
+                                <option value="right">Right edge</option>
+                            </select>
+                        </label>
+                        <div class="sprite-inspector-actions">
+                            <label class="sprite-axis-toggle"><input type="checkbox" @bind="_alignAxisX" /> X</label>
+                            <label class="sprite-axis-toggle"><input type="checkbox" @bind="_alignAxisY" /> Y</label>
+                            <button type="button" class="btn btn-sm btn-primary" disabled="@(_busy || _frameSet is null)" @onclick="AlignFramesAsync">Align</button>
+                        </div>
+                    </div>
+
+                    @if (SelectedFrame() is { } selected)
+                    {
+                        <div class="sprite-settings-panel">
+                            <div class="section-title">Frame: @selected.Name</div>
+                            <div class="sprite-grid-controls">
+                                <label><span>Offset X</span><input class="form-control form-control-sm" type="number" value="@selected.ContentOffsetX" @onchange='(e) => SetFrameOffsetAsync(selected, "x", e)' /></label>
+                                <label><span>Offset Y</span><input class="form-control form-control-sm" type="number" value="@selected.ContentOffsetY" @onchange='(e) => SetFrameOffsetAsync(selected, "y", e)' /></label>
+                                <label><span>Duration</span><input class="form-control form-control-sm" type="number" min="1" max="10000" value="@selected.DurationMs" @onchange="(e) => SetFrameDurationAsync(selected.Id, e)" /></label>
+                                <label><span>Brush</span><input class="form-range" type="range" min="4" max="96" @bind="_brushSize" @bind:after="RenderCanvasAsync" /></label>
+                            </div>
+                            <div class="sprite-inspector-actions">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(-1, 0)">Left</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(1, 0)">Right</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(0, -1)">Up</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(0, 1)">Down</button>
+                            </div>
+                            <div class="sprite-inspector-actions">
+                                <label class="sprite-axis-toggle"><input type="checkbox" @bind="_showOnion" @bind:after="RenderCanvasAsync" /> Onion</label>
+                                <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_busy" @onclick="() => DeleteFrameAsync(selected.Id)">Delete frame</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!selected.HasMask || _busy)" @onclick="() => ClearFrameMaskAsync(selected.Id)">Clear mask</button>
+                            </div>
+                        </div>
+                    }
+                }
+                else if (_mode == SpriteMode.Sheet)
+                {
+                    <div class="sprite-settings-panel">
+                        <div class="section-title">Sheet Settings</div>
+                        <div class="sprite-grid-controls">
+                            <label><span>Rows</span><input class="form-control form-control-sm" type="number" min="1" max="32" @bind="_rows" /></label>
+                            <label><span>Columns</span><input class="form-control form-control-sm" type="number" min="0" max="64" @bind="_columns" /></label>
+                            <label><span>Gutter</span><input class="form-control form-control-sm" type="number" min="0" max="2048" @bind="_gutter" /></label>
+                            <label><span>Outer</span><input class="form-control form-control-sm" type="number" min="0" max="2048" @bind="_outerMargin" /></label>
+                            <label><span>Ordering</span><select class="form-select form-select-sm" @bind="_ordering"><option value="rowMajor">Row major</option><option value="columnMajor">Column major</option></select></label>
+                        </div>
+                        <div class="sprite-inspector-actions">
+                            <button type="button" class="btn btn-sm btn-primary" disabled="@(_busy || _frameSet is null)" @onclick="BuildSheetAsync">Build Sheet</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(BuiltSheetAssetId() is null)" @onclick="ExportBuiltSheetAsync">Export...</button>
+                        </div>
+                        @if (BuiltSheetManifest() is { } manifest)
+                        {
+                            <p class="sprite-inspector-hint">Manifest: @manifest</p>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="sprite-settings-panel">
+                        <div class="section-title">Export</div>
+                        <p class="sprite-inspector-hint">Produce final engine-ready output. Transparency and background removal are applied at this stage only.</p>
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@(BuiltSheetAssetId() is null)" @onclick="ExportBuiltSheetAsync">Export...</button>
+                    </div>
+                }
             </aside>
         </div>
-    }
+
+        <div class="sprite-agent-strip" role="status">
+            <span class="sprite-agent-status">Agent idle</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="Undo task - coming soon">Undo task</button>
+        </div>
+
+        <div class="sprite-bottom-strip">
+            @if (_mode == SpriteMode.Source)
+            {
+                <div class="sprite-frame-strip-panel">
+                    <div class="frame-list-head"><span>@_regions.Count region(s)</span></div>
+                    <div class="sprite-frame-strip">
+                        @foreach (var region in _regions.OrderBy(r => r.Order))
+                        {
+                            <button type="button" class="sprite-region-chip @(_selectedRegionIds.Contains(region.Id) ? "is-selected" : "")" @onclick="() => SelectRegionAsync(region.Id)">
+                                <span>@region.Name</span>
+                                <small>@region.Width x @region.Height</small>
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="sprite-frame-strip-panel">
+                    <div class="frame-list-head"><span>@FrameCount() frame(s)</span></div>
+                    <div class="sprite-frame-strip">
+                        @if (_frameSet is { } set)
+                        {
+                            @foreach (var frame in set.Frames)
+                            {
+                                <div class="sprite-frame-card @(frame.Index == _selectedIndex ? "is-selected" : "")" draggable="true"
+                                     @ondragstart="() => _dragFrameId = frame.Id"
+                                     @ondragover:preventDefault
+                                     @ondrop="() => DropFrameAsync(frame.Index)">
+                                    <button type="button" class="frame-thumb" @onclick="() => SelectFrameAsync(frame.Index)">
+                                        <img src="@FramePreviewUrl(frame.Id)" alt="@frame.Name" />
+                                    </button>
+                                    <div class="sprite-frame-card-body">
+                                        <span class="sprite-frame-name">@frame.Name</span>
+                                        <span class="@WorkingBadgeClass(frame)">@WorkingLabel(frame)@(frame.HasMask ? " + mask" : "")</span>
+                                        <div class="sprite-frame-card-actions">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" title="Move earlier" disabled="@(frame.Index == 0 || _busy)" @onclick="() => ReorderFrameAsync(frame.Id, frame.Index - 1)">‹</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" title="Move later" disabled="@(frame.Index >= set.FrameCount - 1 || _busy)" @onclick="() => ReorderFrameAsync(frame.Id, frame.Index + 1)">›</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+
+                <div class="sprite-anim-cluster">
+                    <div class="sprite-section-title-row">
+                        <div class="section-title">Animation</div>
+                        <div class="sprite-section-actions">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(FrameCount() == 0)" @onclick="ToggleAnimationAsync">@(_animPlaying ? "Stop" : "Play")</button>
+                        </div>
+                    </div>
+                    <div class="sprite-anim-stage">
+                        @if (AnimationFrame() is { } animFrame)
+                        {
+                            <img class="sprite-stage-image" src="@FramePreviewUrl(animFrame.Id)" alt="Animation preview" />
+                        }
+                        else
+                        {
+                            <div class="empty-state compact">No frames.</div>
+                        }
+                    </div>
+                    <div class="sprite-anim-controls">
+                        <label><span>FPS</span><input class="form-control form-control-sm" type="number" min="1" max="60" @bind="_fps" /></label>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
 </div>
 
 @code {
@@ -302,130 +350,115 @@
     public EventCallback<ArtAssetView> OnExportAsset { get; set; }
 
     [Parameter]
-    public EventCallback<SpriteSheetDefinitionView> OnAddSheetToReview { get; set; }
+    public EventCallback<WorkspaceSpritesVisibleState> OnVisibleStateChanged { get; set; }
 
-    [Parameter]
-    public EventCallback<SpriteSheetDefinitionView> OnAddAnimationToReview { get; set; }
-
-    [Parameter]
-    public EventCallback<SpriteSheetDefinitionView> OnPreviewSheet { get; set; }
-
-    [Parameter]
-    public EventCallback<SpriteSheetDefinitionView> OnPreviewAnimation { get; set; }
-
-    [Parameter]
-    public EventCallback<SpriteSheetFrameRecordView> OnPreviewFrame { get; set; }
+    private static readonly SpriteMode[] SpriteModes = [SpriteMode.Source, SpriteMode.Frames, SpriteMode.Sheet, SpriteMode.Export];
 
     private IJSObjectReference? _module;
     private DotNetObjectReference<SpriteSheetWorkspace>? _dotNetRef;
     private ElementReference _sourceCanvas;
-    private ElementReference _animationCanvas;
-    private ElementReference _frameWorkCanvas;
-    private CancellationTokenSource? _autosaveCts;
-    private bool _disposed;
+    private ElementReference _frameCanvas;
 
-    private Guid? _loadedSpriteSheetId;
-    private DateTime? _loadedSpriteSheetUpdatedAt;
-    private string _workingImageDataUrl = string.Empty;
-    private int _rows = 1;
-    private int _columns = 1;
-    private int _cellWidth = 128;
-    private int _cellHeight = 128;
-    private int _padding = 8;
-    private int _gutter = 16;
-    private int _fps = 8;
-    private bool _loop = true;
-    private string _horizontalAnchor = "center";
-    private string _verticalAnchor = "bottom";
-    private int _selectedFrameIndex = -1;
-    private SpriteEditTool _tool = SpriteEditTool.Select;
+    private SpriteMode _mode = SpriteMode.Source;
+    private FrameSetView? _frameSet;
+    private List<SourceRegionView> _regions = [];
+    private readonly HashSet<Guid> _selectedRegionIds = [];
+    private Guid? _loadedProjectId;
+    private Guid? _dragFrameId;
+
     private string _status = string.Empty;
     private string? _error;
-    private string _frameWorkImageDataUrl = string.Empty;
-    private int _frameWorkImageWidth;
-    private int _frameWorkImageHeight;
-    private int? _loadedFrameWorkIndex;
-    private DateTime? _loadedFrameWorkUpdatedAt;
-    private string _frameEditPrompt = string.Empty;
-    private bool _frameEditRunning;
-    private bool _framePersistenceRunning;
-    private SpriteSheetRect? _stabilizationAnchor;
-    private int? _stabilizationReferenceFrameNumber;
-    private StabilizeSpriteSheetFramesResult? _stabilizationPreview;
-    private int _stabilizationSearchPadding = 24;
-    private double _stabilizationMinScore = 0.68d;
-    private bool _stabilizationRunning;
-    private FrameWorkEraseMode _frameEraseMode = FrameWorkEraseMode.None;
-    private readonly List<SpriteSheetEditorFrame> _frames = [];
+    private bool _busy;
+    private int _rev;
 
-    private bool HasActiveSheet => Workbench.ActiveSpriteSheet is not null && CurrentWorkingAsset() is not null;
-    private bool HasSavedStabilization => Workbench.ActiveSpriteSheet?.Stabilization is not null;
+    private int _rows = 1;
+    private int _columns;
+    private int _gutter;
+    private int _outerMargin;
+    private int _cellWidth = 64;
+    private int _cellHeight = 64;
+    private string _ordering = "rowMajor";
+    private string _alignAnchor = "feet";
+    private bool _alignAxisX = true;
+    private bool _alignAxisY = true;
+    private int _fps = 8;
 
-    protected override void OnParametersSet()
+    private string _sourceAssetIdText = string.Empty;
+    private string _sourceTool = "select";
+    private string _frameTool = "content";
+    private int _brushSize = 24;
+    private bool _showOnion = true;
+
+    private Guid? _builtSheetAssetId;
+    private string? _builtSheetManifest;
+    private int _selectedIndex = -1;
+    private int _animIndex;
+    private bool _animPlaying;
+    private CancellationTokenSource? _animCts;
+
+    protected override async Task OnParametersSetAsync()
     {
-        var active = Workbench.ActiveSpriteSheet;
-        if (active is null || CurrentWorkingAsset(active) is not { } working)
+        if (_loadedProjectId != Workbench.Project.Id)
         {
-            _loadedSpriteSheetId = null;
-            _loadedSpriteSheetUpdatedAt = null;
-            _workingImageDataUrl = string.Empty;
-            _frameWorkImageDataUrl = string.Empty;
-            _frameWorkImageWidth = 0;
-            _frameWorkImageHeight = 0;
-            _loadedFrameWorkIndex = null;
-            _loadedFrameWorkUpdatedAt = null;
-            _stabilizationAnchor = null;
-            _stabilizationReferenceFrameNumber = null;
-            _stabilizationPreview = null;
-            ResetFrameEraseMode();
-            _frames.Clear();
-            _selectedFrameIndex = -1;
-            return;
+            _loadedProjectId = Workbench.Project.Id;
+            _frameSet = null;
+            _regions = [];
+            _selectedRegionIds.Clear();
+            _selectedIndex = -1;
+            _builtSheetAssetId = null;
+            _builtSheetManifest = null;
+            await LoadActiveFrameSetAsync();
         }
-
-        if (_loadedSpriteSheetId == active.Id && _loadedSpriteSheetUpdatedAt == active.UpdatedAt && _workingImageDataUrl == working.FullImageUrl)
-            return;
-
-        LoadSheet(active, working);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_disposed)
-            return;
-
         if (firstRender)
         {
-            try
-            {
-                var module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Sprites/SpriteSheetWorkspace.razor.js");
-                if (_disposed)
-                {
-                    await module.DisposeAsync();
-                    return;
-                }
-
-                _module = module;
-                _dotNetRef = DotNetObjectReference.Create(this);
-            }
-            catch (JSDisconnectedException)
-            {
-                return;
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Sprites/SpriteSheetWorkspace.razor.js");
+            _dotNetRef = DotNetObjectReference.Create(this);
         }
 
-        await DrawAsync();
-        if (SelectedFrame() is { } selected
-            && HasWorkingImage(selected)
-            && (_loadedFrameWorkIndex != selected.Index || _loadedFrameWorkUpdatedAt != selected.WorkingUpdatedAt || string.IsNullOrWhiteSpace(_frameWorkImageDataUrl)))
+        await RenderCanvasAsync();
+    }
+
+    private async Task LoadActiveFrameSetAsync()
+    {
+        try
         {
-            await LoadSelectedFrameWorkAsync();
+            var set = await FrameSets.GetActiveFrameSetAsync(Workbench.Project.Id);
+            ApplyFrameSet(set);
+            if (set?.SourceAssetId is Guid sourceId)
+            {
+                _sourceAssetIdText = sourceId.ToString();
+                _regions = (await FrameSets.ListSourceRegionsAsync(Workbench.Project.Id, sourceId)).ToList();
+            }
+            await PublishSpritesStateAsync();
         }
-        await DrawFrameWorkAsync();
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void ApplyFrameSet(FrameSetView? set)
+    {
+        _frameSet = set;
+        _rev++;
+        if (set is null)
+        {
+            _selectedIndex = -1;
+            return;
+        }
+
+        _cellWidth = set.DefaultCellWidth > 0 ? set.DefaultCellWidth : _cellWidth;
+        _cellHeight = set.DefaultCellHeight > 0 ? set.DefaultCellHeight : _cellHeight;
+        _builtSheetAssetId = set.LatestBuiltSheetAssetId ?? _builtSheetAssetId;
+        _builtSheetManifest = set.LatestBuiltSheetManifest ?? _builtSheetManifest;
+        if (set.Frames.Count == 0)
+            _selectedIndex = -1;
+        else if (_selectedIndex < 0 || _selectedIndex >= set.Frames.Count)
+            _selectedIndex = 0;
     }
 
     private async Task ImportSourceAsync(InputFileChangeEventArgs args)
@@ -433,281 +466,305 @@
         if (args.File is null)
             return;
 
-        _error = null;
-        _status = "Importing sprite sheet source...";
-        try
+        await RunAsync("Importing image...", async () =>
         {
             await using var stream = args.File.OpenReadStream(50 * 1024 * 1024);
             using var memory = new MemoryStream();
             await stream.CopyToAsync(memory);
+            var contentType = string.IsNullOrWhiteSpace(args.File.ContentType) ? "image/png" : args.File.ContentType;
             var asset = await Workflow.ImportAssetAsync(Workbench.Project.Id, new ImportAssetRequest(
                 args.File.Name,
-                args.File.ContentType,
+                contentType,
                 memory.ToArray(),
                 Path.GetFileNameWithoutExtension(args.File.Name)));
-            await Workflow.StartSpriteSheetEditAsync(Workbench.Project.Id, asset.Id);
-            _status = $"Imported {asset.Label}.";
+            _sourceAssetIdText = asset.Id.ToString();
+            _regions = [];
+            _selectedRegionIds.Clear();
+            _frameSet = null;
+            _status = $"Imported {asset.Label}. Draw or detect regions to create frames.";
             await OnChanged.InvokeAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
+            await PublishSpritesStateAsync();
+        });
     }
 
-    private async Task ImportFramesAsync(InputFileChangeEventArgs args)
+    private async Task OnSourceAssetChangedAsync(ChangeEventArgs args)
     {
-        var files = args.GetMultipleFiles(128);
-        if (files.Count == 0)
+        _sourceAssetIdText = args.Value?.ToString() ?? string.Empty;
+        _regions = [];
+        _selectedRegionIds.Clear();
+        if (SelectedSourceAssetId() is Guid sourceId)
+            _regions = (await FrameSets.ListSourceRegionsAsync(Workbench.Project.Id, sourceId)).ToList();
+        await PublishSpritesStateAsync();
+        await RenderCanvasAsync();
+    }
+
+    private async Task DetectRegionsAsync()
+    {
+        if (SelectedSourceAssetId() is not Guid sourceId)
             return;
 
-        _error = null;
-        _status = files.Count == 1 ? "Importing sprite frame..." : $"Importing {files.Count} sprite frames...";
-        try
+        await RunAsync("Detecting source regions...", async () =>
         {
-            var assetIds = new List<Guid>();
-            foreach (var file in files)
+            _regions = (await FrameSets.DetectSourceRegionsAsync(Workbench.Project.Id, new DetectSourceRegionsRequest(sourceId))).ToList();
+            _selectedRegionIds.Clear();
+            if (_regions.FirstOrDefault() is { } first)
+                _selectedRegionIds.Add(first.Id);
+            _status = $"Detected {_regions.Count} region(s).";
+            await PublishSpritesStateAsync();
+        });
+    }
+
+    private async Task CreateFrameSetFromRegionsAsync()
+    {
+        if (SelectedSourceAssetId() is not Guid sourceId || _regions.Count == 0)
+            return;
+
+        var regionIds = _selectedRegionIds.Count > 0
+            ? _regions.Where(region => _selectedRegionIds.Contains(region.Id)).Select(region => region.Id).ToList()
+            : _regions.Select(region => region.Id).ToList();
+
+        await RunAsync("Creating frame set...", async () =>
+        {
+            var set = await FrameSets.CreateFrameSetFromRegionsAsync(Workbench.Project.Id, new CreateFrameSetFromRegionsRequest(sourceId, regionIds));
+            ApplyFrameSet(set);
+            _mode = SpriteMode.Frames;
+            _status = $"Created {set.FrameCount} editable frame workspace(s).";
+            await OnChanged.InvokeAsync();
+            await PublishSpritesStateAsync();
+        });
+    }
+
+    private async Task NormalizeCellSizeAsync(bool auto)
+    {
+        if (_frameSet is not { } set)
+            return;
+
+        await RunAsync("Normalizing cells...", async () =>
+        {
+            var updated = await FrameSets.SetCommonCellSizeAsync(Workbench.Project.Id, new SetCommonCellSizeRequest(set.Id, auto ? 0 : _cellWidth, auto ? 0 : _cellHeight));
+            ApplyFrameSet(updated);
+            _status = $"Cells set to {updated.DefaultCellWidth} x {updated.DefaultCellHeight}.";
+            await PublishSpritesStateAsync();
+        });
+    }
+
+    private async Task AlignFramesAsync()
+    {
+        if (_frameSet is not { } set)
+            return;
+
+        await RunAsync("Aligning frames...", async () =>
+        {
+            var updated = await FrameSets.AlignFramesAsync(Workbench.Project.Id, new AlignFramesRequest(set.Id, _alignAnchor, _alignAxisX, _alignAxisY));
+            ApplyFrameSet(updated);
+            _status = $"Aligned {updated.FrameCount} frame(s) by {_alignAnchor}.";
+            await PublishSpritesStateAsync();
+        });
+    }
+
+    private async Task ReorderFrameAsync(Guid frameId, int targetIndex)
+    {
+        if (_frameSet is not { } set)
+            return;
+
+        await RunAsync("Reordering frame...", async () =>
+        {
+            var updated = await FrameSets.ReorderFrameAsync(Workbench.Project.Id, set.Id, frameId, targetIndex);
+            ApplyFrameSet(updated);
+            await PublishSpritesStateAsync();
+        });
+    }
+
+    private async Task DropFrameAsync(int targetIndex)
+    {
+        if (_dragFrameId is not Guid frameId)
+            return;
+        _dragFrameId = null;
+        await ReorderFrameAsync(frameId, targetIndex);
+    }
+
+    private async Task DeleteFrameAsync(Guid frameId)
+    {
+        if (_frameSet is not { } set)
+            return;
+
+        await RunAsync("Deleting frame...", async () =>
+        {
+            var updated = await FrameSets.DeleteFrameAsync(Workbench.Project.Id, set.Id, frameId);
+            ApplyFrameSet(updated);
+            _status = "Frame deleted.";
+            await PublishSpritesStateAsync();
+        });
+    }
+
+    private async Task SetFrameDurationAsync(Guid frameId, ChangeEventArgs args)
+    {
+        if (_frameSet is not { } set || !int.TryParse(args.Value?.ToString(), out var ms))
+            return;
+
+        await RunAsync("Updating duration...", async () =>
+        {
+            var updated = await FrameSets.SetFrameDurationAsync(Workbench.Project.Id, set.Id, frameId, ms);
+            ApplyFrameSet(updated);
+            await PublishSpritesStateAsync();
+        });
+    }
+
+    private async Task SetFrameOffsetAsync(FrameView frame, string axis, ChangeEventArgs args)
+    {
+        if (!int.TryParse(args.Value?.ToString(), out var value))
+            return;
+        var nextX = axis == "x" ? value : frame.ContentOffsetX;
+        var nextY = axis == "y" ? value : frame.ContentOffsetY;
+        await SetFrameOffsetAsync(frame.Id, nextX, nextY);
+    }
+
+    private async Task NudgeSelectedFrameAsync(int dx, int dy)
+    {
+        if (SelectedFrame() is not { } frame)
+            return;
+        await SetFrameOffsetAsync(frame.Id, frame.ContentOffsetX + dx, frame.ContentOffsetY + dy);
+    }
+
+    private async Task SetFrameOffsetAsync(Guid frameId, int x, int y)
+    {
+        if (_frameSet is not { } set)
+            return;
+        var updated = await FrameSets.TranslateFrameContentAsync(Workbench.Project.Id, new TranslateFrameContentRequest(set.Id, frameId, x, y));
+        ApplyFrameSet(updated);
+        await PublishSpritesStateAsync();
+        await RenderCanvasAsync();
+    }
+
+    private async Task BuildSheetAsync()
+    {
+        if (_frameSet is not { } set)
+            return;
+
+        await RunAsync("Building sheet...", async () =>
+        {
+            var result = await FrameSets.BuildSheetAsync(Workbench.Project.Id, new BuildSheetRequest(
+                set.Id,
+                _rows,
+                _columns,
+                Padding: 0,
+                _gutter,
+                _outerMargin,
+                _ordering));
+            _builtSheetAssetId = result.OutputAssetId;
+            _builtSheetManifest = result.ManifestJson;
+            _rev++;
+            _status = $"Built {result.Rows}x{result.Columns} sheet, {result.CellWidth} x {result.CellHeight} cells.";
+            await OnChanged.InvokeAsync();
+            await PublishSpritesStateAsync();
+        });
+    }
+
+    private async Task ExtractSelectedRegionAsAssetAsync()
+    {
+        if (SelectedSourceAssetId() is not Guid sourceId || SelectedRegion() is not { } region)
+            return;
+
+        await RunAsync("Extracting region...", async () =>
+        {
+            var result = await Workflow.ExtractRegionAsAssetAsync(Workbench.Project.Id, new ExtractRegionAsAssetRequest(
+                sourceId,
+                region.X,
+                region.Y,
+                region.Width,
+                region.Height,
+                Name: region.Name,
+                Padding: 0,
+                LinkToSource: true));
+            _status = $"Extracted '{result.Asset.Label}'.";
+            await OnChanged.InvokeAsync();
+            await PublishSpritesStateAsync();
+        });
+    }
+
+    private async Task DeleteSelectedRegionsAsync()
+    {
+        if (SelectedSourceAssetId() is not Guid sourceId || _selectedRegionIds.Count == 0)
+            return;
+        _regions = _regions.Where(region => !_selectedRegionIds.Contains(region.Id)).ToList();
+        _selectedRegionIds.Clear();
+        await SaveRegionsAsync(sourceId);
+    }
+
+    private async Task RenameRegionAsync(Guid id, string? name)
+    {
+        if (SelectedSourceAssetId() is not Guid sourceId)
+            return;
+        _regions = _regions.Select(region => region.Id == id ? region with { Name = string.IsNullOrWhiteSpace(name) ? region.Name : name.Trim() } : region).ToList();
+        await SaveRegionsAsync(sourceId);
+    }
+
+    private async Task UpdateSelectedRegionNumberAsync(Guid id, string field, ChangeEventArgs args)
+    {
+        if (SelectedSourceAssetId() is not Guid sourceId || !int.TryParse(args.Value?.ToString(), out var value))
+            return;
+        _regions = _regions.Select(region => region.Id == id
+            ? field switch
             {
-                if (!file.ContentType.Equals("image/png", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("Sprite frame composition requires PNG images.");
-
-                await using var stream = file.OpenReadStream(50 * 1024 * 1024);
-                using var memory = new MemoryStream();
-                await stream.CopyToAsync(memory);
-                var asset = await Workflow.ImportAssetAsync(Workbench.Project.Id, new ImportAssetRequest(
-                    file.Name,
-                    file.ContentType,
-                    memory.ToArray(),
-                    Path.GetFileNameWithoutExtension(file.Name)));
-                assetIds.Add(asset.Id);
+                "x" => region with { X = value },
+                "y" => region with { Y = value },
+                "w" => region with { Width = Math.Max(1, value) },
+                "h" => region with { Height = Math.Max(1, value) },
+                _ => region
             }
-
-            var hadActiveSheet = Workbench.ActiveSpriteSheet is not null;
-            var sheet = await Workflow.ComposeSpriteSheetFromImagesAsync(Workbench.Project.Id, new ComposeSpriteSheetFromImagesRequest(
-                assetIds,
-                Workbench.ActiveSpriteSheet?.Id,
-                Label: files.Count == 1 ? null : "Imported frame sheet"));
-            _loadedSpriteSheetId = null;
-            _loadedSpriteSheetUpdatedAt = null;
-            _status = hadActiveSheet
-                ? $"Added {files.Count} frame(s)."
-                : $"Created {sheet.Label} from {files.Count} frame(s).";
-            await OnChanged.InvokeAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
+            : region).ToList();
+        await SaveRegionsAsync(sourceId);
     }
 
-    private async Task AutoDetectAsync()
+    private async Task SaveRegionsAsync(Guid sourceId)
     {
-        if (CurrentWorkingAsset() is not { } working)
+        _regions = (await FrameSets.SaveSourceRegionsAsync(Workbench.Project.Id, new SaveSourceRegionsRequest(
+            sourceId,
+            _regions
+                .OrderBy(region => region.Order)
+                .Select((region, index) => new SourceRegionEditRequest(
+                    region.Id,
+                    region.Name,
+                    region.X,
+                    region.Y,
+                    region.Width,
+                    region.Height,
+                    region.ShapePaths,
+                    region.RegionType,
+                    index))
+                .ToList()))).ToList();
+        _rev++;
+        await PublishSpritesStateAsync();
+        await RenderCanvasAsync();
+    }
+
+    private async Task ClearFrameMaskAsync(Guid frameId)
+    {
+        await FrameSets.ClearFrameMaskAsync(Workbench.Project.Id, frameId);
+        if (_frameSet is { } set)
+            ApplyFrameSet(await FrameSets.GetFrameSetAsync(Workbench.Project.Id, set.Id));
+        await PublishSpritesStateAsync();
+        await RenderCanvasAsync();
+    }
+
+    private async Task ExportBuiltSheetAsync()
+    {
+        if (BuiltSheetAssetId() is not Guid assetId)
             return;
-
-        _error = null;
-        _status = "Detecting sprite frames...";
-        try
-        {
-            var detection = await Workflow.DetectSpriteSheetFramesAsync(
-                Workbench.Project.Id,
-                new SpriteSheetDetectionRequest(working.Id, null, "rows", "auto"));
-            if (detection.Frames.Count == 0)
-                throw new InvalidOperationException("No foreground frames were detected.");
-
-            _rows = Math.Max(1, detection.Rows);
-            _columns = Math.Max(1, detection.Columns);
-            _frames.Clear();
-            _frames.AddRange(detection.Frames
-                .OrderBy(frame => frame.Index)
-                .Select(frame => new SpriteSheetEditorFrame
-                {
-                    Index = frame.Index,
-                    Label = $"Frame {frame.Index + 1}",
-                    X = frame.SourceRect.X,
-                    Y = frame.SourceRect.Y,
-                    Width = frame.SourceRect.Width,
-                    Height = frame.SourceRect.Height,
-                    ShapePaths = frame.ShapePaths.ToList(),
-                    SourceImageAssetId = working.Id,
-                    SourceImageRect = frame.SourceRect,
-                }));
-            FitCellsToFrames();
-            _selectedFrameIndex = _frames.Count > 0 ? 0 : -1;
-            await AutosaveLayoutNowAsync();
-            _status = $"Detected {_frames.Count} frame(s).";
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-    }
-
-    private async Task ResetToOriginalAsync()
-    {
-        var active = Workbench.ActiveSpriteSheet;
-        if (active is null || _framePersistenceRunning)
-            return;
-
-        _error = null;
-        _status = "Resetting sprite sheet...";
-        _framePersistenceRunning = true;
-        _autosaveCts?.Cancel();
-        await Task.Yield();
-        try
-        {
-            var reset = await Workflow.ResetSpriteSheetToOriginalAsync(Workbench.Project.Id, active.Id);
-            _loadedSpriteSheetId = null;
-            _loadedSpriteSheetUpdatedAt = null;
-            _frames.Clear();
-            _selectedFrameIndex = -1;
-            _loadedFrameWorkIndex = null;
-            _loadedFrameWorkUpdatedAt = null;
-            _frameWorkImageDataUrl = string.Empty;
-            _frameWorkImageWidth = 0;
-            _frameWorkImageHeight = 0;
-            ResetFrameEraseMode();
-            _status = $"{reset.Label} reset.";
-            await OnChanged.InvokeAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-        finally
-        {
-            _framePersistenceRunning = false;
-        }
-    }
-
-    private async Task ExportWorkingAsync()
-    {
-        if (CurrentWorkingAsset() is { } asset)
+        await OnChanged.InvokeAsync();
+        var asset = Workbench.Assets.FirstOrDefault(a => a.Id == assetId);
+        if (asset is not null)
             await OnExportAsset.InvokeAsync(asset);
     }
 
-    private async Task AddSheetToReviewAsync()
+    private async Task RunAsync(string status, Func<Task> action)
     {
-        if (Workbench.ActiveSpriteSheet is { } sheet)
-            await OnAddSheetToReview.InvokeAsync(sheet);
-    }
-
-    private async Task PreviewSheetAsync()
-    {
-        if (Workbench.ActiveSpriteSheet is { } sheet)
-            await OnPreviewSheet.InvokeAsync(sheet);
-    }
-
-    private async Task AddAnimationToReviewAsync()
-    {
-        if (Workbench.ActiveSpriteSheet is { } sheet)
-            await OnAddAnimationToReview.InvokeAsync(sheet);
-    }
-
-    private async Task PreviewAnimationAsync()
-    {
-        if (Workbench.ActiveSpriteSheet is { } sheet && _frames.Count > 0)
-            await OnPreviewAnimation.InvokeAsync(sheet);
-    }
-
-    private async Task PreviewFrameAsync(SpriteSheetEditorFrame frame)
-    {
-        if (frame.Id is not Guid frameId)
-            return;
-
-        var persistedFrame = Workbench.ActiveSpriteSheet?.Frames.FirstOrDefault(candidate => candidate.Id == frameId);
-        if (persistedFrame is not null)
-            await OnPreviewFrame.InvokeAsync(persistedFrame);
-    }
-
-    private async Task NormalizeSheetAsync()
-    {
-        if (Workbench.ActiveSpriteSheet is not { } active || _frames.Count == 0)
-            return;
-
         _error = null;
-        _status = "Normalizing sprite sheet...";
+        _status = status;
+        _busy = true;
         try
         {
-            NormalizeLayout();
-            await AutosaveLayoutNowAsync();
-            if (!string.IsNullOrWhiteSpace(_error))
-                return;
-
-            await Workflow.NormalizeSpriteSheetAsync(Workbench.Project.Id, active.Id);
-            _loadedSpriteSheetId = null;
-            _loadedSpriteSheetUpdatedAt = null;
-            _status = "Sprite sheet normalized.";
-            await OnChanged.InvokeAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-    }
-
-    private async Task ReassembleSheetAsync()
-    {
-        if (Workbench.ActiveSpriteSheet is not { } active || _frames.Count == 0)
-            return;
-
-        _error = null;
-        _status = "Reassembling sprite sheet...";
-        try
-        {
-            NormalizeLayout();
-            await AutosaveLayoutNowAsync();
-            if (!string.IsNullOrWhiteSpace(_error))
-                return;
-
-            await Workflow.ReassembleSpriteSheetAsync(Workbench.Project.Id, active.Id);
-            _loadedSpriteSheetId = null;
-            _loadedSpriteSheetUpdatedAt = null;
-            _loadedFrameWorkIndex = null;
-            _frameWorkImageDataUrl = string.Empty;
-            _frameWorkImageWidth = 0;
-            _frameWorkImageHeight = 0;
-            ResetFrameEraseMode();
-            _status = "Sprite sheet reassembled.";
-            await OnChanged.InvokeAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-    }
-
-    private async Task SplitAllFramesAsync()
-    {
-        if (Workbench.ActiveSpriteSheet is not { } active || _frames.Count == 0)
-            return;
-
-        _error = null;
-        _status = "Splitting frames into isolated working images...";
-        _frameEditRunning = true;
-        try
-        {
-            NormalizeLayout();
-            await AutosaveLayoutNowAsync();
-            if (!string.IsNullOrWhiteSpace(_error))
-                return;
-
-            await Workflow.SplitSpriteSheetFramesAsync(Workbench.Project.Id, active.Id, Math.Max(16, _padding));
-            _loadedSpriteSheetId = null;
-            _loadedSpriteSheetUpdatedAt = null;
-            _loadedFrameWorkIndex = null;
-            _frameWorkImageDataUrl = string.Empty;
-            _frameWorkImageWidth = 0;
-            _frameWorkImageHeight = 0;
-            ResetFrameEraseMode();
-            _status = "Frames split into isolated working images.";
-            await OnChanged.InvokeAsync();
+            await action();
         }
         catch (Exception ex)
         {
@@ -716,1054 +773,342 @@
         }
         finally
         {
-            _frameEditRunning = false;
+            _busy = false;
+            await InvokeAsync(StateHasChanged);
+            await RenderCanvasAsync();
         }
     }
 
-    private async Task ExpandToCellsAsync()
+    private async Task SetModeAsync(SpriteMode mode)
     {
-        if (Workbench.ActiveSpriteSheet is not { } active || _frames.Count == 0)
-            return;
-
-        _error = null;
-        _status = "Expanding frames to cells...";
-        try
-        {
-            NormalizeLayout();
-            await AutosaveLayoutNowAsync();
-            if (!string.IsNullOrWhiteSpace(_error))
-                return;
-
-            var saved = await Workflow.ExpandSpriteSheetFramesToCellAsync(Workbench.Project.Id, active.Id);
-            if (CurrentWorkingAsset(active) is { } working)
-                LoadSheet(saved, working);
-            _status = "Frames expanded to cells.";
-            await OnChanged.InvokeAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
+        _mode = mode;
+        await PublishSpritesStateAsync();
+        await RenderCanvasAsync();
     }
 
-    private async Task PreviewStabilizationAsync()
+    private async Task SetSourceToolAsync(string tool)
     {
-        if (Workbench.ActiveSpriteSheet is not { } active || _stabilizationAnchor is not { } anchor)
-            return;
-
-        _error = null;
-        _status = "Previewing stabilization...";
-        _stabilizationRunning = true;
-        try
-        {
-            NormalizeStabilizationInputs();
-            var result = await Workflow.StabilizeSpriteSheetFramesAsync(
-                Workbench.Project.Id,
-                new StabilizeSpriteSheetFramesRequest(
-                    active.Id,
-                    ReferenceFrameNumber(),
-                    anchor,
-                    _stabilizationSearchPadding,
-                    _stabilizationMinScore,
-                    null,
-                    Apply: false));
-            _stabilizationPreview = result;
-            _status = $"Stabilization preview: {result.Stabilization.Matches.Count} match(es), {StabilizationLowConfidenceCount(result.Stabilization)} low confidence.";
-            await OnChanged.InvokeAsync();
-            await DrawAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-        finally
-        {
-            _stabilizationRunning = false;
-        }
+        _sourceTool = tool;
+        await RenderCanvasAsync();
     }
 
-    private async Task ApplyStabilizationAsync()
+    private async Task SetFrameToolAsync(string tool)
     {
-        if (Workbench.ActiveSpriteSheet is not { } active || _stabilizationAnchor is not { } anchor)
-            return;
-
-        _error = null;
-        _status = "Applying stabilization...";
-        _stabilizationRunning = true;
-        try
-        {
-            NormalizeStabilizationInputs();
-            var result = await Workflow.StabilizeSpriteSheetFramesAsync(
-                Workbench.Project.Id,
-                new StabilizeSpriteSheetFramesRequest(
-                    active.Id,
-                    ReferenceFrameNumber(),
-                    anchor,
-                    _stabilizationSearchPadding,
-                    _stabilizationMinScore,
-                    null,
-                    Apply: true));
-            _stabilizationPreview = result;
-            if (result.SavedSheet is { } saved && CurrentWorkingAsset(active) is { } working)
-                LoadSheet(saved, working);
-            _status = $"Stabilized {StabilizationAppliedCount(result.Stabilization)} frame(s). Run Reassemble next.";
-            await OnChanged.InvokeAsync();
-            await DrawAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-        finally
-        {
-            _stabilizationRunning = false;
-        }
+        _frameTool = tool;
+        await RenderCanvasAsync();
     }
 
-    private async Task ClearStabilizationAsync()
+    private async Task SelectRegionAsync(Guid id)
     {
-        if (Workbench.ActiveSpriteSheet is not { } active)
-            return;
-
-        _error = null;
-        _status = "Clearing stabilization metadata...";
-        try
+        if (!_selectedRegionIds.Remove(id))
         {
-            var saved = await Workflow.ClearSpriteSheetStabilizationAsync(Workbench.Project.Id, active.Id);
-            _stabilizationPreview = null;
-            _stabilizationAnchor = null;
-            _stabilizationReferenceFrameNumber = null;
-            if (CurrentWorkingAsset(active) is { } working)
-                LoadSheet(saved, working);
-            _status = "Stabilization metadata cleared.";
-            await OnChanged.InvokeAsync();
-            await DrawAsync();
+            _selectedRegionIds.Clear();
+            _selectedRegionIds.Add(id);
         }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-    }
-
-    private void OnStabilizationSettingsChanged()
-    {
-        NormalizeStabilizationInputs();
-        _stabilizationPreview = null;
-    }
-
-    private async Task SetToolAsync(SpriteEditTool tool)
-    {
-        _tool = tool;
-        await DrawAsync();
+        await PublishSpritesStateAsync();
+        await RenderCanvasAsync();
     }
 
     private async Task SelectFrameAsync(int index)
     {
-        _selectedFrameIndex = index;
-        ResetFrameEraseMode();
-        await DrawAsync();
-        await LoadSelectedFrameWorkAsync();
+        _selectedIndex = index;
+        await PublishSpritesStateAsync();
+        await RenderCanvasAsync();
     }
 
-    private async Task DeleteSelectedFrameAsync()
+    private async Task RenderCanvasAsync()
     {
-        var frame = SelectedFrame();
-        if (frame is null || _framePersistenceRunning)
-            return;
-        if (Workbench.ActiveSpriteSheet is not { } active || frame.Id is not Guid frameId)
-        {
-            _error = "Frame must finish saving before it can be deleted.";
-            return;
-        }
-
-        _error = null;
-        _status = "Deleting sprite frame...";
-        _framePersistenceRunning = true;
-        _autosaveCts?.Cancel();
-        await Task.Yield();
-        try
-        {
-            var deletedIndex = frame.Index;
-            await Workflow.DeleteSpriteSheetFrameAsync(Workbench.Project.Id, active.Id, frameId);
-            _frames.Remove(frame);
-            ReindexFrames();
-            _selectedFrameIndex = _frames.Count == 0 ? -1 : Math.Clamp(deletedIndex, 0, _frames.Count - 1);
-            _loadedSpriteSheetId = null;
-            _loadedSpriteSheetUpdatedAt = null;
-            _loadedFrameWorkIndex = null;
-            _loadedFrameWorkUpdatedAt = null;
-            _frameWorkImageDataUrl = string.Empty;
-            _frameWorkImageWidth = 0;
-            _frameWorkImageHeight = 0;
-            ResetFrameEraseMode();
-            _status = "Sprite frame deleted.";
-            await OnChanged.InvokeAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-        finally
-        {
-            _framePersistenceRunning = false;
-        }
-    }
-
-    private async Task MoveFrameAsync(int index, int delta)
-    {
-        var target = index + delta;
-        if (index < 0 || index >= _frames.Count || target < 0 || target >= _frames.Count)
+        if (_module is null || _dotNetRef is null)
             return;
 
-        (_frames[index], _frames[target]) = (_frames[target], _frames[index]);
-        ReindexFrames();
-        _selectedFrameIndex = target;
-        ResetFrameEraseMode();
-        await AutosaveLayoutNowAsync();
-    }
-
-    private async Task AttachFrameAsync(SpriteSheetEditorFrame frame)
-    {
-        if (Workbench.ActiveSpriteSheet is null || frame.Id is not Guid frameId)
-            return;
-
-        await Workflow.AttachSpriteSheetFramesAsync(Workbench.Project.Id, Workbench.ActiveSpriteSheet.Id, [frameId]);
-        await OnChanged.InvokeAsync();
-    }
-
-    private async Task AttachAllFramesAsync()
-    {
-        if (Workbench.ActiveSpriteSheet is null || _frames.Count == 0)
-            return;
-
-        await Workflow.AttachSpriteSheetFramesAsync(Workbench.Project.Id, Workbench.ActiveSpriteSheet.Id);
-        await OnChanged.InvokeAsync();
-    }
-
-    private async Task IsolateSelectedFrameAsync()
-    {
-        if (Workbench.ActiveSpriteSheet is not { } active || SelectedFrame() is not { } selected)
-            return;
-
-        _error = null;
-        _status = "Isolating frame...";
-        try
-        {
-            await AutosaveLayoutNowAsync();
-            if (!string.IsNullOrWhiteSpace(_error))
-                return;
-
-            var updated = await Workflow.IsolateSpriteFrameAsync(Workbench.Project.Id, active.Id, selected.Index, Math.Max(16, _padding));
-            ApplyFrameWorkingView(updated);
-            ResetFrameEraseMode();
-            _status = "Frame isolated.";
-            await OnChanged.InvokeAsync();
-            await DrawFrameWorkAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-    }
-
-    private async Task ClearSelectedFrameWorkAsync()
-    {
-        if (Workbench.ActiveSpriteSheet is not { } active || SelectedFrame() is not { } selected)
-            return;
-
-        _error = null;
-        _status = "Clearing frame work...";
-        try
-        {
-            var updated = await Workflow.ClearSpriteFrameWorkingImageAsync(Workbench.Project.Id, active.Id, selected.Index);
-            ApplyFrameWorkingView(updated);
-            ResetFrameEraseMode();
-            _status = "Frame work cleared.";
-            await OnChanged.InvokeAsync();
-            await DrawFrameWorkAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-    }
-
-    private async Task EditSelectedFrameAsync()
-    {
-        if (Workbench.ActiveSpriteSheet is not { } active || SelectedFrame() is not { } selected || string.IsNullOrWhiteSpace(_frameEditPrompt))
-            return;
-
-        _error = null;
-        _status = "Editing frame...";
-        _frameEditRunning = true;
-        try
-        {
-            await AutosaveLayoutNowAsync();
-            if (!string.IsNullOrWhiteSpace(_error))
-                return;
-
-            var updated = await Workflow.EditSpriteFrameAsync(Workbench.Project.Id, new EditSpriteFrameRequest(
-                active.Id,
-                selected.Index,
-                _frameEditPrompt,
-                "removable"));
-            ApplyFrameWorkingView(updated);
-            ResetFrameEraseMode();
-            _status = "Frame edited.";
-            await OnChanged.InvokeAsync();
-            await DrawFrameWorkAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-        finally
-        {
-            _frameEditRunning = false;
-        }
-    }
-
-    private async Task SetFrameEraseModeAsync(FrameWorkEraseMode mode)
-    {
-        if (SelectedFrame() is not { } selected || FrameEraseModeDisabled(selected))
-        {
-            ResetFrameEraseMode();
-            await DrawFrameWorkAsync();
-            return;
-        }
-
-        _frameEraseMode = _frameEraseMode == mode ? FrameWorkEraseMode.None : mode;
-        await DrawFrameWorkAsync();
-    }
-
-    private async Task OnLayoutFieldChangedAsync()
-    {
-        NormalizeLayout();
-        if (_frames.Count > 0 && _rows * _columns < _frames.Count)
-            _columns = Math.Max(1, (int)Math.Ceiling(_frames.Count / (double)_rows));
-        await DrawAsync();
-        ScheduleAutosave();
-    }
-
-    private async Task OnFrameLabelChangedAsync()
-    {
-        await DrawAsync();
-        ScheduleAutosave();
-    }
-
-    [JSInvokable]
-    public async Task OnSpriteBoxesChanged(SpriteCanvasChange change)
-    {
-        if (_disposed)
-            return;
-
-        _frames.Clear();
-        _frames.AddRange(change.Frames
-            .OrderBy(frame => frame.Index)
-            .Select(frame => new SpriteSheetEditorFrame
-            {
-                Index = frame.Index,
-                Label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label,
-                X = Math.Max(0, frame.SourceRect.X),
-                Y = Math.Max(0, frame.SourceRect.Y),
-                Width = Math.Max(1, frame.SourceRect.Width),
-                Height = Math.Max(1, frame.SourceRect.Height),
-                ShapePaths = frame.ShapePaths.ToList(),
-            }));
-        ReindexFrames();
-        _selectedFrameIndex = change.SelectedIndex;
-        _stabilizationPreview = null;
-        FitCellsToFrames(onlyWhenTooSmall: true);
-        await AutosaveLayoutNowAsync();
-    }
-
-    [JSInvokable]
-    public async Task OnSpriteBoxSelected(int selectedIndex)
-    {
-        if (_disposed)
-            return;
-
-        _selectedFrameIndex = selectedIndex;
-        _loadedFrameWorkIndex = null;
-        ResetFrameEraseMode();
-        if (SelectedFrame() is not { } selected || !HasWorkingImage(selected))
-        {
-            _loadedFrameWorkUpdatedAt = null;
-            _frameWorkImageDataUrl = string.Empty;
-            _frameWorkImageWidth = 0;
-            _frameWorkImageHeight = 0;
-        }
-        await InvokeAsync(StateHasChanged);
-    }
-
-    [JSInvokable]
-    public async Task OnSpriteAnchorChanged(SpriteSheetRect anchorRect)
-    {
-        if (_disposed)
-            return;
-
-        _stabilizationAnchor = new SpriteSheetRect(
-            Math.Max(0, anchorRect.X),
-            Math.Max(0, anchorRect.Y),
-            Math.Max(1, anchorRect.Width),
-            Math.Max(1, anchorRect.Height));
-        _stabilizationReferenceFrameNumber = _selectedFrameIndex >= 0 && _selectedFrameIndex < _frames.Count
-            ? _selectedFrameIndex + 1
-            : 1;
-        _stabilizationPreview = null;
-        _status = $"Anchor set on frame {ReferenceFrameNumber()}.";
-        _error = null;
-        await InvokeAsync(StateHasChanged);
-    }
-
-    [JSInvokable]
-    public async Task OnFrameWorkEraseRect(SpriteSheetRect rect)
-    {
-        if (_disposed || _frameEraseMode != FrameWorkEraseMode.Rect || rect.Width < 1 || rect.Height < 1)
-            return;
-
-        await EraseSelectedFrameRegionsAsync([rect], null);
-    }
-
-    [JSInvokable]
-    public async Task OnFrameWorkErasePolygon(SpriteSheetPoint[] points)
-    {
-        if (_disposed || _frameEraseMode is not (FrameWorkEraseMode.Polygon or FrameWorkEraseMode.Lasso))
-            return;
-
-        var polygon = NormalizeFrameWorkPolygon(points, _frameWorkImageWidth, _frameWorkImageHeight);
-        if (polygon.Count < 3)
-            return;
-
-        await EraseSelectedFrameRegionsAsync([], [new SpriteSheetShapePath(polygon)]);
-    }
-
-    private async Task EraseSelectedFrameRegionsAsync(
-        IReadOnlyList<SpriteSheetRect> rects,
-        IReadOnlyList<SpriteSheetShapePath>? polygons)
-    {
-        if (_disposed || Workbench.ActiveSpriteSheet is not { } active || SelectedFrame() is not { } selected)
-            return;
-
-        _error = null;
-        _status = "Erasing frame region...";
-        try
-        {
-            var updated = await Workflow.EraseSpriteFrameRegionsAsync(
-                Workbench.Project.Id,
-                new EraseSpriteFrameRegionsRequest(active.Id, selected.Index, rects, polygons));
-            ApplyFrameWorkingView(updated);
-            _status = "Frame region erased.";
-            await OnChanged.InvokeAsync();
-            await DrawFrameWorkAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-    }
-
-    private void ScheduleAutosave()
-    {
-        _autosaveCts?.Cancel();
-        _autosaveCts?.Dispose();
-        _autosaveCts = new CancellationTokenSource();
-        var token = _autosaveCts.Token;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(600, token);
-                await InvokeAsync(AutosaveLayoutNowAsync);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }, token);
-    }
-
-    private async Task AutosaveLayoutNowAsync()
-    {
-        if (_disposed || _framePersistenceRunning || Workbench.ActiveSpriteSheet is not { } active || string.IsNullOrWhiteSpace(_workingImageDataUrl))
-            return;
-
-        _autosaveCts?.Cancel();
-        NormalizeLayout();
-        try
-        {
-            var saved = await Workflow.AutosaveSpriteSheetLayoutAsync(Workbench.Project.Id, new AutosaveSpriteSheetLayoutRequest(
-                active.Id,
-                _rows,
-                _columns,
-                _cellWidth,
-                _cellHeight,
-                _padding,
-                _gutter,
-                _fps,
-                _loop,
-                _horizontalAnchor,
-                _verticalAnchor,
-                BuildFrameUpdates()));
-            LoadSheet(saved, new ArtAssetView(
-                saved.WorkingAssetId ?? Guid.Empty,
-                saved.Label,
-                "sprite-sheet.png",
-                ArtAssetKind.SpriteSheet,
-                "image/png",
-                _workingImageDataUrl,
-                _workingImageDataUrl,
-                null,
-                null,
-                saved.SourceAssetId,
-                null,
-                null,
-                null,
-                null,
-                false,
-                string.Empty,
-                string.Empty,
-                DateTime.UtcNow));
-            _status = "Layout autosaved.";
-            _error = null;
-            await OnChanged.InvokeAsync();
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
-    }
-
-    private void LoadSheet(SpriteSheetDefinitionView sheet, ArtAssetView working)
-    {
-        var changedSheet = _loadedSpriteSheetId != sheet.Id;
-        _loadedSpriteSheetId = sheet.Id;
-        _loadedSpriteSheetUpdatedAt = sheet.UpdatedAt;
-        _workingImageDataUrl = working.FullImageUrl;
-        _rows = Math.Max(1, sheet.Rows);
-        _columns = Math.Max(1, sheet.Columns);
-        _cellWidth = Math.Max(1, sheet.CellWidth);
-        _cellHeight = Math.Max(1, sheet.CellHeight);
-        _padding = Math.Max(0, sheet.Padding);
-        _gutter = Math.Max(0, sheet.Gutter);
-        _fps = Math.Clamp(sheet.Fps, 1, 60);
-        _loop = sheet.Loop;
-        _horizontalAnchor = NormalizeHorizontalAnchor(sheet.HorizontalAnchor);
-        _verticalAnchor = NormalizeVerticalAnchor(sheet.VerticalAnchor);
-        if (sheet.Stabilization is { } stabilization)
-        {
-            _stabilizationAnchor = stabilization.AnchorRect;
-            _stabilizationReferenceFrameNumber = stabilization.ReferenceFrameNumber;
-            _stabilizationSearchPadding = Math.Clamp(stabilization.SearchPadding, 0, 512);
-            _stabilizationMinScore = Math.Clamp(stabilization.MinScore, -1d, 1d);
-        }
-        else if (changedSheet)
-        {
-            _stabilizationAnchor = null;
-            _stabilizationReferenceFrameNumber = null;
-            _stabilizationPreview = null;
-            _stabilizationSearchPadding = 24;
-            _stabilizationMinScore = 0.68d;
-        }
-        _frames.Clear();
-        _frames.AddRange(sheet.Frames
-            .OrderBy(frame => frame.Index)
-            .Select(frame => new SpriteSheetEditorFrame
-            {
-                Id = frame.Id,
-                Index = frame.Index,
-                Label = frame.Label,
-                X = frame.SourceRect.X,
-                Y = frame.SourceRect.Y,
-                Width = frame.SourceRect.Width,
-                Height = frame.SourceRect.Height,
-                ShapePaths = frame.ShapePaths.ToList(),
-                PreviewImageUrl = frame.PreviewImageUrl,
-                SourceImageAssetId = frame.SourceImageAssetId,
-                SourceImageRect = frame.SourceImageRect,
-                WorkingState = frame.WorkingState,
-                WorkingWidth = frame.WorkingWidth,
-                WorkingHeight = frame.WorkingHeight,
-                WorkingMargin = frame.WorkingMargin,
-                WorkingUpdatedAt = frame.WorkingUpdatedAt,
-            }));
-        ReindexFrames();
-        if (_frames.Count == 0)
-            _selectedFrameIndex = -1;
-        else if (_selectedFrameIndex < 0 || _selectedFrameIndex >= _frames.Count)
-            _selectedFrameIndex = 0;
-        _error = null;
-        if (SelectedFrame() is not { } selected || !HasWorkingImage(selected))
-        {
-            _loadedFrameWorkIndex = null;
-            _loadedFrameWorkUpdatedAt = null;
-            _frameWorkImageDataUrl = string.Empty;
-            _frameWorkImageWidth = 0;
-            _frameWorkImageHeight = 0;
-            ResetFrameEraseMode();
-        }
-    }
-
-    private async Task DrawAsync()
-    {
-        if (_disposed || _module is null || _dotNetRef is null || !HasActiveSheet || string.IsNullOrWhiteSpace(_workingImageDataUrl))
-            return;
-
-        try
+        if (_mode == SpriteMode.Source && SourceImageUrl() is { } sourceUrl)
         {
             await _module.InvokeVoidAsync(
-                "drawSpriteBoxEditor",
+                "loadSourceCanvas",
                 _sourceCanvas,
-                _animationCanvas,
                 _dotNetRef,
-                _workingImageDataUrl,
-                BuildLayoutPayload(),
-                _selectedFrameIndex,
-                _tool.ToString().ToLowerInvariant());
+                sourceUrl,
+                _regions.Select(CanvasRegion.From).ToList(),
+                _selectedRegionIds.Select(id => id.ToString()).ToList(),
+                _sourceTool);
         }
-        catch (JSDisconnectedException)
+        else if (_mode == SpriteMode.Frames && SelectedFrame() is { } frame)
         {
-        }
-        catch (OperationCanceledException)
-        {
-        }
-    }
-
-    private async Task DrawFrameWorkAsync()
-    {
-        if (_disposed || _module is null || _dotNetRef is null || _frameWorkCanvas.Id is null)
-            return;
-
-        try
-        {
+            var previous = NeighborFrame(-1);
+            var next = NeighborFrame(1);
             await _module.InvokeVoidAsync(
-                "drawFrameWorkCanvas",
-                _frameWorkCanvas,
+                "loadFrameCanvas",
+                _frameCanvas,
                 _dotNetRef,
-                _frameWorkImageDataUrl,
-                FrameEraseModeToken());
+                FramePreviewUrl(frame.Id),
+                frame.HasMask ? FrameMaskUrl(frame.Id) : null,
+                CanvasFrame.From(frame),
+                previous is null ? null : FramePreviewUrl(previous.Id),
+                next is null ? null : FramePreviewUrl(next.Id),
+                _frameTool,
+                _brushSize,
+                _showOnion);
         }
-        catch (JSDisconnectedException)
+    }
+
+    [JSInvokable]
+    public async Task OnSourceRegionsChanged(SourceCanvasPayload payload)
+    {
+        if (SelectedSourceAssetId() is not Guid sourceId)
+            return;
+        _regions = payload.Regions
+            .Select((region, index) => region.ToView(sourceId, index))
+            .ToList();
+        _selectedRegionIds.Clear();
+        foreach (var id in payload.SelectedIds.Select(ParseGuid).Where(id => id is not null).Select(id => id!.Value))
+            _selectedRegionIds.Add(id);
+        await SaveRegionsAsync(sourceId);
+    }
+
+    [JSInvokable]
+    public async Task OnSourceRegionSelected(string? id)
+    {
+        _selectedRegionIds.Clear();
+        if (ParseGuid(id) is Guid regionId)
+            _selectedRegionIds.Add(regionId);
+        await PublishSpritesStateAsync();
+    }
+
+    [JSInvokable]
+    public async Task OnFrameContentOffsetChanged(int x, int y)
+    {
+        if (SelectedFrame() is { } frame)
+            await SetFrameOffsetAsync(frame.Id, x, y);
+    }
+
+    [JSInvokable]
+    public async Task OnFrameContentNudged(int dx, int dy)
+    {
+        if (SelectedFrame() is { } frame)
+            await SetFrameOffsetAsync(frame.Id, frame.ContentOffsetX + dx, frame.ContentOffsetY + dy);
+    }
+
+    [JSInvokable]
+    public async Task OnFrameMaskChanged(string maskDataUrl)
+    {
+        if (SelectedFrame() is not { } frame)
+            return;
+        await FrameSets.UpsertFrameMaskAsync(Workbench.Project.Id, new UpsertFrameMaskRequest(frame.Id, maskDataUrl, $"{frame.Name} mask"));
+        if (_frameSet is { } set)
+            ApplyFrameSet(await FrameSets.GetFrameSetAsync(Workbench.Project.Id, set.Id));
+        await PublishSpritesStateAsync();
+        await RenderCanvasAsync();
+    }
+
+    private async Task PublishSpritesStateAsync()
+    {
+        if (!OnVisibleStateChanged.HasDelegate)
+            return;
+        await OnVisibleStateChanged.InvokeAsync(new WorkspaceSpritesVisibleState(
+            ActiveSpriteSheet: null,
+            ActiveFrameSet: _frameSet is null ? null : new WorkspaceFrameSetSummary(_frameSet.Id, _frameSet.Name, _frameSet.SourceAssetId, _frameSet.DefaultCellWidth, _frameSet.DefaultCellHeight, _frameSet.FrameCount),
+            SourceAsset: SelectedSourceAsset(),
+            SelectedRegions: _regions.Where(region => _selectedRegionIds.Contains(region.Id)).Select(region => new WorkspaceSpriteRegionSummary(region.Id, region.Name, region.X, region.Y, region.Width, region.Height, region.RegionType, region.Order)).ToList(),
+            SelectedFrames: SelectedFrame() is { } frame ? [new WorkspaceFrameSummary(frame.Id, frame.Index, frame.Name, frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight, frame.LogicalWidth, frame.LogicalHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.DurationMs, frame.WorkingState, frame.HasMask)] : [],
+            SelectedMaskId: SelectedFrame()?.MaskId,
+            BuiltSheet: BuiltSheetAssetId() is Guid built ? new WorkspaceBuiltSheetSummary(built, BuiltSheetManifest() ?? string.Empty) : null,
+            Mode: ModeLabel(_mode)));
+    }
+
+    private FrameView? SelectedFrame() =>
+        _frameSet is { } set && _selectedIndex >= 0 && _selectedIndex < set.Frames.Count ? set.Frames[_selectedIndex] : null;
+
+    private SourceRegionView? SelectedRegion() =>
+        _regions.FirstOrDefault(region => _selectedRegionIds.Contains(region.Id));
+
+    private FrameView? NeighborFrame(int offset)
+    {
+        if (_frameSet is not { } set || _selectedIndex < 0)
+            return null;
+        var index = _selectedIndex + offset;
+        return index >= 0 && index < set.Frames.Count ? set.Frames[index] : null;
+    }
+
+    private FrameView? AnimationFrame()
+    {
+        if (_frameSet is not { } set || set.Frames.Count == 0)
+            return null;
+        var index = _animPlaying ? _animIndex % set.Frames.Count : Math.Max(0, _selectedIndex);
+        return index >= 0 && index < set.Frames.Count ? set.Frames[index] : set.Frames[0];
+    }
+
+    private async Task ToggleAnimationAsync()
+    {
+        if (_animPlaying)
         {
+            StopAnimation();
+            return;
+        }
+
+        if (_frameSet is null || _frameSet.Frames.Count == 0)
+            return;
+
+        _animPlaying = true;
+        _animCts = new CancellationTokenSource();
+        _ = RunAnimationLoopAsync(_animCts.Token);
+        await Task.CompletedTask;
+    }
+
+    private async Task RunAnimationLoopAsync(CancellationToken token)
+    {
+        try
+        {
+            while (!token.IsCancellationRequested && _frameSet is { Frames.Count: > 0 })
+            {
+                await Task.Delay(Math.Max(16, 1000 / Math.Clamp(_fps, 1, 60)), token);
+                _animIndex = (_animIndex + 1) % Math.Max(1, _frameSet?.Frames.Count ?? 1);
+                await InvokeAsync(StateHasChanged);
+            }
         }
         catch (OperationCanceledException)
         {
         }
     }
 
-    private async Task LoadSelectedFrameWorkAsync()
+    private void StopAnimation()
     {
-        if (Workbench.ActiveSpriteSheet is not { } active || SelectedFrame() is not { } selected)
-        {
-            _loadedFrameWorkIndex = null;
-            _frameWorkImageDataUrl = string.Empty;
-            _frameWorkImageWidth = 0;
-            _frameWorkImageHeight = 0;
-            ResetFrameEraseMode();
-            await DrawFrameWorkAsync();
-            return;
-        }
-
-        if (_loadedFrameWorkIndex == selected.Index && selected.WorkingUpdatedAt == _loadedFrameWorkUpdatedAt)
-        {
-            await DrawFrameWorkAsync();
-            return;
-        }
-
-        try
-        {
-            var view = await Workflow.GetSpriteFrameWorkingImageAsync(Workbench.Project.Id, active.Id, selected.Index);
-            ApplyFrameWorkingView(view);
-            await DrawFrameWorkAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _status = string.Empty;
-        }
+        _animCts?.Cancel();
+        _animCts?.Dispose();
+        _animCts = null;
+        _animPlaying = false;
     }
 
-    private object BuildLayoutPayload()
-    {
-        NormalizeLayout();
-        return new
-        {
-            Rows = _rows,
-            Columns = _columns,
-            FrameCount = _frames.Count,
-            CellWidth = _cellWidth,
-            CellHeight = _cellHeight,
-            Padding = _padding,
-            Gutter = _gutter,
-            Fps = _fps,
-            Loop = _loop,
-            HorizontalAnchor = _horizontalAnchor,
-            VerticalAnchor = _verticalAnchor,
-            AnchorRect = _stabilizationAnchor is { } anchor
-                ? new { anchor.X, anchor.Y, anchor.Width, anchor.Height }
-                : null,
-            Frames = _frames
-                .OrderBy(frame => frame.Index)
-                .Select(frame => new
-                {
-                    frame.Index,
-                    frame.Label,
-                    SourceRect = new { X = frame.X, Y = frame.Y, Width = frame.Width, Height = frame.Height },
-                    frame.ShapePaths,
-                })
-                .ToList(),
-        };
-    }
+    private int FrameCount() => _frameSet?.FrameCount ?? 0;
 
-    private void ApplyFrameWorkingView(SpriteFrameWorkingView view)
-    {
-        var frame = _frames.FirstOrDefault(item => item.Index == view.Index);
-        if (frame is not null)
-        {
-            frame.WorkingState = NormalizeWorkingState(view.State);
-            frame.WorkingWidth = view.WorkingWidth;
-            frame.WorkingHeight = view.WorkingHeight;
-            frame.WorkingMargin = view.WorkingMargin;
-            frame.WorkingUpdatedAt = view.WorkingUpdatedAt;
-        }
+    private Guid? SelectedSourceAssetId() =>
+        Guid.TryParse(_sourceAssetIdText, out var id) ? id : _frameSet?.SourceAssetId;
 
-        _loadedFrameWorkIndex = view.Index;
-        _loadedFrameWorkUpdatedAt = view.WorkingUpdatedAt;
-        _frameWorkImageDataUrl = view.WorkingPngDataUrl;
-        _frameWorkImageWidth = view.WorkingWidth;
-        _frameWorkImageHeight = view.WorkingHeight;
-        if (string.IsNullOrWhiteSpace(view.WorkingPngDataUrl))
-            ResetFrameEraseMode();
-    }
-
-    private void NormalizeLayout()
-    {
-        _rows = Math.Clamp(_rows, 1, 32);
-        _columns = Math.Clamp(_columns, 1, 64);
-        _cellWidth = Math.Clamp(_cellWidth, 1, 8192);
-        _cellHeight = Math.Clamp(_cellHeight, 1, 8192);
-        _padding = Math.Clamp(_padding, 0, 2048);
-        _gutter = Math.Clamp(_gutter, 0, 2048);
-        _fps = Math.Clamp(_fps, 1, 60);
-        _horizontalAnchor = NormalizeHorizontalAnchor(_horizontalAnchor);
-        _verticalAnchor = NormalizeVerticalAnchor(_verticalAnchor);
-    }
-
-    private void FitCellsToFrames(bool onlyWhenTooSmall = false)
-    {
-        if (_frames.Count == 0)
-            return;
-
-        var width = _frames.Max(frame => Math.Max(1, frame.Width)) + (_padding * 2);
-        var height = _frames.Max(frame => Math.Max(1, frame.Height)) + (_padding * 2);
-        if (!onlyWhenTooSmall || _cellWidth < width)
-            _cellWidth = width;
-        if (!onlyWhenTooSmall || _cellHeight < height)
-            _cellHeight = height;
-    }
-
-    private void ReindexFrames()
-    {
-        for (var index = 0; index < _frames.Count; index++)
-        {
-            _frames[index].Index = index;
-            if (string.IsNullOrWhiteSpace(_frames[index].Label))
-                _frames[index].Label = $"Frame {index + 1}";
-        }
-
-        if (_frames.Count > 0 && _rows * _columns < _frames.Count)
-            _columns = Math.Max(1, (int)Math.Ceiling(_frames.Count / (double)_rows));
-    }
-
-    private SpriteSheetEditorFrame? SelectedFrame() =>
-        _selectedFrameIndex >= 0 && _selectedFrameIndex < _frames.Count ? _frames[_selectedFrameIndex] : null;
-
-    private ArtAssetView? CurrentWorkingAsset() =>
-        Workbench.ActiveSpriteSheet is { } active ? CurrentWorkingAsset(active) : null;
-
-    private ArtAssetView? CurrentWorkingAsset(SpriteSheetDefinitionView active) =>
-        active.WorkingAssetId is Guid assetId
-            ? Workbench.Assets.FirstOrDefault(asset => asset.Id == assetId)
+    private WorkspaceAssetSummary? SelectedSourceAsset() =>
+        CandidateSourceAssets().FirstOrDefault(asset => asset.Id == SelectedSourceAssetId()) is { } asset
+            ? new WorkspaceAssetSummary(asset.Id, asset.Label, asset.Kind, asset.ContentType, asset.Width, asset.Height, asset.ParentAssetId, asset.SourceBatchId, asset.BatchOutputIndex, asset.SourcePromptRecipeId, asset.SourcePromptRecipeVersion, asset.IsFavorite, asset.Notes, Preview(asset.Prompt, 240), asset.CreatedAt)
             : null;
+
+    private static string Preview(string value, int maxLength)
+    {
+        value = value.Trim();
+        return value.Length <= maxLength ? value : string.Concat(value.AsSpan(0, Math.Max(0, maxLength - 1)), "...");
+    }
+
+    private IEnumerable<ArtAssetView> CandidateSourceAssets() =>
+        Workbench.Assets.Where(a => a.Kind is ArtAssetKind.SpriteSheet or ArtAssetKind.Generated or ArtAssetKind.Imported or ArtAssetKind.Edited or ArtAssetKind.Extracted);
+
+    private string? SourceImageUrl()
+    {
+        var id = SelectedSourceAssetId() ?? _frameSet?.SourceAssetId;
+        return id is Guid assetId ? AssetFullUrl(assetId) : null;
+    }
+
+    private Guid? BuiltSheetAssetId() => _builtSheetAssetId ?? _frameSet?.LatestBuiltSheetAssetId;
+
+    private string? BuiltSheetManifest() => _builtSheetManifest ?? _frameSet?.LatestBuiltSheetManifest;
+
+    private string AssetFullUrl(Guid assetId) => $"/media/projects/{Workbench.Project.Id}/assets/{assetId}/full?v={_rev}";
+
+    private string FramePreviewUrl(Guid frameId) => $"/media/projects/{Workbench.Project.Id}/frame-set-frames/{frameId}/preview?v={_rev}";
+
+    private string FrameMaskUrl(Guid frameId) => $"/media/projects/{Workbench.Project.Id}/frame-set-frames/{frameId}/mask?v={_rev}";
 
     private string HeaderSummary()
     {
-        if (Workbench.ActiveSpriteSheet is null)
-            return "No sprite sheet selected";
-
-        var source = Workbench.Assets.FirstOrDefault(asset => asset.Id == Workbench.ActiveSpriteSheet.SourceAssetId);
-        var outputSize = $"{_columns * _cellWidth + Math.Max(0, _columns - 1) * _gutter} x {_rows * _cellHeight + Math.Max(0, _rows - 1) * _gutter}";
-        return $"{source?.Label ?? Workbench.ActiveSpriteSheet.Label} / {_frames.Count} frame(s) / {outputSize}";
+        if (_frameSet is not { } set)
+            return SelectedSourceAssetId() is Guid ? $"{_regions.Count} source region(s)" : "No source selected";
+        return $"{set.Name} / {set.FrameCount} frame(s) / {set.DefaultCellWidth} x {set.DefaultCellHeight}";
     }
 
-    private int ReferenceFrameNumber() =>
-        _stabilizationReferenceFrameNumber is int frameNumber && frameNumber > 0
-            ? frameNumber
-            : _selectedFrameIndex >= 0 && _selectedFrameIndex < _frames.Count ? _selectedFrameIndex + 1 : 1;
-
-    private bool CanRunStabilization() =>
-        HasActiveSheet
-        && _frames.Count > 0
-        && _selectedFrameIndex >= 0
-        && ReferenceFrameNumber() <= _frames.Count
-        && _stabilizationAnchor is not null
-        && !_stabilizationRunning
-        && !_framePersistenceRunning;
-
-    private bool CanApplyStabilization() =>
-        CanRunStabilization() && _stabilizationPreview is not null;
-
-    private void NormalizeStabilizationInputs()
+    private string ToolRailHint() => _mode switch
     {
-        _stabilizationSearchPadding = Math.Clamp(_stabilizationSearchPadding, 0, 512);
-        _stabilizationMinScore = Math.Clamp(_stabilizationMinScore, -1d, 1d);
-    }
+        SpriteMode.Sheet => "Configure and build.",
+        SpriteMode.Export => "Export final files.",
+        _ => string.Empty,
+    };
 
-    private static int StabilizationLowConfidenceCount(SpriteSheetStabilizationView stabilization) =>
-        stabilization.Matches.Count(match => match.LowConfidence);
-
-    private static int StabilizationClippedCount(SpriteSheetStabilizationView stabilization) =>
-        stabilization.Matches.Count(match => match.Clipped);
-
-    private static int StabilizationAppliedCount(SpriteSheetStabilizationView stabilization) =>
-        stabilization.Applied ? stabilization.Matches.Count : 0;
-
-    private string ToolButtonClass(SpriteEditTool tool) =>
-        _tool == tool
-            ? "btn btn-sm btn-primary sprite-tool-button is-active"
-            : "btn btn-sm btn-outline-secondary sprite-tool-button";
-
-    private static string ToolTitle(SpriteEditTool tool) =>
-        tool switch
-        {
-            SpriteEditTool.Select => "Select, move, resize, or edit frame vertices.",
-            SpriteEditTool.Draw => "Draw a rectangular sprite frame.",
-            SpriteEditTool.Outline => "Click polygon points, then click near the first point to close an outline frame.",
-            SpriteEditTool.Anchor => "Draw an anchor box inside the selected reference frame for stabilization.",
-            _ => string.Empty,
-        };
-
-    private static bool HasOutline(SpriteSheetEditorFrame frame) =>
-        frame.ShapePaths.Any(path => path.Points.Count >= 3);
-
-    private static string FrameGeometryLabel(SpriteSheetEditorFrame frame) =>
-        HasOutline(frame) ? "Outline" : "Box";
-
-    private static string FrameMarkerClass(SpriteSheetEditorFrame frame) =>
-        HasOutline(frame)
-            ? "frame-geometry-marker is-outline"
-            : "frame-geometry-marker is-box";
-
-    private static string GeometryReadoutClass(SpriteSheetEditorFrame frame) =>
-        HasOutline(frame)
-            ? "frame-geometry-readout is-outline"
-            : "frame-geometry-readout is-box";
-
-    private static bool HasWorkingImage(SpriteSheetEditorFrame frame) =>
-        NormalizeWorkingState(frame.WorkingState) is "isolated" or "edited" or "stabilized";
-
-    private string FrameSourceLabel(SpriteSheetEditorFrame frame)
+    private static string ModeLabel(SpriteMode mode) => mode switch
     {
-        if (frame.SourceImageAssetId is not Guid sourceImageAssetId)
-            return string.Empty;
+        SpriteMode.Source => "Source",
+        SpriteMode.Frames => "Frames",
+        SpriteMode.Sheet => "Sheet",
+        SpriteMode.Export => "Export",
+        _ => mode.ToString(),
+    };
 
-        var source = Workbench.Assets.FirstOrDefault(asset => asset.Id == sourceImageAssetId);
-        return source is null ? string.Empty : $"Source: {source.Label}";
-    }
+    private string ModeTabClass(SpriteMode mode) => _mode == mode ? "sprite-mode-tab is-active" : "sprite-mode-tab";
 
-    private static IReadOnlyList<SpriteSheetPoint> NormalizeFrameWorkPolygon(
-        IReadOnlyList<SpriteSheetPoint>? points,
-        int width,
-        int height)
+    private static string ToolButtonClass(string current, string tool) => current == tool ? "sprite-tool-button is-active" : "sprite-tool-button";
+
+    private string StageTitle() => _mode switch
     {
-        if (points is null || points.Count == 0)
-            return [];
+        SpriteMode.Source => "Source regions",
+        SpriteMode.Frames => "Frame workspace",
+        SpriteMode.Sheet => "Sheet preview",
+        SpriteMode.Export => "Export",
+        _ => string.Empty,
+    };
 
-        var maxX = Math.Max(0, width - 1);
-        var maxY = Math.Max(0, height - 1);
-        var normalized = new List<SpriteSheetPoint>(points.Count);
-        foreach (var point in points)
-        {
-            var next = new SpriteSheetPoint(
-                Math.Clamp(point.X, 0, maxX),
-                Math.Clamp(point.Y, 0, maxY));
-            if (normalized.Count == 0 || normalized[^1] != next)
-                normalized.Add(next);
-        }
+    private static string WorkingLabel(FrameView frame) =>
+        string.IsNullOrWhiteSpace(frame.WorkingState) || frame.WorkingState == "none" ? "Source" : Capitalize(frame.WorkingState);
 
-        if (normalized.Count > 3 && normalized[0] == normalized[^1])
-            normalized.RemoveAt(normalized.Count - 1);
+    private static string WorkingBadgeClass(FrameView frame) =>
+        string.IsNullOrWhiteSpace(frame.WorkingState) || frame.WorkingState == "none" ? "frame-work-badge is-empty" : "frame-work-badge";
 
-        return normalized;
-    }
+    private static string Capitalize(string value) =>
+        string.IsNullOrEmpty(value) ? value : char.ToUpperInvariant(value[0]) + value[1..];
 
-    private static string NormalizeWorkingState(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
-        {
-            "isolated" => "isolated",
-            "edited" => "edited",
-            "stabilized" => "stabilized",
-            "reassembled" => "reassembled",
-            _ => "none",
-        };
-
-    private static string WorkingStateLabel(SpriteSheetEditorFrame frame) =>
-        NormalizeWorkingState(frame.WorkingState) switch
-        {
-            "isolated" => "Isolated",
-            "edited" => "Edited",
-            "stabilized" => "Stabilized",
-            "reassembled" => "Reassembled",
-            _ => "None",
-        };
-
-    private static string WorkingBadgeClass(SpriteSheetEditorFrame frame) =>
-        NormalizeWorkingState(frame.WorkingState) == "none"
-            ? "frame-work-badge is-empty"
-            : "frame-work-badge";
-
-    private bool FrameEraseModeDisabled(SpriteSheetEditorFrame frame) =>
-        !HasWorkingImage(frame) || _frameEditRunning;
-
-    private string FrameEraseButtonClass(FrameWorkEraseMode mode) =>
-        _frameEraseMode == mode
-            ? "btn btn-sm btn-secondary is-active frame-erase-mode-button"
-            : "btn btn-sm btn-outline-secondary frame-erase-mode-button";
-
-    private string FrameWorkCanvasClass() =>
-        _frameEraseMode == FrameWorkEraseMode.None ? "frame-work-canvas" : "frame-work-canvas is-erase-mode";
-
-    private string AnimationCanvasClass() =>
-        HasActiveSheet && _frames.Count > 0 ? "sprite-animation-canvas is-previewable" : "sprite-animation-canvas";
-
-    private static bool CanPreviewFrame(SpriteSheetEditorFrame frame) =>
-        frame.Id is not null && !string.IsNullOrWhiteSpace(frame.PreviewImageUrl);
-
-    private string FrameEraseModeToken() =>
-        _frameEraseMode switch
-        {
-            FrameWorkEraseMode.Rect => "rect",
-            FrameWorkEraseMode.Polygon => "polygon",
-            FrameWorkEraseMode.Lasso => "lasso",
-            _ => "none",
-        };
-
-    private void ResetFrameEraseMode() =>
-        _frameEraseMode = FrameWorkEraseMode.None;
+    private static Guid? ParseGuid(string? value) => Guid.TryParse(value, out var id) ? id : null;
 
     public async ValueTask DisposeAsync()
     {
-        _disposed = true;
-        _autosaveCts?.Cancel();
-        _autosaveCts?.Dispose();
+        StopAnimation();
         if (_module is not null)
-        {
-            try
-            {
-                await _module.InvokeVoidAsync("disposeSpriteBoxEditor", _sourceCanvas, _animationCanvas);
-                await _module.DisposeAsync();
-            }
-            catch (JSDisconnectedException)
-            {
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }
-
+            await _module.DisposeAsync();
         _dotNetRef?.Dispose();
     }
 
-    private List<SpriteSheetFrameUpdateView> BuildFrameUpdates()
+    private enum SpriteMode
     {
-        NormalizeLayout();
-        return _frames
-            .OrderBy(frame => frame.Index)
-            .Select((frame, index) => new SpriteSheetFrameUpdateView(
-                index,
-                frame.Label,
-                new SpriteSheetRect(frame.X, frame.Y, frame.Width, frame.Height),
-                frame.ShapePaths,
-                frame.SourceImageAssetId,
-                frame.SourceImageRect))
-            .ToList();
+        Source,
+        Frames,
+        Sheet,
+        Export
     }
 
-    private enum SpriteEditTool
+    public sealed record SourceCanvasPayload(IReadOnlyList<CanvasRegion> Regions, IReadOnlyList<string> SelectedIds);
+
+    public sealed record CanvasRegion(
+        string? Id,
+        string Name,
+        int X,
+        int Y,
+        int Width,
+        int Height,
+        IReadOnlyList<SpriteSheetShapePath> ShapePaths,
+        string RegionType,
+        int Order)
     {
-        Select,
-        Draw,
-        Outline,
-        Anchor
+        public static CanvasRegion From(SourceRegionView view) =>
+            new(view.Id.ToString(), view.Name, view.X, view.Y, view.Width, view.Height, view.ShapePaths, view.RegionType, view.Order);
+
+        public SourceRegionView ToView(Guid sourceAssetId, int fallbackOrder) =>
+            new(ParseGuid(Id) ?? Guid.NewGuid(), sourceAssetId, Name, X, Y, Width, Height, ShapePaths, string.IsNullOrWhiteSpace(RegionType) ? "frame" : RegionType, Order >= 0 ? Order : fallbackOrder);
     }
 
-    private enum FrameWorkEraseMode
+    public sealed record CanvasFrame(
+        string Id,
+        int Index,
+        string Name,
+        int LogicalWidth,
+        int LogicalHeight,
+        int SourceWidth,
+        int SourceHeight,
+        int ContentOffsetX,
+        int ContentOffsetY,
+        bool HasMask)
     {
-        None,
-        Rect,
-        Polygon,
-        Lasso
+        public static CanvasFrame From(FrameView frame) =>
+            new(frame.Id.ToString(), frame.Index, frame.Name, frame.LogicalWidth, frame.LogicalHeight, frame.SourceWidth, frame.SourceHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.HasMask);
     }
-
-    private sealed class SpriteSheetEditorFrame
-    {
-        public Guid? Id { get; set; }
-        public int Index { get; set; }
-        public string Label { get; set; } = string.Empty;
-        public int X { get; set; }
-        public int Y { get; set; }
-        public int Width { get; set; }
-        public int Height { get; set; }
-        public List<SpriteSheetShapePath> ShapePaths { get; set; } = [];
-        public string PreviewImageUrl { get; set; } = string.Empty;
-        public Guid? SourceImageAssetId { get; set; }
-        public SpriteSheetRect? SourceImageRect { get; set; }
-        public string WorkingState { get; set; } = "none";
-        public int WorkingWidth { get; set; }
-        public int WorkingHeight { get; set; }
-        public int WorkingMargin { get; set; }
-        public DateTime? WorkingUpdatedAt { get; set; }
-    }
-
-    public sealed class SpriteCanvasChange
-    {
-        public int SelectedIndex { get; set; }
-        public List<SpriteCanvasFrame> Frames { get; set; } = [];
-    }
-
-    public sealed class SpriteCanvasFrame
-    {
-        public int Index { get; set; }
-        public string Label { get; set; } = string.Empty;
-        public SpriteSheetRect SourceRect { get; set; } = new(0, 0, 1, 1);
-        public List<SpriteSheetShapePath> ShapePaths { get; set; } = [];
-    }
-
-    private static string NormalizeHorizontalAnchor(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
-        {
-            "left" => "left",
-            "right" => "right",
-            _ => "center",
-        };
-
-    private static string NormalizeVerticalAnchor(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
-        {
-            "top" => "top",
-            "middle" or "center" => "middle",
-            _ => "bottom",
-        };
 }

@@ -10,6 +10,7 @@ namespace PixelChat.Chat;
 
 public sealed class AssistantToolRegistry(
     IArtWorkflowService workflow,
+    IFrameSetService frameSets,
     IWorkspaceVisibleStateStore visibleState,
     IImageGenerationRuntime imageRuntime,
     IOptions<AgentOptions> agentOptions)
@@ -38,6 +39,27 @@ public sealed class AssistantToolRegistry(
         "generate_animation_guide",
         "generate_sprite_sheet_candidates",
         "create_sprite_sheet",
+        "extract_region_as_asset",
+        "detect_source_regions",
+        "list_source_regions",
+        "save_source_regions",
+        "create_frame_set",
+        "create_frame_set_from_regions",
+        "list_frame_sets",
+        "set_active_frame_set",
+        "set_common_cell_size",
+        "add_frame_from_region",
+        "duplicate_frame",
+        "set_frame_logical_cell",
+        "update_frame_source_bounds",
+        "translate_frame_content",
+        "reorder_frame",
+        "delete_frame",
+        "set_frame_duration",
+        "align_frames",
+        "upsert_frame_mask",
+        "clear_frame_mask",
+        "build_sheet",
         "compose_sprite_sheet_from_images",
         "map_sprite_sheet_frames",
         "detect_sprite_frame_boxes",
@@ -222,6 +244,233 @@ public sealed class AssistantToolRegistry(
                 CreateSpriteSheetAsync(projectId, sourceAssetId, cancellationToken),
             name: "create_sprite_sheet",
             description: "Create or select a sprite-sheet definition from an existing generated or imported asset and switch to Sprites. Use after choosing the best candidate sheet or when importing a sheet."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid sourceAssetId,
+                int x,
+                int y,
+                int width,
+                int height,
+                string? name = null,
+                int padding = 0,
+                int? fixedCanvasWidth = null,
+                int? fixedCanvasHeight = null,
+                bool centerInCanvas = true,
+                bool linkToSource = true,
+                CancellationToken cancellationToken = default) =>
+                ExtractRegionAsAssetAsync(projectId, sourceAssetId, x, y, width, height, name, padding, fixedCanvasWidth, fixedCanvasHeight, centerInCanvas, linkToSource, cancellationToken),
+            name: "extract_region_as_asset",
+            description: "Extract a rectangular region of a source image into a standalone, opaque project asset (weapon, prop, portrait, tile, UI element, VFX). Coordinates are in source-image pixel space. Optional padding or a fixed centered canvas. The result stays opaque - transparency and background removal are Export-only. Returns the new asset id and its logical size/content offset."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid sourceAssetId,
+                int? expectedFrames = null,
+                string? layoutHint = null,
+                bool replaceExisting = true,
+                CancellationToken cancellationToken = default) =>
+                DetectSourceRegionsAsync(projectId, sourceAssetId, expectedFrames, layoutHint, replaceExisting, cancellationToken),
+            name: "detect_source_regions",
+            description: "Greenfield Source pipeline: detect visual or grid-like frame regions on an image asset, persist them as editable SpriteRegions, and return source-image pixel bounds. Use this before creating a FrameSet when regions can be detected automatically."),
+
+        AIFunctionFactory.Create(
+            method: (Guid sourceAssetId, CancellationToken cancellationToken = default) =>
+                ListSourceRegionsAsync(projectId, sourceAssetId, cancellationToken),
+            name: "list_source_regions",
+            description: "Greenfield Source pipeline: list saved editable regions for a source image. Regions are in source-image pixel space and can be used to extract assets or create frames."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid sourceAssetId,
+                SourceRegionEditRequest[] regions,
+                CancellationToken cancellationToken = default) =>
+                SaveSourceRegionsAsync(projectId, sourceAssetId, regions, cancellationToken),
+            name: "save_source_regions",
+            description: "Greenfield Source pipeline: replace a source image's editable SpriteRegions with explicit rectangles or polygon paths. Use for agent-driven draw, move, resize, rename, delete, reorder, and polygon-region commits. Coordinates are source-image pixels."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid sourceAssetId,
+                string? name = null,
+                int? expectedFrames = null,
+                string? layoutHint = null,
+                CancellationToken cancellationToken = default) =>
+                CreateFrameSetFromAssetAsync(projectId, sourceAssetId, name, expectedFrames, layoutHint, cancellationToken),
+            name: "create_frame_set",
+            description: "Greenfield Frames pipeline: detect frames in a source sheet asset and create a FrameSet of individual frames with explicit source bounds and equal logical cells. Returns the frame set id and per-frame geometry. Deterministic; no image generation."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid sourceAssetId,
+                Guid[] regionIds,
+                string? name = null,
+                CancellationToken cancellationToken = default) =>
+                CreateFrameSetFromRegionsAsync(projectId, sourceAssetId, regionIds, name, cancellationToken),
+            name: "create_frame_set_from_regions",
+            description: "Greenfield Source -> Frames pipeline: create a FrameSet from selected saved SpriteRegions without re-detecting the source image. Use after manual region placement or correction."),
+
+        AIFunctionFactory.Create(
+            method: (CancellationToken cancellationToken = default) =>
+                ListFrameSetsAsync(projectId, cancellationToken),
+            name: "list_frame_sets",
+            description: "Greenfield Frames pipeline: list saved FrameSets for the current project so the active editing target can be selected deliberately."),
+
+        AIFunctionFactory.Create(
+            method: (Guid frameSetId, CancellationToken cancellationToken = default) =>
+                SetActiveFrameSetAsync(projectId, frameSetId, cancellationToken),
+            name: "set_active_frame_set",
+            description: "Greenfield Frames pipeline: set the active FrameSet used by the visible Sprites workspace, assistant state, and subsequent frame/sheet operations."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                int width = 0,
+                int height = 0,
+                CancellationToken cancellationToken = default) =>
+                SetCommonCellSizeAsync(projectId, frameSetId, width, height, cancellationToken),
+            name: "set_common_cell_size",
+            description: "Greenfield Frames pipeline: set every frame in a FrameSet to a common logical cell size (without resampling artwork) and re-center content. Pass width/height 0 to auto-pick the tightest common cell. Returns updated frame geometry."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                Guid sourceRegionId,
+                int? insertAt = null,
+                string? name = null,
+                CancellationToken cancellationToken = default) =>
+                AddFrameFromRegionAsync(projectId, frameSetId, sourceRegionId, insertAt, name, cancellationToken),
+            name: "add_frame_from_region",
+            description: "Greenfield Frames pipeline: add one saved Source region as a new editable frame in an existing FrameSet. Use when a user draws an additional region after the frame set exists."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                Guid frameId,
+                int? insertAt = null,
+                string? name = null,
+                CancellationToken cancellationToken = default) =>
+                DuplicateFrameAsync(projectId, frameSetId, frameId, insertAt, name, cancellationToken),
+            name: "duplicate_frame",
+            description: "Greenfield Frames pipeline: duplicate a frame's source bounds, logical cell, content offset, timing, working image, preview, and frame mask into the same FrameSet."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                Guid frameId,
+                int width,
+                int height,
+                CancellationToken cancellationToken = default) =>
+                SetFrameLogicalCellAsync(projectId, frameSetId, frameId, width, height, cancellationToken),
+            name: "set_frame_logical_cell",
+            description: "Greenfield Frames pipeline: set one frame's logical cell dimensions without moving its source crop or resampling artwork. Use for targeted cell fixes; use set_common_cell_size for whole-set normalization."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                Guid frameId,
+                int x,
+                int y,
+                int width,
+                int height,
+                SpriteSheetShapePath[]? shapePaths = null,
+                CancellationToken cancellationToken = default) =>
+                UpdateFrameSourceBoundsAsync(projectId, frameSetId, frameId, x, y, width, height, shapePaths, cancellationToken),
+            name: "update_frame_source_bounds",
+            description: "Greenfield Frames pipeline: move or resize one frame's source crop in source-image pixel coordinates. This changes which source pixels the frame uses without changing content offset inside the logical cell."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                Guid frameId,
+                int contentOffsetX,
+                int contentOffsetY,
+                CancellationToken cancellationToken = default) =>
+                TranslateFrameContentAsync(projectId, frameSetId, frameId, contentOffsetX, contentOffsetY, cancellationToken),
+            name: "translate_frame_content",
+            description: "Greenfield Frames pipeline: set one frame's artwork offset inside its logical cell. Use this for alignment nudges; it does not change source bounds."),
+
+        AIFunctionFactory.Create(
+            method: (Guid frameSetId, CancellationToken cancellationToken = default) =>
+                ReadFrameSetAsync(projectId, frameSetId, cancellationToken),
+            name: "read_frame_set",
+            description: "Greenfield Frames pipeline: read a FrameSet's frames, source bounds, logical cell sizes, and content offsets without image bytes."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                Guid frameId,
+                int targetIndex,
+                CancellationToken cancellationToken = default) =>
+                ReorderFrameAsync(projectId, frameSetId, frameId, targetIndex, cancellationToken),
+            name: "reorder_frame",
+            description: "Greenfield Frames pipeline: move one frame to a new zero-based playback/sheet order index."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                Guid frameId,
+                CancellationToken cancellationToken = default) =>
+                DeleteFrameAsync(projectId, frameSetId, frameId, cancellationToken),
+            name: "delete_frame",
+            description: "Greenfield Frames pipeline: delete one frame from a FrameSet and remove its frame-owned masks."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                Guid frameId,
+                int durationMs,
+                CancellationToken cancellationToken = default) =>
+                SetFrameDurationAsync(projectId, frameSetId, frameId, durationMs, cancellationToken),
+            name: "set_frame_duration",
+            description: "Greenfield Frames pipeline: set one frame's animation duration in milliseconds without changing image geometry."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                int rows = 1,
+                int columns = 0,
+                int padding = 0,
+                int gutter = 0,
+                int outerMargin = 0,
+                string ordering = "rowMajor",
+                string horizontalAnchor = "center",
+                string verticalAnchor = "bottom",
+                string? name = null,
+                CancellationToken cancellationToken = default) =>
+                BuildSheetAsync(projectId, frameSetId, rows, columns, padding, gutter, outerMargin, ordering, horizontalAnchor, verticalAnchor, name, cancellationToken),
+            name: "build_sheet",
+            description: "Greenfield Sheet pipeline: reassemble a FrameSet into a deterministic, opaque sprite-sheet project asset with equal cells, and persist a linked per-frame placement manifest (BuiltSheet). Pass columns 0 to auto-fit. The sheet stays opaque; transparency is Export-only. Returns the output asset id, grid, cell size, and manifest."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                string anchor = "feet",
+                bool axisX = true,
+                bool axisY = true,
+                CancellationToken cancellationToken = default) =>
+                AlignFramesAsync(projectId, frameSetId, anchor, axisX, axisY, cancellationToken),
+            name: "align_frames",
+            description: "Greenfield Frames pipeline: deterministically align every frame inside its equal logical cell by a detected content anchor (feet | bottom | center | top | left | right). Detects each frame's visible-content bounds, sets the anchor, and renders aligned opaque cell images. Use axisX/axisY to preserve intentional motion on one axis. Run build_sheet afterward. Prefer this over generation for jitter/alignment."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameId,
+                string maskDataUrl,
+                string? label = null,
+                string coordinateSpace = "logicalFrame",
+                CancellationToken cancellationToken = default) =>
+                UpsertFrameMaskAsync(projectId, frameId, maskDataUrl, label, coordinateSpace, cancellationToken),
+            name: "upsert_frame_mask",
+            description: "Greenfield Frames pipeline: create or replace a frame-owned mask. The mask payload is a PNG data URL in the requested coordinate space, usually logicalFrame from the frame canvas."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameId,
+                CancellationToken cancellationToken = default) =>
+                ClearFrameMaskAsync(projectId, frameId, cancellationToken),
+            name: "clear_frame_mask",
+            description: "Greenfield Frames pipeline: remove the mask owned by one frame. History/candidate retention remains deferred."),
 
         AIFunctionFactory.Create(
             method: (
@@ -869,6 +1118,400 @@ public sealed class AssistantToolRegistry(
             message = "Sprite sheet is active in the Sprites workspace.",
         }, JsonOptions);
     }
+
+    private async Task<string> ExtractRegionAsAssetAsync(
+        Guid projectId,
+        Guid sourceAssetId,
+        int x,
+        int y,
+        int width,
+        int height,
+        string? name,
+        int padding,
+        int? fixedCanvasWidth,
+        int? fixedCanvasHeight,
+        bool centerInCanvas,
+        bool linkToSource,
+        CancellationToken cancellationToken)
+    {
+        var result = await workflow.ExtractRegionAsAssetAsync(projectId, new ExtractRegionAsAssetRequest(
+            sourceAssetId,
+            x,
+            y,
+            width,
+            height,
+            string.IsNullOrWhiteSpace(name) ? null : name,
+            padding,
+            fixedCanvasWidth,
+            fixedCanvasHeight,
+            centerInCanvas,
+            linkToSource), cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            assetId = result.Asset.Id,
+            label = result.Asset.Label,
+            kind = result.Asset.Kind.ToString(),
+            regionId = result.RegionId,
+            standaloneAssetId = result.StandaloneAssetId,
+            logicalWidth = result.LogicalWidth,
+            logicalHeight = result.LogicalHeight,
+            contentOffsetX = result.ContentOffsetX,
+            contentOffsetY = result.ContentOffsetY,
+            message = "Region extracted as a standalone opaque project asset.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> CreateFrameSetFromAssetAsync(
+        Guid projectId,
+        Guid sourceAssetId,
+        string? name,
+        int? expectedFrames,
+        string? layoutHint,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.CreateFrameSetFromAssetAsync(projectId, new CreateFrameSetFromAssetRequest(
+            sourceAssetId,
+            string.IsNullOrWhiteSpace(name) ? null : name,
+            expectedFrames,
+            layoutHint), cancellationToken);
+        return SerializeFrameSet(view, "Frame set created from detected frames.");
+    }
+
+    private async Task<string> DetectSourceRegionsAsync(
+        Guid projectId,
+        Guid sourceAssetId,
+        int? expectedFrames,
+        string? layoutHint,
+        bool replaceExisting,
+        CancellationToken cancellationToken)
+    {
+        var regions = await frameSets.DetectSourceRegionsAsync(projectId, new DetectSourceRegionsRequest(
+            sourceAssetId,
+            expectedFrames,
+            layoutHint,
+            replaceExisting), cancellationToken);
+        return SerializeSourceRegions(sourceAssetId, regions, "Detected and saved editable source regions.");
+    }
+
+    private async Task<string> ListSourceRegionsAsync(Guid projectId, Guid sourceAssetId, CancellationToken cancellationToken)
+    {
+        var regions = await frameSets.ListSourceRegionsAsync(projectId, sourceAssetId, cancellationToken);
+        return SerializeSourceRegions(sourceAssetId, regions, null);
+    }
+
+    private async Task<string> SaveSourceRegionsAsync(
+        Guid projectId,
+        Guid sourceAssetId,
+        SourceRegionEditRequest[]? regions,
+        CancellationToken cancellationToken)
+    {
+        var saved = await frameSets.SaveSourceRegionsAsync(projectId, new SaveSourceRegionsRequest(
+            sourceAssetId,
+            regions?.ToList() ?? []), cancellationToken);
+        return SerializeSourceRegions(sourceAssetId, saved, "Saved editable source regions.");
+    }
+
+    private async Task<string> CreateFrameSetFromRegionsAsync(
+        Guid projectId,
+        Guid sourceAssetId,
+        Guid[]? regionIds,
+        string? name,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.CreateFrameSetFromRegionsAsync(projectId, new CreateFrameSetFromRegionsRequest(
+            sourceAssetId,
+            regionIds?.ToList() ?? [],
+            string.IsNullOrWhiteSpace(name) ? null : name), cancellationToken);
+        return SerializeFrameSet(view, "Frame set created from selected source regions.");
+    }
+
+    private async Task<string> ListFrameSetsAsync(Guid projectId, CancellationToken cancellationToken)
+    {
+        var sets = await frameSets.ListFrameSetsAsync(projectId, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            frameSets = sets.Select(set => new
+            {
+                set.Id,
+                set.Name,
+                set.SourceAssetId,
+                set.DefaultCellWidth,
+                set.DefaultCellHeight,
+                set.FrameCount,
+                set.UpdatedAt,
+            }),
+        }, JsonOptions);
+    }
+
+    private async Task<string> SetActiveFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken)
+    {
+        var view = await frameSets.SetActiveFrameSetAsync(projectId, frameSetId, cancellationToken);
+        return SerializeFrameSet(view, "Active frame set selected.");
+    }
+
+    private async Task<string> SetCommonCellSizeAsync(
+        Guid projectId,
+        Guid frameSetId,
+        int width,
+        int height,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.SetCommonCellSizeAsync(projectId, new SetCommonCellSizeRequest(frameSetId, width, height), cancellationToken);
+        return SerializeFrameSet(view, "Common logical cell size applied.");
+    }
+
+    private async Task<string> AddFrameFromRegionAsync(
+        Guid projectId,
+        Guid frameSetId,
+        Guid sourceRegionId,
+        int? insertAt,
+        string? name,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.AddFrameFromRegionAsync(projectId, new AddFrameFromRegionRequest(
+            frameSetId,
+            sourceRegionId,
+            insertAt,
+            string.IsNullOrWhiteSpace(name) ? null : name), cancellationToken);
+        return SerializeFrameSet(view, "Source region added as a frame.");
+    }
+
+    private async Task<string> DuplicateFrameAsync(
+        Guid projectId,
+        Guid frameSetId,
+        Guid frameId,
+        int? insertAt,
+        string? name,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.DuplicateFrameAsync(projectId, new DuplicateFrameRequest(
+            frameSetId,
+            frameId,
+            insertAt,
+            string.IsNullOrWhiteSpace(name) ? null : name), cancellationToken);
+        return SerializeFrameSet(view, "Frame duplicated.");
+    }
+
+    private async Task<string> SetFrameLogicalCellAsync(
+        Guid projectId,
+        Guid frameSetId,
+        Guid frameId,
+        int width,
+        int height,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.SetFrameLogicalCellAsync(projectId, new SetFrameLogicalCellRequest(frameSetId, frameId, width, height), cancellationToken);
+        return SerializeFrameSet(view, "Frame logical cell updated.");
+    }
+
+    private async Task<string> UpdateFrameSourceBoundsAsync(
+        Guid projectId,
+        Guid frameSetId,
+        Guid frameId,
+        int x,
+        int y,
+        int width,
+        int height,
+        SpriteSheetShapePath[]? shapePaths,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.UpdateFrameSourceBoundsAsync(projectId, new UpdateFrameSourceBoundsRequest(
+            frameSetId,
+            frameId,
+            x,
+            y,
+            width,
+            height,
+            shapePaths?.ToList()), cancellationToken);
+        return SerializeFrameSet(view, "Frame source bounds updated.");
+    }
+
+    private async Task<string> TranslateFrameContentAsync(
+        Guid projectId,
+        Guid frameSetId,
+        Guid frameId,
+        int contentOffsetX,
+        int contentOffsetY,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.TranslateFrameContentAsync(projectId, new TranslateFrameContentRequest(
+            frameSetId,
+            frameId,
+            contentOffsetX,
+            contentOffsetY), cancellationToken);
+        return SerializeFrameSet(view, "Frame content offset updated.");
+    }
+
+    private async Task<string> ReadFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken)
+    {
+        var view = await frameSets.GetFrameSetAsync(projectId, frameSetId, cancellationToken);
+        return SerializeFrameSet(view, null);
+    }
+
+    private async Task<string> ReorderFrameAsync(
+        Guid projectId,
+        Guid frameSetId,
+        Guid frameId,
+        int targetIndex,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.ReorderFrameAsync(projectId, frameSetId, frameId, targetIndex, cancellationToken);
+        return SerializeFrameSet(view, "Frame reordered.");
+    }
+
+    private async Task<string> DeleteFrameAsync(
+        Guid projectId,
+        Guid frameSetId,
+        Guid frameId,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.DeleteFrameAsync(projectId, frameSetId, frameId, cancellationToken);
+        return SerializeFrameSet(view, "Frame deleted.");
+    }
+
+    private async Task<string> SetFrameDurationAsync(
+        Guid projectId,
+        Guid frameSetId,
+        Guid frameId,
+        int durationMs,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.SetFrameDurationAsync(projectId, frameSetId, frameId, durationMs, cancellationToken);
+        return SerializeFrameSet(view, "Frame duration updated.");
+    }
+
+    private async Task<string> AlignFramesAsync(
+        Guid projectId,
+        Guid frameSetId,
+        string anchor,
+        bool axisX,
+        bool axisY,
+        CancellationToken cancellationToken)
+    {
+        var view = await frameSets.AlignFramesAsync(projectId, new AlignFramesRequest(frameSetId, anchor, axisX, axisY), cancellationToken);
+        return SerializeFrameSet(view, $"Frames aligned by {anchor}.");
+    }
+
+    private async Task<string> UpsertFrameMaskAsync(
+        Guid projectId,
+        Guid frameId,
+        string maskDataUrl,
+        string? label,
+        string coordinateSpace,
+        CancellationToken cancellationToken)
+    {
+        var mask = await frameSets.UpsertFrameMaskAsync(projectId, new UpsertFrameMaskRequest(
+            frameId,
+            maskDataUrl,
+            string.IsNullOrWhiteSpace(label) ? null : label,
+            string.IsNullOrWhiteSpace(coordinateSpace) ? "logicalFrame" : coordinateSpace), cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            mask.Id,
+            mask.AssetId,
+            mask.Label,
+            mask.Width,
+            mask.Height,
+            message = "Frame mask saved.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> ClearFrameMaskAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken)
+    {
+        await frameSets.ClearFrameMaskAsync(projectId, frameId, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            frameId,
+            message = "Frame mask cleared.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> BuildSheetAsync(
+        Guid projectId,
+        Guid frameSetId,
+        int rows,
+        int columns,
+        int padding,
+        int gutter,
+        int outerMargin,
+        string ordering,
+        string horizontalAnchor,
+        string verticalAnchor,
+        string? name,
+        CancellationToken cancellationToken)
+    {
+        var result = await frameSets.BuildSheetAsync(projectId, new BuildSheetRequest(
+            frameSetId,
+            rows,
+            columns,
+            padding,
+            gutter,
+            outerMargin,
+            ordering,
+            horizontalAnchor,
+            verticalAnchor,
+            string.IsNullOrWhiteSpace(name) ? null : name), cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            builtSheetId = result.BuiltSheetId,
+            sheetLayoutId = result.SheetLayoutId,
+            outputAssetId = result.OutputAssetId,
+            rows = result.Rows,
+            columns = result.Columns,
+            cellWidth = result.CellWidth,
+            cellHeight = result.CellHeight,
+            width = result.Width,
+            height = result.Height,
+            warnings = result.Warnings,
+            manifest = result.ManifestJson,
+            message = "Built an opaque sprite sheet with a linked frame manifest.",
+        }, JsonOptions);
+    }
+
+    private static string SerializeSourceRegions(Guid sourceAssetId, IReadOnlyList<SourceRegionView> regions, string? message) =>
+        JsonSerializer.Serialize(new
+        {
+            sourceAssetId,
+            regions = regions.Select(region => new
+            {
+                region.Id,
+                region.SourceAssetId,
+                region.Name,
+                bounds = new { region.X, region.Y, region.Width, region.Height },
+                region.ShapePaths,
+                region.RegionType,
+                region.Order,
+            }),
+            message,
+        }, JsonOptions);
+
+    private static string SerializeFrameSet(FrameSetView view, string? message) =>
+        JsonSerializer.Serialize(new
+        {
+            frameSetId = view.Id,
+            name = view.Name,
+            sourceAssetId = view.SourceAssetId,
+            defaultCellWidth = view.DefaultCellWidth,
+            defaultCellHeight = view.DefaultCellHeight,
+            frameCount = view.FrameCount,
+            latestBuiltSheetAssetId = view.LatestBuiltSheetAssetId,
+            latestBuiltSheetManifest = view.LatestBuiltSheetManifest,
+            frames = view.Frames.Select(f => new
+            {
+                f.Id,
+                f.SourceRegionId,
+                f.Index,
+                f.Name,
+                source = new { f.SourceX, f.SourceY, f.SourceWidth, f.SourceHeight },
+                logical = new { f.LogicalWidth, f.LogicalHeight },
+                content = new { f.ContentOffsetX, f.ContentOffsetY },
+                f.DurationMs,
+                f.WorkingState,
+                f.HasMask,
+                f.MaskId,
+            }),
+            message,
+        }, JsonOptions);
 
     private async Task<string> ComposeSpriteSheetFromImagesAsync(
         Guid projectId,

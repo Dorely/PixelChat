@@ -693,6 +693,34 @@ public sealed record CropAssetRequest(
     string CropDataUrl,
     string Label);
 
+/// <summary>
+/// Extracts a source-image region into a standalone, opaque project asset
+/// (greenfield Source-view "Extract as Asset"). Padding/canvas areas are filled with
+/// the source background color so the result stays opaque (transparency is an Export
+/// concern only).
+/// </summary>
+public sealed record ExtractRegionAsAssetRequest(
+    Guid SourceAssetId,
+    int X,
+    int Y,
+    int Width,
+    int Height,
+    string? Name = null,
+    int Padding = 0,
+    int? FixedCanvasWidth = null,
+    int? FixedCanvasHeight = null,
+    bool CenterInCanvas = true,
+    bool LinkToSource = true);
+
+public sealed record ExtractRegionAsAssetResult(
+    ArtAssetView Asset,
+    Guid RegionId,
+    Guid StandaloneAssetId,
+    int LogicalWidth,
+    int LogicalHeight,
+    int ContentOffsetX,
+    int ContentOffsetY);
+
 public sealed record SavePromptRecipeRequest(
     string Name,
     string AssetType,

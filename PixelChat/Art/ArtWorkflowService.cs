@@ -3320,6 +3320,131 @@ public sealed class ArtWorkflowService(
         return AssetView(asset);
     }
 
+    public async Task<ExtractRegionAsAssetResult> ExtractRegionAsAssetAsync(
+        Guid projectId,
+        ExtractRegionAsAssetRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        _ = await GetProjectAsync(projectId, cancellationToken);
+        var source = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == request.SourceAssetId, cancellationToken)
+            ?? throw new InvalidOperationException("Source asset was not found.");
+        if (!ImageRgbaDecoder.TryReadRgba(source, out var sourceWidth, out var sourceHeight, out var sourceRgba))
+            throw new InvalidOperationException("Region extraction requires a readable PNG or JPEG source image.");
+
+        // Clamp the requested region to the source bounds (source-image coordinate space).
+        var rectX = Math.Clamp(request.X, 0, Math.Max(0, sourceWidth - 1));
+        var rectY = Math.Clamp(request.Y, 0, Math.Max(0, sourceHeight - 1));
+        var rectW = Math.Clamp(request.Width, 1, sourceWidth - rectX);
+        var rectH = Math.Clamp(request.Height, 1, sourceHeight - rectY);
+        var padding = Math.Clamp(request.Padding, 0, 4096);
+
+        // Determine the opaque output canvas and where the cropped content sits in it.
+        int canvasW;
+        int canvasH;
+        if (request.FixedCanvasWidth is int fixedW and > 0 && request.FixedCanvasHeight is int fixedH and > 0)
+        {
+            canvasW = Math.Min(fixedW, 8192);
+            canvasH = Math.Min(fixedH, 8192);
+        }
+        else
+        {
+            canvasW = rectW + (padding * 2);
+            canvasH = rectH + (padding * 2);
+        }
+
+        var offsetX = request.CenterInCanvas ? Math.Max(0, (canvasW - rectW) / 2) : padding;
+        var offsetY = request.CenterInCanvas ? Math.Max(0, (canvasH - rectH) / 2) : padding;
+
+        // Fill with the opaque source background color, then blit the region.
+        var canvasRgba = new byte[canvasW * canvasH * 4];
+        var bgR = sourceRgba[0];
+        var bgG = sourceRgba[1];
+        var bgB = sourceRgba[2];
+        for (var i = 0; i < canvasW * canvasH; i++)
+        {
+            canvasRgba[(i * 4) + 0] = bgR;
+            canvasRgba[(i * 4) + 1] = bgG;
+            canvasRgba[(i * 4) + 2] = bgB;
+            canvasRgba[(i * 4) + 3] = 255;
+        }
+
+        for (var y = 0; y < rectH; y++)
+        {
+            var destY = offsetY + y;
+            if (destY < 0 || destY >= canvasH)
+                continue;
+            for (var x = 0; x < rectW; x++)
+            {
+                var destX = offsetX + x;
+                if (destX < 0 || destX >= canvasW)
+                    continue;
+                var srcIndex = (((rectY + y) * sourceWidth) + (rectX + x)) * 4;
+                var destIndex = ((destY * canvasW) + destX) * 4;
+                canvasRgba[destIndex + 0] = sourceRgba[srcIndex + 0];
+                canvasRgba[destIndex + 1] = sourceRgba[srcIndex + 1];
+                canvasRgba[destIndex + 2] = sourceRgba[srcIndex + 2];
+                canvasRgba[destIndex + 3] = 255;
+            }
+        }
+
+        var png = SpriteSheetPngCodec.EncodeRgba(canvasW, canvasH, canvasRgba);
+        var name = string.IsNullOrWhiteSpace(request.Name) ? $"{source.Label} region" : request.Name.Trim();
+
+        var asset = CreateAsset(
+            projectId,
+            name,
+            $"extracted-{DateTime.UtcNow:yyyyMMddHHmmss}.png",
+            ArtAssetKind.Extracted,
+            "image/png",
+            png,
+            source.Id,
+            source.SourceBatchId,
+            source.SourcePromptRecipeId,
+            source.SourcePromptRecipeVersion,
+            source.Prompt,
+            new { ExtractedFrom = source.Id, Region = new { rectX, rectY, rectW, rectH } });
+        await db.ArtAssets.AddAsync(asset, cancellationToken);
+
+        var region = new SpriteRegion
+        {
+            ProjectId = projectId,
+            SourceAssetId = source.Id,
+            Name = name,
+            X = rectX,
+            Y = rectY,
+            Width = rectW,
+            Height = rectH,
+            RegionType = "asset",
+        };
+        await db.SpriteRegions.AddAsync(region, cancellationToken);
+
+        var standalone = new StandaloneAsset
+        {
+            ProjectId = projectId,
+            SourceRegionId = request.LinkToSource ? region.Id : null,
+            OutputAssetId = asset.Id,
+            Name = name,
+            LogicalWidth = canvasW,
+            LogicalHeight = canvasH,
+            ContentOffsetX = offsetX,
+            ContentOffsetY = offsetY,
+            LinkedToSource = request.LinkToSource,
+        };
+        await db.StandaloneAssets.AddAsync(standalone, cancellationToken);
+
+        await SetWorkspaceModeAfterAssetMutationAsync(projectId, WorkspaceMode.Sprites, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new ExtractRegionAsAssetResult(
+            AssetView(asset),
+            region.Id,
+            standalone.Id,
+            canvasW,
+            canvasH,
+            offsetX,
+            offsetY);
+    }
+
     public async Task<ImageMaskView> UpsertAssetMaskAsync(
         Guid projectId,
         Guid assetId,
@@ -4168,6 +4293,9 @@ public sealed class ArtWorkflowService(
         mask.Data = maskImage.Data;
         mask.Width = maskImage.Width;
         mask.Height = maskImage.Height;
+        mask.OwnerKind = "asset";
+        mask.OwnerId = asset.Id;
+        mask.CoordinateSpace = "source";
         mask.UpdatedAt = now;
 
         var duplicateMasks = masks.Skip(1).ToList();

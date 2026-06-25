@@ -72,6 +72,7 @@ public interface IArtWorkflowService
     Task<GenerationBatchView> GenerateImagesAsync(Guid projectId, GenerateImagesRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> ImportAssetAsync(Guid projectId, ImportAssetRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> CreateCropAssetAsync(Guid projectId, CropAssetRequest request, CancellationToken cancellationToken = default);
+    Task<ExtractRegionAsAssetResult> ExtractRegionAsAssetAsync(Guid projectId, ExtractRegionAsAssetRequest request, CancellationToken cancellationToken = default);
     Task<ImageMaskView> UpsertAssetMaskAsync(Guid projectId, Guid assetId, string maskDataUrl, string label, CancellationToken cancellationToken = default);
     Task ClearAssetMaskAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<PromptRecipeView> SavePromptRecipeAsync(Guid projectId, SavePromptRecipeRequest request, CancellationToken cancellationToken = default);

@@ -152,6 +152,7 @@ else
     private readonly HashSet<Guid> _draftReferenceAssetIds = [];
     private Guid? _recipeExampleAssetId;
     private WorkbenchView? _workbench;
+    private WorkspaceSpritesVisibleState? _spritesVisibleState;
     private ImageGenerationRuntimeSnapshot _generationRuntimeSnapshot = new([]);
     private WorkspaceMode _activeWorkspaceMode = WorkspaceMode.Generate;
     private Guid? _activeWorkspaceProjectId;
@@ -1153,11 +1154,7 @@ else
         <SpriteSheetWorkspace Workbench="@_workbench"
                               OnChanged="OnSpriteSheetChangedAsync"
                               OnExportAsset="OpenExportAsync"
-                              OnAddSheetToReview="AddSpriteSheetToReviewAsync"
-                              OnAddAnimationToReview="AddSpriteAnimationToReviewAsync"
-                              OnPreviewSheet="OpenSpriteSheetReviewPreview"
-                              OnPreviewAnimation="OpenAnimationReviewPreview"
-                              OnPreviewFrame="OpenSpriteFrameReviewPreview" />
+                              OnVisibleStateChanged="OnSpritesVisibleStateChanged" />
     };
 
     private RenderFragment RenderRecipesWorkspace() => __builder =>
@@ -4391,7 +4388,14 @@ else
                 .ToList() ?? []);
 
     private WorkspaceSpritesVisibleState BuildSpritesVisibleState() =>
-        new(_workbench?.ActiveSpriteSheet is null ? null : SpriteSheetSummary(_workbench.ActiveSpriteSheet));
+        _spritesVisibleState ?? new(_workbench?.ActiveSpriteSheet is null ? null : SpriteSheetSummary(_workbench.ActiveSpriteSheet));
+
+    private Task OnSpritesVisibleStateChanged(WorkspaceSpritesVisibleState state)
+    {
+        _spritesVisibleState = state;
+        PublishVisibleState();
+        return Task.CompletedTask;
+    }
 
     private WorkspaceRecipeVisibleState BuildRecipeVisibleState() =>
         new(

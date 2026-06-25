@@ -1,20 +1,89 @@
+/* Fixed, non-scrolling sprite workspace shell. The component fills the
+   workspace-center cell; only inner panels scroll. */
 .sprite-workspace {
-    display: grid;
-    gap: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    height: 100%;
     min-height: 0;
 }
 
-.sprite-head-actions {
+/* Top toolbar: title + history placeholders | mode tabs | import/reset. */
+.sprite-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.sprite-toolbar-lead {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    min-width: 0;
+}
+
+.sprite-title {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.sprite-title h1 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 750;
+}
+
+.sprite-title span {
+    color: #667085;
+    font-size: 0.74rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sprite-history-group {
+    display: inline-flex;
+    gap: 0.25rem;
+}
+
+.sprite-mode-tabs {
+    display: inline-flex;
+    gap: 0.2rem;
+    padding: 0.2rem;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #f8fafc;
+}
+
+.sprite-mode-tab {
+    border: 0;
+    background: transparent;
+    color: #475467;
+    border-radius: 6px;
+    padding: 0.34rem 0.78rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.sprite-mode-tab.is-active {
+    background: #1f6feb;
+    color: #ffffff;
+}
+
+.sprite-toolbar-actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: flex-end;
     gap: 0.45rem;
-}
-
-.sprite-head-actions input[type="file"] {
-    max-width: 230px;
-    font-size: 0.8rem;
 }
 
 .sprite-file-control {
@@ -23,37 +92,83 @@
     gap: 0.35rem;
     margin: 0;
     color: #475467;
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     font-weight: 700;
 }
 
 .sprite-file-control input[type="file"] {
     max-width: 150px;
+    font-size: 0.78rem;
 }
 
-.sprite-editor-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
-    gap: 0.85rem;
-    align-items: start;
-    min-height: 0;
+/* Reset is de-emphasized (no longer a red danger button). */
+.sprite-reset-button {
+    opacity: 0.85;
 }
 
-.sprite-editor-main {
-    display: grid;
-    grid-template-rows: auto auto;
+/* Body: stage row (fills) + agent strip + bottom strip. */
+.sprite-editor-body {
+    display: flex;
+    flex-direction: column;
     gap: 0.65rem;
-    align-self: start;
-    min-width: 0;
     min-height: 0;
+    flex: 1 1 auto;
 }
 
-.sprite-canvas-panel {
+.sprite-stage-row {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) minmax(260px, 320px);
+    gap: 0.65rem;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+
+/* Vertical tool rail. */
+.sprite-tool-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    width: 84px;
+    padding: 0.5rem;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #ffffff;
+    overflow: auto;
+}
+
+.sprite-tool-button {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid #d7dee8;
+    border-radius: 6px;
+    background: #f8fafc;
+    color: #344054;
+    padding: 0.38rem 0.25rem;
+    font-size: 0.76rem;
+    font-weight: 650;
+}
+
+.sprite-tool-rail-hint {
+    color: #667085;
+    font-size: 0.74rem;
+}
+
+.sprite-tool-button.is-active {
+    font-weight: 700;
+    box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.18);
+}
+
+/* Main stage. */
+.sprite-stage {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0.45rem;
     min-width: 0;
     min-height: 0;
+    padding: 0.65rem;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #ffffff;
 }
 
 .sprite-section-title-row {
@@ -69,94 +184,78 @@
     gap: 0.35rem;
 }
 
-.sprite-source-canvas,
-.sprite-animation-canvas {
-    display: block;
-    width: 100%;
-    min-width: 0;
-    border: 1px solid #d7dee8;
-    border-radius: 8px;
-    background: #e9eef4;
-}
-
-.sprite-source-canvas {
-    min-height: 460px;
-    height: clamp(460px, 62vh, 760px);
-    cursor: default;
-}
-
-.sprite-source-canvas.is-draw-tool,
-.sprite-source-canvas.is-outline-tool,
-.sprite-source-canvas.is-anchor-tool {
-    cursor: crosshair;
-}
-
-.sprite-source-canvas.is-outline-tool {
-    border-color: #16a34a;
-    box-shadow: inset 0 0 0 2px rgba(22, 163, 74, 0.12);
-}
-
-.sprite-source-canvas.is-anchor-tool {
-    border-color: #ec4899;
-    box-shadow: inset 0 0 0 2px rgba(236, 72, 153, 0.12);
-}
-
-.sprite-source-canvas.is-dragging-frame {
-    cursor: grabbing;
-}
-
-.sprite-side-panel {
+.sprite-stage-canvas {
     display: grid;
-    grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
-    gap: 0.65rem;
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
     min-width: 0;
     min-height: 0;
-}
-
-.sprite-animation-panel {
-    min-height: 220px;
-}
-
-.sprite-animation-canvas {
-    aspect-ratio: 1 / 1;
-    max-height: 260px;
-}
-
-.sprite-animation-canvas.is-previewable {
-    cursor: zoom-in;
-}
-
-.sprite-tool-strip {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 0.75rem;
-    align-items: center;
-    padding: 0.65rem;
-    border: 1px solid #d7dee8;
-    border-radius: 8px;
-    background: #ffffff;
-}
-
-.tool-button-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
     gap: 0.4rem;
 }
 
-.sprite-tool-button {
-    min-width: 74px;
+.sprite-stage-canvas .frame-work-meta {
+    grid-row: auto;
 }
 
-.sprite-tool-button.is-active {
-    font-weight: 700;
-    box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.18);
+.sprite-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #e9eef4;
+    outline: none;
+}
+
+.sprite-canvas:focus {
+    border-color: #1f6feb;
+    box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.16);
+}
+
+.sprite-export-pane {
+    display: grid;
+    gap: 0.6rem;
+    align-content: center;
+    justify-items: start;
+    padding: 1.25rem;
+    border: 1px dashed #cbd5e1;
+    border-radius: 8px;
+    background: #f8fafc;
+    color: #344054;
+}
+
+.sprite-export-note {
+    color: #667085;
+    font-size: 0.82rem;
+    margin: 0;
+}
+
+/* Contextual inspector. */
+.sprite-inspector {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    min-height: 0;
+    overflow: auto;
+}
+
+.sprite-inspector-hint {
+    color: #667085;
+    font-size: 0.8rem;
+    margin: 0;
+}
+
+.sprite-inspector-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
 }
 
 .sprite-settings-panel {
     display: grid;
-    gap: 0.45rem;
+    gap: 0.5rem;
     padding: 0.65rem;
     border: 1px solid #d7dee8;
     border-radius: 8px;
@@ -175,6 +274,7 @@
 }
 
 .sprite-grid-controls label > span,
+.sprite-anim-controls label > span,
 .selected-frame-readout span:first-child {
     display: block;
     color: #667085;
@@ -189,6 +289,17 @@
     min-height: 31px;
 }
 
+.sprite-loop-toggle input {
+    margin: 0;
+}
+
+.section-title {
+    color: #344054;
+    font-size: 0.86rem;
+    font-weight: 700;
+}
+
+/* Alignment (formerly Stabilization). */
 .sprite-stabilization-panel {
     gap: 0.55rem;
 }
@@ -228,7 +339,7 @@
 .stabilization-diagnostic {
     display: block;
     width: 100%;
-    max-height: 220px;
+    max-height: 200px;
     object-fit: contain;
     border: 1px solid #d7dee8;
     border-radius: 8px;
@@ -260,18 +371,13 @@
     background: #fff7ed;
 }
 
-.sprite-loop-toggle input {
-    margin: 0;
-}
-
+/* Selected frame readout under the stage. */
 .selected-frame-readout {
     display: flex;
     flex-wrap: wrap;
-    justify-content: flex-start;
     gap: 0.35rem;
     color: #344054;
     font-size: 0.78rem;
-    flex: 1 1 320px;
 }
 
 .selected-frame-readout span {
@@ -297,50 +403,163 @@
     color: #15803d;
 }
 
+.frame-work-meta {
+    color: #495057;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.8rem;
+    gap: 0.4rem;
+}
+
+.frame-work-meta span {
+    background: #f6f7f9;
+    border: 1px solid #dde1e6;
+    border-radius: 999px;
+    padding: 0.12rem 0.45rem;
+}
+
+.frame-erase-controls {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+}
+
+.frame-erase-mode-button {
+    min-width: 4rem;
+}
+
+.frame-edit-prompt {
+    resize: vertical;
+}
+
+.frame-edit-button {
+    justify-self: start;
+}
+
+/* Agent task strip (history-driven actions are placeholders for now). */
+.sprite-agent-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.4rem 0.65rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #f8fafc;
+    color: #667085;
+    font-size: 0.8rem;
+}
+
+.sprite-agent-status {
+    font-weight: 600;
+}
+
+/* Bottom strip: horizontal frame strip + animation cluster. */
+.sprite-bottom-strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+    gap: 0.65rem;
+    min-height: 0;
+}
+
+.sprite-bottom-strip:has(.sprite-region-chip) {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.sprite-frame-strip-panel {
+    display: grid;
+    grid-template-rows: auto auto;
+    gap: 0.4rem;
+    padding: 0.55rem;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #ffffff;
+    min-width: 0;
+}
+
 .frame-list-head {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 0.5rem;
     color: #344054;
-    font-size: 0.86rem;
+    font-size: 0.82rem;
     font-weight: 700;
 }
 
-.sprite-frame-list {
-    display: grid;
-    gap: 0.45rem;
-    min-height: 0;
-    overflow: auto;
+.sprite-frame-strip {
+    display: flex;
+    gap: 0.5rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 0.25rem;
 }
 
-.sprite-frame-row {
+.sprite-region-chip {
     display: grid;
-    grid-template-columns: 58px minmax(0, 1fr);
-    gap: 0.45rem;
-    align-items: center;
-    padding: 0.45rem;
+    gap: 0.12rem;
+    min-width: 138px;
+    flex: 0 0 auto;
+    padding: 0.45rem 0.55rem;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #344054;
+    text-align: left;
+}
+
+.sprite-region-chip.is-selected {
+    border-color: #2f80ed;
+    box-shadow: 0 0 0 2px rgba(47, 128, 237, 0.12);
+}
+
+.sprite-region-chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.sprite-region-chip small {
+    color: #667085;
+    font-size: 0.72rem;
+}
+
+.sprite-frame-card {
+    display: grid;
+    grid-template-columns: 58px minmax(120px, 160px);
+    gap: 0.4rem;
+    align-items: start;
+    flex: 0 0 auto;
+    padding: 0.4rem;
     border: 1px solid #d7dee8;
     border-radius: 8px;
     background: #ffffff;
 }
 
-.sprite-frame-row.is-selected {
+.sprite-frame-card.is-selected {
     border-color: #2f80ed;
     box-shadow: 0 0 0 2px rgba(47, 128, 237, 0.12);
 }
 
-.frame-label-stack {
+.sprite-frame-card-body {
     display: grid;
-    gap: 0.18rem;
+    gap: 0.25rem;
     min-width: 0;
 }
 
-.frame-label-stack small {
+.sprite-frame-source {
     color: #667085;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.sprite-frame-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
 }
 
 .frame-thumb {
@@ -390,21 +609,13 @@
     clip-path: polygon(50% 0, 100% 34%, 82% 100%, 18% 100%, 0 34%);
 }
 
-.frame-row-actions {
-    grid-column: 2;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.3rem;
-}
-
 .frame-work-badge {
     border: 1px solid rgba(31, 111, 235, 0.28);
     border-radius: 999px;
     color: #1f6feb;
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     font-weight: 600;
-    grid-column: 2;
-    padding: 0.12rem 0.45rem;
+    padding: 0.1rem 0.4rem;
     white-space: nowrap;
     width: fit-content;
 }
@@ -414,70 +625,43 @@
     color: #6c757d;
 }
 
-.frame-work-panel {
-    border-top: 1px solid #d6d9df;
+.sprite-anim-cluster {
     display: grid;
-    gap: 0.55rem;
-    padding-top: 0.75rem;
-}
-
-.frame-work-meta {
-    color: #495057;
-    display: flex;
-    flex-wrap: wrap;
-    font-size: 0.8rem;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0.4rem;
+    padding: 0.55rem;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #ffffff;
+    min-width: 0;
+    min-height: 0;
 }
 
-.frame-work-meta span {
-    background: #f6f7f9;
-    border: 1px solid #dde1e6;
-    border-radius: 999px;
-    padding: 0.12rem 0.45rem;
-}
-
-.frame-work-canvas {
-    aspect-ratio: 1 / 1;
-    background: #f8f9fa;
-    border: 1px solid #cfd4da;
-    border-radius: 6px;
-    cursor: default;
-    min-height: 160px;
+.sprite-animation-canvas {
+    display: block;
     width: 100%;
+    min-width: 0;
+    aspect-ratio: 1 / 1;
+    max-height: 160px;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #e9eef4;
 }
 
-.frame-work-canvas.is-erase-mode {
-    cursor: crosshair;
+.sprite-animation-canvas.is-previewable {
+    cursor: zoom-in;
 }
 
-.frame-work-actions {
-    align-items: center;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-}
-
-.frame-erase-controls {
-    display: inline-flex;
-    flex-wrap: nowrap;
-    gap: 0.25rem;
-}
-
-.frame-erase-mode-button {
-    min-width: 4rem;
-}
-
-.frame-edit-prompt {
-    resize: vertical;
-}
-
-.frame-edit-button {
-    justify-self: start;
+.sprite-anim-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem;
+    align-items: end;
 }
 
 .sprite-status,
 .sprite-error {
-    padding: 0.5rem 0.6rem;
+    padding: 0.45rem 0.6rem;
     border-radius: 8px;
     font-size: 0.82rem;
 }
@@ -494,47 +678,101 @@
     color: #b42318;
 }
 
-@media (max-width: 1280px) {
-    .sprite-editor-grid {
-        grid-template-columns: 1fr;
+.empty-state.compact {
+    display: grid;
+    place-items: center;
+    color: #667085;
+    font-size: 0.85rem;
+}
+
+.sprite-stage-image {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    object-fit: contain;
+    image-rendering: pixelated;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #e9eef4;
+}
+
+.sprite-busy-pill {
+    padding: 0.12rem 0.5rem;
+    border-radius: 999px;
+    background: #eef2ff;
+    color: #3730a3;
+    font-size: 0.74rem;
+    font-weight: 600;
+}
+
+.sprite-source-pick {
+    display: grid;
+    gap: 0.2rem;
+}
+
+.sprite-source-pick > span {
+    color: #667085;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.sprite-axis-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin: 0;
+    color: #475467;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.sprite-anim-stage {
+    display: grid;
+    place-items: center;
+    min-height: 0;
+}
+
+.sprite-anim-stage .sprite-stage-image {
+    max-height: 150px;
+}
+
+.sprite-frame-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8rem;
+    color: #344054;
+}
+
+@media (max-width: 1180px) {
+    .sprite-stage-row {
+        grid-template-columns: auto minmax(0, 1fr);
     }
 
-    .sprite-side-panel {
-        grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
-        grid-template-rows: auto auto minmax(0, 1fr) auto;
+    .sprite-inspector {
+        grid-column: 1 / -1;
+        flex-direction: row;
+        flex-wrap: wrap;
+        overflow: visible;
     }
 
-    .sprite-settings-panel {
-        grid-column: 1;
-    }
-
-    .frame-list-head,
-    .sprite-frame-list,
-    .frame-work-panel {
-        grid-column: 2;
-    }
-
-    .sprite-animation-panel {
-        grid-row: 1;
+    .sprite-inspector .sprite-settings-panel {
+        flex: 1 1 260px;
     }
 }
 
-@media (max-width: 980px) {
-    .sprite-tool-strip,
-    .sprite-side-panel {
+@media (max-width: 820px) {
+    .sprite-bottom-strip {
         grid-template-columns: 1fr;
     }
 
-    .frame-list-head,
-    .sprite-frame-list,
-    .frame-work-panel,
-    .sprite-animation-panel,
-    .sprite-settings-panel {
-        grid-column: auto;
-        grid-row: auto;
+    .sprite-stage-row {
+        grid-template-columns: 1fr;
     }
 
-    .sprite-grid-controls {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+    .sprite-tool-rail {
+        flex-direction: row;
+        width: auto;
     }
 }

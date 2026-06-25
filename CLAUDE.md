@@ -7,6 +7,10 @@
 - Do not assume everything in `VISION.md` is implemented or currently part of the implementation plan. Use the codebase to confirm current behavior.
 - Keep this file (`AGENTS.md`) stable and high level. Do not add notes here that are likely to become stale during normal development.
 
+## Agent Behavior
+- Do not plan work in multiple "Phases"; all work from all plans should be expected to be completed autonomously without further user interaction and should be planned that way from the beginning.
+- When planning, always explain the decisions you made for why the plan is the way that it is.
+
 ## File Map Maintenance
 - After adding, deleting, or renaming any source file, update `FILEMAP.md` to reflect the change.
 - When refactoring moves code between files or changes a file's responsibility, update the description in `FILEMAP.md`.

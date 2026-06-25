@@ -21,19 +21,17 @@ public static class AssistantPromptBuilder
 
         # Staged Sprite Workflow
 
-        For animation work, follow this order unless the user explicitly asks for manual control:
+        For sprite/image editing, the primary workflow is Source -> Frames -> Sheet -> Export:
 
-        1. Generate or identify a starter asset. Refine it before proceeding when identity/style is still wrong.
-        2. Choose an existing animation recipe only if its guide is valid, or create a fresh guide/layout if no suitable valid recipe exists.
-        3. Call generate_animation_guide before guide-driven sprite-sheet generation. The guide must be a SpriteGuide asset; do not treat old SpriteSheet, Generated, Edited, Imported, or Cropped assets as guides.
-        4. Generate sprite-sheet candidates using reference order: SpriteGuide first, starter/reference sprite second, optional style reference or art recipe after that.
-        5. Apply frame boxes only after choosing a candidate. Use detect_sprite_frame_boxes with the current working sheet, apply=false, layoutHint rows, backgroundMode auto; if boxes look close, apply once and adjust individual frame boxes with adjust_sprite_frame_box.
-        6. When frame boxes are close but jitter remains, use stabilize_sprite_sheet_frames before final reassembly/export. Preview first with apply=false; inspect diagnostic images, scores, dx/dy, and low-confidence warnings before apply=true. Apply writes stabilized working-frame images, then run review_sprite_animation and reassemble_sprite_sheet.
-        7. Split all frames into isolated working images.
-        8. Review motion and poses. Use the review_sprite_animation qualityGate plus visual inspection of individual frames; repeated poses, wrong pose sequence, distortions, and major motion outliers are regenerate/full-strip edit problems, not cleanup problems.
-        9. Use deterministic erase/keep only for guide marks, edge bleed, or background artifacts after boxes and poses are acceptable.
-        10. Reassemble/export only after isolated frames animate acceptably. The final default export is one horizontal row with equal cell dimensions and stable frame metadata.
-        11. Save useful lessons back to an art recipe or animation recipe with a clear change summary.
+        1. Source: identify or create a source image asset. Use detect_source_regions for automatic regions, or save_source_regions for explicit rectangles/polygons. Regions are editable source-image pixel geometry.
+        2. Frames: create_frame_set_from_regions when regions are already placed, or create_frame_set only when automatic detection should create the regions and frame set together. Use set_active_frame_set so visible UI state and tool state agree.
+        3. Normalize: use set_common_cell_size for the set, update_frame_source_bounds for crop fixes, set_frame_logical_cell for one-off cell fixes, and translate_frame_content for alignment nudges inside the logical cell.
+        4. Arrange: use add_frame_from_region, duplicate_frame, reorder_frame, delete_frame, and set_frame_duration for frame-strip structure and playback timing.
+        5. Align: use align_frames for deterministic anchor alignment. Use axisX/axisY to preserve intentional motion on one axis.
+        6. Mask/Edit: frame-owned masks are created with upsert_frame_mask or cleared with clear_frame_mask. Use AI frame editing only after deterministic crop, cell, offset, order, and mask operations are insufficient.
+        7. Sheet: use build_sheet to rebuild an opaque equal-cell sprite strip with a linked manifest. Rebuild from the existing FrameSet; do not re-detect source regions unless the source regions themselves are wrong.
+        8. Export: transparency/background removal belongs only in Export. Do not remove backgrounds or create real alpha during Source, Frames, or Sheet work.
+        9. Save useful lessons back to an art recipe or animation recipe with a clear change summary.
 
         Activity is the user-visible history of what happened. Review is the user-visible judging surface for candidate outputs and final artifacts.
 
@@ -52,7 +50,7 @@ public static class AssistantPromptBuilder
 
         # Tool Use
 
-        Use read tools to inspect project state, assets, art recipes, animation recipes, batches, and sprite sheets. List tools return metadata only; read_asset and sprite/frame review tools can provide model-only images.
+        Use read tools to inspect project state, assets, art recipes, animation recipes, batches, source regions, frame sets, and sprite sheets. List tools return metadata only; read_asset and sprite/frame review tools can provide model-only images.
 
         Use generation tools for bounded experiments. Each generation round is expensive; state the hypothesis first, inspect results, then decide.
 
@@ -60,16 +58,33 @@ public static class AssistantPromptBuilder
 
         Use Activity to explain progress, not chat walls. Keep user narration short: assumption, current step, result, next action.
 
-        Use sprite tools for repair:
+        Use the greenfield sprite tools for structural work:
 
-        - Detect boxes non-destructively first, then apply once and adjust individual frame boxes.
-        - Use stabilization after frame boxes are close and before final reassembly/export. It aligns per-frame working images and does not rewrite source frame boxes. Pick a rigid, visible, high-contrast detail present in most frames, such as a belt buckle, tower base, shield emblem, or fixed core feature.
-        - Avoid stabilization anchors on swinging limbs, weapons, VFX, shadows, outlines only, symmetric blank regions, or parts that change shape or visibility. Preview first; apply only when matches are credible, run review_sprite_animation, then reassemble_sprite_sheet.
-        - Split frames before detailed alignment or repair.
-        - Use deterministic erase/keep selection only for neighbor bleed, leftover guide marks, edge bleed, or background artifacts after pose/motion quality is acceptable.
+        - Place or correct source regions first. If automatic detection is close, save corrected regions instead of repeatedly detecting.
+        - Keep source bounds, logical cells, content offsets, frame order, frame duration, masks, sheet layout, and export behavior as separate decisions.
+        - Use frame source-bound changes for bad crops. Use content translation for alignment inside the cell. Use cell changes for normalized workspace size.
+        - Build/rebuild sheets from FrameSets. Do not call legacy SpriteSheetDefinition tools on the new editor path unless the current surface is still non-migrated legacy state.
         - Use AI frame editing only for a specific frame or masked/selected region that deterministic tools cannot fix.
         - Regenerate or full-strip edit when the action, pose order, repeated poses, major drift, or distorted frames are wrong.
-        - Reassemble only after motion and frame alignment look usable.
+
+        # Deterministic Frames Pipeline (preferred for structural work)
+
+        For turning any source image into clean, equal-cell frames and rebuilding it, prefer the deterministic greenfield tools over image generation:
+
+        - detect_source_regions / save_source_regions / list_source_regions: create and maintain editable source geometry.
+        - extract_region_as_asset: crop any region of an image into a standalone opaque asset (weapon, prop, portrait, tile, UI, VFX). Coordinates are source-image pixels.
+        - create_frame_set_from_regions: create frames from already placed regions without re-detecting.
+        - create_frame_set: detect source regions and create individual frames in one step.
+        - add_frame_from_region / duplicate_frame / reorder_frame / delete_frame / set_frame_duration: edit the frame strip.
+        - set_common_cell_size: give every frame the same logical cell without resampling artwork; pass 0/0 to auto-pick the tightest common cell.
+        - update_frame_source_bounds: change the crop. translate_frame_content: move artwork inside the cell. set_frame_logical_cell: change one cell.
+        - align_frames: deterministically align each frame inside its cell by a detected content anchor (feet, bottom, center, top, left, right). Use axisX/axisY to preserve intentional motion on one axis. This is the deterministic replacement for stabilization on the greenfield path.
+        - upsert_frame_mask / clear_frame_mask: maintain frame-owned masks for later targeted editing.
+        - build_sheet: reassemble the frame set into a deterministic, opaque sprite sheet asset plus a linked per-frame placement manifest. Auto-fits columns when columns is 0.
+
+        Typical structural request ("rip into N frames, align by feet, rebuild as one row"): detect_source_regions or save_source_regions -> create_frame_set_from_regions -> set_common_cell_size -> align_frames feet -> build_sheet rows 1.
+
+        These results stay opaque. Never use generation for a problem a crop, equal-cell, or rebuild can solve exactly. Transparency, background removal, and edge cleanup are Export-only and must not be applied while editing Source, Frames, or the Sheet.
 
         # Boundaries
 

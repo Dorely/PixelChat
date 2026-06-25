@@ -95,7 +95,14 @@ public sealed record WorkspaceActivitySummary(
     DateTime UpdatedAt);
 
 public sealed record WorkspaceSpritesVisibleState(
-    WorkspaceSpriteSheetSummary? ActiveSpriteSheet);
+    WorkspaceSpriteSheetSummary? ActiveSpriteSheet = null,
+    WorkspaceFrameSetSummary? ActiveFrameSet = null,
+    WorkspaceAssetSummary? SourceAsset = null,
+    IReadOnlyList<WorkspaceSpriteRegionSummary>? SelectedRegions = null,
+    IReadOnlyList<WorkspaceFrameSummary>? SelectedFrames = null,
+    Guid? SelectedMaskId = null,
+    WorkspaceBuiltSheetSummary? BuiltSheet = null,
+    string Mode = "");
 
 public sealed record WorkspaceRecipeVisibleState(
     Guid? EditingRecipeId,
@@ -179,3 +186,41 @@ public sealed record WorkspaceSpriteSheetSummary(
     SpriteSheetBackground Background,
     int FrameCount,
     DateTime UpdatedAt);
+
+public sealed record WorkspaceFrameSetSummary(
+    Guid Id,
+    string Name,
+    Guid? SourceAssetId,
+    int DefaultCellWidth,
+    int DefaultCellHeight,
+    int FrameCount);
+
+public sealed record WorkspaceSpriteRegionSummary(
+    Guid Id,
+    string Name,
+    int X,
+    int Y,
+    int Width,
+    int Height,
+    string RegionType,
+    int Order);
+
+public sealed record WorkspaceFrameSummary(
+    Guid Id,
+    int Index,
+    string Name,
+    int SourceX,
+    int SourceY,
+    int SourceWidth,
+    int SourceHeight,
+    int LogicalWidth,
+    int LogicalHeight,
+    int ContentOffsetX,
+    int ContentOffsetY,
+    int DurationMs,
+    string WorkingState,
+    bool HasMask);
+
+public sealed record WorkspaceBuiltSheetSummary(
+    Guid OutputAssetId,
+    string ManifestJson);

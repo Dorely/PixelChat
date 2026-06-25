@@ -46,6 +46,30 @@ public static class ArtMediaEndpoints
             return ImageResult(image);
         });
 
+        group.MapGet("/frame-set-frames/{frameId:guid}/preview", async (
+            Guid projectId,
+            Guid frameId,
+            IFrameSetService frameSets,
+            CancellationToken cancellationToken) =>
+        {
+            var image = await frameSets.GetFramePreviewImageAsync(projectId, frameId, cancellationToken);
+            return image is null
+                ? Results.NotFound()
+                : Results.File(image.Value.Data, image.Value.ContentType, enableRangeProcessing: false);
+        });
+
+        group.MapGet("/frame-set-frames/{frameId:guid}/mask", async (
+            Guid projectId,
+            Guid frameId,
+            IFrameSetService frameSets,
+            CancellationToken cancellationToken) =>
+        {
+            var image = await frameSets.GetFrameMaskImageAsync(projectId, frameId, cancellationToken);
+            return image is null
+                ? Results.NotFound()
+                : Results.File(image.Value.Data, image.Value.ContentType, enableRangeProcessing: false);
+        });
+
         return app;
     }
 
