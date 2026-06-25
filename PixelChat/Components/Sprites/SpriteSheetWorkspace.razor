@@ -137,7 +137,7 @@
                         <div class="stabilization-summary">
                             <span>@preview.Stabilization.Matches.Count match(es)</span>
                             <span>@StabilizationLowConfidenceCount(preview.Stabilization) low confidence</span>
-                            <span>@StabilizationClampedCount(preview.Stabilization) clamped</span>
+                            <span>@StabilizationClippedCount(preview.Stabilization) clipped</span>
                         </div>
                         @if (preview.Warnings.Count > 0)
                         {
@@ -758,10 +758,6 @@
         try
         {
             NormalizeStabilizationInputs();
-            await AutosaveLayoutPreservingAnchorAsync(anchor);
-            if (!string.IsNullOrWhiteSpace(_error))
-                return;
-
             var result = await Workflow.StabilizeSpriteSheetFramesAsync(
                 Workbench.Project.Id,
                 new StabilizeSpriteSheetFramesRequest(
@@ -799,10 +795,6 @@
         try
         {
             NormalizeStabilizationInputs();
-            await AutosaveLayoutPreservingAnchorAsync(anchor);
-            if (!string.IsNullOrWhiteSpace(_error))
-                return;
-
             var result = await Workflow.StabilizeSpriteSheetFramesAsync(
                 Workbench.Project.Id,
                 new StabilizeSpriteSheetFramesRequest(
@@ -816,7 +808,7 @@
             _stabilizationPreview = result;
             if (result.SavedSheet is { } saved && CurrentWorkingAsset(active) is { } working)
                 LoadSheet(saved, working);
-            _status = $"Applied stabilization to {StabilizationAppliedCount(result.Stabilization)} frame(s), {StabilizationLowConfidenceCount(result.Stabilization)} low confidence.";
+            _status = $"Stabilized {StabilizationAppliedCount(result.Stabilization)} frame(s). Run Reassemble next.";
             await OnChanged.InvokeAsync();
             await DrawAsync();
         }
@@ -855,14 +847,6 @@
             _error = ex.Message;
             _status = string.Empty;
         }
-    }
-
-    private async Task AutosaveLayoutPreservingAnchorAsync(SpriteSheetRect anchor)
-    {
-        var referenceFrameNumber = _stabilizationReferenceFrameNumber;
-        await AutosaveLayoutNowAsync();
-        _stabilizationAnchor = anchor;
-        _stabilizationReferenceFrameNumber = referenceFrameNumber;
     }
 
     private void OnStabilizationSettingsChanged()
@@ -1550,8 +1534,8 @@
     private static int StabilizationLowConfidenceCount(SpriteSheetStabilizationView stabilization) =>
         stabilization.Matches.Count(match => match.LowConfidence);
 
-    private static int StabilizationClampedCount(SpriteSheetStabilizationView stabilization) =>
-        stabilization.Matches.Count(match => match.Clamped);
+    private static int StabilizationClippedCount(SpriteSheetStabilizationView stabilization) =>
+        stabilization.Matches.Count(match => match.Clipped);
 
     private static int StabilizationAppliedCount(SpriteSheetStabilizationView stabilization) =>
         stabilization.Applied ? stabilization.Matches.Count : 0;
@@ -1588,7 +1572,7 @@
             : "frame-geometry-readout is-box";
 
     private static bool HasWorkingImage(SpriteSheetEditorFrame frame) =>
-        NormalizeWorkingState(frame.WorkingState) is "isolated" or "edited";
+        NormalizeWorkingState(frame.WorkingState) is "isolated" or "edited" or "stabilized";
 
     private string FrameSourceLabel(SpriteSheetEditorFrame frame)
     {
@@ -1630,6 +1614,7 @@
         {
             "isolated" => "isolated",
             "edited" => "edited",
+            "stabilized" => "stabilized",
             "reassembled" => "reassembled",
             _ => "none",
         };
@@ -1639,6 +1624,7 @@
         {
             "isolated" => "Isolated",
             "edited" => "Edited",
+            "stabilized" => "Stabilized",
             "reassembled" => "Reassembled",
             _ => "None",
         };

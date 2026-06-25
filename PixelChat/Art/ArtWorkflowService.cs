@@ -683,22 +683,69 @@ public sealed class ArtWorkflowService(
             throw new InvalidOperationException("No sprite frames were found to review.");
 
         var updates = frames.Select(FrameUpdateFromRecord).ToList();
-        var reviewRender = SpriteSheetServerRenderer.BuildAnimationReview(
-            rgba,
-            width,
-            height,
-            sheet.Rows,
-            sheet.Columns,
-            sheet.CellWidth,
-            sheet.CellHeight,
-            sheet.Padding,
-            sheet.Gutter,
-            sheet.HorizontalAnchor,
-            sheet.VerticalAnchor,
-            background,
-            updates,
-            sheet.Loop,
-            frameLimit);
+        SpriteSheetReviewRenderResult reviewRender;
+        var useStabilizedWorkingFrames = frames.Any(frame =>
+            NormalizeFrameWorkingState(frame.WorkingState) == "stabilized"
+            && frame.WorkingData.Length > 0);
+        if (useStabilizedWorkingFrames)
+        {
+            var inputs = BuildSpriteFrameImageInputsFromRecords(sheet, rgba, width, height, background, frames);
+            var render = SpriteSheetServerRenderer.ReassembleIrregularFrames(
+                rows: 1,
+                columns: frames.Count,
+                sheet.Padding,
+                sheet.Gutter,
+                sheet.HorizontalAnchor,
+                sheet.VerticalAnchor,
+                background,
+                inputs);
+            var reviewFrames = render.Frames
+                .Select(frame => new SpriteSheetFrameUpdateView(
+                    frame.Index,
+                    frame.Label,
+                    frame.SourceRect,
+                    frame.ShapePaths,
+                    frame.SourceImageAssetId,
+                    frame.SourceImageRect))
+                .ToList();
+            if (!SpriteSheetPngCodec.TryReadRgba(render.PngData, out var reviewWidth, out var reviewHeight, out var reviewRgba))
+                throw new InvalidOperationException("Temporary stabilized review image must be a PNG.");
+            reviewRender = SpriteSheetServerRenderer.BuildAnimationReview(
+                reviewRgba,
+                reviewWidth,
+                reviewHeight,
+                render.Rows,
+                render.Columns,
+                render.FrameWidth,
+                render.FrameHeight,
+                sheet.Padding,
+                sheet.Gutter,
+                sheet.HorizontalAnchor,
+                sheet.VerticalAnchor,
+                background,
+                reviewFrames,
+                sheet.Loop,
+                frameLimit);
+        }
+        else
+        {
+            reviewRender = SpriteSheetServerRenderer.BuildAnimationReview(
+                rgba,
+                width,
+                height,
+                sheet.Rows,
+                sheet.Columns,
+                sheet.CellWidth,
+                sheet.CellHeight,
+                sheet.Padding,
+                sheet.Gutter,
+                sheet.HorizontalAnchor,
+                sheet.VerticalAnchor,
+                background,
+                updates,
+                sheet.Loop,
+                frameLimit);
+        }
         var metrics = SpriteSheetImageAnalyzer.ComputeMotionMetrics(reviewRender.MetricFrames, background, sheet.Loop);
         var images = reviewRender.Images
             .Select(image => new SpriteAnimationReviewImageView(
@@ -715,6 +762,9 @@ public sealed class ArtWorkflowService(
         for (var index = 0; index < frames.Count; index++)
         {
             var record = frames[index];
+            if (NormalizeFrameWorkingState(record.WorkingState) == "stabilized")
+                continue;
+
             if (record.WorkingData.Length == 0
                 || !SpriteSheetPngCodec.TryReadRgba(record.WorkingData, out var workingWidth, out var workingHeight, out var workingRgba))
             {
@@ -836,7 +886,43 @@ public sealed class ArtWorkflowService(
         if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
             throw new InvalidOperationException("Sprite-sheet stabilization annotation requires a PNG working image.");
 
-        return BuildStabilizationDiagnosticImage(rgba, width, height, BackgroundOrDefault(sheet), stabilization);
+        var records = await db.SpriteSheetFrameRecords
+            .AsNoTracking()
+            .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == spriteSheetId)
+            .OrderBy(frame => frame.Index)
+            .ToListAsync(cancellationToken);
+        var background = BackgroundOrDefault(sheet);
+        var inputs = BuildStabilizationWorkingFrameInputs(sheet, rgba, width, height, background, records)
+            .Select(input => input.Image)
+            .ToList();
+        return BuildStabilizationDiagnosticImage(background, stabilization, inputs);
+    }
+
+    public async Task<SpriteAnimationReviewImageView> BuildSpriteSheetStabilizationAnnotatedSheetAsync(
+        Guid projectId,
+        Guid spriteSheetId,
+        SpriteSheetStabilizationView stabilization,
+        CancellationToken cancellationToken = default)
+    {
+        var sheet = await db.SpriteSheetDefinitions
+            .Include(s => s.OutputAsset)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.ProjectId == projectId && s.Id == spriteSheetId, cancellationToken)
+            ?? throw new InvalidOperationException("Sprite sheet was not found.");
+        var working = sheet.OutputAsset ?? throw new InvalidOperationException("Sprite sheet working asset was not found.");
+        if (!SpriteSheetPngCodec.TryReadRgba(working.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Sprite-sheet stabilization annotation requires a PNG working image.");
+
+        var records = await db.SpriteSheetFrameRecords
+            .AsNoTracking()
+            .Where(frame => frame.ProjectId == projectId && frame.SpriteSheetDefinitionId == spriteSheetId)
+            .OrderBy(frame => frame.Index)
+            .ToListAsync(cancellationToken);
+        var background = BackgroundOrDefault(sheet);
+        var inputs = BuildStabilizationWorkingFrameInputs(sheet, rgba, width, height, background, records)
+            .Select(input => input.Image)
+            .ToList();
+        return BuildStabilizationDiagnosticImage(background, stabilization, inputs);
     }
 
     public Task<SpriteAnimationReviewImageView> BuildSpriteSheetAnnotatedSheetAsync(
@@ -1706,97 +1792,133 @@ public sealed class ArtWorkflowService(
             throw new InvalidOperationException("Reference frame number is outside the saved frame range.");
 
         var background = EnsureSheetBackground(definition, rgba, width, height);
+        var inputs = BuildStabilizationWorkingFrameInputs(definition, rgba, width, height, background, records);
         var searchPadding = Math.Clamp(request.SearchPadding ?? 24, 0, 512);
         var minScore = Math.Clamp(request.MinScore ?? 0.68d, -1d, 1d);
         var referenceFrame = records[referenceIndex];
-        var anchorRect = NormalizeStabilizationAnchor(request.AnchorRect, FrameSourceRect(referenceFrame));
-        var template = BuildStabilizationTemplate(rgba, width, height, anchorRect, background);
+        var sourceAnchorRect = NormalizeStabilizationAnchor(request.AnchorRect, FrameSourceRect(referenceFrame));
+        var referenceInput = inputs[referenceIndex];
+        var referenceWorkingAnchorRect = NormalizeWorkingStabilizationAnchor(sourceAnchorRect, referenceInput);
+        var referenceBackground = ResolveWorkingFrameBackground(definition, referenceInput.Image.Rgba, referenceInput.Image.Width, referenceInput.Image.Height);
+        var template = BuildStabilizationTemplate(
+            referenceInput.Image.Rgba,
+            referenceInput.Image.Width,
+            referenceInput.Image.Height,
+            referenceWorkingAnchorRect,
+            referenceBackground);
         var warnings = template.Warnings.ToList();
         var targetIndexes = TargetFrameIndexes(request.TargetFrameNumbers, records.Count);
-        var matches = new List<SpriteSheetStabilizationMatchView>();
-        var proposedByIndex = new Dictionary<int, SpriteSheetFrameUpdateView>();
-        var referenceRelativeX = anchorRect.X - referenceFrame.SourceX;
-        var referenceRelativeY = anchorRect.Y - referenceFrame.SourceY;
+        var drafts = new List<StabilizationMatchDraft>();
+        var referenceRelativeX = sourceAnchorRect.X - referenceFrame.SourceX;
+        var referenceRelativeY = sourceAnchorRect.Y - referenceFrame.SourceY;
 
         foreach (var index in targetIndexes)
         {
-            var record = records[index];
-            var originalRect = FrameSourceRect(record);
-            var match = index == referenceIndex
-                ? BuildReferenceStabilizationMatch(record, anchorRect)
+            var input = inputs[index];
+            var draft = index == referenceIndex
+                ? BuildReferenceStabilizationMatch(input, referenceWorkingAnchorRect)
                 : MatchStabilizationFrame(
-                    rgba,
-                    width,
-                    height,
+                    input,
                     template,
-                    record,
                     referenceRelativeX,
                     referenceRelativeY,
                     searchPadding,
                     minScore);
-            matches.Add(match);
-            proposedByIndex[index] = FrameUpdateFromRecord(record) with
-            {
-                SourceRect = match.ProposedSourceRect,
-                SourceImageRect = ShiftSourceImageRect(record, match.DeltaX, match.DeltaY),
-            };
-            if (match.LowConfidence)
-                warnings.Add($"Frame {match.FrameNumber} matched below min score {minScore:0.###}.");
-            if (match.Clamped)
-                warnings.Add($"Frame {match.FrameNumber} proposed box was clamped to the source image bounds.");
-            warnings.AddRange(match.Warnings.Select(warning => $"Frame {match.FrameNumber}: {warning}"));
-            if (originalRect.Width != match.ProposedSourceRect.Width || originalRect.Height != match.ProposedSourceRect.Height)
-                warnings.Add($"Frame {match.FrameNumber} size changed unexpectedly during stabilization.");
+            drafts.Add(draft);
+            if (draft.LowConfidence)
+                warnings.Add($"Frame {draft.Frame.Record.Index + 1} matched below min score {minScore:0.###}.");
+            warnings.AddRange(draft.Warnings.Select(warning => $"Frame {draft.Frame.Record.Index + 1}: {warning}"));
         }
 
         if (request.TargetFrameNumbers is { Count: > 0 })
             warnings.Add($"{(request.Apply ? "Applied" : "Prepared")} stabilization only for requested frame number(s): {string.Join(", ", request.TargetFrameNumbers.Order())}.");
 
-        var frameUpdates = records
-            .Select((record, index) => proposedByIndex.TryGetValue(index, out var update) ? update : FrameUpdateFromRecord(record))
+        var targetCenterX = referenceWorkingAnchorRect.X + (referenceWorkingAnchorRect.Width / 2);
+        var targetCenterY = referenceWorkingAnchorRect.Y + (referenceWorkingAnchorRect.Height / 2);
+        var placements = BuildStabilizationPlacements(drafts, targetCenterX, targetCenterY);
+        var normalizedWidth = placements.NormalizedWidth;
+        var normalizedHeight = placements.NormalizedHeight;
+        var matches = drafts
+            .Select(draft =>
+            {
+                var placement = placements.ByIndex[draft.Frame.Record.Index];
+                return new SpriteSheetStabilizationMatchView(
+                    draft.Frame.Record.Index + 1,
+                    draft.Frame.Record.Index,
+                    FrameSourceRect(draft.Frame.Record),
+                    new SpriteSheetRect(0, 0, draft.Frame.Image.Width, draft.Frame.Image.Height),
+                    draft.MatchedAnchorRect,
+                    placement.PlacementRect,
+                    placement.DeltaX,
+                    placement.DeltaY,
+                    RoundMetric(draft.Score),
+                    draft.LowConfidence,
+                    Clipped: false,
+                    draft.Warnings);
+            })
+            .OrderBy(match => match.Index)
             .ToList();
         var stabilization = new SpriteSheetStabilizationView(
             referenceIndex + 1,
             referenceIndex,
-            anchorRect,
+            sourceAnchorRect,
+            referenceWorkingAnchorRect,
+            new SpriteSheetPoint(targetCenterX - placements.MinDeltaX, targetCenterY - placements.MinDeltaY),
+            normalizedWidth,
+            normalizedHeight,
             searchPadding,
             RoundMetric(minScore),
             request.Apply,
+            RequiresReassembly: request.Apply,
             DateTime.UtcNow,
-            matches.OrderBy(match => match.Index).ToList(),
+            matches,
             warnings.Distinct(StringComparer.Ordinal).ToList());
-        var diagnostic = BuildStabilizationDiagnosticImage(rgba, width, height, background, stabilization);
+        var diagnostic = BuildStabilizationDiagnosticImage(background, stabilization, inputs.Select(input => input.Image).ToList());
+
+        var frameViews = inputs
+            .Where(input => targetIndexes.Contains(input.Record.Index))
+            .OrderBy(input => input.Record.Index)
+            .Select(input => new SpriteSheetStabilizationFrameView(
+                input.Record.Index + 1,
+                input.Record.Index,
+                string.IsNullOrWhiteSpace(input.Record.Label) ? $"Frame {input.Record.Index + 1}" : input.Record.Label,
+                input.Image.Width,
+                input.Image.Height,
+                normalizedWidth,
+                normalizedHeight,
+                input.Image.UsedWorkingImage,
+                request.Apply,
+                request.Apply ? "stabilized" : NormalizeFrameWorkingState(input.Record.WorkingState)))
+            .ToList();
 
         SpriteSheetDefinitionView? saved = null;
         if (request.Apply)
         {
-            saved = await UpdateSpriteSheetFramesAsync(projectId, new UpdateSpriteSheetFramesRequest(
-                definition.Id,
-                definition.Rows,
-                definition.Columns,
-                definition.CellWidth,
-                definition.CellHeight,
-                definition.Padding,
-                definition.Gutter,
-                definition.Fps,
-                definition.Loop,
-                definition.HorizontalAnchor,
-                definition.VerticalAnchor,
-                frameUpdates), cancellationToken);
+            var now = DateTime.UtcNow;
+            foreach (var draft in drafts)
+            {
+                var placement = placements.ByIndex[draft.Frame.Record.Index].PlacementRect;
+                var rendered = SpriteSheetServerRenderer.RenderPlacedFrameImage(
+                    draft.Frame.Image.Rgba,
+                    draft.Frame.Image.Width,
+                    draft.Frame.Image.Height,
+                    background,
+                    normalizedWidth,
+                    normalizedHeight,
+                    placement);
+                ApplyFrameWorkingImage(draft.Frame.Record, "stabilized", rendered.PngData, rendered.Width, rendered.Height, margin: 0, now);
+                draft.Frame.Record.UpdatedAt = now;
+            }
 
-            definition = await db.SpriteSheetDefinitions
-                .FirstOrDefaultAsync(sheet => sheet.ProjectId == projectId && sheet.Id == request.SpriteSheetId, cancellationToken)
-                ?? throw new InvalidOperationException("Sprite sheet was not found.");
+            definition.StabilizationJson = SerializeStabilization(stabilization);
+            definition.UpdatedAt = now;
+            var project = await GetProjectAsync(projectId, cancellationToken);
+            project.ActiveSpriteSheetId = definition.Id;
+            project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
+            project.UpdatedAt = now;
+            await db.SaveChangesAsync(cancellationToken);
+            saved = await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
         }
-
-        definition.StabilizationJson = SerializeStabilization(stabilization);
-        definition.UpdatedAt = DateTime.UtcNow;
-        var project = await GetProjectAsync(projectId, cancellationToken);
-        project.ActiveSpriteSheetId = definition.Id;
-        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
-        project.UpdatedAt = definition.UpdatedAt;
-        await db.SaveChangesAsync(cancellationToken);
-        saved = await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
 
         return new StabilizeSpriteSheetFramesResult(
             definition.Id,
@@ -1806,7 +1928,7 @@ public sealed class ArtWorkflowService(
             width,
             height,
             stabilization,
-            frameUpdates,
+            frameViews,
             stabilization.Warnings,
             diagnostic,
             saved);
@@ -2271,7 +2393,8 @@ public sealed class ArtWorkflowService(
                     height,
                     UsedWorkingImage: true,
                     record.SourceImageAssetId,
-                    SourceImageRectView(record)));
+                    SourceImageRectView(record),
+                    NormalizeFrameWorkingState(record.WorkingState)));
                 continue;
             }
 
@@ -2292,10 +2415,11 @@ public sealed class ArtWorkflowService(
                 record.Label,
                 extractedRgba,
                 extractedWidth,
-                extractedHeight,
-                UsedWorkingImage: false,
-                record.SourceImageAssetId,
-                SourceImageRectView(record)));
+                    extractedHeight,
+                    UsedWorkingImage: false,
+                    record.SourceImageAssetId,
+                    SourceImageRectView(record),
+                    NormalizeFrameWorkingState(record.WorkingState)));
         }
 
         var render = SpriteSheetServerRenderer.ReassembleIrregularFrames(
@@ -4399,6 +4523,114 @@ public sealed class ArtWorkflowService(
     private static SpriteSheetRect FrameSourceRect(SpriteSheetFrameRecord frame) =>
         RectViewPreserveOrigin(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight);
 
+    private static List<StabilizationWorkingFrameInput> BuildStabilizationWorkingFrameInputs(
+        SpriteSheetDefinition definition,
+        byte[] sheetRgba,
+        int sheetWidth,
+        int sheetHeight,
+        SpriteSheetBackground background,
+        IReadOnlyList<SpriteSheetFrameRecord> records)
+    {
+        var marginValue = NormalizeFrameWorkingMargin(null, definition.Padding);
+        var updates = records.Select(FrameUpdateFromRecord).ToList();
+        var inputs = new List<StabilizationWorkingFrameInput>();
+        for (var index = 0; index < records.Count; index++)
+        {
+            var record = records[index];
+            var state = NormalizeFrameWorkingState(record.WorkingState);
+            if (record.WorkingData.Length > 0)
+            {
+                if (!SpriteSheetPngCodec.TryReadRgba(record.WorkingData, out var width, out var height, out var rgba))
+                    throw new InvalidOperationException($"Working image for frame {index + 1} must be a PNG.");
+                var margin = Math.Max(0, record.WorkingMargin);
+                inputs.Add(new StabilizationWorkingFrameInput(
+                    record,
+                    new SpriteSheetFrameImageInput(
+                        record.Index,
+                        record.Label,
+                        rgba,
+                        width,
+                        height,
+                        UsedWorkingImage: true,
+                        record.SourceImageAssetId,
+                        SourceImageRectView(record),
+                        state),
+                    record.SourceX - margin,
+                    record.SourceY - margin));
+                continue;
+            }
+
+            var extracted = SpriteSheetServerRenderer.ExtractFrameRegion(
+                sheetRgba,
+                sheetWidth,
+                sheetHeight,
+                definition.Rows,
+                definition.Columns,
+                background,
+                updates,
+                record.Index,
+                marginValue);
+            if (!SpriteSheetPngCodec.TryReadRgba(extracted.PngData, out var extractedWidth, out var extractedHeight, out var extractedRgba))
+                throw new InvalidOperationException($"Extracted image for frame {index + 1} must be a PNG.");
+            inputs.Add(new StabilizationWorkingFrameInput(
+                record,
+                new SpriteSheetFrameImageInput(
+                    record.Index,
+                    record.Label,
+                    extractedRgba,
+                    extractedWidth,
+                    extractedHeight,
+                    UsedWorkingImage: false,
+                    record.SourceImageAssetId,
+                    SourceImageRectView(record),
+                    "isolated"),
+                record.SourceX - marginValue,
+                record.SourceY - marginValue));
+        }
+
+        return inputs;
+    }
+
+    private static StabilizationPlacementSet BuildStabilizationPlacements(
+        IReadOnlyList<StabilizationMatchDraft> drafts,
+        int targetCenterX,
+        int targetCenterY)
+    {
+        if (drafts.Count == 0)
+            throw new InvalidOperationException("At least one stabilization match is required.");
+
+        var raw = drafts
+            .Select(draft =>
+            {
+                var matchCenterX = draft.MatchedAnchorRect.X + (draft.MatchedAnchorRect.Width / 2);
+                var matchCenterY = draft.MatchedAnchorRect.Y + (draft.MatchedAnchorRect.Height / 2);
+                var deltaX = targetCenterX - matchCenterX;
+                var deltaY = targetCenterY - matchCenterY;
+                return new
+                {
+                    draft.Frame.Record.Index,
+                    draft.Frame.Image.Width,
+                    draft.Frame.Image.Height,
+                    DeltaX = deltaX,
+                    DeltaY = deltaY,
+                };
+            })
+            .ToList();
+        var minX = raw.Min(item => item.DeltaX);
+        var minY = raw.Min(item => item.DeltaY);
+        var maxX = raw.Max(item => item.DeltaX + item.Width);
+        var maxY = raw.Max(item => item.DeltaY + item.Height);
+        var normalizedWidth = Math.Max(1, maxX - minX);
+        var normalizedHeight = Math.Max(1, maxY - minY);
+        var placements = raw.ToDictionary(
+            item => item.Index,
+            item => new StabilizationPlacement(
+                item.DeltaX,
+                item.DeltaY,
+                new SpriteSheetRect(item.DeltaX - minX, item.DeltaY - minY, item.Width, item.Height)));
+        return new StabilizationPlacementSet(normalizedWidth, normalizedHeight, minX, minY, placements);
+    }
+
     private static SpriteSheetRect NormalizeStabilizationAnchor(SpriteSheetRect anchorRect, SpriteSheetRect referenceFrame)
     {
         var anchor = NormalizeSourceSpriteRect(anchorRect);
@@ -4464,51 +4696,49 @@ public sealed class ArtWorkflowService(
         return new StabilizationTemplate(anchorRect.Width, anchorRect.Height, values, weights, weightSum, mean, denominator, warnings);
     }
 
-    private static SpriteSheetStabilizationMatchView BuildReferenceStabilizationMatch(
-        SpriteSheetFrameRecord record,
-        SpriteSheetRect anchorRect)
+    private static SpriteSheetRect NormalizeWorkingStabilizationAnchor(
+        SpriteSheetRect sourceAnchorRect,
+        StabilizationWorkingFrameInput referenceInput)
     {
-        var originalRect = FrameSourceRect(record);
-        return new SpriteSheetStabilizationMatchView(
-            record.Index + 1,
-            record.Index,
-            originalRect,
-            anchorRect,
-            originalRect,
-            0,
-            0,
-            1d,
-            LowConfidence: false,
-            Clamped: false,
-            []);
+        var anchor = new SpriteSheetRect(
+            sourceAnchorRect.X - referenceInput.SourceOriginX,
+            sourceAnchorRect.Y - referenceInput.SourceOriginY,
+            sourceAnchorRect.Width,
+            sourceAnchorRect.Height);
+        var workingRect = new SpriteSheetRect(0, 0, referenceInput.Image.Width, referenceInput.Image.Height);
+        if (!RectContains(workingRect, anchor))
+            throw new InvalidOperationException("Anchor box does not map inside the selected reference frame image. Re-isolate the frame or redraw the anchor.");
+        return anchor;
     }
 
-    private static SpriteSheetStabilizationMatchView MatchStabilizationFrame(
-        byte[] rgba,
-        int imageWidth,
-        int imageHeight,
+    private static StabilizationMatchDraft BuildReferenceStabilizationMatch(
+        StabilizationWorkingFrameInput frame,
+        SpriteSheetRect anchorRect) =>
+        new(frame, anchorRect, 1d, LowConfidence: false, []);
+
+    private static StabilizationMatchDraft MatchStabilizationFrame(
+        StabilizationWorkingFrameInput frame,
         StabilizationTemplate template,
-        SpriteSheetFrameRecord record,
         int referenceRelativeX,
         int referenceRelativeY,
         int searchPadding,
         double minScore)
     {
-        var originalRect = FrameSourceRect(record);
-        var expectedX = originalRect.X + referenceRelativeX;
-        var expectedY = originalRect.Y + referenceRelativeY;
-        var searchBounds = ExpandedRect(originalRect, searchPadding, imageWidth, imageHeight);
-        var minX = Math.Max(searchBounds.X, expectedX - searchPadding);
-        var minY = Math.Max(searchBounds.Y, expectedY - searchPadding);
-        var maxX = Math.Min(searchBounds.X + searchBounds.Width - template.Width, expectedX + searchPadding);
-        var maxY = Math.Min(searchBounds.Y + searchBounds.Height - template.Height, expectedY + searchPadding);
+        var imageWidth = frame.Image.Width;
+        var imageHeight = frame.Image.Height;
+        var expectedX = frame.Record.SourceX + referenceRelativeX - frame.SourceOriginX;
+        var expectedY = frame.Record.SourceY + referenceRelativeY - frame.SourceOriginY;
+        var minX = Math.Max(0, expectedX - searchPadding);
+        var minY = Math.Max(0, expectedY - searchPadding);
+        var maxX = Math.Min(imageWidth - template.Width, expectedX + searchPadding);
+        var maxY = Math.Min(imageHeight - template.Height, expectedY + searchPadding);
         var warnings = new List<string>();
         if (maxX < minX || maxY < minY)
         {
-            minX = Math.Clamp(searchBounds.X, 0, Math.Max(0, imageWidth - template.Width));
-            minY = Math.Clamp(searchBounds.Y, 0, Math.Max(0, imageHeight - template.Height));
-            maxX = Math.Clamp(searchBounds.X + searchBounds.Width - template.Width, minX, Math.Max(minX, imageWidth - template.Width));
-            maxY = Math.Clamp(searchBounds.Y + searchBounds.Height - template.Height, minY, Math.Max(minY, imageHeight - template.Height));
+            minX = 0;
+            minY = 0;
+            maxX = Math.Max(0, imageWidth - template.Width);
+            maxY = Math.Max(0, imageHeight - template.Height);
             warnings.Add("Search area was too small for the anchor and was expanded.");
         }
 
@@ -4519,7 +4749,7 @@ public sealed class ArtWorkflowService(
         {
             for (var candidateX = minX; candidateX <= maxX; candidateX++)
             {
-                var score = MatchScore(rgba, imageWidth, imageHeight, template, candidateX, candidateY);
+                var score = MatchScore(frame.Image.Rgba, imageWidth, imageHeight, template, candidateX, candidateY);
                 if (score > bestScore)
                 {
                     bestScore = score;
@@ -4535,25 +4765,11 @@ public sealed class ArtWorkflowService(
             warnings.Add("No valid anchor candidate was found.");
         }
 
-        var deltaX = bestX - expectedX;
-        var deltaY = bestY - expectedY;
-        var unclamped = new SpriteSheetRect(originalRect.X + deltaX, originalRect.Y + deltaY, originalRect.Width, originalRect.Height);
-        var proposed = ClampRectToImage(unclamped, imageWidth, imageHeight);
-        var clamped = proposed.X != unclamped.X || proposed.Y != unclamped.Y;
-        if (!FrameShapePathsContained(record, proposed))
-            warnings.Add("Preserved outline path extends outside the proposed stabilized frame box.");
-
-        return new SpriteSheetStabilizationMatchView(
-            record.Index + 1,
-            record.Index,
-            originalRect,
+        return new StabilizationMatchDraft(
+            frame,
             new SpriteSheetRect(bestX, bestY, template.Width, template.Height),
-            proposed,
-            proposed.X - originalRect.X,
-            proposed.Y - originalRect.Y,
-            RoundMetric(bestScore),
+            bestScore,
             bestScore < minScore,
-            clamped,
             warnings);
     }
 
@@ -4605,59 +4821,6 @@ public sealed class ArtWorkflowService(
         return sum;
     }
 
-    private static SpriteSheetRect? ShiftSourceImageRect(SpriteSheetFrameRecord record, int deltaX, int deltaY)
-    {
-        if (record.SourceImageAssetId is null || record.SourceImageWidth <= 0 || record.SourceImageHeight <= 0)
-            return null;
-        return new SpriteSheetRect(
-            record.SourceImageX + deltaX,
-            record.SourceImageY + deltaY,
-            Math.Max(1, record.SourceImageWidth),
-            Math.Max(1, record.SourceImageHeight));
-    }
-
-    private static bool FrameShapePathsContained(SpriteSheetFrameRecord record, SpriteSheetRect rect)
-    {
-        var paths = DeserializeShapePaths(record.ShapeJson);
-        if (paths.Count == 0)
-            return true;
-        foreach (var point in paths.SelectMany(path => path.Points))
-        {
-            if (point.X < rect.X || point.Y < rect.Y || point.X >= rect.X + rect.Width || point.Y >= rect.Y + rect.Height)
-                return false;
-        }
-
-        return true;
-    }
-
-    private static SpriteSheetRect ExpandedRect(SpriteSheetRect rect, int padding, int imageWidth, int imageHeight) =>
-        IntersectRect(
-            new SpriteSheetRect(
-                rect.X - padding,
-                rect.Y - padding,
-                checked(rect.Width + (padding * 2)),
-                checked(rect.Height + (padding * 2))),
-            imageWidth,
-            imageHeight);
-
-    private static SpriteSheetRect ClampRectToImage(SpriteSheetRect rect, int imageWidth, int imageHeight)
-    {
-        var width = Math.Clamp(rect.Width, 1, Math.Max(1, imageWidth));
-        var height = Math.Clamp(rect.Height, 1, Math.Max(1, imageHeight));
-        var x = Math.Clamp(rect.X, 0, Math.Max(0, imageWidth - width));
-        var y = Math.Clamp(rect.Y, 0, Math.Max(0, imageHeight - height));
-        return new SpriteSheetRect(x, y, width, height);
-    }
-
-    private static SpriteSheetRect IntersectRect(SpriteSheetRect rect, int imageWidth, int imageHeight)
-    {
-        var startX = Math.Clamp(rect.X, 0, imageWidth);
-        var startY = Math.Clamp(rect.Y, 0, imageHeight);
-        var endX = Math.Clamp(rect.X + rect.Width, 0, imageWidth);
-        var endY = Math.Clamp(rect.Y + rect.Height, 0, imageHeight);
-        return new SpriteSheetRect(startX, startY, Math.Max(0, endX - startX), Math.Max(0, endY - startY));
-    }
-
     private static bool RectContains(SpriteSheetRect container, SpriteSheetRect rect) =>
         rect.X >= container.X
         && rect.Y >= container.Y
@@ -4688,13 +4851,11 @@ public sealed class ArtWorkflowService(
     }
 
     private static SpriteAnimationReviewImageView BuildStabilizationDiagnosticImage(
-        byte[] rgba,
-        int width,
-        int height,
         SpriteSheetBackground background,
-        SpriteSheetStabilizationView stabilization)
+        SpriteSheetStabilizationView stabilization,
+        IReadOnlyList<SpriteSheetFrameImageInput> inputFrames)
     {
-        var image = SpriteSheetServerRenderer.BuildStabilizationAnnotatedSheetView(rgba, width, height, background, stabilization);
+        var image = SpriteSheetServerRenderer.BuildStabilizationAnnotatedSheetView(background, stabilization, inputFrames);
         return new SpriteAnimationReviewImageView(
             image.Label,
             image.FileName,
@@ -4748,7 +4909,8 @@ public sealed class ArtWorkflowService(
                     height,
                     UsedWorkingImage: true,
                     record.SourceImageAssetId,
-                    SourceImageRectView(record)));
+                    SourceImageRectView(record),
+                    NormalizeFrameWorkingState(record.WorkingState)));
                 continue;
             }
 
@@ -4772,7 +4934,8 @@ public sealed class ArtWorkflowService(
                 extractedHeight,
                 UsedWorkingImage: false,
                 record.SourceImageAssetId,
-                SourceImageRectView(record)));
+                SourceImageRectView(record),
+                NormalizeFrameWorkingState(record.WorkingState)));
         }
 
         return inputs;
@@ -4858,6 +5021,7 @@ public sealed class ArtWorkflowService(
         {
             "isolated" => "isolated",
             "edited" => "edited",
+            "stabilized" => "stabilized",
             "reassembled" => "reassembled",
             _ => "none",
         };
@@ -6444,26 +6608,32 @@ public sealed class ArtWorkflowService(
             stabilization.ReferenceFrameNumber,
             stabilization.ReferenceFrameIndex,
             stabilization.AnchorRect,
+            stabilization.ReferenceWorkingAnchorRect,
+            stabilization.ReferenceAnchorCenter,
+            stabilization.NormalizedWidth,
+            stabilization.NormalizedHeight,
             stabilization.SearchPadding,
             stabilization.MinScore,
             stabilization.Applied,
+            stabilization.RequiresReassembly,
             stabilization.UpdatedAt,
             matchCount = stabilization.Matches.Count,
             lowConfidenceCount = lowConfidence,
-            clampedCount = stabilization.Matches.Count(match => match.Clamped),
+            clippedCount = stabilization.Matches.Count(match => match.Clipped),
             warnings = stabilization.Warnings,
             matches = stabilization.Matches.Select(match => new
             {
                 match.FrameNumber,
                 match.Index,
-                match.OriginalSourceRect,
+                match.SourceRect,
+                match.InputFrameRect,
                 match.MatchedAnchorRect,
-                match.ProposedSourceRect,
+                match.PlacementRect,
                 match.DeltaX,
                 match.DeltaY,
                 match.Score,
                 match.LowConfidence,
-                match.Clamped,
+                match.Clipped,
                 match.Warnings,
             }),
         };
@@ -7741,4 +7911,29 @@ public sealed class ArtWorkflowService(
         double Mean,
         double Denominator,
         IReadOnlyList<string> Warnings);
+
+    private sealed record StabilizationWorkingFrameInput(
+        SpriteSheetFrameRecord Record,
+        SpriteSheetFrameImageInput Image,
+        int SourceOriginX,
+        int SourceOriginY);
+
+    private sealed record StabilizationMatchDraft(
+        StabilizationWorkingFrameInput Frame,
+        SpriteSheetRect MatchedAnchorRect,
+        double Score,
+        bool LowConfidence,
+        IReadOnlyList<string> Warnings);
+
+    private sealed record StabilizationPlacement(
+        int DeltaX,
+        int DeltaY,
+        SpriteSheetRect PlacementRect);
+
+    private sealed record StabilizationPlacementSet(
+        int NormalizedWidth,
+        int NormalizedHeight,
+        int MinDeltaX,
+        int MinDeltaY,
+        IReadOnlyDictionary<int, StabilizationPlacement> ByIndex);
 }

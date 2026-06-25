@@ -328,18 +328,33 @@ internal static class SpriteSheetServerRenderer
                 if (input.Rgba.Length < input.Width * input.Height * 4)
                     throw new InvalidOperationException("Isolated sprite frame pixels are incomplete.");
 
-                var detectionBackground = input.UsedWorkingImage
+                var preserveFullCanvas = string.Equals(input.WorkingState, "stabilized", StringComparison.OrdinalIgnoreCase);
+                var detectionBackground = preserveFullCanvas
+                    ? sheetBackground
+                    : input.UsedWorkingImage
                     ? SpriteSheetImageAnalyzer.ResolveBackground(input.Rgba, input.Width, input.Height)
                     : sheetBackground;
                 var warnings = new List<string>();
-                var bounds = SpriteSheetImageAnalyzer.ForegroundBounds(input.Rgba, input.Width, input.Height, detectionBackground);
-                if (bounds is null)
+                SpriteSheetRect bounds;
+                if (preserveFullCanvas)
                 {
-                    warnings.Add("no foreground was detected; used the full frame canvas");
                     bounds = new SpriteSheetRect(0, 0, input.Width, input.Height);
                 }
+                else
+                {
+                    var foregroundBounds = SpriteSheetImageAnalyzer.ForegroundBounds(input.Rgba, input.Width, input.Height, detectionBackground);
+                    if (foregroundBounds is null)
+                    {
+                        warnings.Add("no foreground was detected; used the full frame canvas");
+                        bounds = new SpriteSheetRect(0, 0, input.Width, input.Height);
+                    }
+                    else
+                    {
+                        bounds = foregroundBounds;
+                    }
+                }
 
-                return new PreparedReassembleFrame(input, detectionBackground, bounds, warnings);
+                return new PreparedReassembleFrame(input, detectionBackground, bounds, preserveFullCanvas, warnings);
             })
             .ToList();
 
@@ -347,6 +362,9 @@ internal static class SpriteSheetServerRenderer
         var medianBoundsHeight = MedianValue(prepared.Select(frame => frame.Bounds.Height));
         foreach (var (frame, index) in prepared.Select((frame, index) => (frame, index)))
         {
+            if (frame.PreserveFullCanvas)
+                continue;
+
             if ((medianBoundsWidth > 0 && frame.Bounds.Width > medianBoundsWidth * 3 / 2)
                 || (medianBoundsHeight > 0 && frame.Bounds.Height > medianBoundsHeight * 3 / 2))
             {
@@ -375,17 +393,32 @@ internal static class SpriteSheetServerRenderer
             if (clippedPlacedRect.Width != placedRect.Width || clippedPlacedRect.Height != placedRect.Height)
                 frame.Warnings.Add("foreground was clipped during reassembly");
 
-            CopyForegroundBounds(
-                frame.Input.Rgba,
-                frame.Input.Width,
-                frame.Input.Height,
-                frame.Bounds,
-                frame.Background,
-                outputRgba,
-                outputWidth,
-                outputHeight,
-                destX,
-                destY);
+            if (frame.PreserveFullCanvas)
+            {
+                CopyImage(
+                    frame.Input.Rgba,
+                    frame.Input.Width,
+                    frame.Input.Height,
+                    outputRgba,
+                    outputWidth,
+                    outputHeight,
+                    destX,
+                    destY);
+            }
+            else
+            {
+                CopyForegroundBounds(
+                    frame.Input.Rgba,
+                    frame.Input.Width,
+                    frame.Input.Height,
+                    frame.Bounds,
+                    frame.Background,
+                    outputRgba,
+                    outputWidth,
+                    outputHeight,
+                    destX,
+                    destY);
+            }
 
             var label = string.IsNullOrWhiteSpace(frame.Input.Label) ? $"Frame {index + 1}" : frame.Input.Label.Trim();
             var previewRgba = CropRect(outputRgba, outputWidth, outputHeight, cellRect, sheetBackground);
@@ -447,6 +480,8 @@ internal static class SpriteSheetServerRenderer
             .ToList();
         if (frames.Count == 0)
             throw new InvalidOperationException("At least one sprite frame is required.");
+        if (sourceRgba.Length < sourceWidth * (long)sourceHeight * 4)
+            throw new InvalidOperationException("Sprite animation review source pixels are incomplete.");
 
         cellWidth = Math.Clamp(cellWidth, 1, 8192);
         cellHeight = Math.Clamp(cellHeight, 1, 8192);
@@ -587,37 +622,83 @@ internal static class SpriteSheetServerRenderer
             rejectedSegments);
     }
 
-    internal static SpriteSheetReviewImage BuildStabilizationAnnotatedSheetView(
+    internal static SpriteSheetFrameWorkingRenderResult RenderPlacedFrameImage(
         byte[] sourceRgba,
         int sourceWidth,
         int sourceHeight,
         SpriteSheetBackground background,
-        SpriteSheetStabilizationView stabilization)
+        int outputWidth,
+        int outputHeight,
+        SpriteSheetRect placement)
     {
-        ValidateCanvasSize(sourceWidth, sourceHeight, "Stabilization diagnostic image is too large.");
-        var output = NewFilledCanvas(sourceWidth, sourceHeight, background);
-        Array.Copy(sourceRgba, output, Math.Min(sourceRgba.Length, output.Length));
+        outputWidth = Math.Max(1, outputWidth);
+        outputHeight = Math.Max(1, outputHeight);
+        ValidateCanvasSize(outputWidth, outputHeight, "Stabilized sprite frame is too large.");
+        var output = NewFilledCanvas(outputWidth, outputHeight, background);
+        CopyImage(sourceRgba, sourceWidth, sourceHeight, output, outputWidth, outputHeight, placement.X, placement.Y);
+        return new SpriteSheetFrameWorkingRenderResult(
+            SpriteSheetPngCodec.EncodeRgba(outputWidth, outputHeight, output),
+            outputWidth,
+            outputHeight);
+    }
 
-        foreach (var match in stabilization.Matches)
+    internal static SpriteSheetReviewImage BuildStabilizationAnnotatedSheetView(
+        SpriteSheetBackground background,
+        SpriteSheetStabilizationView stabilization,
+        IReadOnlyList<SpriteSheetFrameImageInput> inputFrames)
+    {
+        var matches = stabilization.Matches.OrderBy(match => match.Index).ToList();
+        if (matches.Count == 0)
+            throw new InvalidOperationException("At least one stabilization match is required.");
+
+        var cellWidth = Math.Max(1, stabilization.NormalizedWidth);
+        var cellHeight = Math.Max(1, stabilization.NormalizedHeight);
+        var columns = Math.Clamp(Math.Min(4, matches.Count), 1, 4);
+        var rows = (int)Math.Ceiling(matches.Count / (double)columns);
+        var gutter = 1;
+        var outputWidth = checked((columns * cellWidth) + (Math.Max(0, columns - 1) * gutter));
+        var outputHeight = checked((rows * cellHeight) + (Math.Max(0, rows - 1) * gutter));
+        ValidateCanvasSize(outputWidth, outputHeight, "Stabilization diagnostic image is too large.");
+
+        var output = NewFilledCanvas(outputWidth, outputHeight, background);
+        var inputByIndex = inputFrames.ToDictionary(frame => frame.Index);
+        for (var position = 0; position < matches.Count; position++)
         {
-            DrawRectangle(output, sourceWidth, sourceHeight, NormalizeSourceRect(match.OriginalSourceRect), 31, 111, 235, 150, 1);
-            DrawRectangle(output, sourceWidth, sourceHeight, NormalizeSourceRect(match.ProposedSourceRect), 32, 210, 115, 230, 2);
+            var match = matches[position];
+            if (!inputByIndex.TryGetValue(match.Index, out var input))
+                continue;
+
+            var column = position % columns;
+            var row = position / columns;
+            var cellX = column * (cellWidth + gutter);
+            var cellY = row * (cellHeight + gutter);
+            var placement = stabilization.Applied && string.Equals(input.WorkingState, "stabilized", StringComparison.OrdinalIgnoreCase)
+                ? new SpriteSheetRect(0, 0, input.Width, input.Height)
+                : match.PlacementRect;
+
+            CopyImage(input.Rgba, input.Width, input.Height, output, outputWidth, outputHeight, cellX + placement.X, cellY + placement.Y);
+            DrawRectangle(output, outputWidth, outputHeight, new SpriteSheetRect(cellX + placement.X, cellY + placement.Y, placement.Width, placement.Height), 32, 210, 115, 220, 1);
+
             var anchorColor = match.LowConfidence ? (R: (byte)239, G: (byte)68, B: (byte)68) : (R: (byte)245, G: (byte)159, B: (byte)0);
-            DrawRectangle(output, sourceWidth, sourceHeight, NormalizeSourceRect(match.MatchedAnchorRect), anchorColor.R, anchorColor.G, anchorColor.B, 240, 2);
-            DrawIndexLabel(output, sourceWidth, sourceHeight, match.Index, match.ProposedSourceRect.X, match.ProposedSourceRect.Y);
+            var finalAnchor = new SpriteSheetRect(
+                cellX + match.MatchedAnchorRect.X + match.PlacementRect.X,
+                cellY + match.MatchedAnchorRect.Y + match.PlacementRect.Y,
+                match.MatchedAnchorRect.Width,
+                match.MatchedAnchorRect.Height);
+            DrawRectangle(output, outputWidth, outputHeight, finalAnchor, anchorColor.R, anchorColor.G, anchorColor.B, 240, 2);
+            if (match.Index == stabilization.ReferenceFrameIndex)
+                DrawRectangle(output, outputWidth, outputHeight, finalAnchor, 236, 72, 153, 255, 3);
+            DrawIndexLabel(output, outputWidth, outputHeight, match.Index, cellX, cellY);
         }
 
-        DrawRectangle(output, sourceWidth, sourceHeight, NormalizeSourceRect(stabilization.AnchorRect), 236, 72, 153, 255, 3);
-        DrawIndexLabel(output, sourceWidth, sourceHeight, stabilization.ReferenceFrameIndex, stabilization.AnchorRect.X, stabilization.AnchorRect.Y);
-
         return new SpriteSheetReviewImage(
-            "Sprite stabilization diagnostic (blue original, green proposed, yellow/red matched anchors, magenta reference anchor)",
+            "Sprite stabilization diagnostic (green placement, yellow/red matched anchors, magenta reference anchor)",
             "sprite-sheet-stabilization-diagnostic.png",
             "stabilization",
             null,
             null,
             null,
-            SpriteSheetPngCodec.EncodeRgba(sourceWidth, sourceHeight, output));
+            SpriteSheetPngCodec.EncodeRgba(outputWidth, outputHeight, output));
     }
 
     private static SpriteSheetReviewImage BuildAnnotatedSheetView(
@@ -868,6 +949,38 @@ internal static class SpriteSheetServerRenderer
         }
 
         return output;
+    }
+
+    private static void CopyImage(
+        byte[] source,
+        int sourceWidth,
+        int sourceHeight,
+        byte[] target,
+        int targetWidth,
+        int targetHeight,
+        int destX,
+        int destY)
+    {
+        for (var y = 0; y < sourceHeight; y++)
+        {
+            var targetY = destY + y;
+            if (targetY < 0 || targetY >= targetHeight)
+                continue;
+
+            for (var x = 0; x < sourceWidth; x++)
+            {
+                var targetX = destX + x;
+                if (targetX < 0 || targetX >= targetWidth)
+                    continue;
+
+                var sourceIndex = ((y * sourceWidth) + x) * 4;
+                var targetIndex = ((targetY * targetWidth) + targetX) * 4;
+                target[targetIndex] = source[sourceIndex];
+                target[targetIndex + 1] = source[sourceIndex + 1];
+                target[targetIndex + 2] = source[sourceIndex + 2];
+                target[targetIndex + 3] = source[sourceIndex + 3];
+            }
+        }
     }
 
     private static void CopyForegroundBounds(
@@ -1385,6 +1498,7 @@ internal static class SpriteSheetServerRenderer
         SpriteSheetFrameImageInput Input,
         SpriteSheetBackground Background,
         SpriteSheetRect Bounds,
+        bool PreserveFullCanvas,
         List<string> Warnings);
 }
 
@@ -1401,7 +1515,8 @@ internal sealed record SpriteSheetFrameImageInput(
     int Height,
     bool UsedWorkingImage,
     Guid? SourceImageAssetId = null,
-    SpriteSheetRect? SourceImageRect = null);
+    SpriteSheetRect? SourceImageRect = null,
+    string WorkingState = "");
 
 internal sealed record SpriteSheetReassembleFrameRenderInfo(
     int Index,

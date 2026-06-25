@@ -52,7 +52,7 @@
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Activity, Review sets, guide generation, sprite sheets/reviews/stabilization/split/reassembly, exports, art/animation recipes, masks, import, crop, and edits. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Activity, Review sets, guide generation, sprite sheets/reviews/working-frame stabilization/split/reassembly, exports, art/animation recipes, masks, import, crop, and edits. |
 | `ArtWorkflowModels.cs` | Request/result/view records for the workbench, Activity, lazy media URLs/binaries, animation-guide generation, sprite-sheet composition/provenance/stabilization/animation metadata, per-frame isolation/reassembly, art/animation recipe management, and assistant tools. |
 | `AnimationGuideModels.cs` | Shared guide-rendering records for animation specs, frame specs, guide layouts, and per-frame slots without restoring the old animation job pipeline. |
 | `SpriteAnimationOptions.cs` | Configuration record for sprite-animation defaults used by guide rendering and animation-generation workflow setup. |
@@ -72,7 +72,7 @@
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 | `SpriteSheetImageAnalyzer.cs` | Server-side PNG analyzer for background-aware foreground bounds, connected sprite boxes/shape outlines, and animation motion metrics. |
 | `SpriteSheetPngCodec.cs` | Minimal PNG RGBA decoder/encoder used by server-side sprite-sheet rendering. |
-| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with irregular frame isolation, erase/keep cleanup, coordinate-grid and removed-vs-source overlays, stabilization diagnostics, outlier-aware reassembly, annotated sheet views, diffs, onion skins, and filmstrips. |
+| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with irregular frame isolation, erase/keep cleanup, coordinate-grid and removed-vs-source overlays, working-frame stabilization diagnostics, outlier-aware reassembly, annotated sheet views, diffs, onion skins, and filmstrips. |
 
 ### Assets/MotionClips/
 
@@ -126,7 +126,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with lazy frame thumbnails, sheet/frame import, multi-image composition, source-region editing, manual anchor stabilization, split-all/isolate/erase/AI edit/reassembly, animation preview, reset, and export. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Sprites workspace with lazy frame thumbnails, sheet/frame import, multi-image composition, source-region editing, manual working-frame anchor stabilization, split-all/isolate/erase/AI edit/reassembly, animation preview, reset, and export. |
 
 ### Llm/
 

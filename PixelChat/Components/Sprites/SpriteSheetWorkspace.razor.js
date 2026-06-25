@@ -770,12 +770,6 @@ function drawAnchorOverlay(ctx, state, viewport, scaleX, scaleY) {
     ctx.fillStyle = "rgba(236,72,153,0.16)";
     ctx.fillRect(x, y, w, h);
     ctx.strokeRect(x, y, w, h);
-    const label = "Anchor";
-    const labelWidth = Math.min(ctx.measureText(label).width + 10 * deviceScale(), Math.max(42 * deviceScale(), w));
-    ctx.fillStyle = "rgba(157,23,77,0.94)";
-    ctx.fillRect(x, y, labelWidth, 20 * deviceScale());
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText(label, x + 5 * deviceScale(), y + 3 * deviceScale(), labelWidth - 8 * deviceScale());
     ctx.restore();
 }
 

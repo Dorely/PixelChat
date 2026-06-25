@@ -260,7 +260,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 StabilizeSpriteSheetFramesAsync(projectId, spriteSheetId, referenceFrameNumber, anchorRect, searchPadding, minScore, targetFrameNumbers, apply, cancellationToken),
             name: "stabilize_sprite_sheet_frames",
-            description: "Preview or apply translation-only frame stabilization using one manual anchor box on a reference frame. anchorRect is in source-sheet pixels and must be fully inside referenceFrameNumber. Defaults: searchPadding 24px, minScore 0.68, apply false. Preview first; inspect model-only diagnostics and match scores before applying."),
+            description: "Preview or apply translation-only frame stabilization using one manual anchor box on a reference frame. anchorRect is in source-sheet pixels and must be fully inside referenceFrameNumber. Defaults: searchPadding 24px, minScore 0.68, apply false. Apply writes stabilized working-frame PNGs without changing source boxes; run reassemble_sprite_sheet afterward."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
@@ -1321,19 +1321,9 @@ public sealed class AssistantToolRegistry(
         result.ImageHeight,
         stabilization = CompactStabilization(result.Stabilization),
         frameCount = result.Frames.Count,
-        frames = result.Frames.Select((frame, index) => new
-        {
-            frameNumber = index + 1,
-            frame.Index,
-            label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label,
-            frame.SourceRect,
-            frame.SourceImageAssetId,
-            frame.SourceImageRect,
-            hasShapePaths = HasShapePaths(frame.ShapePaths),
-            shapePathCount = ShapePathCount(frame.ShapePaths),
-            shapePointCount = ShapePointCount(frame.ShapePaths),
-        }),
+        frames = result.Frames,
         warnings = result.Warnings,
+        requiresReassembly = result.Stabilization.RequiresReassembly,
         diagnosticImage = new
         {
             result.DiagnosticImage.Label,
@@ -1345,10 +1335,10 @@ public sealed class AssistantToolRegistry(
             result.DiagnosticImage.ToFrame,
         },
         savedFrameIds = result.SavedSheet?.Frames.Select(frame => frame.Id).ToList() ?? [],
-        modelOnlyImages = "Stabilization returns a model-only annotated diagnostic sheet after the tool result. Blue is original, green is proposed, yellow/red are matched anchors, magenta is the reference anchor.",
+        modelOnlyImages = "Stabilization returns a model-only annotated diagnostic sheet after the tool result. Green is normalized placement, yellow/red are matched anchors, and magenta is the reference anchor.",
         message = result.Applied
-            ? "Sprite-sheet stabilization applied."
-            : "Sprite-sheet stabilization preview saved without changing frame boxes.",
+            ? "Sprite-sheet frames stabilized as working images. Run reassemble_sprite_sheet next."
+            : "Sprite-sheet stabilization preview completed without changing frame boxes or working images.",
     };
 
     private static object CompactSpriteSheetResult(SpriteSheetDefinitionView saved, string message) => new
@@ -1411,26 +1401,32 @@ public sealed class AssistantToolRegistry(
             stabilization.ReferenceFrameNumber,
             stabilization.ReferenceFrameIndex,
             stabilization.AnchorRect,
+            stabilization.ReferenceWorkingAnchorRect,
+            stabilization.ReferenceAnchorCenter,
+            stabilization.NormalizedWidth,
+            stabilization.NormalizedHeight,
             stabilization.SearchPadding,
             stabilization.MinScore,
             stabilization.Applied,
+            stabilization.RequiresReassembly,
             stabilization.UpdatedAt,
             matchCount = stabilization.Matches.Count,
             lowConfidenceCount = stabilization.Matches.Count(match => match.LowConfidence),
-            clampedCount = stabilization.Matches.Count(match => match.Clamped),
+            clippedCount = stabilization.Matches.Count(match => match.Clipped),
             warnings = stabilization.Warnings,
             matches = stabilization.Matches.Select(match => new
             {
                 match.FrameNumber,
                 match.Index,
-                match.OriginalSourceRect,
+                match.SourceRect,
+                match.InputFrameRect,
                 match.MatchedAnchorRect,
-                match.ProposedSourceRect,
+                match.PlacementRect,
                 match.DeltaX,
                 match.DeltaY,
                 match.Score,
                 match.LowConfidence,
-                match.Clamped,
+                match.Clipped,
                 match.Warnings,
             }),
         };

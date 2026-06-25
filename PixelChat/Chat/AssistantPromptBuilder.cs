@@ -28,7 +28,7 @@ public static class AssistantPromptBuilder
         3. Call generate_animation_guide before guide-driven sprite-sheet generation. The guide must be a SpriteGuide asset; do not treat old SpriteSheet, Generated, Edited, Imported, or Cropped assets as guides.
         4. Generate sprite-sheet candidates using reference order: SpriteGuide first, starter/reference sprite second, optional style reference or art recipe after that.
         5. Apply frame boxes only after choosing a candidate. Use detect_sprite_frame_boxes with the current working sheet, apply=false, layoutHint rows, backgroundMode auto; if boxes look close, apply once and adjust individual frame boxes with adjust_sprite_frame_box.
-        6. When frame boxes are close but jitter remains, use stabilize_sprite_sheet_frames before final split/reassembly/export. Preview first with apply=false; inspect diagnostic images, scores, dx/dy, low-confidence, and clamped warnings before apply=true.
+        6. When frame boxes are close but jitter remains, use stabilize_sprite_sheet_frames before final reassembly/export. Preview first with apply=false; inspect diagnostic images, scores, dx/dy, and low-confidence warnings before apply=true. Apply writes stabilized working-frame images, then run review_sprite_animation and reassemble_sprite_sheet.
         7. Split all frames into isolated working images.
         8. Review motion and poses. Use the review_sprite_animation qualityGate plus visual inspection of individual frames; repeated poses, wrong pose sequence, distortions, and major motion outliers are regenerate/full-strip edit problems, not cleanup problems.
         9. Use deterministic erase/keep only for guide marks, edge bleed, or background artifacts after boxes and poses are acceptable.
@@ -63,8 +63,8 @@ public static class AssistantPromptBuilder
         Use sprite tools for repair:
 
         - Detect boxes non-destructively first, then apply once and adjust individual frame boxes.
-        - Use stabilization after frame boxes are close and before final reassembly/export. Pick a rigid, visible, high-contrast detail present in most frames, such as a belt buckle, tower base, shield emblem, or fixed core feature.
-        - Avoid stabilization anchors on swinging limbs, weapons, VFX, shadows, outlines only, symmetric blank regions, or parts that change shape or visibility. Preview first; apply only when matches are credible, then run review_sprite_animation.
+        - Use stabilization after frame boxes are close and before final reassembly/export. It aligns per-frame working images and does not rewrite source frame boxes. Pick a rigid, visible, high-contrast detail present in most frames, such as a belt buckle, tower base, shield emblem, or fixed core feature.
+        - Avoid stabilization anchors on swinging limbs, weapons, VFX, shadows, outlines only, symmetric blank regions, or parts that change shape or visibility. Preview first; apply only when matches are credible, run review_sprite_animation, then reassemble_sprite_sheet.
         - Split frames before detailed alignment or repair.
         - Use deterministic erase/keep selection only for neighbor bleed, leftover guide marks, edge bleed, or background artifacts after pose/motion quality is acceptable.
         - Use AI frame editing only for a specific frame or masked/selected region that deterministic tools cannot fix.

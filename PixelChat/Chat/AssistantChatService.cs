@@ -1152,10 +1152,23 @@ public sealed class AssistantChatService(
         if (!TryReadGuidProperty(root, "spriteSheetId", out var spriteSheetId))
             return Array.Empty<AIContent>();
 
-        var image = await workflow.BuildSpriteSheetStabilizationAnnotatedSheetAsync(projectId, spriteSheetId, cancellationToken);
+        SpriteAnimationReviewImageView image;
+        if (root.TryGetProperty("stabilization", out var stabilizationElement)
+            && stabilizationElement.ValueKind == JsonValueKind.Object)
+        {
+            var stabilization = JsonSerializer.Deserialize<SpriteSheetStabilizationView>(stabilizationElement.GetRawText(), JsonOptions);
+            image = stabilization is null
+                ? await workflow.BuildSpriteSheetStabilizationAnnotatedSheetAsync(projectId, spriteSheetId, cancellationToken)
+                : await workflow.BuildSpriteSheetStabilizationAnnotatedSheetAsync(projectId, spriteSheetId, stabilization, cancellationToken);
+        }
+        else
+        {
+            image = await workflow.BuildSpriteSheetStabilizationAnnotatedSheetAsync(projectId, spriteSheetId, cancellationToken);
+        }
+
         return
         [
-            new TextContent($"Model-only image: sprite stabilization diagnostic for sprite sheet {spriteSheetId}. Blue boxes are original frame crops, green boxes are proposed crops, yellow anchors are accepted matches, red anchors are low-confidence matches, and magenta is the reference anchor. These images are not attached to visible chat context."),
+            new TextContent($"Model-only image: sprite stabilization diagnostic for sprite sheet {spriteSheetId}. Green boxes show each full working-frame placement on the normalized canvas, yellow anchors are accepted matches, red anchors are low-confidence matches, and magenta is the reference anchor. Apply writes stabilized working frames; run Reassemble afterward. These images are not attached to visible chat context."),
             new DataContent(image.DataUrl, image.ContentType)
             {
                 Name = image.FileName,
