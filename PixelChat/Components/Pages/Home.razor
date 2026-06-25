@@ -153,6 +153,7 @@ else
     private Guid? _recipeExampleAssetId;
     private WorkbenchView? _workbench;
     private WorkspaceSpritesVisibleState? _spritesVisibleState;
+    private Guid? _spriteEditorSourceAssetId;
     private ImageGenerationRuntimeSnapshot _generationRuntimeSnapshot = new([]);
     private WorkspaceMode _activeWorkspaceMode = WorkspaceMode.Generate;
     private Guid? _activeWorkspaceProjectId;
@@ -335,6 +336,8 @@ else
         _loadedEditorAssetId = _activeWorkspaceMode == WorkspaceMode.Edit ? _loadedEditorAssetId : null;
         if (_editAssetId is Guid editAssetId && !_workbench.Assets.Any(asset => asset.Id == editAssetId))
             _editAssetId = null;
+        if (_spriteEditorSourceAssetId is Guid spriteSourceAssetId && !_workbench.Assets.Any(asset => asset.Id == spriteSourceAssetId))
+            _spriteEditorSourceAssetId = null;
         if (_exportAsset is { } exportAsset && !_workbench.Assets.Any(asset => asset.Id == exportAsset.Id))
             ResetExportModal();
         _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
@@ -1152,6 +1155,7 @@ else
     private RenderFragment RenderSpritesWorkspace() => __builder =>
     {
         <SpriteSheetWorkspace Workbench="@_workbench"
+                              SourceAssetId="@_spriteEditorSourceAssetId"
                               OnChanged="OnSpriteSheetChangedAsync"
                               OnExportAsset="OpenExportAsync"
                               OnVisibleStateChanged="OnSpritesVisibleStateChanged" />
@@ -2908,7 +2912,8 @@ else
             return;
 
         await FlushMaskAutosaveAsync();
-        await Workflow.StartSpriteSheetEditAsync(_workbench.Project.Id, asset.Id);
+        _spriteEditorSourceAssetId = asset.Id;
+        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Sprites);
         await ReloadWorkbenchAsync();
     }
 

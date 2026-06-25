@@ -3,7 +3,7 @@ const frameStates = new WeakMap();
 const imageCache = new Map();
 
 export async function loadSourceCanvas(canvas, dotNetRef, imageUrl, regions, selectedIds, tool) {
-    if (!canvas) return;
+    if (!isCanvas(canvas)) return;
     const image = await loadImage(imageUrl);
     let state = sourceStates.get(canvas);
     if (!state) {
@@ -36,7 +36,7 @@ export async function loadSourceCanvas(canvas, dotNetRef, imageUrl, regions, sel
 }
 
 export async function loadFrameCanvas(canvas, dotNetRef, imageUrl, maskUrl, frame, previousUrl, nextUrl, tool, brushSize, showOnion) {
-    if (!canvas) return;
+    if (!isCanvas(canvas)) return;
     const image = await loadImage(imageUrl);
     const previous = previousUrl ? await loadImage(previousUrl) : null;
     const next = nextUrl ? await loadImage(nextUrl) : null;
@@ -94,6 +94,10 @@ function attachSource(canvas, state) {
     canvas.addEventListener("pointerleave", event => {
         if (state.drag) onSourcePointerUp(canvas, state, event);
     });
+}
+
+function isCanvas(value) {
+    return value && typeof value.addEventListener === "function" && typeof value.getContext === "function";
 }
 
 function attachFrame(canvas, state) {

@@ -131,16 +131,20 @@
                 {
                     <div class="sprite-settings-panel">
                         <div class="section-title">Source</div>
-                        <label class="sprite-source-pick">
-                            <span>Source asset</span>
-                            <select class="form-select form-select-sm" value="@_sourceAssetIdText" @onchange="OnSourceAssetChangedAsync">
-                                <option value="">- select -</option>
-                                @foreach (var asset in CandidateSourceAssets())
-                                {
-                                    <option value="@asset.Id">@asset.Label</option>
-                                }
-                            </select>
-                        </label>
+                        @if (SelectedSourceArtAsset() is { } sourceAsset)
+                        {
+                            <div class="sprite-source-summary">
+                                <img src="@sourceAsset.PreviewImageUrl" alt="" />
+                                <div>
+                                    <strong>@sourceAsset.Label</strong>
+                                    <span>@SourceAssetMeta(sourceAsset)</span>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <p class="sprite-inspector-hint">Import an image or open one from Assets.</p>
+                        }
                         <div class="sprite-inspector-actions">
                             <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_busy || SelectedSourceAssetId() is null)" @onclick="DetectRegionsAsync">Detect Regions</button>
                             <button type="button" class="btn btn-sm btn-primary" disabled="@(_busy || SelectedSourceAssetId() is null || _regions.Count == 0)" @onclick="CreateFrameSetFromRegionsAsync">Create Frame Set</button>
@@ -350,6 +354,9 @@
     public EventCallback<ArtAssetView> OnExportAsset { get; set; }
 
     [Parameter]
+    public Guid? SourceAssetId { get; set; }
+
+    [Parameter]
     public EventCallback<WorkspaceSpritesVisibleState> OnVisibleStateChanged { get; set; }
 
     private static readonly SpriteMode[] SpriteModes = [SpriteMode.Source, SpriteMode.Frames, SpriteMode.Sheet, SpriteMode.Export];
@@ -364,6 +371,7 @@
     private List<SourceRegionView> _regions = [];
     private readonly HashSet<Guid> _selectedRegionIds = [];
     private Guid? _loadedProjectId;
+    private Guid? _appliedSourceAssetId;
     private Guid? _dragFrameId;
 
     private string _status = string.Empty;
@@ -398,9 +406,11 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        var projectChanged = _loadedProjectId != Workbench.Project.Id;
         if (_loadedProjectId != Workbench.Project.Id)
         {
             _loadedProjectId = Workbench.Project.Id;
+            _appliedSourceAssetId = null;
             _frameSet = null;
             _regions = [];
             _selectedRegionIds.Clear();
@@ -408,6 +418,12 @@
             _builtSheetAssetId = null;
             _builtSheetManifest = null;
             await LoadActiveFrameSetAsync();
+        }
+
+        if (SourceAssetId is Guid sourceId && (projectChanged || _appliedSourceAssetId != sourceId))
+        {
+            await SelectSourceAssetAsync(sourceId, clearMismatchedFrameSet: true);
+            _status = $"Loaded {SelectedSourceArtAsset()?.Label ?? "source image"}.";
         }
     }
 
@@ -430,8 +446,7 @@
             ApplyFrameSet(set);
             if (set?.SourceAssetId is Guid sourceId)
             {
-                _sourceAssetIdText = sourceId.ToString();
-                _regions = (await FrameSets.ListSourceRegionsAsync(Workbench.Project.Id, sourceId)).ToList();
+                await SelectSourceAssetAsync(sourceId, clearMismatchedFrameSet: false);
             }
             await PublishSpritesStateAsync();
         }
@@ -477,9 +492,7 @@
                 contentType,
                 memory.ToArray(),
                 Path.GetFileNameWithoutExtension(args.File.Name)));
-            _sourceAssetIdText = asset.Id.ToString();
-            _regions = [];
-            _selectedRegionIds.Clear();
+            await SelectSourceAssetAsync(asset.Id, clearMismatchedFrameSet: true);
             _frameSet = null;
             _status = $"Imported {asset.Label}. Draw or detect regions to create frames.";
             await OnChanged.InvokeAsync();
@@ -487,15 +500,24 @@
         });
     }
 
-    private async Task OnSourceAssetChangedAsync(ChangeEventArgs args)
+    private async Task SelectSourceAssetAsync(Guid sourceId, bool clearMismatchedFrameSet)
     {
-        _sourceAssetIdText = args.Value?.ToString() ?? string.Empty;
+        _sourceAssetIdText = sourceId.ToString();
+        _appliedSourceAssetId = sourceId;
         _regions = [];
         _selectedRegionIds.Clear();
-        if (SelectedSourceAssetId() is Guid sourceId)
-            _regions = (await FrameSets.ListSourceRegionsAsync(Workbench.Project.Id, sourceId)).ToList();
+        _regions = (await FrameSets.ListSourceRegionsAsync(Workbench.Project.Id, sourceId)).ToList();
+        if (clearMismatchedFrameSet && _frameSet?.SourceAssetId != sourceId)
+        {
+            StopAnimation();
+            _frameSet = null;
+            _selectedIndex = -1;
+            _builtSheetAssetId = null;
+            _builtSheetManifest = null;
+        }
+        _mode = SpriteMode.Source;
         await PublishSpritesStateAsync();
-        await RenderCanvasAsync();
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task DetectRegionsAsync()
@@ -775,7 +797,6 @@
         {
             _busy = false;
             await InvokeAsync(StateHasChanged);
-            await RenderCanvasAsync();
         }
     }
 
@@ -783,7 +804,7 @@
     {
         _mode = mode;
         await PublishSpritesStateAsync();
-        await RenderCanvasAsync();
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task SetSourceToolAsync(string tool)
@@ -984,7 +1005,7 @@
         Guid.TryParse(_sourceAssetIdText, out var id) ? id : _frameSet?.SourceAssetId;
 
     private WorkspaceAssetSummary? SelectedSourceAsset() =>
-        CandidateSourceAssets().FirstOrDefault(asset => asset.Id == SelectedSourceAssetId()) is { } asset
+        SelectedSourceArtAsset() is { } asset
             ? new WorkspaceAssetSummary(asset.Id, asset.Label, asset.Kind, asset.ContentType, asset.Width, asset.Height, asset.ParentAssetId, asset.SourceBatchId, asset.BatchOutputIndex, asset.SourcePromptRecipeId, asset.SourcePromptRecipeVersion, asset.IsFavorite, asset.Notes, Preview(asset.Prompt, 240), asset.CreatedAt)
             : null;
 
@@ -994,8 +1015,14 @@
         return value.Length <= maxLength ? value : string.Concat(value.AsSpan(0, Math.Max(0, maxLength - 1)), "...");
     }
 
-    private IEnumerable<ArtAssetView> CandidateSourceAssets() =>
-        Workbench.Assets.Where(a => a.Kind is ArtAssetKind.SpriteSheet or ArtAssetKind.Generated or ArtAssetKind.Imported or ArtAssetKind.Edited or ArtAssetKind.Extracted);
+    private ArtAssetView? SelectedSourceArtAsset() =>
+        SelectedSourceAssetId() is Guid assetId ? Workbench.Assets.FirstOrDefault(asset => asset.Id == assetId) : null;
+
+    private static string SourceAssetMeta(ArtAssetView asset)
+    {
+        var dimensions = asset.Width is int width && asset.Height is int height ? $"{width} x {height}" : "size unknown";
+        return $"{asset.Kind} / {dimensions}";
+    }
 
     private string? SourceImageUrl()
     {
