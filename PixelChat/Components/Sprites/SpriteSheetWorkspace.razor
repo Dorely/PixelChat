@@ -46,6 +46,7 @@
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Select)" title="@ToolTitle(SpriteEditTool.Select)" aria-pressed="@(_tool == SpriteEditTool.Select)" @onclick="() => SetToolAsync(SpriteEditTool.Select)">Select</button>
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Draw)" title="@ToolTitle(SpriteEditTool.Draw)" aria-pressed="@(_tool == SpriteEditTool.Draw)" @onclick="() => SetToolAsync(SpriteEditTool.Draw)">Draw Box</button>
                         <button type="button" class="@ToolButtonClass(SpriteEditTool.Outline)" title="@ToolTitle(SpriteEditTool.Outline)" aria-pressed="@(_tool == SpriteEditTool.Outline)" @onclick="() => SetToolAsync(SpriteEditTool.Outline)">Outline</button>
+                        <button type="button" class="@ToolButtonClass(SpriteEditTool.Anchor)" title="@ToolTitle(SpriteEditTool.Anchor)" aria-pressed="@(_tool == SpriteEditTool.Anchor)" @onclick="() => SetToolAsync(SpriteEditTool.Anchor)">Anchor</button>
                         <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_frames.Count == 0 || _framePersistenceRunning)" @onclick="ExpandToCellsAsync">Expand to Cells</button>
                         <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_frames.Count == 0 || _frameEditRunning || _framePersistenceRunning)" @onclick="SplitAllFramesAsync">Split Frames</button>
                         <button type="button" class="btn btn-sm btn-primary" disabled="@(_frames.Count == 0 || _frameEditRunning || _framePersistenceRunning)" @onclick="ReassembleSheetAsync">Reassemble</button>
@@ -62,6 +63,13 @@
                             <span>W @selected.Width</span>
                             <span>H @selected.Height</span>
                             <span>@WorkingStateLabel(selected)</span>
+                            @if (Workbench.ActiveSpriteSheet?.Stabilization is { } stabilization)
+                            {
+                                <span>Stabilized F@stabilization.ReferenceFrameNumber</span>
+                                <span>@stabilization.AnchorRect.X,@stabilization.AnchorRect.Y @stabilization.AnchorRect.Width x @stabilization.AnchorRect.Height</span>
+                                <span>@StabilizationAppliedCount(stabilization) applied</span>
+                                <span>@StabilizationLowConfidenceCount(stabilization) low</span>
+                            }
                         }
                         else
                         {
@@ -89,6 +97,70 @@
                         </div>
                     </div>
                     <canvas class="@AnimationCanvasClass()" @ref="_animationCanvas" @onclick="PreviewAnimationAsync"></canvas>
+                </div>
+
+                <div class="sprite-settings-panel sprite-stabilization-panel">
+                    <div class="sprite-section-title-row">
+                        <div class="section-title">Stabilization</div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!HasSavedStabilization || _stabilizationRunning)" @onclick="ClearStabilizationAsync">Clear</button>
+                    </div>
+                    <div class="stabilization-readout">
+                        @if (_stabilizationAnchor is { } anchor)
+                        {
+                            <span>Reference F@ReferenceFrameNumber()</span>
+                            <span>X @anchor.X</span>
+                            <span>Y @anchor.Y</span>
+                            <span>W @anchor.Width</span>
+                            <span>H @anchor.Height</span>
+                        }
+                        else
+                        {
+                            <span>No anchor</span>
+                        }
+                    </div>
+                    <div class="sprite-grid-controls">
+                        <label>
+                            <span>Search</span>
+                            <input class="form-control form-control-sm" type="number" min="0" max="512" @bind="_stabilizationSearchPadding" @bind:after="OnStabilizationSettingsChanged" />
+                        </label>
+                        <label>
+                            <span>Min Score</span>
+                            <input class="form-control form-control-sm" type="number" min="-1" max="1" step="0.01" @bind="_stabilizationMinScore" @bind:after="OnStabilizationSettingsChanged" />
+                        </label>
+                    </div>
+                    <div class="stabilization-actions">
+                        <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(!CanRunStabilization())" @onclick="PreviewStabilizationAsync">Preview Stabilize</button>
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@(!CanApplyStabilization())" @onclick="ApplyStabilizationAsync">Apply</button>
+                    </div>
+                    @if (_stabilizationPreview is { } preview)
+                    {
+                        <div class="stabilization-summary">
+                            <span>@preview.Stabilization.Matches.Count match(es)</span>
+                            <span>@StabilizationLowConfidenceCount(preview.Stabilization) low confidence</span>
+                            <span>@StabilizationClampedCount(preview.Stabilization) clamped</span>
+                        </div>
+                        @if (preview.Warnings.Count > 0)
+                        {
+                            <ul class="stabilization-warnings">
+                                @foreach (var warning in preview.Warnings.Take(4))
+                                {
+                                    <li>@warning</li>
+                                }
+                            </ul>
+                        }
+                        <img class="stabilization-diagnostic" src="@preview.DiagnosticImage.DataUrl" alt="Stabilization diagnostic" />
+                        <div class="stabilization-match-list">
+                            @foreach (var match in preview.Stabilization.Matches.OrderBy(match => match.Index))
+                            {
+                                <div class="stabilization-match-row @(match.LowConfidence ? "is-low-confidence" : "")">
+                                    <span>F@match.FrameNumber</span>
+                                    <span>@match.Score.ToString("0.000")</span>
+                                    <span>dx @match.DeltaX</span>
+                                    <span>dy @match.DeltaY</span>
+                                </div>
+                            }
+                        </div>
+                    }
                 </div>
 
                 <div class="sprite-settings-panel">
@@ -277,10 +349,17 @@
     private string _frameEditPrompt = string.Empty;
     private bool _frameEditRunning;
     private bool _framePersistenceRunning;
+    private SpriteSheetRect? _stabilizationAnchor;
+    private int? _stabilizationReferenceFrameNumber;
+    private StabilizeSpriteSheetFramesResult? _stabilizationPreview;
+    private int _stabilizationSearchPadding = 24;
+    private double _stabilizationMinScore = 0.68d;
+    private bool _stabilizationRunning;
     private FrameWorkEraseMode _frameEraseMode = FrameWorkEraseMode.None;
     private readonly List<SpriteSheetEditorFrame> _frames = [];
 
     private bool HasActiveSheet => Workbench.ActiveSpriteSheet is not null && CurrentWorkingAsset() is not null;
+    private bool HasSavedStabilization => Workbench.ActiveSpriteSheet?.Stabilization is not null;
 
     protected override void OnParametersSet()
     {
@@ -295,6 +374,9 @@
             _frameWorkImageHeight = 0;
             _loadedFrameWorkIndex = null;
             _loadedFrameWorkUpdatedAt = null;
+            _stabilizationAnchor = null;
+            _stabilizationReferenceFrameNumber = null;
+            _stabilizationPreview = null;
             ResetFrameEraseMode();
             _frames.Clear();
             _selectedFrameIndex = -1;
@@ -665,6 +747,130 @@
         }
     }
 
+    private async Task PreviewStabilizationAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is not { } active || _stabilizationAnchor is not { } anchor)
+            return;
+
+        _error = null;
+        _status = "Previewing stabilization...";
+        _stabilizationRunning = true;
+        try
+        {
+            NormalizeStabilizationInputs();
+            await AutosaveLayoutPreservingAnchorAsync(anchor);
+            if (!string.IsNullOrWhiteSpace(_error))
+                return;
+
+            var result = await Workflow.StabilizeSpriteSheetFramesAsync(
+                Workbench.Project.Id,
+                new StabilizeSpriteSheetFramesRequest(
+                    active.Id,
+                    ReferenceFrameNumber(),
+                    anchor,
+                    _stabilizationSearchPadding,
+                    _stabilizationMinScore,
+                    null,
+                    Apply: false));
+            _stabilizationPreview = result;
+            _status = $"Stabilization preview: {result.Stabilization.Matches.Count} match(es), {StabilizationLowConfidenceCount(result.Stabilization)} low confidence.";
+            await OnChanged.InvokeAsync();
+            await DrawAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+        finally
+        {
+            _stabilizationRunning = false;
+        }
+    }
+
+    private async Task ApplyStabilizationAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is not { } active || _stabilizationAnchor is not { } anchor)
+            return;
+
+        _error = null;
+        _status = "Applying stabilization...";
+        _stabilizationRunning = true;
+        try
+        {
+            NormalizeStabilizationInputs();
+            await AutosaveLayoutPreservingAnchorAsync(anchor);
+            if (!string.IsNullOrWhiteSpace(_error))
+                return;
+
+            var result = await Workflow.StabilizeSpriteSheetFramesAsync(
+                Workbench.Project.Id,
+                new StabilizeSpriteSheetFramesRequest(
+                    active.Id,
+                    ReferenceFrameNumber(),
+                    anchor,
+                    _stabilizationSearchPadding,
+                    _stabilizationMinScore,
+                    null,
+                    Apply: true));
+            _stabilizationPreview = result;
+            if (result.SavedSheet is { } saved && CurrentWorkingAsset(active) is { } working)
+                LoadSheet(saved, working);
+            _status = $"Applied stabilization to {StabilizationAppliedCount(result.Stabilization)} frame(s), {StabilizationLowConfidenceCount(result.Stabilization)} low confidence.";
+            await OnChanged.InvokeAsync();
+            await DrawAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+        finally
+        {
+            _stabilizationRunning = false;
+        }
+    }
+
+    private async Task ClearStabilizationAsync()
+    {
+        if (Workbench.ActiveSpriteSheet is not { } active)
+            return;
+
+        _error = null;
+        _status = "Clearing stabilization metadata...";
+        try
+        {
+            var saved = await Workflow.ClearSpriteSheetStabilizationAsync(Workbench.Project.Id, active.Id);
+            _stabilizationPreview = null;
+            _stabilizationAnchor = null;
+            _stabilizationReferenceFrameNumber = null;
+            if (CurrentWorkingAsset(active) is { } working)
+                LoadSheet(saved, working);
+            _status = "Stabilization metadata cleared.";
+            await OnChanged.InvokeAsync();
+            await DrawAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _status = string.Empty;
+        }
+    }
+
+    private async Task AutosaveLayoutPreservingAnchorAsync(SpriteSheetRect anchor)
+    {
+        var referenceFrameNumber = _stabilizationReferenceFrameNumber;
+        await AutosaveLayoutNowAsync();
+        _stabilizationAnchor = anchor;
+        _stabilizationReferenceFrameNumber = referenceFrameNumber;
+    }
+
+    private void OnStabilizationSettingsChanged()
+    {
+        NormalizeStabilizationInputs();
+        _stabilizationPreview = null;
+    }
+
     private async Task SetToolAsync(SpriteEditTool tool)
     {
         _tool = tool;
@@ -890,6 +1096,7 @@
             }));
         ReindexFrames();
         _selectedFrameIndex = change.SelectedIndex;
+        _stabilizationPreview = null;
         FitCellsToFrames(onlyWhenTooSmall: true);
         await AutosaveLayoutNowAsync();
     }
@@ -910,6 +1117,26 @@
             _frameWorkImageWidth = 0;
             _frameWorkImageHeight = 0;
         }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnSpriteAnchorChanged(SpriteSheetRect anchorRect)
+    {
+        if (_disposed)
+            return;
+
+        _stabilizationAnchor = new SpriteSheetRect(
+            Math.Max(0, anchorRect.X),
+            Math.Max(0, anchorRect.Y),
+            Math.Max(1, anchorRect.Width),
+            Math.Max(1, anchorRect.Height));
+        _stabilizationReferenceFrameNumber = _selectedFrameIndex >= 0 && _selectedFrameIndex < _frames.Count
+            ? _selectedFrameIndex + 1
+            : 1;
+        _stabilizationPreview = null;
+        _status = $"Anchor set on frame {ReferenceFrameNumber()}.";
+        _error = null;
         await InvokeAsync(StateHasChanged);
     }
 
@@ -1037,6 +1264,7 @@
 
     private void LoadSheet(SpriteSheetDefinitionView sheet, ArtAssetView working)
     {
+        var changedSheet = _loadedSpriteSheetId != sheet.Id;
         _loadedSpriteSheetId = sheet.Id;
         _loadedSpriteSheetUpdatedAt = sheet.UpdatedAt;
         _workingImageDataUrl = working.FullImageUrl;
@@ -1050,6 +1278,21 @@
         _loop = sheet.Loop;
         _horizontalAnchor = NormalizeHorizontalAnchor(sheet.HorizontalAnchor);
         _verticalAnchor = NormalizeVerticalAnchor(sheet.VerticalAnchor);
+        if (sheet.Stabilization is { } stabilization)
+        {
+            _stabilizationAnchor = stabilization.AnchorRect;
+            _stabilizationReferenceFrameNumber = stabilization.ReferenceFrameNumber;
+            _stabilizationSearchPadding = Math.Clamp(stabilization.SearchPadding, 0, 512);
+            _stabilizationMinScore = Math.Clamp(stabilization.MinScore, -1d, 1d);
+        }
+        else if (changedSheet)
+        {
+            _stabilizationAnchor = null;
+            _stabilizationReferenceFrameNumber = null;
+            _stabilizationPreview = null;
+            _stabilizationSearchPadding = 24;
+            _stabilizationMinScore = 0.68d;
+        }
         _frames.Clear();
         _frames.AddRange(sheet.Frames
             .OrderBy(frame => frame.Index)
@@ -1184,6 +1427,9 @@
             Loop = _loop,
             HorizontalAnchor = _horizontalAnchor,
             VerticalAnchor = _verticalAnchor,
+            AnchorRect = _stabilizationAnchor is { } anchor
+                ? new { anchor.X, anchor.Y, anchor.Width, anchor.Height }
+                : null,
             Frames = _frames
                 .OrderBy(frame => frame.Index)
                 .Select(frame => new
@@ -1278,6 +1524,38 @@
         return $"{source?.Label ?? Workbench.ActiveSpriteSheet.Label} / {_frames.Count} frame(s) / {outputSize}";
     }
 
+    private int ReferenceFrameNumber() =>
+        _stabilizationReferenceFrameNumber is int frameNumber && frameNumber > 0
+            ? frameNumber
+            : _selectedFrameIndex >= 0 && _selectedFrameIndex < _frames.Count ? _selectedFrameIndex + 1 : 1;
+
+    private bool CanRunStabilization() =>
+        HasActiveSheet
+        && _frames.Count > 0
+        && _selectedFrameIndex >= 0
+        && ReferenceFrameNumber() <= _frames.Count
+        && _stabilizationAnchor is not null
+        && !_stabilizationRunning
+        && !_framePersistenceRunning;
+
+    private bool CanApplyStabilization() =>
+        CanRunStabilization() && _stabilizationPreview is not null;
+
+    private void NormalizeStabilizationInputs()
+    {
+        _stabilizationSearchPadding = Math.Clamp(_stabilizationSearchPadding, 0, 512);
+        _stabilizationMinScore = Math.Clamp(_stabilizationMinScore, -1d, 1d);
+    }
+
+    private static int StabilizationLowConfidenceCount(SpriteSheetStabilizationView stabilization) =>
+        stabilization.Matches.Count(match => match.LowConfidence);
+
+    private static int StabilizationClampedCount(SpriteSheetStabilizationView stabilization) =>
+        stabilization.Matches.Count(match => match.Clamped);
+
+    private static int StabilizationAppliedCount(SpriteSheetStabilizationView stabilization) =>
+        stabilization.Applied ? stabilization.Matches.Count : 0;
+
     private string ToolButtonClass(SpriteEditTool tool) =>
         _tool == tool
             ? "btn btn-sm btn-primary sprite-tool-button is-active"
@@ -1289,6 +1567,7 @@
             SpriteEditTool.Select => "Select, move, resize, or edit frame vertices.",
             SpriteEditTool.Draw => "Draw a rectangular sprite frame.",
             SpriteEditTool.Outline => "Click polygon points, then click near the first point to close an outline frame.",
+            SpriteEditTool.Anchor => "Draw an anchor box inside the selected reference frame for stabilization.",
             _ => string.Empty,
         };
 
@@ -1440,7 +1719,8 @@
     {
         Select,
         Draw,
-        Outline
+        Outline,
+        Anchor
     }
 
     private enum FrameWorkEraseMode

@@ -317,6 +317,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => e.OutputAssetId);
             entity.Property(e => e.HorizontalAnchor).HasDefaultValue("center");
             entity.Property(e => e.VerticalAnchor).HasDefaultValue("bottom");
+            entity.Property(e => e.StabilizationJson).HasDefaultValue("{}");
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.SpriteSheets)

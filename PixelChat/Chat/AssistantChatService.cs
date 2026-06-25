@@ -913,6 +913,9 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "detect_sprite_frame_boxes", StringComparison.Ordinal))
                 return await BuildSpriteSheetDetectionModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
+            if (string.Equals(pendingCall.Name, "stabilize_sprite_sheet_frames", StringComparison.Ordinal))
+                return await BuildSpriteStabilizationModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
+
             if (IsSpriteMutationFeedbackTool(pendingCall.Name))
                 return await BuildSpriteMutationModelOnlyContentsAsync(pendingCall.Name, projectId, toolResult, cancellationToken);
         }
@@ -1135,6 +1138,27 @@ public sealed class AssistantChatService(
             new DataContent(legacyImage.DataUrl, legacyImage.ContentType)
             {
                 Name = legacyImage.FileName,
+            },
+        ];
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildSpriteStabilizationModelOnlyContentsAsync(
+        Guid projectId,
+        string toolResult,
+        CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(toolResult);
+        var root = document.RootElement;
+        if (!TryReadGuidProperty(root, "spriteSheetId", out var spriteSheetId))
+            return Array.Empty<AIContent>();
+
+        var image = await workflow.BuildSpriteSheetStabilizationAnnotatedSheetAsync(projectId, spriteSheetId, cancellationToken);
+        return
+        [
+            new TextContent($"Model-only image: sprite stabilization diagnostic for sprite sheet {spriteSheetId}. Blue boxes are original frame crops, green boxes are proposed crops, yellow anchors are accepted matches, red anchors are low-confidence matches, and magenta is the reference anchor. These images are not attached to visible chat context."),
+            new DataContent(image.DataUrl, image.ContentType)
+            {
+                Name = image.FileName,
             },
         ];
     }

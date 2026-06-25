@@ -27,6 +27,7 @@ public class SpriteSheetDefinition
     public string? BackgroundMode { get; set; }
     public string? BackgroundColor { get; set; }
     public string FramesJson { get; set; } = "[]";
+    public string StabilizationJson { get; set; } = "{}";
 
     public ICollection<SpriteSheetFrameRecord> FrameRecords { get; set; } = [];
 

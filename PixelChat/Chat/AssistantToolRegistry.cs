@@ -43,6 +43,8 @@ public sealed class AssistantToolRegistry(
         "detect_sprite_frame_boxes",
         "adjust_sprite_frame_box",
         "review_sprite_animation",
+        "stabilize_sprite_sheet_frames",
+        "clear_sprite_sheet_stabilization",
         "split_sprite_sheet_frames",
         "isolate_sprite_frame",
         "erase_sprite_frame_regions",
@@ -245,6 +247,26 @@ public sealed class AssistantToolRegistry(
                 ReviewSpriteAnimationAsync(projectId, spriteSheetId, maxFrames, cancellationToken),
             name: "review_sprite_animation",
             description: "Review a sprite animation from the current PNG working sheet. Returns motion metrics in JSON and supplies labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content with manifest fields. For frames with hidden working images it also returns removed-vs-source overlays where red marks pixels erased from the source foreground; inspect these for clipped owned silhouette before declaring cleanup done."),
+
+        AIFunctionFactory.Create(
+            method: (
+                SpriteSheetRect anchorRect,
+                Guid? spriteSheetId = null,
+                int referenceFrameNumber = 1,
+                int? searchPadding = null,
+                double? minScore = null,
+                int[]? targetFrameNumbers = null,
+                bool apply = false,
+                CancellationToken cancellationToken = default) =>
+                StabilizeSpriteSheetFramesAsync(projectId, spriteSheetId, referenceFrameNumber, anchorRect, searchPadding, minScore, targetFrameNumbers, apply, cancellationToken),
+            name: "stabilize_sprite_sheet_frames",
+            description: "Preview or apply translation-only frame stabilization using one manual anchor box on a reference frame. anchorRect is in source-sheet pixels and must be fully inside referenceFrameNumber. Defaults: searchPadding 24px, minScore 0.68, apply false. Preview first; inspect model-only diagnostics and match scores before applying."),
+
+        AIFunctionFactory.Create(
+            method: (Guid? spriteSheetId = null, CancellationToken cancellationToken = default) =>
+                ClearSpriteSheetStabilizationAsync(projectId, spriteSheetId, cancellationToken),
+            name: "clear_sprite_sheet_stabilization",
+            description: "Clear saved sprite-sheet stabilization metadata without changing frame boxes, order, previews, or working image bytes."),
 
         AIFunctionFactory.Create(
             method: (string mode) => SwitchWorkspaceModeAsync(projectId, mode),
@@ -931,6 +953,60 @@ public sealed class AssistantToolRegistry(
         }, JsonOptions);
     }
 
+    private async Task<string> StabilizeSpriteSheetFramesAsync(
+        Guid projectId,
+        Guid? spriteSheetId,
+        int referenceFrameNumber,
+        SpriteSheetRect? anchorRect,
+        int? searchPadding,
+        double? minScore,
+        int[]? targetFrameNumbers,
+        bool apply,
+        CancellationToken cancellationToken)
+    {
+        if (anchorRect is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "anchorRect is required and must be fully inside the selected reference frame.",
+            }, JsonOptions);
+        }
+
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var result = await workflow.StabilizeSpriteSheetFramesAsync(projectId, new StabilizeSpriteSheetFramesRequest(
+            resolution.SpriteSheetId!.Value,
+            referenceFrameNumber,
+            anchorRect,
+            searchPadding,
+            minScore,
+            targetFrameNumbers,
+            apply), cancellationToken);
+        return JsonSerializer.Serialize(CompactStabilizationResult(result), JsonOptions);
+    }
+
+    private async Task<string> ClearSpriteSheetStabilizationAsync(
+        Guid projectId,
+        Guid? spriteSheetId,
+        CancellationToken cancellationToken)
+    {
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var saved = await workflow.ClearSpriteSheetStabilizationAsync(projectId, resolution.SpriteSheetId!.Value, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            spriteSheetId = saved.Id,
+            stabilization = (object?)null,
+            frameCount = saved.Frames.Count,
+            frames = saved.Frames.Select(CompactFrame),
+            message = "Sprite-sheet stabilization metadata cleared. Frame boxes were not changed.",
+        }, JsonOptions);
+    }
+
     private static Task<string> DraftGenerateFormAsync(
         string? prompt,
         string? negativePrompt,
@@ -1235,6 +1311,46 @@ public sealed class AssistantToolRegistry(
             : "Sprite-sheet frame repair proposed without applying.",
     };
 
+    private static object CompactStabilizationResult(StabilizeSpriteSheetFramesResult result) => new
+    {
+        spriteSheetId = result.SpriteSheetId,
+        result.SourceAssetId,
+        result.WorkingAssetId,
+        result.Applied,
+        result.ImageWidth,
+        result.ImageHeight,
+        stabilization = CompactStabilization(result.Stabilization),
+        frameCount = result.Frames.Count,
+        frames = result.Frames.Select((frame, index) => new
+        {
+            frameNumber = index + 1,
+            frame.Index,
+            label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {index + 1}" : frame.Label,
+            frame.SourceRect,
+            frame.SourceImageAssetId,
+            frame.SourceImageRect,
+            hasShapePaths = HasShapePaths(frame.ShapePaths),
+            shapePathCount = ShapePathCount(frame.ShapePaths),
+            shapePointCount = ShapePointCount(frame.ShapePaths),
+        }),
+        warnings = result.Warnings,
+        diagnosticImage = new
+        {
+            result.DiagnosticImage.Label,
+            result.DiagnosticImage.FileName,
+            result.DiagnosticImage.ContentType,
+            result.DiagnosticImage.Kind,
+            result.DiagnosticImage.FrameIndex,
+            result.DiagnosticImage.FromFrame,
+            result.DiagnosticImage.ToFrame,
+        },
+        savedFrameIds = result.SavedSheet?.Frames.Select(frame => frame.Id).ToList() ?? [],
+        modelOnlyImages = "Stabilization returns a model-only annotated diagnostic sheet after the tool result. Blue is original, green is proposed, yellow/red are matched anchors, magenta is the reference anchor.",
+        message = result.Applied
+            ? "Sprite-sheet stabilization applied."
+            : "Sprite-sheet stabilization preview saved without changing frame boxes.",
+    };
+
     private static object CompactSpriteSheetResult(SpriteSheetDefinitionView saved, string message) => new
     {
         spriteSheetId = saved.Id,
@@ -1251,6 +1367,7 @@ public sealed class AssistantToolRegistry(
         saved.HorizontalAnchor,
         saved.VerticalAnchor,
         background = saved.Background,
+        stabilization = CompactStabilization(saved.Stabilization),
         frameCount = saved.Frames.Count,
         frames = saved.Frames.Select(CompactFrame),
         warnings = CompactSpriteSheetWarnings(saved),
@@ -1281,7 +1398,43 @@ public sealed class AssistantToolRegistry(
         frame.WorkingHeight,
         frame.WorkingMargin,
         frame.WorkingUpdatedAt,
+        translation = new { x = frame.TranslationX, y = frame.TranslationY },
     };
+
+    private static object? CompactStabilization(SpriteSheetStabilizationView? stabilization)
+    {
+        if (stabilization is null)
+            return null;
+
+        return new
+        {
+            stabilization.ReferenceFrameNumber,
+            stabilization.ReferenceFrameIndex,
+            stabilization.AnchorRect,
+            stabilization.SearchPadding,
+            stabilization.MinScore,
+            stabilization.Applied,
+            stabilization.UpdatedAt,
+            matchCount = stabilization.Matches.Count,
+            lowConfidenceCount = stabilization.Matches.Count(match => match.LowConfidence),
+            clampedCount = stabilization.Matches.Count(match => match.Clamped),
+            warnings = stabilization.Warnings,
+            matches = stabilization.Matches.Select(match => new
+            {
+                match.FrameNumber,
+                match.Index,
+                match.OriginalSourceRect,
+                match.MatchedAnchorRect,
+                match.ProposedSourceRect,
+                match.DeltaX,
+                match.DeltaY,
+                match.Score,
+                match.LowConfidence,
+                match.Clamped,
+                match.Warnings,
+            }),
+        };
+    }
 
     private static object CompactFrameWorkingResult(SpriteFrameWorkingView frame, string message) => new
     {

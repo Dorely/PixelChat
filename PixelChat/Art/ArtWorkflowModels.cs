@@ -105,6 +105,7 @@ public sealed record SpriteSheetDefinitionView(
     string VerticalAnchor,
     SpriteSheetBackground Background,
     IReadOnlyList<SpriteSheetFrameRecordView> Frames,
+    SpriteSheetStabilizationView? Stabilization,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
@@ -149,6 +150,52 @@ public sealed record SpriteSheetFrameRecordView(
     int TranslationY = 0,
     string QaStatus = "",
     IReadOnlyList<string>? RepairHistory = null);
+
+public sealed record SpriteSheetStabilizationView(
+    int ReferenceFrameNumber,
+    int ReferenceFrameIndex,
+    SpriteSheetRect AnchorRect,
+    int SearchPadding,
+    double MinScore,
+    bool Applied,
+    DateTime UpdatedAt,
+    IReadOnlyList<SpriteSheetStabilizationMatchView> Matches,
+    IReadOnlyList<string> Warnings);
+
+public sealed record SpriteSheetStabilizationMatchView(
+    int FrameNumber,
+    int Index,
+    SpriteSheetRect OriginalSourceRect,
+    SpriteSheetRect MatchedAnchorRect,
+    SpriteSheetRect ProposedSourceRect,
+    int DeltaX,
+    int DeltaY,
+    double Score,
+    bool LowConfidence,
+    bool Clamped,
+    IReadOnlyList<string> Warnings);
+
+public sealed record StabilizeSpriteSheetFramesRequest(
+    Guid SpriteSheetId,
+    int ReferenceFrameNumber,
+    SpriteSheetRect AnchorRect,
+    int? SearchPadding,
+    double? MinScore,
+    IReadOnlyList<int>? TargetFrameNumbers,
+    bool Apply);
+
+public sealed record StabilizeSpriteSheetFramesResult(
+    Guid SpriteSheetId,
+    Guid SourceAssetId,
+    Guid? WorkingAssetId,
+    bool Applied,
+    int ImageWidth,
+    int ImageHeight,
+    SpriteSheetStabilizationView Stabilization,
+    IReadOnlyList<SpriteSheetFrameUpdateView> Frames,
+    IReadOnlyList<string> Warnings,
+    SpriteAnimationReviewImageView DiagnosticImage,
+    SpriteSheetDefinitionView? SavedSheet);
 
 public sealed record SpriteFrameWorkingView(
     Guid FrameId,

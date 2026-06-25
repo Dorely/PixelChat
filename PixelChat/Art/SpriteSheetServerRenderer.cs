@@ -587,6 +587,39 @@ internal static class SpriteSheetServerRenderer
             rejectedSegments);
     }
 
+    internal static SpriteSheetReviewImage BuildStabilizationAnnotatedSheetView(
+        byte[] sourceRgba,
+        int sourceWidth,
+        int sourceHeight,
+        SpriteSheetBackground background,
+        SpriteSheetStabilizationView stabilization)
+    {
+        ValidateCanvasSize(sourceWidth, sourceHeight, "Stabilization diagnostic image is too large.");
+        var output = NewFilledCanvas(sourceWidth, sourceHeight, background);
+        Array.Copy(sourceRgba, output, Math.Min(sourceRgba.Length, output.Length));
+
+        foreach (var match in stabilization.Matches)
+        {
+            DrawRectangle(output, sourceWidth, sourceHeight, NormalizeSourceRect(match.OriginalSourceRect), 31, 111, 235, 150, 1);
+            DrawRectangle(output, sourceWidth, sourceHeight, NormalizeSourceRect(match.ProposedSourceRect), 32, 210, 115, 230, 2);
+            var anchorColor = match.LowConfidence ? (R: (byte)239, G: (byte)68, B: (byte)68) : (R: (byte)245, G: (byte)159, B: (byte)0);
+            DrawRectangle(output, sourceWidth, sourceHeight, NormalizeSourceRect(match.MatchedAnchorRect), anchorColor.R, anchorColor.G, anchorColor.B, 240, 2);
+            DrawIndexLabel(output, sourceWidth, sourceHeight, match.Index, match.ProposedSourceRect.X, match.ProposedSourceRect.Y);
+        }
+
+        DrawRectangle(output, sourceWidth, sourceHeight, NormalizeSourceRect(stabilization.AnchorRect), 236, 72, 153, 255, 3);
+        DrawIndexLabel(output, sourceWidth, sourceHeight, stabilization.ReferenceFrameIndex, stabilization.AnchorRect.X, stabilization.AnchorRect.Y);
+
+        return new SpriteSheetReviewImage(
+            "Sprite stabilization diagnostic (blue original, green proposed, yellow/red matched anchors, magenta reference anchor)",
+            "sprite-sheet-stabilization-diagnostic.png",
+            "stabilization",
+            null,
+            null,
+            null,
+            SpriteSheetPngCodec.EncodeRgba(sourceWidth, sourceHeight, output));
+    }
+
     private static SpriteSheetReviewImage BuildAnnotatedSheetView(
         byte[] sourceRgba,
         int sourceWidth,

@@ -412,6 +412,7 @@ function updateCanvasToolClasses(canvas, state) {
     canvas.classList.toggle("is-select-tool", state.tool === "select");
     canvas.classList.toggle("is-draw-tool", state.tool === "draw");
     canvas.classList.toggle("is-outline-tool", state.tool === "outline");
+    canvas.classList.toggle("is-anchor-tool", state.tool === "anchor");
     canvas.classList.toggle("is-dragging-frame", Boolean(state.drag));
 }
 
@@ -472,6 +473,14 @@ function onPointerDown(canvas, state, event) {
         return;
     }
 
+    if (state.tool === "anchor") {
+        state.layout.anchorRect = { x: point.x, y: point.y, w: 1, h: 1 };
+        state.drag = { type: "anchor", start: point, current: point };
+        updateCanvasToolClasses(canvas, state);
+        drawSourceCanvas(canvas, state);
+        return;
+    }
+
     const hit = hitTest(state, point);
     if (!hit) {
         state.selectedIndex = -1;
@@ -515,6 +524,13 @@ function onPointerMove(canvas, state, event) {
     if (!point) return;
     event.preventDefault();
 
+    if (state.drag.type === "anchor") {
+        state.drag.current = point;
+        state.layout.anchorRect = clampRect(rectFromPoints(state.drag.start, point), imageWidth(state.image), imageHeight(state.image));
+        drawSourceCanvas(canvas, state);
+        return;
+    }
+
     const frame = state.layout.frames[state.drag.index];
     if (!frame) return;
 
@@ -552,6 +568,18 @@ function onPointerMove(canvas, state, event) {
 function onPointerUp(canvas, state, event) {
     if (!state.drag || !state.layout) return;
     event.preventDefault();
+
+    if (state.drag.type === "anchor") {
+        const rect = clampRect(rectFromPoints(state.drag.start, state.drag.current || state.drag.start), imageWidth(state.image), imageHeight(state.image));
+        state.drag = null;
+        updateCanvasToolClasses(canvas, state);
+        if (rect.w >= 4 && rect.h >= 4) {
+            state.layout.anchorRect = rect;
+            state.dotNetRef?.invokeMethodAsync("OnSpriteAnchorChanged", toDotNetRect(rect));
+        }
+        drawSourceCanvas(canvas, state);
+        return;
+    }
 
     const frame = state.layout.frames[state.drag.index];
     if (frame) {
@@ -638,6 +666,7 @@ function drawSourceCanvas(canvas, state) {
         }
     }
     drawOutlineDraft(ctx, state, viewport, scaleX, scaleY);
+    drawAnchorOverlay(ctx, state, viewport, scaleX, scaleY);
     ctx.restore();
 }
 
@@ -724,6 +753,29 @@ function drawOutlineDraft(ctx, state, viewport, scaleX, scaleY) {
         ctx.fillStyle = "rgba(22,163,74,0.42)";
         ctx.fill();
     }
+    ctx.restore();
+}
+
+function drawAnchorOverlay(ctx, state, viewport, scaleX, scaleY) {
+    const rect = normalizeAnchorRect(state.layout?.anchorRect);
+    if (!rect) return;
+
+    const x = viewport.x + rect.x * scaleX;
+    const y = viewport.y + rect.y * scaleY;
+    const w = rect.w * scaleX;
+    const h = rect.h * scaleY;
+    ctx.save();
+    ctx.lineWidth = Math.max(2, 2 * deviceScale());
+    ctx.strokeStyle = "#ec4899";
+    ctx.fillStyle = "rgba(236,72,153,0.16)";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+    const label = "Anchor";
+    const labelWidth = Math.min(ctx.measureText(label).width + 10 * deviceScale(), Math.max(42 * deviceScale(), w));
+    ctx.fillStyle = "rgba(157,23,77,0.94)";
+    ctx.fillRect(x, y, labelWidth, 20 * deviceScale());
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(label, x + 5 * deviceScale(), y + 3 * deviceScale(), labelWidth - 8 * deviceScale());
     ctx.restore();
 }
 
@@ -1045,6 +1097,7 @@ function normalizeLayout(payload) {
     }
 
     reindexFrames(frames);
+    const anchorRect = normalizeAnchorRect(read(payload, "AnchorRect", "anchorRect"));
     return {
         rows,
         columns,
@@ -1057,8 +1110,20 @@ function normalizeLayout(payload) {
         loop: Boolean(read(payload, "Loop", "loop") ?? true),
         horizontalAnchor: normalizeHorizontalAnchor(read(payload, "HorizontalAnchor", "horizontalAnchor")),
         verticalAnchor: normalizeVerticalAnchor(read(payload, "VerticalAnchor", "verticalAnchor")),
+        anchorRect,
         frames,
     };
+}
+
+function normalizeAnchorRect(value) {
+    if (!value) return null;
+    const rect = {
+        x: clampInt(read(value, "X", "x"), -32768, 32767, 0),
+        y: clampInt(read(value, "Y", "y"), -32768, 32767, 0),
+        w: clampInt(read(value, "Width", "width", "W", "w"), 1, 32767, 1),
+        h: clampInt(read(value, "Height", "height", "H", "h"), 1, 32767, 1),
+    };
+    return rect.w >= 1 && rect.h >= 1 ? rect : null;
 }
 
 function normalizeHorizontalAnchor(value) {
