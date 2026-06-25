@@ -35,11 +35,13 @@ public sealed class AssistantToolRegistry(
         "save_prompt_recipe",
         "save_animation_recipe",
         "revert_recipe_version",
+        "generate_animation_guide",
         "generate_sprite_sheet_candidates",
         "create_sprite_sheet",
         "compose_sprite_sheet_from_images",
         "map_sprite_sheet_frames",
         "detect_sprite_frame_boxes",
+        "adjust_sprite_frame_box",
         "review_sprite_animation",
         "split_sprite_sheet_frames",
         "isolate_sprite_frame",
@@ -136,13 +138,31 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 SaveAnimationRecipeToolAsync(projectId, recipeId, name, animationKind, promptScaffold, changeSummary, facing, frameCount, frameOrder, fps, loop, guideAssetId, expectedFrameBoxes, anchorStrategy, exportDefaultsJson, notes, primaryExampleSpriteSheetId, cancellationToken),
             name: "save_animation_recipe",
-            description: "Create or update a durable animation recipe for reusable motion/layout work. Include generic guide/layout guidance, expected frame boxes if known, frame order, fps/loop, anchor strategy, prompt scaffold, export defaults, notes, and a primary successful sprite-sheet example when available. Do not put art style rules here unless the recipe is intentionally style-specific. Always provide changeSummary."),
+            description: "Create or update a durable animation recipe for reusable motion/layout work. If guideAssetId is supplied it must be an existing SpriteGuide asset in this project; generated images and sprite sheets are rejected. Include generic guide/layout guidance, expected frame boxes if known, frame order, fps/loop, anchor strategy, prompt scaffold, export defaults, notes, and a primary successful sprite-sheet example when available. Do not put art style rules here unless the recipe is intentionally style-specific. Always provide changeSummary."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId, int version, CancellationToken cancellationToken = default) =>
                 RevertPromptRecipeToolAsync(projectId, recipeId, version, cancellationToken),
             name: "revert_recipe_version",
             description: "Restore an older prompt recipe snapshot as a new assistant-authored version. This is non-destructive and appends a new version entry."),
+
+        AIFunctionFactory.Create(
+            method: (
+                string animationKind,
+                Guid? referenceAssetId = null,
+                string? assetType = null,
+                string? structureType = null,
+                string? facing = null,
+                int? frameCount = null,
+                int? fps = null,
+                string? rootMotion = null,
+                string? targetCellSize = null,
+                string? motionClipId = null,
+                string? label = null,
+                CancellationToken cancellationToken = default) =>
+                GenerateAnimationGuideToolAsync(projectId, referenceAssetId, animationKind, assetType, structureType, facing, frameCount, fps, rootMotion, targetCellSize, motionClipId, label, cancellationToken),
+            name: "generate_animation_guide",
+            description: "Render and save a reusable animation guide as SpriteGuide assets. Use this before generate_sprite_sheet_candidates for animation work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
 
         AIFunctionFactory.Create(
             method: (string? status = null, int? limit = null) =>
@@ -182,7 +202,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 RunGenerationRoundAsync(projectId, budget, prompt, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, cancellationToken),
             name: "generate_sprite_sheet_candidates",
-            description: "Generate sprite-sheet candidates from a concise prompt plus ordered references. Put guide/layout references first, starter/reference sprite second, and optional style reference/art recipe after that. The prompt should define frame count/order, boundaries, no overlap, preservation, and guide-mark cleanup. Returns model-only candidate images; add promising batches/assets to Review for the user."),
+            description: "Generate sprite-sheet candidates from a concise prompt plus ordered references. For guide-driven animation, first call generate_animation_guide and put the returned SpriteGuide asset first, starter/reference sprite second, and optional style reference/art recipe after that. Do not use old SpriteSheet, Generated, Edited, Imported, or Cropped assets as motion guides. The prompt should define frame count/order, boundaries, no overlap, preservation, and guide-mark cleanup. Returns model-only candidate images; add promising batches/assets to Review for the user."),
 
         AIFunctionFactory.Create(
             method: (int? limit = null) => workflow.ListSpriteSheetsJsonAsync(projectId, limit),
@@ -310,13 +330,13 @@ public sealed class AssistantToolRegistry(
                 Guid? sourceAssetId = null,
                 Guid? spriteSheetId = null,
                 int? expectedFrames = null,
-                string? layoutHint = null,
-                string? backgroundMode = null,
-                bool apply = true,
+                string? layoutHint = "rows",
+                string? backgroundMode = "auto",
+                bool apply = false,
                 CancellationToken cancellationToken = default) =>
                 MapSpriteSheetFramesAsync(projectId, "auto", sourceAssetId, spriteSheetId, expectedFrames, layoutHint, backgroundMode, targetFrameNumbers: null, apply, cancellationToken),
             name: "detect_sprite_frame_boxes",
-            description: "Auto-detect candidate frame boxes for a sheet and optionally apply them. Use after choosing a candidate sheet and before splitting frames. If detection is close but imperfect, apply then adjust frame boxes instead of repeatedly detecting."),
+            description: "Auto-detect candidate frame boxes for the current working sheet without applying by default. Defaults match the UI Auto Detect button: active/current working sheet, layoutHint rows, backgroundMode auto, and fit-cells behavior when apply=true. Use after choosing a candidate sheet and before splitting frames. If detection is close but imperfect, apply then adjust individual frame boxes instead of repeatedly detecting."),
 
         AIFunctionFactory.Create(
             method: (
@@ -335,6 +355,19 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) => UpdateSpriteSheetFramesAsync(projectId, spriteSheetId, rows, columns, cellWidth, cellHeight, frames, padding, gutter, fps, loop, horizontalAnchor, verticalAnchor, cancellationToken),
             name: "update_sprite_sheet_frames",
             description: "Replace the visible Sprites workspace frame set and layout without changing working image bytes. Use after detection when boxes need manual correction, ordering changes, or precise geometry updates."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid? spriteSheetId,
+                int frameNumber,
+                SpriteSheetRect sourceRect,
+                SpriteSheetRect? sourceImageRect = null,
+                string? label = null,
+                bool fitCells = true,
+                CancellationToken cancellationToken = default) =>
+                AdjustSpriteFrameBoxAsync(projectId, spriteSheetId, frameNumber, sourceRect, sourceImageRect, label, fitCells, cancellationToken),
+            name: "adjust_sprite_frame_box",
+            description: "Adjust one saved frame source rectangle without replacing every frame. Use after detect_sprite_frame_boxes when a specific frame box is shifted, too small, or too large. frameNumber is 1-based. fitCells matches the UI Auto Detect behavior by resizing cells to the largest current frame plus padding."),
 
         AIFunctionFactory.Create(
             method: (Guid? spriteSheetId, int frameNumber, int? margin = null, CancellationToken cancellationToken = default) =>
@@ -615,6 +648,71 @@ public sealed class AssistantToolRegistry(
         }, JsonOptions);
     }
 
+    private async Task<string> GenerateAnimationGuideToolAsync(
+        Guid projectId,
+        Guid? referenceAssetId,
+        string animationKind,
+        string? assetType,
+        string? structureType,
+        string? facing,
+        int? frameCount,
+        int? fps,
+        string? rootMotion,
+        string? targetCellSize,
+        string? motionClipId,
+        string? label,
+        CancellationToken cancellationToken)
+    {
+        var guide = await workflow.GenerateAnimationGuideAsync(projectId, new GenerateAnimationGuideRequest(
+            referenceAssetId,
+            animationKind,
+            assetType,
+            structureType,
+            facing,
+            frameCount,
+            fps,
+            rootMotion,
+            targetCellSize,
+            motionClipId,
+            label), cancellationToken);
+
+        return JsonSerializer.Serialize(new
+        {
+            guide.GuideAssetId,
+            guide.DiagnosticGuideAssetId,
+            guide.Label,
+            guide.AnimationKind,
+            guide.AssetType,
+            guide.StructureType,
+            guide.Facing,
+            guide.RootMotion,
+            guide.FrameCount,
+            guide.FrameOrder,
+            guide.Fps,
+            guide.Loop,
+            guide.Rows,
+            guide.Columns,
+            guide.CanvasWidth,
+            guide.CanvasHeight,
+            guide.GuideCellWidth,
+            guide.GuideCellHeight,
+            guide.TargetCellWidth,
+            guide.TargetCellHeight,
+            guide.ExpectedFrameBoxes,
+            guide.AnchorStrategy,
+            guide.PromptScaffold,
+            guide.ExportDefaultsJson,
+            guide.Renderer,
+            guide.RenderStyle,
+            guide.MotionClipId,
+            guide.MotionSourcePackage,
+            guide.MotionSourceLicense,
+            guide.MotionSourceUrl,
+            guide.Message,
+            nextStep = "Call generate_sprite_sheet_candidates with referenceAssetIds ordered as [guideAssetId, subjectAssetId, optionalStyleAssetId].",
+        }, JsonOptions);
+    }
+
     private async Task<string> RevertPromptRecipeToolAsync(
         Guid projectId,
         Guid recipeId,
@@ -828,6 +926,7 @@ public sealed class AssistantToolRegistry(
             review.Fps,
             review.Loop,
             review.Metrics,
+            qualityGate = BuildAnimationQualityGate(review.Metrics),
             modelOnlyImages = review.Images.Select(image => new { image.Label, image.FileName, image.ContentType, image.Kind, image.FrameIndex, image.FromFrame, image.ToFrame }).ToList(),
         }, JsonOptions);
     }
@@ -916,48 +1015,67 @@ public sealed class AssistantToolRegistry(
 
         if (normalizedMode is not "auto")
             return JsonSerializer.Serialize(new { error = "mode must be 'auto' or 'grid-repair'." }, JsonOptions);
-        if (sourceAssetId is not Guid asset)
-            return JsonSerializer.Serialize(new { error = "mode 'auto' requires sourceAssetId." }, JsonOptions);
 
-        return await DetectSpriteSheetFramesAsync(projectId, asset, expectedFrames, layoutHint, backgroundMode);
+        return await DetectSpriteSheetFramesAsync(projectId, sourceAssetId, spriteSheetId, expectedFrames, layoutHint, backgroundMode, apply, cancellationToken);
     }
 
     private async Task<string> DetectSpriteSheetFramesAsync(
         Guid projectId,
-        Guid sourceAssetId,
+        Guid? sourceAssetId,
+        Guid? spriteSheetId,
         int? expectedFrames,
         string? layoutHint,
-        string? backgroundMode)
+        string? backgroundMode,
+        bool apply,
+        CancellationToken cancellationToken)
     {
+        var workbench = await workflow.GetWorkbenchAsync(projectId, cancellationToken);
+        var sheet = ResolveDetectionSheet(workbench, sourceAssetId, spriteSheetId);
+        if (sheet is null && sourceAssetId is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "Auto detection requires sourceAssetId, spriteSheetId, or an active sprite sheet.",
+                activeSpriteSheetId = workbench.Project.ActiveSpriteSheetId,
+            }, JsonOptions);
+        }
+
+        var sourceForDetection = sheet?.WorkingAssetId ?? sheet?.SourceAssetId ?? sourceAssetId!.Value;
         var detection = await workflow.DetectSpriteSheetFramesAsync(
             projectId,
             new SpriteSheetDetectionRequest(
-                sourceAssetId,
+                sourceForDetection,
                 expectedFrames,
-                layoutHint,
-                backgroundMode));
-        var sheet = await workflow.StartSpriteSheetEditAsync(projectId, sourceAssetId);
+                string.IsNullOrWhiteSpace(layoutHint) ? "rows" : layoutHint,
+                string.IsNullOrWhiteSpace(backgroundMode) ? "auto" : backgroundMode));
+        if (!apply)
+            return JsonSerializer.Serialize(detection, JsonOptions);
+
+        var savedSheet = sheet is null
+            ? await workflow.StartSpriteSheetEditAsync(projectId, sourceForDetection, cancellationToken)
+            : sheet;
         var frames = detection.Frames
             .Select(frame => new SpriteSheetFrameUpdateView(
                 frame.Index,
                 $"Frame {frame.Index + 1}",
                 frame.SourceRect,
                 frame.ShapePaths,
-                sourceAssetId,
+                sourceForDetection,
                 frame.SourceRect))
             .ToList();
+        var padding = Math.Max(0, savedSheet.Padding);
         var saved = await workflow.UpdateSpriteSheetFramesAsync(projectId, new UpdateSpriteSheetFramesRequest(
-            sheet.Id,
+            savedSheet.Id,
             Math.Clamp(detection.Rows, 1, 32),
             Math.Clamp(detection.Columns, 1, 64),
-            Math.Clamp(MaxFrameWidth(detection.Frames, CeilDiv(detection.ImageWidth, Math.Max(1, detection.Columns))), 1, 8192),
-            Math.Clamp(MaxFrameHeight(detection.Frames, CeilDiv(detection.ImageHeight, Math.Max(1, detection.Rows))), 1, 8192),
-            Padding: 0,
-            Gutter: 0,
-            sheet.Fps,
-            sheet.Loop,
-            sheet.HorizontalAnchor,
-            sheet.VerticalAnchor,
+            Math.Clamp(MaxFrameWidth(detection.Frames, CeilDiv(detection.ImageWidth, Math.Max(1, detection.Columns))) + (padding * 2), 1, 8192),
+            Math.Clamp(MaxFrameHeight(detection.Frames, CeilDiv(detection.ImageHeight, Math.Max(1, detection.Rows))) + (padding * 2), 1, 8192),
+            padding,
+            savedSheet.Gutter,
+            savedSheet.Fps,
+            savedSheet.Loop,
+            savedSheet.HorizontalAnchor,
+            savedSheet.VerticalAnchor,
             frames));
 
         return JsonSerializer.Serialize(CompactDetectionResult(detection, saved), JsonOptions);
@@ -1019,6 +1137,31 @@ public sealed class AssistantToolRegistry(
             NormalizeVerticalAnchor(verticalAnchor),
             frames), cancellationToken);
         return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, "Sprite sheet frames updated."), JsonOptions);
+    }
+
+    private async Task<string> AdjustSpriteFrameBoxAsync(
+        Guid projectId,
+        Guid? spriteSheetId,
+        int frameNumber,
+        SpriteSheetRect sourceRect,
+        SpriteSheetRect? sourceImageRect,
+        string? label,
+        bool fitCells,
+        CancellationToken cancellationToken)
+    {
+        var resolution = await ResolveSpriteSheetIdForToolAsync(projectId, spriteSheetId, cancellationToken);
+        if (resolution.ErrorJson is not null)
+            return resolution.ErrorJson;
+
+        var saved = await workflow.AdjustSpriteSheetFrameBoxAsync(projectId, new AdjustSpriteSheetFrameBoxRequest(
+            resolution.SpriteSheetId!.Value,
+            FrameIndexFromNumber(frameNumber),
+            sourceRect,
+            sourceImageRect,
+            label,
+            fitCells), cancellationToken);
+
+        return JsonSerializer.Serialize(CompactSpriteSheetResult(saved, $"Frame {frameNumber} box adjusted."), JsonOptions);
     }
 
     private static object CompactDetectionResult(SpriteSheetDetectionResult detection, SpriteSheetDefinitionView saved) => new
@@ -1160,6 +1303,61 @@ public sealed class AssistantToolRegistry(
         message,
     };
 
+    private static object BuildAnimationQualityGate(SpriteAnimationMetricsView metrics)
+    {
+        var pairs = metrics.FramePairs.ToList();
+        var majorOutliers = pairs
+            .Where(pair =>
+                pair.CentroidDistance > Math.Max(32d, metrics.MeanCentroidDrift * 2.25d)
+                || Math.Abs(pair.BoundingBoxWidthDelta) > 64
+                || Math.Abs(pair.BoundingBoxHeightDelta) > 64
+                || Math.Abs(pair.SilhouetteAreaChangePercent) > 45d
+                || pair.ForegroundPixelDiffPercent > 42d)
+            .Select(pair => new
+            {
+                fromFrame = pair.FromFrame,
+                toFrame = pair.ToFrame,
+                pair.LoopSeam,
+                pair.CentroidDistance,
+                pair.ForegroundPixelDiffPercent,
+                pair.SilhouetteAreaChangePercent,
+                pair.BoundingBoxWidthDelta,
+                pair.BoundingBoxHeightDelta,
+            })
+            .ToList();
+        var repeatedPosePairs = pairs
+            .Where(pair => !pair.LoopSeam && pair.CentroidDistance < 4d && pair.ForegroundPixelDiffPercent < 8d)
+            .Select(pair => new { fromFrame = pair.FromFrame, toFrame = pair.ToFrame })
+            .ToList();
+        var warnings = new List<string>();
+        if (majorOutliers.Count > 0)
+            warnings.Add("Major motion, scale, silhouette, or foreground-diff outliers detected.");
+        if (repeatedPosePairs.Count > 0)
+            warnings.Add("Adjacent frames may repeat the same pose.");
+        if (metrics.AreaVariancePercent > 30d)
+            warnings.Add("Frame silhouette area variance is high; check for distortions, crop errors, or wrong boxes.");
+        warnings.Add("Wrong pose order and action semantics require visual review against the requested animation/guide.");
+
+        var status = majorOutliers.Count > 0 || repeatedPosePairs.Count > 0 || metrics.AreaVariancePercent > 30d
+            ? "needs_motion_or_pose_review"
+            : "pass_with_visual_review";
+        var recommendedAction = majorOutliers.Count > 0 || repeatedPosePairs.Count > 0
+            ? "regenerate_or_full_strip_edit_bad_pose_sequence_before_cleanup"
+            : metrics.AreaVariancePercent > 30d
+                ? "check_boxes_then_regenerate_or_edit_distorted_frames"
+                : "continue_only_if_visual_pose_review_passes";
+
+        return new
+        {
+            status,
+            recommendedAction,
+            warnings,
+            majorOutliers,
+            repeatedPosePairs,
+            cleanupRule = "Use deterministic erase/keep only for guide marks, edge bleed, or background artifacts after boxes and poses are acceptable.",
+        };
+    }
+
     private static int FrameIndexFromNumber(int frameNumber)
     {
         if (frameNumber <= 0)
@@ -1227,6 +1425,44 @@ public sealed class AssistantToolRegistry(
         IReadOnlyList<string> Warnings);
 
     private sealed record SpriteSheetToolResolution(Guid? SpriteSheetId, string? ErrorJson);
+
+    private static SpriteSheetDefinitionView? ResolveDetectionSheet(
+        WorkbenchView workbench,
+        Guid? sourceAssetId,
+        Guid? requestedSpriteSheetId)
+    {
+        if (requestedSpriteSheetId is Guid requested && requested != Guid.Empty)
+        {
+            var exact = workbench.SpriteSheets.FirstOrDefault(sheet => sheet.Id == requested);
+            if (exact is not null)
+                return exact;
+
+            var assetMatches = workbench.SpriteSheets
+                .Where(sheet => sheet.SourceAssetId == requested || sheet.WorkingAssetId == requested)
+                .ToList();
+            if (assetMatches.Count == 1)
+                return assetMatches[0];
+
+            var activeMatch = assetMatches.FirstOrDefault(sheet => sheet.Id == workbench.Project.ActiveSpriteSheetId);
+            if (activeMatch is not null)
+                return activeMatch;
+        }
+
+        if (sourceAssetId is Guid source && source != Guid.Empty)
+        {
+            var assetMatches = workbench.SpriteSheets
+                .Where(sheet => sheet.SourceAssetId == source || sheet.WorkingAssetId == source)
+                .ToList();
+            if (assetMatches.Count == 1)
+                return assetMatches[0];
+
+            var activeMatch = assetMatches.FirstOrDefault(sheet => sheet.Id == workbench.Project.ActiveSpriteSheetId);
+            if (activeMatch is not null)
+                return activeMatch;
+        }
+
+        return workbench.ActiveSpriteSheet;
+    }
 
     private async Task<SpriteSheetToolResolution> ResolveSpriteSheetIdForToolAsync(
         Guid projectId,

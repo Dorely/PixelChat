@@ -530,7 +530,9 @@ public sealed record AnimationRecipeView(
     Guid? PrimaryExampleSpriteSheetId,
     int CurrentVersion,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    string GuideAssetKind,
+    bool GuideAssetValid);
 
 public sealed record ImageMaskView(
     Guid Id,
@@ -689,6 +691,60 @@ public sealed record UpdateAnimationRecipeRequest(
     Guid? PrimaryExampleSpriteSheetId,
     string Source = "user",
     string ChangeSummary = "");
+
+public sealed record GenerateAnimationGuideRequest(
+    Guid? ReferenceAssetId,
+    string AnimationKind,
+    string? AssetType = null,
+    string? StructureType = null,
+    string? Facing = null,
+    int? FrameCount = null,
+    int? Fps = null,
+    string? RootMotion = null,
+    string? TargetCellSize = null,
+    string? MotionClipId = null,
+    string? Label = null);
+
+public sealed record AnimationGuideRenderView(
+    Guid GuideAssetId,
+    Guid DiagnosticGuideAssetId,
+    string Label,
+    string AnimationKind,
+    string AssetType,
+    string StructureType,
+    string Facing,
+    string RootMotion,
+    int FrameCount,
+    IReadOnlyList<int> FrameOrder,
+    int Fps,
+    bool Loop,
+    int Rows,
+    int Columns,
+    int CanvasWidth,
+    int CanvasHeight,
+    int GuideCellWidth,
+    int GuideCellHeight,
+    int TargetCellWidth,
+    int TargetCellHeight,
+    IReadOnlyList<SpriteSheetRect> ExpectedFrameBoxes,
+    string AnchorStrategy,
+    string PromptScaffold,
+    string ExportDefaultsJson,
+    string Renderer,
+    string RenderStyle,
+    string? MotionClipId,
+    string? MotionSourcePackage,
+    string? MotionSourceLicense,
+    string? MotionSourceUrl,
+    string Message);
+
+public sealed record AdjustSpriteSheetFrameBoxRequest(
+    Guid SpriteSheetId,
+    int FrameIndex,
+    SpriteSheetRect SourceRect,
+    SpriteSheetRect? SourceImageRect = null,
+    string? Label = null,
+    bool FitCells = true);
 
 public sealed record PromptRecipeVersionView(
     Guid Id,

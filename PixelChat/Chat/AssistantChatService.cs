@@ -893,6 +893,9 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal))
                 return await BuildGenerationRoundModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
+            if (string.Equals(pendingCall.Name, "generate_animation_guide", StringComparison.Ordinal))
+                return await BuildAnimationGuideModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
+
             if (IsSpriteFrameWorkingImageTool(pendingCall.Name))
                 return await BuildSpriteFrameWorkingModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
@@ -906,6 +909,9 @@ public sealed class AssistantChatService(
                     ? await BuildSpriteMutationModelOnlyContentsAsync("repair_sprite_sheet_frames", projectId, toolResult, cancellationToken)
                     : await BuildSpriteSheetDetectionModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
             }
+
+            if (string.Equals(pendingCall.Name, "detect_sprite_frame_boxes", StringComparison.Ordinal))
+                return await BuildSpriteSheetDetectionModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
             if (IsSpriteMutationFeedbackTool(pendingCall.Name))
                 return await BuildSpriteMutationModelOnlyContentsAsync(pendingCall.Name, projectId, toolResult, cancellationToken);
@@ -1038,6 +1044,36 @@ public sealed class AssistantChatService(
             contents.Add(new DataContent(image.DataUrl, image.ContentType)
             {
                 Name = image.FileName,
+            });
+        }
+
+        return contents;
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildAnimationGuideModelOnlyContentsAsync(
+        Guid projectId,
+        string toolResult,
+        CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(toolResult);
+        var root = document.RootElement;
+        if (!TryReadGuidProperty(root, "guideAssetId", out var guideAssetId))
+            return Array.Empty<AIContent>();
+
+        var contents = new List<AIContent>();
+        var guide = await workflow.GetAssetForExportAsync(projectId, guideAssetId, cancellationToken);
+        contents.Add(new TextContent($"Model-only images returned by generate_animation_guide for SpriteGuide asset '{guide.Label}' ({guide.Id}). Use the guide asset first in sprite-sheet generation references; the diagnostic guide is for inspection only."));
+        contents.Add(new DataContent(guide.DataUrl, guide.ContentType)
+        {
+            Name = guide.FileName,
+        });
+
+        if (TryReadGuidProperty(root, "diagnosticGuideAssetId", out var diagnosticGuideAssetId))
+        {
+            var diagnostic = await workflow.GetAssetForExportAsync(projectId, diagnosticGuideAssetId, cancellationToken);
+            contents.Add(new DataContent(diagnostic.DataUrl, diagnostic.ContentType)
+            {
+                Name = diagnostic.FileName,
             });
         }
 
@@ -1193,6 +1229,7 @@ public sealed class AssistantChatService(
 
     private static bool IsSpriteMutationFeedbackTool(string toolName) =>
         toolName is "update_sprite_sheet_frames"
+            or "adjust_sprite_frame_box"
             or "normalize_sprite_sheet"
             or "reset_sprite_sheet_to_original"
             or "reassemble_sprite_sheet";

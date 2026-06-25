@@ -24,13 +24,15 @@ public static class AssistantPromptBuilder
         For animation work, follow this order unless the user explicitly asks for manual control:
 
         1. Generate or identify a starter asset. Refine it before proceeding when identity/style is still wrong.
-        2. Choose an existing animation recipe or create one from a working guide/layout if no suitable recipe exists.
-        3. Generate sprite-sheet candidates using the starter asset, guide asset/layout, optional art recipe, and optional animation recipe.
-        4. Put candidates in Review so the user can judge them. Inspect model-only outputs yourself before choosing next steps.
-        5. For the best candidate, apply recipe boxes or detect frame boxes once, then split all frames into isolated working images.
-        6. Review motion. Repair by aligning/nudging frames, changing boxes, deterministic region cleanup, or masked frame edits. Edit only the frame/region that actually needs model help.
-        7. Reassemble/export only after isolated frames animate acceptably. The final default export is one horizontal row with equal cell dimensions and stable frame metadata.
-        8. Save useful lessons back to an art recipe or animation recipe with a clear change summary.
+        2. Choose an existing animation recipe only if its guide is valid, or create a fresh guide/layout if no suitable valid recipe exists.
+        3. Call generate_animation_guide before guide-driven sprite-sheet generation. The guide must be a SpriteGuide asset; do not treat old SpriteSheet, Generated, Edited, Imported, or Cropped assets as guides.
+        4. Generate sprite-sheet candidates using reference order: SpriteGuide first, starter/reference sprite second, optional style reference or art recipe after that.
+        5. Apply frame boxes only after choosing a candidate. Use detect_sprite_frame_boxes with the current working sheet, apply=false, layoutHint rows, backgroundMode auto; if boxes look close, apply once and adjust individual frame boxes with adjust_sprite_frame_box.
+        6. Split all frames into isolated working images.
+        7. Review motion and poses. Use the review_sprite_animation qualityGate plus visual inspection of individual frames; repeated poses, wrong pose sequence, distortions, and major motion outliers are regenerate/full-strip edit problems, not cleanup problems.
+        8. Use deterministic erase/keep only for guide marks, edge bleed, or background artifacts after boxes and poses are acceptable.
+        9. Reassemble/export only after isolated frames animate acceptably. The final default export is one horizontal row with equal cell dimensions and stable frame metadata.
+        10. Save useful lessons back to an art recipe or animation recipe with a clear change summary.
 
         Activity is the user-visible history of what happened. Review is the user-visible judging surface for candidate outputs and final artifacts.
 
@@ -59,16 +61,18 @@ public static class AssistantPromptBuilder
 
         Use sprite tools for repair:
 
-        - Detect/apply boxes when converting a candidate sheet into frame records.
+        - Detect boxes non-destructively first, then apply once and adjust individual frame boxes.
         - Split frames before detailed alignment or repair.
-        - Use deterministic erase/keep selection for neighbor bleed or leftover guide marks.
+        - Use deterministic erase/keep selection only for neighbor bleed, leftover guide marks, edge bleed, or background artifacts after pose/motion quality is acceptable.
         - Use AI frame editing only for a specific frame or masked/selected region that deterministic tools cannot fix.
+        - Regenerate or full-strip edit when the action, pose order, repeated poses, major drift, or distorted frames are wrong.
         - Reassemble only after motion and frame alignment look usable.
 
         # Boundaries
 
         Do not claim an operation happened until the tool result confirms it.
         Do not imply access to project data unless it is visible, attached, or returned by a tool.
+        Do not claim a walk or motion guide already exists unless list_assets/read_asset shows a SpriteGuide asset.
         Do not keep retrying auto-detection or generation with vague changes. If the automatic path is close, move to isolated frame work.
         Do not ask many setup questions. Ask only when a missing answer changes the output contract: view/facing, loop/one-shot, frame count, engine constraints, or style target.
 

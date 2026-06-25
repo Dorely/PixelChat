@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PixelChat.Llm;
@@ -15,6 +16,8 @@ public sealed class ArtWorkflowService(
     IImageProvider imageProvider,
     ILlmProviderService providerService,
     IOptions<ImageGenerationOptions> imageOptions,
+    IOptions<SpriteAnimationOptions> animationOptions,
+    IWebHostEnvironment environment,
     ILogger<ArtWorkflowService> logger) : IArtWorkflowService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -28,6 +31,14 @@ public sealed class ArtWorkflowService(
         string PromptTemplate,
         string StyleRulesJson,
         string AvoidRulesJson);
+    private sealed record LayoutProfile(
+        double ForegroundAspect,
+        double ForegroundCoverage,
+        int ForegroundWidth,
+        int ForegroundHeight,
+        bool NeedsLargeCells,
+        bool NeedsTallCells,
+        bool NeedsLargePadding);
 
     public async Task<ProjectView> EnsureDefaultProjectAsync(CancellationToken cancellationToken = default)
     {
@@ -122,6 +133,7 @@ public sealed class ArtWorkflowService(
             .ToListAsync(cancellationToken);
         var animationRecipes = await db.AnimationRecipes
             .AsNoTracking()
+            .Include(r => r.GuideAsset)
             .Where(r => r.ProjectId == selected.Id)
             .OrderBy(r => r.Name)
             .ToListAsync(cancellationToken);
@@ -507,6 +519,7 @@ public sealed class ArtWorkflowService(
         var max = NormalizeToolLimit(limit, 20, 50);
         var recipes = db.AnimationRecipes
             .AsNoTracking()
+            .Include(r => r.GuideAsset)
             .Where(r => r.ProjectId == projectId);
 
         if (!string.IsNullOrWhiteSpace(query))
@@ -540,6 +553,7 @@ public sealed class ArtWorkflowService(
     {
         var recipe = await db.AnimationRecipes
             .AsNoTracking()
+            .Include(r => r.GuideAsset)
             .FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
             ?? throw new InvalidOperationException("Animation recipe was not found.");
 
@@ -1587,6 +1601,65 @@ public sealed class ArtWorkflowService(
         project.UpdatedAt = definition.UpdatedAt;
         await db.SaveChangesAsync(cancellationToken);
         return await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
+    }
+
+    public async Task<SpriteSheetDefinitionView> AdjustSpriteSheetFrameBoxAsync(
+        Guid projectId,
+        AdjustSpriteSheetFrameBoxRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var sheet = await LoadSpriteSheetViewAsync(projectId, request.SpriteSheetId, cancellationToken);
+        if (sheet.Frames.Count == 0)
+            throw new InvalidOperationException("Sprite sheet has no saved frame records to adjust.");
+
+        var targetIndex = Math.Clamp(request.FrameIndex, 0, sheet.Frames.Count - 1);
+        var frames = sheet.Frames
+            .OrderBy(frame => frame.Index)
+            .Select(frame =>
+            {
+                if (frame.Index != targetIndex)
+                {
+                    return new SpriteSheetFrameUpdateView(
+                        frame.Index,
+                        frame.Label,
+                        frame.SourceRect,
+                        frame.ShapePaths,
+                        frame.SourceImageAssetId,
+                        frame.SourceImageRect);
+                }
+
+                var sourceRect = NormalizeSourceSpriteRect(request.SourceRect);
+                return new SpriteSheetFrameUpdateView(
+                    frame.Index,
+                    string.IsNullOrWhiteSpace(request.Label) ? frame.Label : request.Label.Trim(),
+                    sourceRect,
+                    frame.ShapePaths,
+                    frame.SourceImageAssetId ?? sheet.WorkingAssetId ?? sheet.SourceAssetId,
+                    request.SourceImageRect ?? sourceRect);
+            })
+            .ToList();
+
+        var padding = Math.Max(0, sheet.Padding);
+        var cellWidth = request.FitCells
+            ? Math.Max(1, frames.Max(frame => Math.Max(1, frame.SourceRect.Width)) + (padding * 2))
+            : sheet.CellWidth;
+        var cellHeight = request.FitCells
+            ? Math.Max(1, frames.Max(frame => Math.Max(1, frame.SourceRect.Height)) + (padding * 2))
+            : sheet.CellHeight;
+
+        return await UpdateSpriteSheetFramesAsync(projectId, new UpdateSpriteSheetFramesRequest(
+            sheet.Id,
+            sheet.Rows,
+            sheet.Columns,
+            cellWidth,
+            cellHeight,
+            padding,
+            sheet.Gutter,
+            sheet.Fps,
+            sheet.Loop,
+            sheet.HorizontalAnchor,
+            sheet.VerticalAnchor,
+            frames), cancellationToken);
     }
 
     public async Task<SpriteSheetDefinitionView> ExpandSpriteSheetFramesToCellAsync(
@@ -3184,7 +3257,7 @@ public sealed class ArtWorkflowService(
         await db.AnimationRecipes.AddAsync(recipe, cancellationToken);
         await AppendAnimationRecipeVersionAsync(recipe, request.Source, request.ChangeSummary, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-        return AnimationRecipeView(recipe);
+        return await LoadAnimationRecipeViewAsync(projectId, recipe.Id, cancellationToken);
     }
 
     public async Task<AnimationRecipeView> UpdateAnimationRecipeAsync(
@@ -3201,7 +3274,7 @@ public sealed class ArtWorkflowService(
         recipe.UpdatedAt = DateTime.UtcNow;
         await AppendAnimationRecipeVersionAsync(recipe, request.Source, request.ChangeSummary, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-        return AnimationRecipeView(recipe);
+        return await LoadAnimationRecipeViewAsync(projectId, recipe.Id, cancellationToken);
     }
 
     public async Task<IReadOnlyList<AnimationRecipeVersionView>> ListAnimationRecipeVersionsAsync(
@@ -3218,6 +3291,19 @@ public sealed class ArtWorkflowService(
             .OrderByDescending(v => v.Version)
             .ToListAsync(cancellationToken);
         return versions.Select(AnimationRecipeVersionView).ToList();
+    }
+
+    private async Task<AnimationRecipeView> LoadAnimationRecipeViewAsync(
+        Guid projectId,
+        Guid recipeId,
+        CancellationToken cancellationToken)
+    {
+        var recipe = await db.AnimationRecipes
+            .AsNoTracking()
+            .Include(r => r.GuideAsset)
+            .FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == recipeId, cancellationToken)
+            ?? throw new InvalidOperationException("Animation recipe was not found.");
+        return AnimationRecipeView(recipe);
     }
 
     public async Task<string> ListAnimationRecipeVersionsJsonAsync(
@@ -3242,6 +3328,208 @@ public sealed class ArtWorkflowService(
 
         db.AnimationRecipes.Remove(recipe);
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<AnimationGuideRenderView> GenerateAnimationGuideAsync(
+        Guid projectId,
+        GenerateAnimationGuideRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        _ = await GetProjectAsync(projectId, cancellationToken);
+        ArtAsset? reference = null;
+        if (request.ReferenceAssetId is Guid referenceAssetId)
+        {
+            reference = await db.ArtAssets
+                .AsNoTracking()
+                .FirstOrDefaultAsync(asset => asset.ProjectId == projectId && asset.Id == referenceAssetId, cancellationToken)
+                ?? throw new InvalidOperationException("Reference asset was not found in this project.");
+        }
+
+        var animationKind = CleanRequired(
+            string.IsNullOrWhiteSpace(request.AnimationKind) ? "walk" : request.AnimationKind,
+            "Animation kind is required.");
+        var assetType = NormalizeGuideToken(request.AssetType, InferGuideAssetType(reference));
+        var structureType = NormalizeGuideToken(request.StructureType, DefaultGuideStructure(assetType));
+        var facing = SpriteFacing.Normalize(request.Facing, assetType == "vfx" ? SpriteFacing.Center : SpriteFacing.SideRight);
+        var rootMotion = NormalizeGuideToken(request.RootMotion, "in_place");
+        var fps = Math.Clamp(request.Fps ?? animationOptions.Value.DefaultFps, 1, 60);
+        var (targetCellWidth, targetCellHeight) = ParseCellSize(
+            request.TargetCellSize,
+            animationOptions.Value.DefaultFrameCellSize,
+            fallbackWidth: 192,
+            fallbackHeight: 192);
+
+        var spec = SpriteMotionArchetypes.Build(
+            assetType,
+            structureType,
+            animationKind,
+            facing,
+            rootMotion,
+            request.FrameCount,
+            fps,
+            targetCellWidth,
+            targetCellHeight);
+        spec = ResolveMotionClipSpec(spec, request.MotionClipId);
+
+        var layoutProfile = AnalyzeGuideLayoutProfile(reference);
+        var layout = BuildGuideLayout(spec, "#ff00ff", layoutProfile);
+        MotionGuideRenderResult? motionRender = null;
+        if (MotionClipCatalog.IsExternalMotionSpec(spec))
+        {
+            try
+            {
+                motionRender = RenderMotionGuideIfAvailable(spec, layout);
+                if (motionRender is not null)
+                    spec = ApplyMotionSampleMetadata(spec, motionRender.Samples);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(ex, "Falling back to procedural sprite guide for animation kind {AnimationKind}.", spec.AnimationKind);
+                spec = spec with
+                {
+                    GuideRenderer = null,
+                    GuideRenderStyle = null,
+                    MotionClipId = null,
+                    GuideCameraYawDegrees = null,
+                    MotionValidationProfile = null,
+                    GuideSourcePackage = null,
+                    GuideSourceLicense = null,
+                };
+            }
+        }
+
+        var guidePng = motionRender?.GuidePng ?? SpriteGuideRenderer.Render(layout, spec, diagnostic: false);
+        var diagnosticPng = motionRender?.DiagnosticPng ?? SpriteGuideRenderer.Render(layout, spec, diagnostic: true);
+        var renderer = motionRender?.Metadata.Renderer ?? "procedural_sprite_guide";
+        var renderStyle = motionRender?.Metadata.RenderStyle ?? "procedural_shape_guide";
+        var label = string.IsNullOrWhiteSpace(request.Label)
+            ? $"{TitleCase(animationKind)} {spec.FrameCount}-frame guide"
+            : request.Label.Trim();
+        var fileStem = CleanFileName(label.ToLowerInvariant().Replace(' ', '-'), "animation-guide");
+        var frameOrder = Enumerable.Range(1, spec.FrameCount).ToList();
+        var expectedBoxes = layout.Slots
+            .OrderBy(slot => slot.FrameIndex)
+            .Select(slot => slot.Rect)
+            .ToList();
+        var promptScaffold = BuildAnimationGuidePromptScaffold(reference, spec, layout);
+        var exportDefaultsJson = JsonSerializer.Serialize(new
+        {
+            rows = layout.Rows,
+            columns = layout.Columns,
+            cellWidth = spec.TargetCellWidth,
+            cellHeight = spec.TargetCellHeight,
+            fps = spec.Fps,
+            loop = spec.Loop,
+            frameOrder,
+            anchorStrategy = "root-baseline",
+            background = layout.BackgroundColor,
+        }, JsonOptions);
+
+        var metadata = new
+        {
+            source = "generate_animation_guide",
+            renderer,
+            renderStyle,
+            spec.AnimationKind,
+            spec.AssetType,
+            spec.StructureType,
+            spec.Facing,
+            spec.RootMotion,
+            spec.FrameCount,
+            spec.Fps,
+            spec.Loop,
+            spec.MotionClipId,
+            spec.GuideCameraYawDegrees,
+            spec.GuideSourcePackage,
+            spec.GuideSourceLicense,
+            layout.Rows,
+            layout.Columns,
+            layout.CanvasWidth,
+            layout.CanvasHeight,
+            layout.GuideCellWidth,
+            layout.GuideCellHeight,
+            layout.TargetCellWidth,
+            layout.TargetCellHeight,
+            expectedFrameBoxes = expectedBoxes,
+            referenceAssetId = reference?.Id,
+        };
+        var guide = CreateAsset(
+            projectId,
+            label,
+            $"{fileStem}.png",
+            ArtAssetKind.SpriteGuide,
+            "image/png",
+            guidePng,
+            reference?.Id,
+            sourceBatchId: null,
+            promptRecipeId: null,
+            promptRecipeVersion: null,
+            promptScaffold,
+            metadata);
+        var diagnostic = CreateAsset(
+            projectId,
+            $"{label} diagnostic",
+            $"{fileStem}-diagnostic.png",
+            ArtAssetKind.SpriteGuide,
+            "image/png",
+            diagnosticPng,
+            guide.Id,
+            sourceBatchId: null,
+            promptRecipeId: null,
+            promptRecipeVersion: null,
+            promptScaffold,
+            metadata);
+        await db.ArtAssets.AddRangeAsync([guide, diagnostic], cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        await LogActivityAsync(
+            projectId,
+            "Animation guide generated",
+            $"{spec.AnimationKind} guide rendered as {layout.Columns}x{layout.Rows} frames.",
+            "animation-guide",
+            "assistant",
+            "completed",
+            "Rendered guide assets",
+            MotionClipCatalog.IsExternalMotionSpec(spec)
+                ? $"Rendered {renderer} guide from motion clip {spec.MotionClipId}."
+                : "Rendered procedural guide layout.",
+            "asset",
+            guide.Id,
+            guide.Label,
+            cancellationToken);
+
+        return new AnimationGuideRenderView(
+            guide.Id,
+            diagnostic.Id,
+            guide.Label,
+            spec.AnimationKind,
+            spec.AssetType,
+            spec.StructureType,
+            spec.Facing,
+            spec.RootMotion,
+            spec.FrameCount,
+            frameOrder,
+            spec.Fps,
+            spec.Loop,
+            layout.Rows,
+            layout.Columns,
+            layout.CanvasWidth,
+            layout.CanvasHeight,
+            layout.GuideCellWidth,
+            layout.GuideCellHeight,
+            layout.TargetCellWidth,
+            layout.TargetCellHeight,
+            expectedBoxes,
+            "root-baseline",
+            promptScaffold,
+            exportDefaultsJson,
+            renderer,
+            renderStyle,
+            spec.MotionClipId,
+            motionRender?.Metadata.SourcePackage ?? spec.GuideSourcePackage,
+            motionRender?.Metadata.SourceLicense ?? spec.GuideSourceLicense,
+            motionRender?.Metadata.SourceUrl,
+            "Animation guide assets saved as SpriteGuide. Use guideAssetId first in generate_sprite_sheet_candidates references.");
     }
 
     public async Task<ActivityRunView> LogActivityAsync(
@@ -4568,10 +4856,15 @@ public sealed class ArtWorkflowService(
         Guid? primaryExampleSpriteSheetId,
         CancellationToken cancellationToken)
     {
-        if (guideAssetId is Guid assetId
-            && !await db.ArtAssets.AnyAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken))
+        if (guideAssetId is Guid assetId)
         {
-            throw new InvalidOperationException("Animation recipe guide asset was not found in this project.");
+            var guideAsset = await db.ArtAssets
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken);
+            if (guideAsset is null)
+                throw new InvalidOperationException("Animation recipe guide asset was not found in this project.");
+            if (guideAsset.Kind != ArtAssetKind.SpriteGuide)
+                throw new InvalidOperationException($"Animation recipe guide asset must be a SpriteGuide asset. Asset {assetId} is {guideAsset.Kind}.");
         }
 
         if (primaryExampleSpriteSheetId is Guid spriteSheetId
@@ -4579,6 +4872,324 @@ public sealed class ArtWorkflowService(
         {
             throw new InvalidOperationException("Animation recipe example sprite sheet was not found in this project.");
         }
+    }
+
+    private AnimationSpec ResolveMotionClipSpec(AnimationSpec spec, string? requestedMotionClipId)
+    {
+        var catalog = MotionClipCatalog.Load(environment.ContentRootPath);
+        MotionClipDefinition? clip = null;
+        if (!string.IsNullOrWhiteSpace(requestedMotionClipId))
+        {
+            clip = catalog.Find(requestedMotionClipId)
+                ?? throw new InvalidOperationException($"Motion clip '{requestedMotionClipId}' was not found in the catalog.");
+            if (!clip.Supports(spec))
+                throw new InvalidOperationException($"Motion clip '{requestedMotionClipId}' does not support {spec.AssetType}/{spec.StructureType}/{spec.AnimationKind}.");
+        }
+        else if (IsHumanoidWalkSpec(spec))
+        {
+            clip = catalog.ResolveDefault(spec);
+        }
+
+        if (clip is null)
+            return spec;
+
+        var sampleCount = clip.ResolveSampleCount(spec.FrameCount);
+        if (sampleCount != spec.FrameCount)
+        {
+            spec = SpriteMotionArchetypes.Build(
+                spec.AssetType,
+                spec.StructureType,
+                spec.AnimationKind,
+                spec.Facing,
+                spec.RootMotion,
+                sampleCount,
+                spec.Fps,
+                spec.TargetCellWidth,
+                spec.TargetCellHeight);
+        }
+
+        return spec with
+        {
+            GuideRenderer = MotionClipCatalog.RendererId,
+            GuideRenderStyle = MotionClipCatalog.SkinnedMannequinRenderStyle,
+            MotionClipId = clip.ClipId,
+            GuideCameraYawDegrees = GltfMotionGuideRenderer.FacingToYawDegrees(spec.Facing),
+            MotionValidationProfile = "humanoid_walk",
+            GuideSourcePackage = clip.SourcePackage,
+            GuideSourceLicense = clip.License,
+        };
+    }
+
+    private MotionGuideRenderResult? RenderMotionGuideIfAvailable(AnimationSpec spec, LayoutSpec layout)
+    {
+        if (!MotionClipCatalog.IsExternalMotionSpec(spec))
+            return null;
+
+        var catalog = MotionClipCatalog.Load(environment.ContentRootPath);
+        var clip = catalog.Find(spec.MotionClipId)
+            ?? throw new InvalidOperationException($"Motion clip '{spec.MotionClipId}' was not found in the catalog.");
+        return GltfMotionGuideRenderer.Render(environment.ContentRootPath, clip, layout, spec);
+    }
+
+    private static AnimationSpec ApplyMotionSampleMetadata(AnimationSpec spec, IReadOnlyList<MotionGuideFrameSample> samples)
+    {
+        var byIndex = samples.ToDictionary(sample => sample.FrameIndex);
+        return spec with
+        {
+            Frames = spec.Frames.Select(frame =>
+            {
+                if (!byIndex.TryGetValue(frame.Index, out var sample))
+                    return frame;
+
+                return frame with
+                {
+                    PoseName = $"sample_{frame.Index + 1:00}_{MotionContactLabel(sample.Contacts)}",
+                    Contacts = sample.Contacts,
+                    GuideShape = MotionClipCatalog.RendererId,
+                };
+            }).ToList(),
+        };
+    }
+
+    private static bool IsHumanoidWalkSpec(AnimationSpec spec)
+    {
+        var kind = NormalizeGuideToken(spec.AnimationKind, string.Empty);
+        if (!kind.Contains("walk", StringComparison.Ordinal))
+            return false;
+
+        var assetType = NormalizeGuideToken(spec.AssetType, string.Empty);
+        var structure = NormalizeGuideToken(spec.StructureType, string.Empty);
+        return assetType.Contains("unit", StringComparison.Ordinal)
+            || assetType.Contains("character", StringComparison.Ordinal)
+            || assetType.Contains("humanoid", StringComparison.Ordinal)
+            || structure.Contains("biped", StringComparison.Ordinal)
+            || structure.Contains("humanoid", StringComparison.Ordinal);
+    }
+
+    private static string MotionContactLabel(IReadOnlyList<string> contacts)
+    {
+        if (contacts.Count == 0)
+            return "lift";
+        var left = contacts.Any(contact => contact.Contains("left", StringComparison.OrdinalIgnoreCase));
+        var right = contacts.Any(contact => contact.Contains("right", StringComparison.OrdinalIgnoreCase));
+        return (left, right) switch
+        {
+            (true, true) => "both_contact",
+            (true, false) => "left_contact",
+            (false, true) => "right_contact",
+            _ => "lift",
+        };
+    }
+
+    private static LayoutProfile AnalyzeGuideLayoutProfile(ArtAsset? reference)
+    {
+        var foregroundAspect = 1d;
+        var foregroundCoverage = 0d;
+        var foregroundWidth = 0;
+        var foregroundHeight = 0;
+        var equippedOrWide = false;
+        var bulky = false;
+        var text = string.Join(' ', reference?.Label, reference?.Prompt, reference?.Notes).ToLowerInvariant();
+        equippedOrWide |= ContainsAny(text, "weapon", "axe", "sword", "shield", "bow", "spear", "staff", "gun", "rifle", "wand", "tail", "wing");
+        bulky |= ContainsAny(text, "bulky", "stocky", "large", "giant", "heavy", "wide", "broad", "shield");
+
+        if (reference is not null && SpriteSheetPngCodec.TryReadRgba(reference.Data, out var width, out var height, out var rgba))
+        {
+            var background = SpriteSheetImageAnalyzer.ResolveBackground(rgba, width, height);
+            if (SpriteSheetImageAnalyzer.ForegroundBounds(rgba, width, height, background) is { } bounds)
+            {
+                foregroundWidth = bounds.Width;
+                foregroundHeight = bounds.Height;
+                foregroundAspect = bounds.Height <= 0 ? 1d : bounds.Width / (double)bounds.Height;
+                foregroundCoverage = Math.Max(bounds.Width / (double)Math.Max(1, width), bounds.Height / (double)Math.Max(1, height));
+                equippedOrWide |= foregroundAspect >= 0.82d;
+                bulky |= foregroundCoverage >= 0.62d;
+            }
+        }
+
+        var needsTallCells = foregroundAspect <= 0.68d && !equippedOrWide;
+        return new LayoutProfile(
+            foregroundAspect,
+            foregroundCoverage,
+            foregroundWidth,
+            foregroundHeight,
+            NeedsLargeCells: equippedOrWide || bulky,
+            NeedsTallCells: needsTallCells,
+            NeedsLargePadding: equippedOrWide || bulky);
+    }
+
+    private static LayoutSpec BuildGuideLayout(AnimationSpec spec, string backgroundColor, LayoutProfile layoutProfile)
+    {
+        var (columns, rows) = GuideGridForFrameCount(spec.FrameCount);
+        var (guideCellWidth, guideCellHeight) = GuideCellSize(spec.FrameCount, layoutProfile);
+        var canvasWidth = checked(columns * guideCellWidth);
+        var canvasHeight = checked(rows * guideCellHeight);
+        var safeMarginRatio = layoutProfile.NeedsLargePadding ? 0.14d : 0.11d;
+        var slots = Enumerable.Range(0, spec.FrameCount)
+            .Select(index =>
+            {
+                var rect = CellRectForGuideGrid(index, columns, rows, canvasWidth, canvasHeight);
+                var margin = Math.Max(24, (int)Math.Round(Math.Min(rect.Width, rect.Height) * safeMarginRatio));
+                var safe = new SpriteSheetRect(
+                    rect.X + margin,
+                    rect.Y + margin,
+                    Math.Max(1, rect.Width - (margin * 2)),
+                    Math.Max(1, rect.Height - (margin * 2)));
+                var baseline = rect.Y + (int)Math.Round(rect.Height * 0.83d);
+                var root = new SpriteSheetPoint(rect.X + rect.Width / 2, baseline);
+                return new SlotSpec(index, rect, root, baseline, safe);
+            })
+            .ToList();
+        return new LayoutSpec(
+            canvasWidth,
+            canvasHeight,
+            rows,
+            columns,
+            guideCellWidth,
+            guideCellHeight,
+            spec.TargetCellWidth,
+            spec.TargetCellHeight,
+            backgroundColor,
+            slots);
+    }
+
+    private static (int Columns, int Rows) GuideGridForFrameCount(int frameCount) =>
+        frameCount switch
+        {
+            <= 1 => (1, 1),
+            2 => (2, 1),
+            <= 4 => (2, 2),
+            <= 6 => (3, 2),
+            <= 8 => (4, 2),
+            <= 12 => (4, 3),
+            _ => (4, 4),
+        };
+
+    private static (int Width, int Height) GuideCellSize(int frameCount, LayoutProfile layoutProfile)
+    {
+        if (frameCount <= 1)
+            return (1024, 1024);
+        if (frameCount == 2)
+            return layoutProfile.NeedsLargeCells ? (1024, 1024) : (768, 1024);
+        if (frameCount <= 6)
+            return layoutProfile.NeedsLargeCells ? (768, 768) : (512, 512);
+        if (frameCount <= 8)
+            return layoutProfile.NeedsLargeCells || layoutProfile.NeedsTallCells ? (512, 768) : (512, 512);
+
+        return (512, 512);
+    }
+
+    private static SpriteSheetRect CellRectForGuideGrid(int index, int columns, int rows, int canvasWidth, int canvasHeight)
+    {
+        var row = index / columns;
+        var col = index % columns;
+        var x0 = col * canvasWidth / columns;
+        var x1 = (col + 1) * canvasWidth / columns;
+        var y0 = row * canvasHeight / rows;
+        var y1 = (row + 1) * canvasHeight / rows;
+        return new SpriteSheetRect(x0, y0, Math.Max(1, x1 - x0), Math.Max(1, y1 - y0));
+    }
+
+    private static string BuildAnimationGuidePromptScaffold(ArtAsset? reference, AnimationSpec spec, LayoutSpec layout)
+    {
+        var guideRole = MotionClipCatalog.IsExternalMotionSpec(spec)
+            ? $"Image 1 is a sampled mannequin motion guide from clip {spec.MotionClipId}; it controls exact slot positions, frame order, root/pivot anchors, safe margins, body pose, foot contacts, and camera yaw. Do not reproduce guide marks."
+            : "Image 1 is a structure guide; it controls exact slot positions, frame order, root/pivot anchors, safe margins, and motion layout. Do not reproduce guide marks.";
+        var referenceRole = reference is null
+            ? "Image 2, when supplied, controls the subject identity, silhouette, palette, materials, outfit, equipment, and rendering style."
+            : $"Image 2 is the canonical subject reference '{reference.Label}'. It controls identity, silhouette, palette, materials, outfit, equipment, and rendering style.";
+
+        return $"""
+        GOAL
+        Render a {spec.FrameCount}-frame {spec.AssetType} {spec.AnimationKind} animation as a {layout.Columns} column by {layout.Rows} row sprite-sheet grid.
+
+        INPUT ROLES
+        {guideRole}
+        {referenceRole}
+        Optional later references may control art style, but the guide remains the only motion/layout guide.
+
+        MOTION CONTRACT
+        Facing/direction: {SpriteFacing.Normalize(spec.Facing)} ({SpriteFacing.ToPromptPhrase(spec.Facing)}). Root motion: {spec.RootMotion}. Read frame order left-to-right across each row, then lower rows. Do not mirror the guide, swap leading/trailing limbs, or turn the subject to a different camera angle.
+
+        OUTPUT CONTRACT
+        Exactly {spec.FrameCount} complete frames, one subject per cell, no text, no labels, no borders, no extra poses, no overlap between cells, no cropping. Keep identity, apparent scale, camera, line style, and root/pivot position stable. Keep the full silhouette inside each guide cell's safe region, including weapons, shields, hands, feet, ears, hair, tails, wings, clothing, accessories, and effects.
+
+        CLEANUP CONTRACT
+        Do not reproduce guide lines, frame boxes, safe boxes, root marks, skeleton/mannequin marks, contact markers, numbers, labels, or construction marks.
+
+        BACKGROUND
+        Use one flat opaque chroma color: {layout.BackgroundColor}. No shadows, floors, scenery, gradients, transparent checkerboards, or detached effects outside the guided subject.
+        """;
+    }
+
+    private static (int Width, int Height) ParseCellSize(string? requested, string configured, int fallbackWidth, int fallbackHeight)
+    {
+        if (TryParseCellSize(requested, out var requestedWidth, out var requestedHeight))
+            return (requestedWidth, requestedHeight);
+        if (TryParseCellSize(configured, out var configuredWidth, out var configuredHeight))
+            return (configuredWidth, configuredHeight);
+        return (fallbackWidth, fallbackHeight);
+    }
+
+    private static bool TryParseCellSize(string? value, out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var parts = value.Trim().ToLowerInvariant().Split('x', 2, StringSplitOptions.TrimEntries);
+        if (parts.Length != 2
+            || !int.TryParse(parts[0], out width)
+            || !int.TryParse(parts[1], out height))
+        {
+            return false;
+        }
+
+        width = Math.Clamp(width, 1, 4096);
+        height = Math.Clamp(height, 1, 4096);
+        return true;
+    }
+
+    private static string InferGuideAssetType(ArtAsset? reference)
+    {
+        if (reference is null)
+            return "unit";
+
+        var text = string.Join(' ', reference.Label, reference.Prompt, reference.Notes).ToLowerInvariant();
+        if (ContainsAny(text, "tower", "turret", "cannon"))
+            return "tower";
+        if (ContainsAny(text, "projectile", "bullet", "missile", "arrow"))
+            return "projectile";
+        if (ContainsAny(text, "vfx", "effect", "explosion", "slash", "spark"))
+            return "vfx";
+        return "unit";
+    }
+
+    private static string DefaultGuideStructure(string assetType) =>
+        assetType switch
+        {
+            "tower" => "tower_pivot",
+            "projectile" => "directional_projectile",
+            "vfx" => "radial_vfx",
+            _ => "biped",
+        };
+
+    private static string NormalizeGuideToken(string? value, string fallback)
+    {
+        var cleaned = value?.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        return string.IsNullOrWhiteSpace(cleaned) ? fallback : cleaned;
+    }
+
+    private static bool ContainsAny(string text, params string[] values) =>
+        values.Any(value => text.Contains(value, StringComparison.OrdinalIgnoreCase));
+
+    private static string TitleCase(string value)
+    {
+        var words = value.Replace('_', ' ').Replace('-', ' ').Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return words.Length == 0
+            ? "Animation"
+            : string.Join(' ', words.Select(word => char.ToUpperInvariant(word[0]) + (word.Length == 1 ? string.Empty : word[1..])));
     }
 
     private async Task<Dictionary<Guid, int>> LoadCurrentRecipeVersionsAsync(
@@ -5220,6 +5831,8 @@ public sealed class ArtWorkflowService(
         recipe.Fps,
         recipe.Loop,
         recipe.GuideAssetId,
+        guideAssetKind = recipe.GuideAsset?.Kind.ToString() ?? string.Empty,
+        guideAssetValid = recipe.GuideAssetId is null || recipe.GuideAsset?.Kind == ArtAssetKind.SpriteGuide,
         expectedFrameBoxCount = DeserializeFrameBoxes(recipe.ExpectedFrameBoxesJson).Count,
         recipe.AnchorStrategy,
         promptPreview = Preview(recipe.PromptScaffold, 320),
@@ -5742,7 +6355,9 @@ public sealed class ArtWorkflowService(
             recipe.PrimaryExampleSpriteSheetId,
             recipe.CurrentVersion,
             recipe.CreatedAt,
-            recipe.UpdatedAt);
+            recipe.UpdatedAt,
+            recipe.GuideAsset?.Kind.ToString() ?? string.Empty,
+            recipe.GuideAssetId is null || recipe.GuideAsset?.Kind == ArtAssetKind.SpriteGuide);
 
     private static AnimationRecipeVersionView AnimationRecipeVersionView(AnimationRecipeVersion version) =>
         new(

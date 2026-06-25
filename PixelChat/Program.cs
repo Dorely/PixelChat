@@ -39,6 +39,7 @@ builder.Services.AddScoped<IAssistantConversationRepository, AssistantConversati
 builder.Services.AddScoped<ISecretStore, SqliteSecretStore>();
 builder.Services.Configure<AgentOptions>(builder.Configuration.GetSection(AgentOptions.SectionName));
 builder.Services.Configure<ImageGenerationOptions>(builder.Configuration.GetSection(ImageGenerationOptions.SectionName));
+builder.Services.Configure<SpriteAnimationOptions>(builder.Configuration.GetSection(SpriteAnimationOptions.SectionName));
 builder.Services.Configure<BackgroundRemovalOptions>(builder.Configuration.GetSection(BackgroundRemovalOptions.SectionName));
 builder.Services.Configure<TokenCountingOptions>(builder.Configuration.GetSection(TokenCountingOptions.SectionName));
 builder.Services.AddScoped<ILlmProviderService, LlmProviderService>();

@@ -24,9 +24,9 @@
 
 | File | Description |
 |------|-------------|
-| `PixelChat.csproj` | `net10.0` Blazor Web project with Electron.NET, EF Core SQLite, Microsoft.Extensions.AI, OpenAI SDK, SQLitePCLRaw bundle pin, runtime IDs, and warnings-as-errors. |
+| `PixelChat.csproj` | `net10.0` Blazor Web project with Electron.NET, EF Core SQLite, Microsoft.Extensions.AI, OpenAI SDK, SharpGLTF motion-guide support, SQLitePCLRaw bundle pin, runtime IDs, and warnings-as-errors. |
 | `Program.cs` | App host setup: Electron mode detection/window launch, Blazor Interactive Server, DI wiring, art/sprite services, EF migrations, OAuth/media endpoints, and routing. |
-| `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OAuth redirect URI, SQLite, Blazor hub size, agent/tool limits, image-generation defaults, and local background-removal sidecar/model defaults. |
+| `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OAuth redirect URI, SQLite, Blazor hub size, agent/tool limits, image-generation defaults, sprite-animation defaults, and local background-removal sidecar/model defaults. |
 | `Properties/launchSettings.json` | Local launch profiles for browser-hosted HTTP and Electron desktop mode on `localhost:1455`. |
 | `Properties/electron-builder.json` | Electron/electron-builder packaging metadata for Windows, Linux, and macOS targets. |
 
@@ -45,15 +45,22 @@
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact all-tab records including Activity, Review, sprite, asset, and recipe context used by assistant tools. |
 | `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt around staged sprite workflow, art/animation recipe split, frame repair, review, activity, and export guidance. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records, form draft payloads, animation frame mark payloads, and per-turn autonomous generation budget state. |
-| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, art/animation recipe saves/versioning, sprite-sheet candidate generation, frame split/repair/reassembly, Review sets, favorites, and exports. |
+| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, guide generation, art/animation recipe saves/versioning, sprite-sheet candidate generation, frame detection/adjustment/split/repair/reassembly, Review sets, favorites, and exports. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Activity, Review sets, sprite sheets/reviews/split/reassembly, exports, art/animation recipes, masks, import, crop, and edits. |
-| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, Activity, lazy media URLs/binaries, sprite-sheet composition/provenance/animation metadata, per-frame isolation/reassembly, art/animation recipe management, and assistant tools. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Activity, Review sets, guide generation, sprite sheets/reviews/split/reassembly, exports, art/animation recipes, masks, import, crop, and edits. |
+| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, Activity, lazy media URLs/binaries, animation-guide generation, sprite-sheet composition/provenance/animation metadata, per-frame isolation/reassembly, art/animation recipe management, and assistant tools. |
+| `AnimationGuideModels.cs` | Shared guide-rendering records for animation specs, frame specs, guide layouts, and per-frame slots without restoring the old animation job pipeline. |
+| `SpriteAnimationOptions.cs` | Configuration record for sprite-animation defaults used by guide rendering and animation-generation workflow setup. |
+| `SpriteFacing.cs` | Facing normalization, yaw conversion, left/right detection, and prompt phrasing helpers for animation guides. |
+| `SpriteMotionArchetypes.cs` | Procedural motion archetype builder for unit, tower, projectile, and VFX animation guide frame specs. |
+| `SpriteGuideRenderer.cs` | Procedural PNG renderer for lightweight animation guide sheets and diagnostic guide sheets. |
+| `MotionClipCatalog.cs` | Motion clip manifest loader and resolver for external GLTF-backed animation guides. |
+| `GltfMotionGuideRenderer.cs` | GLB sampler/renderer that produces mannequin motion guide sheets from cataloged Quaternius clips. |
 | `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, masks, and sprite-frame previews. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
@@ -66,6 +73,14 @@
 | `SpriteSheetImageAnalyzer.cs` | Server-side PNG analyzer for background-aware foreground bounds, connected sprite boxes/shape outlines, and animation motion metrics. |
 | `SpriteSheetPngCodec.cs` | Minimal PNG RGBA decoder/encoder used by server-side sprite-sheet rendering. |
 | `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with irregular frame isolation, erase/keep cleanup, coordinate-grid and removed-vs-source overlays, outlier-aware reassembly, annotated sheet views, diffs, onion skins, and filmstrips. |
+
+### Assets/MotionClips/
+
+| File | Description |
+|------|-------------|
+| `manifest.json` | Motion clip catalog manifest for guide renderer lookup and default humanoid walk resolution. |
+| `Quaternius/UAL2/UAL2_Standard.glb` | Restored CC0 Quaternius Universal Animation Library 2 GLB used for sampled walk-cycle guide rendering. |
+| `Quaternius/UAL2/README.md` / `License.txt` | Source attribution and license notes for the restored Quaternius motion clip asset. |
 
 ### Components/
 
@@ -102,7 +117,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, chat attachments, Activity log, Review UI, recipe-aware Generate/Edit, Sprites/Recipes/Assets tabs, canvas helpers, and exports. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, chat attachments, Activity log, Review UI, recipe-aware Generate/Edit, Sprites, art/animation recipe editors, guide-aware Assets tabs, canvas helpers, and exports. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, thinking modes, defaults, API-key updates, and child model rows. |

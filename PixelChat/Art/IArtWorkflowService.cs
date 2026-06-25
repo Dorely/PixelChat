@@ -39,6 +39,7 @@ public interface IArtWorkflowService
     Task<SpriteSheetDefinitionView> NormalizeSpriteSheetAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> ExpandSpriteSheetFramesToCellAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> UpdateSpriteSheetFramesAsync(Guid projectId, UpdateSpriteSheetFramesRequest request, CancellationToken cancellationToken = default);
+    Task<SpriteSheetDefinitionView> AdjustSpriteSheetFrameBoxAsync(Guid projectId, AdjustSpriteSheetFrameBoxRequest request, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> DeleteSpriteSheetFrameAsync(Guid projectId, Guid spriteSheetId, Guid frameId, CancellationToken cancellationToken = default);
     Task<SpriteSheetDefinitionView> ResetSpriteSheetToOriginalAsync(Guid projectId, Guid spriteSheetId, CancellationToken cancellationToken = default);
     Task<SpriteAnimationReviewImageView> BuildSpriteSheetRepairAnnotatedSheetAsync(Guid projectId, RepairSpriteSheetFramesResult repair, CancellationToken cancellationToken = default);
@@ -81,6 +82,7 @@ public interface IArtWorkflowService
     Task<IReadOnlyList<AnimationRecipeVersionView>> ListAnimationRecipeVersionsAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<string> ListAnimationRecipeVersionsJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task DeleteAnimationRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<AnimationGuideRenderView> GenerateAnimationGuideAsync(Guid projectId, GenerateAnimationGuideRequest request, CancellationToken cancellationToken = default);
     Task<ActivityRunView> LogActivityAsync(Guid projectId, string title, string summary, string workflowKind, string actor, string status, string stepTitle, string stepDetail, string artifactKind, Guid? artifactId, string artifactLabel, CancellationToken cancellationToken = default);
     Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default);
     Task DeleteAssetAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
