@@ -1055,14 +1055,10 @@
         try
         {
             var hasPaint = await _module.InvokeAsync<bool>("hasEditMaskPaint", _editCanvas);
-            if (!hasPaint)
-            {
-                _editModalError = "Paint the mask area first.";
-                return;
-            }
-
             var sourceDataUrl = await _module.InvokeAsync<string>("exportEditSourcePng", _editCanvas);
-            var maskDataUrl = await _module.InvokeAsync<string>("exportEditMaskPng", _editCanvas);
+            var maskDataUrl = hasPaint
+                ? await _module.InvokeAsync<string>("exportEditMaskPng", _editCanvas)
+                : null;
             var count = Math.Clamp(_editCount, 1, Math.Max(1, ImageOptions.Value.MaxOutputs));
             _editCount = count;
             var batch = await ImageRuntime.StartEditImageAsync(Workbench.Project.Id, new EditImageRequest(
