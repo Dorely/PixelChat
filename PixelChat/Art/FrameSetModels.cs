@@ -149,6 +149,37 @@ public sealed record AlignFramesRequest(
     bool AxisX = true,
     bool AxisY = true);
 
+public sealed record AlignFramesByAnchorRectRequest(
+    Guid FrameSetId,
+    Guid ReferenceFrameId,
+    SpriteSheetRect AnchorRect,
+    int SearchPadding = 24,
+    double MinScore = 0.68d,
+    bool AxisX = true,
+    bool AxisY = true,
+    bool Apply = false);
+
+public sealed record AnchorAlignmentResult(
+    FrameSetView FrameSet,
+    Guid ReferenceFrameId,
+    SpriteSheetRect AnchorRect,
+    int SearchPadding,
+    double MinScore,
+    bool Applied,
+    IReadOnlyList<AnchorAlignmentMatchView> Matches,
+    IReadOnlyList<string> Warnings);
+
+public sealed record AnchorAlignmentMatchView(
+    Guid FrameId,
+    int FrameIndex,
+    string FrameName,
+    SpriteSheetRect MatchedAnchorRect,
+    int DeltaX,
+    int DeltaY,
+    double Score,
+    bool LowConfidence,
+    IReadOnlyList<string> Warnings);
+
 public sealed record BuildSheetRequest(
     Guid FrameSetId,
     int Rows = 1,

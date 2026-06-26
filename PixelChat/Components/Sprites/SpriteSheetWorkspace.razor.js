@@ -36,7 +36,7 @@ export async function loadSourceCanvas(canvas, dotNetRef, imageUrl, regions, sel
     renderSource(canvas, state);
 }
 
-export async function loadFrameCanvas(canvas, dotNetRef, imageUrl, frame, previousUrl, nextUrl, tool, showOnion) {
+export async function loadFrameCanvas(canvas, dotNetRef, imageUrl, frame, previousUrl, nextUrl, tool, showOnion, anchorRect) {
     if (!isCanvas(canvas)) return;
     const image = await loadImage(imageUrl);
     const previous = previousUrl ? await loadImage(previousUrl) : null;
@@ -52,6 +52,7 @@ export async function loadFrameCanvas(canvas, dotNetRef, imageUrl, frame, previo
             frame: null,
             tool: "content",
             showOnion: true,
+            anchorRect: null,
             view: null,
             drag: null,
         };
@@ -66,6 +67,7 @@ export async function loadFrameCanvas(canvas, dotNetRef, imageUrl, frame, previo
     state.frame = normalizeFrame(frame);
     state.tool = tool || "content";
     state.showOnion = Boolean(showOnion);
+    state.anchorRect = normalizeAnchorRect(anchorRect);
     if (state.imageUrl !== imageUrl) {
         state.imageUrl = imageUrl;
         state.view = null;
@@ -384,6 +386,14 @@ function onFramePointerDown(canvas, state, event) {
     }
 
     const content = contentRect(state.frame);
+    if (state.tool === "anchor") {
+        const local = contentLocalPoint(content, world);
+        state.drag = { type: "anchor", start: local };
+        state.anchorRect = rectFromPoints(local, local, content.width, content.height);
+        renderFrame(canvas, state);
+        return;
+    }
+
     if (world.x >= content.x && world.x <= content.x + content.width && world.y >= content.y && world.y <= content.y + content.height) {
         state.drag = {
             type: "content",
@@ -409,6 +419,10 @@ function onFramePointerMove(canvas, state, event) {
     if (state.drag.type === "content") {
         state.frame.contentOffsetX = Math.round(state.drag.originalX + world.x - state.drag.start.x);
         state.frame.contentOffsetY = Math.round(state.drag.originalY + world.y - state.drag.start.y);
+    } else if (state.drag.type === "anchor") {
+        const content = contentRect(state.frame);
+        const local = contentLocalPoint(content, world);
+        state.anchorRect = rectFromPoints(state.drag.start, local, content.width, content.height);
     }
     renderFrame(canvas, state);
 }
@@ -422,6 +436,8 @@ function onFramePointerUp(canvas, state, event) {
     renderFrame(canvas, state);
     if (type === "content") {
         state.dotNetRef?.invokeMethodAsync("OnFrameContentOffsetChanged", state.frame.contentOffsetX, state.frame.contentOffsetY);
+    } else if (type === "anchor" && state.anchorRect) {
+        state.dotNetRef?.invokeMethodAsync("OnFrameAnchorRectChanged", state.anchorRect.x, state.anchorRect.y, state.anchorRect.width, state.anchorRect.height);
     }
 }
 
@@ -624,6 +640,13 @@ function drawFrameOverlays(ctx, state) {
     ctx.setLineDash([4, 3]);
     ctx.strokeRect(content.x + 0.5, content.y + 0.5, content.width, content.height);
     ctx.setLineDash([]);
+    if (state.anchorRect) {
+        ctx.fillStyle = "rgba(236,72,153,0.18)";
+        ctx.strokeStyle = "#ec4899";
+        ctx.lineWidth = 2;
+        ctx.fillRect(content.x + state.anchorRect.x, content.y + state.anchorRect.y, state.anchorRect.width, state.anchorRect.height);
+        ctx.strokeRect(content.x + state.anchorRect.x + 0.5, content.y + state.anchorRect.y + 0.5, state.anchorRect.width - 1, state.anchorRect.height - 1);
+    }
     ctx.fillStyle = "rgba(15,23,42,0.82)";
     ctx.font = "11px sans-serif";
     ctx.fillText(`${frame.name}  offset ${frame.contentOffsetX},${frame.contentOffsetY}`, 6, 14);
@@ -818,6 +841,22 @@ function contentRect(frame) {
         width: frame.workingWidth > 0 ? frame.workingWidth : frame.sourceWidth,
         height: frame.workingHeight > 0 ? frame.workingHeight : frame.sourceHeight,
     };
+}
+
+function contentLocalPoint(content, world) {
+    return {
+        x: Math.round(clamp(world.x - content.x, 0, Math.max(0, content.width - 1))),
+        y: Math.round(clamp(world.y - content.y, 0, Math.max(0, content.height - 1))),
+    };
+}
+
+function normalizeAnchorRect(rect) {
+    if (!rect) return null;
+    const x = Math.max(0, number(read(rect, "x", "X"), 0));
+    const y = Math.max(0, number(read(rect, "y", "Y"), 0));
+    const width = Math.max(1, number(read(rect, "width", "Width"), 1));
+    const height = Math.max(1, number(read(rect, "height", "Height"), 1));
+    return { x, y, width, height };
 }
 
 function frameWorkspace(frame) {

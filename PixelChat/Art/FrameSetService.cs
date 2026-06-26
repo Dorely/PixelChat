@@ -577,6 +577,109 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
         return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
     }
 
+    public async Task<AnchorAlignmentResult> AlignFramesByAnchorRectAsync(
+        Guid projectId,
+        AlignFramesByAnchorRectRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
+        var frames = OrderFrames(frameSet, await LoadFramesAsync(projectId, frameSet.Id, cancellationToken)).ToList();
+        if (frames.Count == 0)
+            throw new InvalidOperationException("The frame set has no frames to align.");
+
+        var reference = frames.FirstOrDefault(frame => frame.Id == request.ReferenceFrameId)
+            ?? throw new InvalidOperationException("Reference frame was not found.");
+        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
+        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
+        var referenceContent = FrameContentPixels(reference, sourceRgba, sourceWidth, sourceHeight);
+        var anchor = NormalizeAnchorRect(request.AnchorRect, referenceContent.Width, referenceContent.Height);
+        var background = SpriteSheetImageAnalyzer.ResolveBackground(referenceContent.Rgba, referenceContent.Width, referenceContent.Height);
+        var template = BuildAnchorTemplate(referenceContent.Rgba, referenceContent.Width, referenceContent.Height, anchor, background);
+        var searchPadding = Math.Clamp(request.SearchPadding, 0, 512);
+        var minScore = Math.Clamp(request.MinScore, -1d, 1d);
+        var targetCenterX = reference.ContentOffsetX + anchor.X + (anchor.Width / 2);
+        var targetCenterY = reference.ContentOffsetY + anchor.Y + (anchor.Height / 2);
+        var warnings = template.Warnings.ToList();
+        var matches = new List<AnchorAlignmentMatchView>();
+        var now = DateTime.UtcNow;
+
+        if (request.Apply)
+        {
+            var frameIds = frames.Select(frame => frame.Id).ToList();
+            var existingAnchors = await db.Anchors
+                .Where(anchorEntity => anchorEntity.ProjectId == projectId && anchorEntity.Name == "template" && frameIds.Contains(anchorEntity.FrameId))
+                .ToListAsync(cancellationToken);
+            db.Anchors.RemoveRange(existingAnchors);
+        }
+
+        foreach (var frame in frames)
+        {
+            var content = FrameContentPixels(frame, sourceRgba, sourceWidth, sourceHeight);
+            var match = frame.Id == reference.Id
+                ? new AnchorMatch(anchor, 1d, LowConfidence: false, [])
+                : MatchAnchor(content.Rgba, content.Width, content.Height, template, anchor.X, anchor.Y, searchPadding, minScore);
+            if (match.LowConfidence)
+                warnings.Add($"Frame {frame.Index + 1} matched below min score {minScore:0.###}.");
+
+            var matchCenterX = match.Rect.X + (match.Rect.Width / 2);
+            var matchCenterY = match.Rect.Y + (match.Rect.Height / 2);
+            var nextOffsetX = targetCenterX - matchCenterX;
+            var nextOffsetY = targetCenterY - matchCenterY;
+            var deltaX = nextOffsetX - frame.ContentOffsetX;
+            var deltaY = nextOffsetY - frame.ContentOffsetY;
+
+            if (request.Apply)
+            {
+                if (request.AxisX)
+                    frame.ContentOffsetX = Math.Clamp(nextOffsetX, -8192, 8192);
+                if (request.AxisY)
+                    frame.ContentOffsetY = Math.Clamp(nextOffsetY, -8192, 8192);
+                frame.UpdatedAt = now;
+
+                await db.Anchors.AddAsync(new Anchor
+                {
+                    ProjectId = projectId,
+                    FrameId = frame.Id,
+                    Name = "template",
+                    X = frame.ContentOffsetX + matchCenterX,
+                    Y = frame.ContentOffsetY + matchCenterY,
+                    Confidence = Math.Clamp(match.Score, -1d, 1d),
+                    Source = match.LowConfidence ? "matched-low-confidence" : "matched",
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                }, cancellationToken);
+            }
+
+            matches.Add(new AnchorAlignmentMatchView(
+                frame.Id,
+                frame.Index,
+                frame.Name,
+                match.Rect,
+                deltaX,
+                deltaY,
+                RoundMetric(match.Score),
+                match.LowConfidence,
+                match.Warnings));
+        }
+
+        if (request.Apply)
+        {
+            frameSet.UpdatedAt = now;
+            await TouchProjectAsync(projectId, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        return new AnchorAlignmentResult(
+            await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken),
+            reference.Id,
+            anchor,
+            searchPadding,
+            RoundMetric(minScore),
+            request.Apply,
+            matches.OrderBy(match => match.FrameIndex).ToList(),
+            warnings.Distinct(StringComparer.Ordinal).ToList());
+    }
+
     public Task<FrameSetView> GetFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken = default) =>
         BuildFrameSetViewAsync(projectId, frameSetId, cancellationToken);
 
@@ -1324,10 +1427,208 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
         return output;
     }
 
+    private static SpriteSheetRect NormalizeAnchorRect(SpriteSheetRect anchor, int imageWidth, int imageHeight)
+    {
+        var x = Math.Clamp(anchor.X, 0, Math.Max(0, imageWidth - 1));
+        var y = Math.Clamp(anchor.Y, 0, Math.Max(0, imageHeight - 1));
+        var width = Math.Clamp(anchor.Width, 1, Math.Max(1, imageWidth - x));
+        var height = Math.Clamp(anchor.Height, 1, Math.Max(1, imageHeight - y));
+        if (width < 4 || height < 4)
+            throw new InvalidOperationException("Anchor rectangle must be at least 4 x 4 pixels.");
+        return new SpriteSheetRect(x, y, width, height);
+    }
+
+    private static AnchorTemplate BuildAnchorTemplate(
+        byte[] rgba,
+        int imageWidth,
+        int imageHeight,
+        SpriteSheetRect anchor,
+        SpriteSheetBackground background)
+    {
+        var values = new double[anchor.Width * anchor.Height];
+        var weights = new double[values.Length];
+        var weightSum = 0d;
+        var warnings = new List<string>();
+
+        for (var y = 0; y < anchor.Height; y++)
+        {
+            for (var x = 0; x < anchor.Width; x++)
+            {
+                var sourceX = anchor.X + x;
+                var sourceY = anchor.Y + y;
+                if (sourceX < 0 || sourceY < 0 || sourceX >= imageWidth || sourceY >= imageHeight)
+                    continue;
+
+                var pixel = (y * anchor.Width) + x;
+                var offset = ((sourceY * imageWidth) + sourceX) * 4;
+                var r = rgba[offset];
+                var g = rgba[offset + 1];
+                var b = rgba[offset + 2];
+                var a = rgba[offset + 3];
+                values[pixel] = Luminance(r, g, b);
+                if (!SpriteSheetImageAnalyzer.IsForeground(r, g, b, a, background))
+                    continue;
+
+                var alphaWeight = Math.Clamp(a / 255d, 0.05d, 1d);
+                weights[pixel] = alphaWeight;
+                weightSum += alphaWeight;
+            }
+        }
+
+        var usefulPixels = weights.Count(weight => weight > 0);
+        if (usefulPixels < Math.Max(8, values.Length / 10))
+            warnings.Add("Anchor has few foreground-like pixels; choose a more detailed rigid feature if matches look weak.");
+        if (weightSum <= 0)
+        {
+            Array.Fill(weights, 1d);
+            weightSum = weights.Length;
+            warnings.Add("Anchor had no foreground-like pixels; matched all pixels in the box.");
+        }
+
+        var mean = WeightedMean(values, weights, weightSum);
+        var denominator = WeightedVariance(values, weights, mean);
+        if (denominator <= 0.000001d)
+            warnings.Add("Anchor has very low contrast; template matching may be ambiguous.");
+
+        return new AnchorTemplate(anchor.Width, anchor.Height, values, weights, weightSum, mean, denominator, warnings);
+    }
+
+    private static AnchorMatch MatchAnchor(
+        byte[] rgba,
+        int imageWidth,
+        int imageHeight,
+        AnchorTemplate template,
+        int expectedX,
+        int expectedY,
+        int searchPadding,
+        double minScore)
+    {
+        var warnings = new List<string>();
+        var maxTemplateX = imageWidth - template.Width;
+        var maxTemplateY = imageHeight - template.Height;
+        if (maxTemplateX < 0 || maxTemplateY < 0)
+        {
+            warnings.Add("Frame content is smaller than the anchor rectangle.");
+            return new AnchorMatch(new SpriteSheetRect(0, 0, template.Width, template.Height), -1d, LowConfidence: true, warnings);
+        }
+
+        var minX = Math.Max(0, expectedX - searchPadding);
+        var minY = Math.Max(0, expectedY - searchPadding);
+        var maxX = Math.Min(maxTemplateX, expectedX + searchPadding);
+        var maxY = Math.Min(maxTemplateY, expectedY + searchPadding);
+        if (maxX < minX || maxY < minY)
+        {
+            minX = 0;
+            minY = 0;
+            maxX = maxTemplateX;
+            maxY = maxTemplateY;
+            warnings.Add("Search area was too small for the anchor and was expanded.");
+        }
+
+        var bestX = Math.Clamp(expectedX, 0, maxTemplateX);
+        var bestY = Math.Clamp(expectedY, 0, maxTemplateY);
+        var bestScore = double.NegativeInfinity;
+        for (var candidateY = minY; candidateY <= maxY; candidateY++)
+        {
+            for (var candidateX = minX; candidateX <= maxX; candidateX++)
+            {
+                var score = MatchScore(rgba, imageWidth, imageHeight, template, candidateX, candidateY);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestX = candidateX;
+                    bestY = candidateY;
+                }
+            }
+        }
+
+        if (double.IsNegativeInfinity(bestScore))
+        {
+            bestScore = -1d;
+            warnings.Add("No valid anchor candidate was found.");
+        }
+
+        return new AnchorMatch(
+            new SpriteSheetRect(bestX, bestY, template.Width, template.Height),
+            bestScore,
+            bestScore < minScore,
+            warnings);
+    }
+
+    private static double MatchScore(byte[] rgba, int imageWidth, int imageHeight, AnchorTemplate template, int startX, int startY)
+    {
+        if (startX < 0 || startY < 0 || startX + template.Width > imageWidth || startY + template.Height > imageHeight)
+            return double.NegativeInfinity;
+
+        var targetValues = new double[template.Values.Length];
+        for (var y = 0; y < template.Height; y++)
+        {
+            for (var x = 0; x < template.Width; x++)
+            {
+                var offset = (((startY + y) * imageWidth) + startX + x) * 4;
+                targetValues[(y * template.Width) + x] = Luminance(rgba[offset], rgba[offset + 1], rgba[offset + 2]);
+            }
+        }
+
+        var targetMean = WeightedMean(targetValues, template.Weights, template.WeightSum);
+        var targetDenominator = WeightedVariance(targetValues, template.Weights, targetMean);
+        if (template.Denominator <= 0.000001d || targetDenominator <= 0.000001d)
+            return double.NegativeInfinity;
+
+        var numerator = 0d;
+        for (var index = 0; index < template.Values.Length; index++)
+            numerator += template.Weights[index] * (template.Values[index] - template.Mean) * (targetValues[index] - targetMean);
+        return numerator / Math.Sqrt(template.Denominator * targetDenominator);
+    }
+
+    private static double WeightedMean(double[] values, double[] weights, double weightSum)
+    {
+        if (weightSum <= 0)
+            return 0d;
+        var sum = 0d;
+        for (var index = 0; index < values.Length; index++)
+            sum += values[index] * weights[index];
+        return sum / weightSum;
+    }
+
+    private static double WeightedVariance(double[] values, double[] weights, double mean)
+    {
+        var sum = 0d;
+        for (var index = 0; index < values.Length; index++)
+        {
+            var delta = values[index] - mean;
+            sum += weights[index] * delta * delta;
+        }
+
+        return sum;
+    }
+
+    private static double Luminance(byte r, byte g, byte b) =>
+        (0.2126d * r) + (0.7152d * g) + (0.0722d * b);
+
+    private static double RoundMetric(double value) =>
+        Math.Round(value, 4, MidpointRounding.AwayFromZero);
+
     private static void ValidateCanvasSize(int width, int height, string message)
     {
         const int maxPixels = 8192 * 8192;
         if (width <= 0 || height <= 0 || (long)width * height > maxPixels)
             throw new InvalidOperationException(message);
     }
+
+    private sealed record AnchorTemplate(
+        int Width,
+        int Height,
+        double[] Values,
+        double[] Weights,
+        double WeightSum,
+        double Mean,
+        double Denominator,
+        IReadOnlyList<string> Warnings);
+
+    private sealed record AnchorMatch(
+        SpriteSheetRect Rect,
+        double Score,
+        bool LowConfidence,
+        IReadOnlyList<string> Warnings);
 }

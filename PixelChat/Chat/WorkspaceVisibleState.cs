@@ -103,7 +103,8 @@ public sealed record WorkspaceSpritesVisibleState(
     Guid? SelectedMaskId = null,
     WorkspaceBuiltSheetSummary? BuiltSheet = null,
     string Mode = "",
-    WorkspaceSpriteEditModalSummary? EditModal = null);
+    WorkspaceSpriteEditModalSummary? EditModal = null,
+    WorkspaceSpriteAnchorSummary? Anchor = null);
 
 public sealed record WorkspaceSpriteEditModalSummary(
     string TargetKind,
@@ -111,7 +112,20 @@ public sealed record WorkspaceSpriteEditModalSummary(
     Guid? BatchId,
     IReadOnlyList<Guid> CandidateAssetIds,
     Guid? SelectedCandidateAssetId,
-    bool IsGenerating);
+    bool IsGenerating,
+    int CandidateCount = 1,
+    string CandidateSetState = "");
+
+public sealed record WorkspaceSpriteAnchorSummary(
+    Guid? ReferenceFrameId,
+    SpriteSheetRect? AnchorRect,
+    int SearchPadding,
+    double MinScore,
+    bool AxisX,
+    bool AxisY,
+    int MatchCount,
+    int LowConfidenceCount,
+    bool Applied);
 
 public sealed record WorkspaceRecipeVisibleState(
     Guid? EditingRecipeId,

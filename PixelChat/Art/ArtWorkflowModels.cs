@@ -662,7 +662,8 @@ public sealed record EditImageRequest(
     Guid? PromptRecipeId,
     string? SourcePngDataUrl,
     string? MaskPngDataUrl,
-    IReadOnlyList<Guid> ReferenceAssetIds);
+    IReadOnlyList<Guid> ReferenceAssetIds,
+    bool SwitchToCompare = true);
 
 public sealed record CompareReviewSetItemRequest(
     CompareReviewItemKind Kind,

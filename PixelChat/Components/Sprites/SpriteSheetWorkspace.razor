@@ -1,4 +1,5 @@
 @namespace PixelChat.Components.Sprites
+@using Microsoft.Extensions.Options
 @using PixelChat.Art
 @using PixelChat.Chat
 @using PixelChat.Models
@@ -6,6 +7,7 @@
 @inject IArtWorkflowService Workflow
 @inject IFrameSetService FrameSets
 @inject IImageGenerationRuntime ImageRuntime
+@inject IOptions<ImageGenerationOptions> ImageOptions
 @inject IJSRuntime JS
 
 <div class="sprite-workspace">
@@ -46,11 +48,14 @@
                     <button type="button" class="@ToolButtonClass(_sourceTool, "draw")" title="Draw rectangular region" @onclick='() => SetSourceToolAsync("draw")'>Rect</button>
                     <button type="button" class="@ToolButtonClass(_sourceTool, "polygon")" title="Draw polygon region" @onclick='() => SetSourceToolAsync("polygon")'>Poly</button>
                     <button type="button" class="@ToolButtonClass(_sourceTool, "pan")" title="Pan canvas" @onclick='() => SetSourceToolAsync("pan")'>Pan</button>
+                    <button type="button" class="sprite-tool-button" title="Edit source with mask and prompt" disabled="@(_busy || SelectedSourceAssetId() is null)" @onclick="OpenSourceEditModalAsync">Edit</button>
                 }
                 else if (_mode == SpriteMode.Frames)
                 {
                     <button type="button" class="@ToolButtonClass(_frameTool, "content")" title="Move frame content" @onclick='() => SetFrameToolAsync("content")'>Move</button>
+                    <button type="button" class="@ToolButtonClass(_frameTool, "anchor")" title="Draw anchor rectangle" @onclick='() => SetFrameToolAsync("anchor")'>Anchor</button>
                     <button type="button" class="@ToolButtonClass(_frameTool, "pan")" title="Pan canvas" @onclick='() => SetFrameToolAsync("pan")'>Pan</button>
+                    <button type="button" class="sprite-tool-button" title="Edit selected frame with mask and prompt" disabled="@(_busy || SelectedFrame() is null)" @onclick="OpenFrameEditModalAsync">Edit</button>
                 }
                 else
                 {
@@ -147,7 +152,6 @@
                         <div class="sprite-inspector-actions">
                             <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_busy || SelectedSourceAssetId() is null)" @onclick="DetectRegionsAsync">Detect Regions</button>
                             <button type="button" class="btn btn-sm btn-primary" disabled="@(_busy || SelectedSourceAssetId() is null || _regions.Count == 0)" @onclick="CreateFrameSetFromRegionsAsync">Create Frame Set</button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_busy || SelectedSourceAssetId() is null)" @onclick="OpenSourceEditModalAsync">Edit</button>
                         </div>
                     </div>
 
@@ -178,6 +182,28 @@
                 }
                 else if (_mode == SpriteMode.Frames)
                 {
+                    <div class="sprite-anim-cluster">
+                        <div class="sprite-section-title-row">
+                            <div class="section-title">Animation</div>
+                            <div class="sprite-section-actions">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(FrameCount() == 0)" @onclick="ToggleAnimationAsync">@(_animPlaying ? "Stop" : "Play")</button>
+                            </div>
+                        </div>
+                        <div class="sprite-anim-stage">
+                            @if (AnimationFrame() is { } animFrame)
+                            {
+                                <img class="sprite-stage-image" src="@FramePreviewUrl(animFrame.Id)" alt="Animation preview" />
+                            }
+                            else
+                            {
+                                <div class="empty-state compact">No frames.</div>
+                            }
+                        </div>
+                        <div class="sprite-anim-controls">
+                            <label><span>FPS</span><input class="form-control form-control-sm" type="number" min="1" max="60" @bind="_fps" /></label>
+                        </div>
+                    </div>
+
                     <div class="sprite-settings-panel">
                         <div class="section-title">Frame Set</div>
                         <div class="sprite-grid-controls">
@@ -190,24 +216,62 @@
                         </div>
                     </div>
 
-                    <div class="sprite-settings-panel">
-                        <div class="section-title">Align Frames</div>
+                    <div class="sprite-settings-panel sprite-stabilization-panel">
+                        <div class="section-title">Anchor Align</div>
                         <label class="sprite-source-pick">
-                            <span>Anchor</span>
-                            <select class="form-select form-select-sm" @bind="_alignAnchor">
-                                <option value="feet">Feet</option>
-                                <option value="bottom">Bottom</option>
-                                <option value="center">Center</option>
-                                <option value="top">Top</option>
-                                <option value="left">Left edge</option>
-                                <option value="right">Right edge</option>
+                            <span>Reference</span>
+                            <select class="form-select form-select-sm" value="@AnchorReferenceFrameIdText()" @onchange="SetAnchorReferenceFrameAsync" disabled="@(_busy || _frameSet is null)">
+                                @if (_frameSet is { } anchorSet)
+                                {
+                                    @foreach (var frame in anchorSet.Frames)
+                                    {
+                                        <option value="@frame.Id">@frame.Name</option>
+                                    }
+                                }
                             </select>
                         </label>
-                        <div class="sprite-inspector-actions">
-                            <label class="sprite-axis-toggle"><input type="checkbox" @bind="_alignAxisX" /> X</label>
-                            <label class="sprite-axis-toggle"><input type="checkbox" @bind="_alignAxisY" /> Y</label>
-                            <button type="button" class="btn btn-sm btn-primary" disabled="@(_busy || _frameSet is null)" @onclick="AlignFramesAsync">Align</button>
+                        <div class="sprite-grid-controls">
+                            <label><span>Search</span><input class="form-control form-control-sm" type="number" min="0" max="512" @bind="_anchorSearchPadding" /></label>
+                            <label><span>Min Score</span><input class="form-control form-control-sm" type="number" step="0.01" min="-1" max="1" @bind="_anchorMinScore" /></label>
                         </div>
+                        <div class="stabilization-readout">
+                            <span>@AnchorRectSummary()</span>
+                        </div>
+                        <div class="sprite-inspector-actions">
+                            <label class="sprite-axis-toggle"><input type="checkbox" @bind="_anchorAxisX" /> X</label>
+                            <label class="sprite-axis-toggle"><input type="checkbox" @bind="_anchorAxisY" /> Y</label>
+                            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(!CanRunAnchorAlignment())" @onclick="() => AlignByAnchorRectAsync(false)">Preview</button>
+                            <button type="button" class="btn btn-sm btn-primary" disabled="@(!CanRunAnchorAlignment())" @onclick="() => AlignByAnchorRectAsync(true)">Apply</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_busy || _anchorRect is null)" @onclick="ClearAnchorRectAsync">Clear</button>
+                        </div>
+                        @if (_anchorDiagnostics is { } diagnostics)
+                        {
+                            <div class="stabilization-summary">
+                                <span>@(diagnostics.Applied ? "Applied" : "Preview")</span>
+                                <span>@diagnostics.Matches.Count match(es)</span>
+                                <span>@diagnostics.Matches.Count(match => match.LowConfidence) low confidence</span>
+                            </div>
+                            @if (diagnostics.Warnings.Count > 0)
+                            {
+                                <ul class="stabilization-warnings">
+                                    @foreach (var warning in diagnostics.Warnings.Take(3))
+                                    {
+                                        <li>@warning</li>
+                                    }
+                                </ul>
+                            }
+                            <div class="stabilization-match-list">
+                                @foreach (var match in diagnostics.Matches.OrderBy(match => match.FrameIndex))
+                                {
+                                    <div class="stabilization-match-row @(match.LowConfidence ? "is-low-confidence" : "")">
+                                        <span>@(match.FrameIndex + 1)</span>
+                                        <span>@match.Score.ToString("0.###")</span>
+                                        <span>@match.DeltaX,@match.DeltaY</span>
+                                        <span>@match.MatchedAnchorRect.Width x @match.MatchedAnchorRect.Height</span>
+                                    </div>
+                                }
+                            </div>
+                        }
                     </div>
 
                     @if (SelectedFrame() is { } selected)
@@ -224,7 +288,6 @@
                                 <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(1, 0)">Right</button>
                                 <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(0, -1)">Up</button>
                                 <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(0, 1)">Down</button>
-                                <button type="button" class="btn btn-sm btn-outline-primary" disabled="@_busy" @onclick="OpenFrameEditModalAsync">Edit</button>
                             </div>
                             <div class="sprite-inspector-actions">
                                 <label class="sprite-axis-toggle"><input type="checkbox" @bind="_showOnion" @bind:after="RenderCanvasAsync" /> Onion</label>
@@ -301,42 +364,19 @@
                                      @ondrop="() => DropFrameAsync(frame.Index)">
                                     <button type="button" class="frame-thumb" @onclick="() => SelectFrameAsync(frame.Index)">
                                         <img src="@FramePreviewUrl(frame.Id)" alt="@frame.Name" />
+                                        <span class="@WorkingBadgeClass(frame)">@WorkingLabel(frame)@(frame.HasMask ? " + mask" : "")</span>
                                     </button>
                                     <div class="sprite-frame-card-body">
-                                        <span class="sprite-frame-name">@frame.Name</span>
-                                        <span class="@WorkingBadgeClass(frame)">@WorkingLabel(frame)@(frame.HasMask ? " + mask" : "")</span>
-                                        <div class="sprite-frame-card-actions">
-                                            <button type="button" class="btn btn-sm btn-outline-secondary" title="Move earlier" disabled="@(frame.Index == 0 || _busy)" @onclick="() => ReorderFrameAsync(frame.Id, frame.Index - 1)">‹</button>
-                                            <button type="button" class="btn btn-sm btn-outline-secondary" title="Move later" disabled="@(frame.Index >= set.FrameCount - 1 || _busy)" @onclick="() => ReorderFrameAsync(frame.Id, frame.Index + 1)">›</button>
-                                        </div>
+                                        <button type="button" class="sprite-frame-name" title="@frame.Name" @onclick="() => SelectFrameAsync(frame.Index)">@frame.Name</button>
                                     </div>
+                                    <button type="button" class="sprite-frame-arrow is-left" title="Move earlier" disabled="@(frame.Index == 0 || _busy)" @onclick="() => ReorderFrameAsync(frame.Id, frame.Index - 1)">&lt;</button>
+                                    <button type="button" class="sprite-frame-arrow is-right" title="Move later" disabled="@(frame.Index >= set.FrameCount - 1 || _busy)" @onclick="() => ReorderFrameAsync(frame.Id, frame.Index + 1)">&gt;</button>
                                 </div>
                             }
                         }
                     </div>
                 </div>
 
-                <div class="sprite-anim-cluster">
-                    <div class="sprite-section-title-row">
-                        <div class="section-title">Animation</div>
-                        <div class="sprite-section-actions">
-                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(FrameCount() == 0)" @onclick="ToggleAnimationAsync">@(_animPlaying ? "Stop" : "Play")</button>
-                        </div>
-                    </div>
-                    <div class="sprite-anim-stage">
-                        @if (AnimationFrame() is { } animFrame)
-                        {
-                            <img class="sprite-stage-image" src="@FramePreviewUrl(animFrame.Id)" alt="Animation preview" />
-                        }
-                        else
-                        {
-                            <div class="empty-state compact">No frames.</div>
-                        }
-                    </div>
-                    <div class="sprite-anim-controls">
-                        <label><span>FPS</span><input class="form-control form-control-sm" type="number" min="1" max="60" @bind="_fps" /></label>
-                    </div>
-                </div>
             }
         </div>
     </div>
@@ -375,6 +415,11 @@
                     <label>
                         <span>Prompt</span>
                         <textarea class="form-control form-control-sm sprite-edit-prompt" rows="7" @bind="_editPrompt" @bind:event="oninput"></textarea>
+                    </label>
+
+                    <label>
+                        <span>Candidates</span>
+                        <input class="form-control form-control-sm" type="number" min="1" max="@ImageOptions.Value.MaxOutputs" @bind="_editCount" />
                     </label>
 
                     <button type="button" class="btn btn-sm btn-primary"
@@ -468,9 +513,13 @@
     private int _cellWidth = 64;
     private int _cellHeight = 64;
     private string _ordering = "rowMajor";
-    private string _alignAnchor = "feet";
-    private bool _alignAxisX = true;
-    private bool _alignAxisY = true;
+    private Guid? _anchorReferenceFrameId;
+    private SpriteSheetRect? _anchorRect;
+    private int _anchorSearchPadding = 24;
+    private double _anchorMinScore = 0.68d;
+    private bool _anchorAxisX = true;
+    private bool _anchorAxisY = true;
+    private AnchorAlignmentResult? _anchorDiagnostics;
     private int _fps = 8;
 
     private string _sourceAssetIdText = string.Empty;
@@ -489,6 +538,7 @@
     private string? _editMaskUrl;
     private string _editTool = "mask";
     private int _editBrushSize = 28;
+    private int _editCount = 2;
     private string _editPrompt = string.Empty;
     private string? _editModalError;
     private Guid? _editBatchId;
@@ -576,6 +626,8 @@
             _selectedIndex = -1;
         else if (_selectedIndex < 0 || _selectedIndex >= set.Frames.Count)
             _selectedIndex = 0;
+        if (_anchorReferenceFrameId is null || !set.Frames.Any(frame => frame.Id == _anchorReferenceFrameId))
+            _anchorReferenceFrameId = SelectedFrame()?.Id ?? set.Frames.FirstOrDefault()?.Id;
     }
 
     private async Task ImportSourceAsync(InputFileChangeEventArgs args)
@@ -671,18 +723,61 @@
         });
     }
 
-    private async Task AlignFramesAsync()
+    private bool CanRunAnchorAlignment() =>
+        !_busy
+        && _frameSet is not null
+        && AnchorReferenceFrame() is not null
+        && _anchorRect is not null;
+
+    private async Task AlignByAnchorRectAsync(bool apply)
     {
-        if (_frameSet is not { } set)
+        if (_frameSet is not { } set || AnchorReferenceFrame() is not { } reference || _anchorRect is not { } rect)
             return;
 
-        await RunAsync("Aligning frames...", async () =>
+        await RunAsync(apply ? "Applying anchor alignment..." : "Previewing anchor alignment...", async () =>
         {
-            var updated = await FrameSets.AlignFramesAsync(Workbench.Project.Id, new AlignFramesRequest(set.Id, _alignAnchor, _alignAxisX, _alignAxisY));
-            ApplyFrameSet(updated);
-            _status = $"Aligned {updated.FrameCount} frame(s) by {_alignAnchor}.";
+            var result = await FrameSets.AlignFramesByAnchorRectAsync(Workbench.Project.Id, new AlignFramesByAnchorRectRequest(
+                set.Id,
+                reference.Id,
+                rect,
+                _anchorSearchPadding,
+                _anchorMinScore,
+                _anchorAxisX,
+                _anchorAxisY,
+                apply));
+            _anchorDiagnostics = result;
+            ApplyFrameSet(result.FrameSet);
+            _status = apply
+                ? $"Applied anchor alignment to {result.Matches.Count} frame(s)."
+                : $"Previewed anchor alignment for {result.Matches.Count} frame(s).";
             await PublishSpritesStateAsync();
+            await RenderCanvasAsync();
         });
+    }
+
+    private async Task ClearAnchorRectAsync()
+    {
+        _anchorRect = null;
+        _anchorDiagnostics = null;
+        await PublishSpritesStateAsync();
+        await RenderCanvasAsync();
+    }
+
+    private async Task SetAnchorReferenceFrameAsync(ChangeEventArgs args)
+    {
+        if (_frameSet is not { } set || !Guid.TryParse(args.Value?.ToString(), out var frameId))
+            return;
+
+        var index = set.Frames.ToList().FindIndex(frame => frame.Id == frameId);
+        if (index < 0)
+            return;
+
+        _selectedIndex = index;
+        _anchorReferenceFrameId = frameId;
+        _anchorRect = null;
+        _anchorDiagnostics = null;
+        await PublishSpritesStateAsync();
+        await RenderCanvasAsync();
     }
 
     private async Task ReorderFrameAsync(Guid frameId, int targetIndex)
@@ -968,16 +1063,19 @@
 
             var sourceDataUrl = await _module.InvokeAsync<string>("exportEditSourcePng", _editCanvas);
             var maskDataUrl = await _module.InvokeAsync<string>("exportEditMaskPng", _editCanvas);
+            var count = Math.Clamp(_editCount, 1, Math.Max(1, ImageOptions.Value.MaxOutputs));
+            _editCount = count;
             var batch = await ImageRuntime.StartEditImageAsync(Workbench.Project.Id, new EditImageRequest(
                 sourceAssetId,
                 _editPrompt,
                 "auto",
-                4,
+                count,
                 "opaque",
                 null,
                 sourceDataUrl,
                 maskDataUrl,
-                []));
+                [],
+                SwitchToCompare: false));
             _editBatchId = batch.Id;
             await Workflow.SetWorkspaceModeAsync(Workbench.Project.Id, WorkspaceMode.Sprites);
 
@@ -1158,6 +1256,9 @@
     private async Task SelectFrameAsync(int index)
     {
         _selectedIndex = index;
+        _anchorReferenceFrameId = SelectedFrame()?.Id;
+        _anchorRect = null;
+        _anchorDiagnostics = null;
         await PublishSpritesStateAsync();
         await RenderCanvasAsync();
     }
@@ -1191,7 +1292,8 @@
                 previous is null ? null : FramePreviewUrl(previous.Id),
                 next is null ? null : FramePreviewUrl(next.Id),
                 _frameTool,
-                _showOnion);
+                _showOnion,
+                _anchorReferenceFrameId == frame.Id ? _anchorRect : null);
         }
     }
 
@@ -1254,6 +1356,16 @@
             await SetFrameOffsetAsync(frame.Id, frame.ContentOffsetX + dx, frame.ContentOffsetY + dy);
     }
 
+    [JSInvokable]
+    public async Task OnFrameAnchorRectChanged(int x, int y, int width, int height)
+    {
+        _anchorReferenceFrameId = SelectedFrame()?.Id;
+        _anchorRect = new SpriteSheetRect(Math.Max(0, x), Math.Max(0, y), Math.Max(1, width), Math.Max(1, height));
+        _anchorDiagnostics = null;
+        await PublishSpritesStateAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
     private async Task PublishSpritesStateAsync()
     {
         if (!OnVisibleStateChanged.HasDelegate)
@@ -1274,12 +1386,46 @@
                     _editBatchId,
                     _editCandidates.Select(candidate => candidate.AssetId).ToList(),
                     _selectedEditCandidateId,
-                    _editGenerating)
-                : null));
+                    _editGenerating,
+                    _editCount,
+                    EditCandidateSetState())
+                : null,
+            Anchor: new WorkspaceSpriteAnchorSummary(
+                _anchorReferenceFrameId,
+                _anchorRect,
+                _anchorSearchPadding,
+                _anchorMinScore,
+                _anchorAxisX,
+                _anchorAxisY,
+                _anchorDiagnostics?.Matches.Count ?? 0,
+                _anchorDiagnostics?.Matches.Count(match => match.LowConfidence) ?? 0,
+                _anchorDiagnostics?.Applied ?? false)));
     }
 
     private FrameView? SelectedFrame() =>
         _frameSet is { } set && _selectedIndex >= 0 && _selectedIndex < set.Frames.Count ? set.Frames[_selectedIndex] : null;
+
+    private FrameView? AnchorReferenceFrame() =>
+        _frameSet?.Frames.FirstOrDefault(frame => frame.Id == _anchorReferenceFrameId) ?? SelectedFrame();
+
+    private string AnchorReferenceFrameIdText() =>
+        (AnchorReferenceFrame()?.Id ?? Guid.Empty).ToString();
+
+    private string AnchorRectSummary() =>
+        _anchorRect is { } rect
+            ? $"Anchor {rect.X},{rect.Y} / {rect.Width} x {rect.Height}"
+            : "Draw an anchor rectangle on the selected frame.";
+
+    private string EditCandidateSetState()
+    {
+        if (_editGenerating)
+            return "generating";
+        if (_editCandidates.Count > 0 && _selectedEditCandidateId is Guid)
+            return "candidate-selected";
+        if (_editCandidates.Count > 0)
+            return "candidates-pending";
+        return "empty";
+    }
 
     private SourceRegionView? SelectedRegion() =>
         _regions.FirstOrDefault(region => _selectedRegionIds.Contains(region.Id));

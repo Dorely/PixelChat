@@ -20,6 +20,7 @@ public interface IFrameSetService
     Task<FrameSetView> TranslateFrameContentAsync(Guid projectId, TranslateFrameContentRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> ApplyFrameEditCandidateAsync(Guid projectId, ApplyFrameEditCandidateRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> AlignFramesAsync(Guid projectId, AlignFramesRequest request, CancellationToken cancellationToken = default);
+    Task<AnchorAlignmentResult> AlignFramesByAnchorRectAsync(Guid projectId, AlignFramesByAnchorRectRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> GetFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken = default);
     Task<BuildSheetResult> BuildSheetAsync(Guid projectId, BuildSheetRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<FrameSetSummaryView>> ListFrameSetsAsync(Guid projectId, CancellationToken cancellationToken = default);

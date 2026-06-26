@@ -3123,7 +3123,8 @@ public sealed class ArtWorkflowService(
         };
         await db.GenerationBatches.AddAsync(batch, cancellationToken);
         project.ActiveBatchId = batch.Id;
-        project.ActiveWorkspaceMode = WorkspaceMode.Compare;
+        if (request.SwitchToCompare)
+            project.ActiveWorkspaceMode = WorkspaceMode.Compare;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
         await LogActivityAsync(
