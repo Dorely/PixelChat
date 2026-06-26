@@ -865,6 +865,11 @@ namespace PixelChat.Persistence.Migrations
                     b.Property<int>("DurationMs")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("HideFromOnionSkin")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false);
+
                     b.Property<Guid>("FrameSetId")
                         .HasColumnType("TEXT");
 

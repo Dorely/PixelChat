@@ -21,6 +21,7 @@ public sealed record FrameView(
     string WorkingState,
     int WorkingWidth,
     int WorkingHeight,
+    bool HideFromOnionSkin,
     bool HasMask,
     Guid? MaskId);
 

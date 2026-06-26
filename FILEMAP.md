@@ -97,6 +97,7 @@
 
 | File | Description |
 |------|-------------|
+| `ExportPanel.razor` / `.razor.css` | Shared export workflow panel used inline by Sprites and as the Assets export modal, including cleanup steps, local AI removal, preview backgrounds, reset, and PNG/JSON downloads. |
 | `LazyImage.razor` / `.razor.css` / `.razor.js` | IntersectionObserver-backed image component that reserves thumbnail space and assigns `src` only when near the viewport. |
 | `SpriteAnimationPreview.razor` / `.razor.js` | Reusable canvas animation preview component that plays saved sprite-frame preview images without storing a GIF artifact. |
 
@@ -177,7 +178,7 @@
 | `SpriteRegion.cs` | Greenfield EF entity for a source-image region (rect/polygon, type, order) that stays linked to source pixels and can be extracted as an asset or turned into frames. |
 | `StandaloneAsset.cs` | Greenfield EF entity linking an extracted region to its output `ArtAsset` (kind `Extracted`) with logical size, content offset, source link, and a deferred bitmap-revision pointer. |
 | `FrameSet.cs` | Greenfield EF entity (replaces `SpriteSheetDefinition` as the frame owner) holding ordered frames, default cell size, playback/alignment settings, and child sheet layouts. |
-| `Frame.cs` | Greenfield EF entity (replaces `SpriteSheetFrameRecord`) with explicit coordinate spaces: source bounds, logical cell size, content offset, duration, working/preview bitmaps, and anchors. |
+| `Frame.cs` | Greenfield EF entity (replaces `SpriteSheetFrameRecord`) with explicit coordinate spaces, duration, onion-skin visibility, working/preview bitmaps, and anchors. |
 | `Anchor.cs` | Greenfield EF entity for a named per-frame alignment point (feet/root/center/custom) with confidence and detected/manual source. |
 | `SheetLayout.cs` | Greenfield EF entity for deterministic sheet geometry (rows/columns/cell/padding/gutter/outer-margin/ordering) and playback/background defaults for a frame set. |
 | `BuiltSheet.cs` | Greenfield EF entity for a reassembled opaque sheet asset retaining a per-frame placement manifest and links to the frames used, so the sheet stays rebuildable. |
@@ -232,6 +233,7 @@
 | `*_SpriteGreenfieldModel.cs` / `.Designer.cs` | EF migration adding the greenfield sprite tables (SpriteRegions, StandaloneAssets, FrameSets, Frames, Anchors, SheetLayouts, BuiltSheets, HistoryTasks), the new `Extracted` asset kind, and ImageMask owner/coordinate-space columns. |
 | `20260625233000_ActiveFrameSetProjectState.cs` | Corrective EF migration that adds `Projects.ActiveFrameSetId` after the greenfield migration for databases that had already applied the earlier migration. |
 | `20260626000000_SpriteEditSessions.cs` | EF migration adding pending Sprites edit modal sessions with target, batch, mask, candidate, output-state, prompt/count, and crop persistence. |
+| `20260626001500_FrameOnionSkinVisibility.cs` | EF migration adding per-frame onion-skin visibility metadata for the greenfield frame model. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

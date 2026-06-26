@@ -29,6 +29,7 @@ public interface IFrameSetService
     Task<FrameSetView> ReorderFrameAsync(Guid projectId, Guid frameSetId, Guid frameId, int targetIndex, CancellationToken cancellationToken = default);
     Task<FrameSetView> DeleteFrameAsync(Guid projectId, Guid frameSetId, Guid frameId, CancellationToken cancellationToken = default);
     Task<FrameSetView> SetFrameDurationAsync(Guid projectId, Guid frameSetId, Guid frameId, int durationMs, CancellationToken cancellationToken = default);
+    Task<FrameSetView> SetFrameOnionSkinVisibilityAsync(Guid projectId, Guid frameSetId, Guid frameId, bool hideFromOnionSkin, CancellationToken cancellationToken = default);
     Task<ImageMaskView> UpsertFrameMaskAsync(Guid projectId, UpsertFrameMaskRequest request, CancellationToken cancellationToken = default);
     Task ClearFrameMaskAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
     Task<SpriteEditSessionView?> GetPendingSpriteEditSessionAsync(Guid projectId, CancellationToken cancellationToken = default);

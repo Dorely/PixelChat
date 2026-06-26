@@ -928,6 +928,24 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
         return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
     }
 
+    public async Task<FrameSetView> SetFrameOnionSkinVisibilityAsync(
+        Guid projectId,
+        Guid frameSetId,
+        Guid frameId,
+        bool hideFromOnionSkin,
+        CancellationToken cancellationToken = default)
+    {
+        var frameSet = await LoadFrameSetAsync(projectId, frameSetId, cancellationToken);
+        var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == frameId, cancellationToken)
+            ?? throw new InvalidOperationException("Frame was not found.");
+        frame.HideFromOnionSkin = hideFromOnionSkin;
+        frame.UpdatedAt = DateTime.UtcNow;
+        frameSet.UpdatedAt = frame.UpdatedAt;
+        await TouchProjectAsync(projectId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+    }
+
     public async Task<ImageMaskView> UpsertFrameMaskAsync(
         Guid projectId,
         UpsertFrameMaskRequest request,
@@ -1172,6 +1190,7 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
                         string.IsNullOrWhiteSpace(frame.WorkingState) ? "none" : frame.WorkingState,
                         frame.WorkingWidth,
                         frame.WorkingHeight,
+                        frame.HideFromOnionSkin,
                         mask is not null,
                         mask?.Id);
                 })

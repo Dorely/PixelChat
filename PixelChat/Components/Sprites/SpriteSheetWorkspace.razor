@@ -57,6 +57,10 @@
                     <button type="button" class="@ToolButtonClass(_frameTool, "pan")" title="Pan canvas" @onclick='() => SetFrameToolAsync("pan")'>Pan</button>
                     <button type="button" class="sprite-tool-button" title="Edit selected frame with mask and prompt" disabled="@(_busy || SelectedFrame() is null)" @onclick="OpenFrameEditModalAsync">Edit</button>
                 }
+                else if (_mode == SpriteMode.Sheet)
+                {
+                    <button type="button" class="sprite-tool-button" title="Build normalized sprite sheet" disabled="@(_busy || _frameSet is null)" @onclick="BuildSheetAsync">Build</button>
+                }
                 else
                 {
                     <span class="sprite-tool-rail-hint">@ToolRailHint()</span>
@@ -112,11 +116,17 @@
                     }
                     else
                     {
-                        <div class="sprite-export-pane">
-                            <p>Export turns the opaque built sheet into engine-ready files.</p>
-                            <p class="sprite-export-note">Background removal, transparency, and edge cleanup happen here, not while editing Source, Frames, or Sheet.</p>
-                            <button type="button" class="btn btn-sm btn-primary" disabled="@(BuiltSheetAssetId() is null)" @onclick="ExportBuiltSheetAsync">Export...</button>
-                        </div>
+                        @if (BuiltSheetAssetId() is Guid exportAssetId)
+                        {
+                            <ExportPanel ProjectId="Workbench.Project.Id" AssetId="exportAssetId" Inline="true" />
+                        }
+                        else
+                        {
+                            <div class="sprite-export-pane">
+                                <p>Build a sheet before exporting.</p>
+                                <p class="sprite-export-note">Background removal, transparency, and edge cleanup happen here after the opaque sheet exists.</p>
+                            </div>
+                        }
                     }
                 </div>
 
@@ -308,13 +318,8 @@
                             <label><span>Ordering</span><select class="form-select form-select-sm" @bind="_ordering"><option value="rowMajor">Row major</option><option value="columnMajor">Column major</option></select></label>
                         </div>
                         <div class="sprite-inspector-actions">
-                            <button type="button" class="btn btn-sm btn-primary" disabled="@(_busy || _frameSet is null)" @onclick="BuildSheetAsync">Build Sheet</button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(BuiltSheetAssetId() is null)" @onclick="ExportBuiltSheetAsync">Export...</button>
+                            <span class="sprite-inspector-hint">Use the Build button in the left rail to rebuild the current layout.</span>
                         </div>
-                        @if (BuiltSheetManifest() is { } manifest)
-                        {
-                            <p class="sprite-inspector-hint">Manifest: @manifest</p>
-                        }
                     </div>
                 }
                 else
@@ -322,7 +327,6 @@
                     <div class="sprite-settings-panel">
                         <div class="section-title">Export</div>
                         <p class="sprite-inspector-hint">Produce final engine-ready output. Transparency and background removal are applied at this stage only.</p>
-                        <button type="button" class="btn btn-sm btn-primary" disabled="@(BuiltSheetAssetId() is null)" @onclick="ExportBuiltSheetAsync">Export...</button>
                     </div>
                 }
             </aside>
@@ -333,6 +337,8 @@
             <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="Undo task - coming soon">Undo task</button>
         </div>
 
+        @if (_mode != SpriteMode.Export)
+        {
         <div class="sprite-bottom-strip">
             @if (_mode == SpriteMode.Source)
             {
@@ -362,15 +368,22 @@
                                      @ondragstart="() => _dragFrameId = frame.Id"
                                      @ondragover:preventDefault
                                      @ondrop="() => DropFrameAsync(frame.Index)">
-                                    <button type="button" class="frame-thumb" @onclick="() => SelectFrameAsync(frame.Index)">
-                                        <img src="@FramePreviewUrl(frame.Id)" alt="@frame.Name" />
-                                        <span class="@WorkingBadgeClass(frame)">@WorkingLabel(frame)@(frame.HasMask ? " + mask" : "")</span>
-                                    </button>
                                     <div class="sprite-frame-card-body">
                                         <button type="button" class="sprite-frame-name" title="@frame.Name" @onclick="() => SelectFrameAsync(frame.Index)">@frame.Name</button>
                                     </div>
-                                    <button type="button" class="sprite-frame-arrow is-left" title="Move earlier" disabled="@(frame.Index == 0 || _busy)" @onclick="() => ReorderFrameAsync(frame.Id, frame.Index - 1)">&lt;</button>
-                                    <button type="button" class="sprite-frame-arrow is-right" title="Move later" disabled="@(frame.Index >= set.FrameCount - 1 || _busy)" @onclick="() => ReorderFrameAsync(frame.Id, frame.Index + 1)">&gt;</button>
+                                    <div class="sprite-frame-image-row">
+                                        <button type="button" class="sprite-frame-arrow is-left" title="Move earlier" disabled="@(frame.Index == 0 || _busy)" @onclick="() => ReorderFrameAsync(frame.Id, frame.Index - 1)">&lt;</button>
+                                        <button type="button" class="frame-thumb" @onclick="() => SelectFrameAsync(frame.Index)">
+                                            <img src="@FramePreviewUrl(frame.Id)" alt="@frame.Name" />
+                                        </button>
+                                        <button type="button" class="sprite-frame-arrow is-right" title="Move later" disabled="@(frame.Index >= set.FrameCount - 1 || _busy)" @onclick="() => ReorderFrameAsync(frame.Id, frame.Index + 1)">&gt;</button>
+                                    </div>
+                                    <button type="button" class="sprite-frame-onion @(frame.HideFromOnionSkin ? "is-hidden" : "")"
+                                            title="@(frame.HideFromOnionSkin ? "Show in onion skin" : "Hide from onion skin")"
+                                            disabled="@_busy"
+                                            @onclick="() => ToggleFrameOnionSkinAsync(frame)">
+                                        @(frame.HideFromOnionSkin ? "Eye off" : "Eye")
+                                    </button>
                                 </div>
                             }
                         }
@@ -379,6 +392,7 @@
 
             }
         </div>
+        }
     </div>
 </div>
 
@@ -859,6 +873,24 @@
             var updated = await FrameSets.SetFrameDurationAsync(Workbench.Project.Id, set.Id, frameId, ms);
             ApplyFrameSet(updated);
             await PublishSpritesStateAsync();
+        });
+    }
+
+    private async Task ToggleFrameOnionSkinAsync(FrameView frame)
+    {
+        if (_frameSet is not { } set)
+            return;
+
+        await RunAsync("Updating onion-skin visibility...", async () =>
+        {
+            var updated = await FrameSets.SetFrameOnionSkinVisibilityAsync(
+                Workbench.Project.Id,
+                set.Id,
+                frame.Id,
+                !frame.HideFromOnionSkin);
+            ApplyFrameSet(updated);
+            await PublishSpritesStateAsync();
+            await RenderCanvasAsync();
         });
     }
 
@@ -1695,8 +1727,8 @@
         }
         else if (_mode == SpriteMode.Frames && SelectedFrame() is { } frame)
         {
-            var previous = NeighborFrame(-1);
-            var next = NeighborFrame(1);
+            var previous = NeighborOnionFrame(-1);
+            var next = NeighborOnionFrame(1);
             await _module.InvokeVoidAsync(
                 "loadFrameCanvas",
                 _frameCanvas,
@@ -1791,7 +1823,7 @@
             ActiveFrameSet: _frameSet is null ? null : new WorkspaceFrameSetSummary(_frameSet.Id, _frameSet.Name, _frameSet.SourceAssetId, _frameSet.DefaultCellWidth, _frameSet.DefaultCellHeight, _frameSet.FrameCount),
             SourceAsset: SelectedSourceAsset(),
             SelectedRegions: _regions.Where(region => _selectedRegionIds.Contains(region.Id)).Select(region => new WorkspaceSpriteRegionSummary(region.Id, region.Name, region.X, region.Y, region.Width, region.Height, region.RegionType, region.Order)).ToList(),
-            SelectedFrames: SelectedFrame() is { } frame ? [new WorkspaceFrameSummary(frame.Id, frame.Index, frame.Name, frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight, frame.LogicalWidth, frame.LogicalHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.DurationMs, frame.WorkingState, frame.HasMask)] : [],
+            SelectedFrames: SelectedFrame() is { } frame ? [new WorkspaceFrameSummary(frame.Id, frame.Index, frame.Name, frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight, frame.LogicalWidth, frame.LogicalHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.DurationMs, frame.WorkingState, frame.HideFromOnionSkin, frame.HasMask)] : [],
             SelectedMaskId: SelectedFrame()?.MaskId,
             BuiltSheet: BuiltSheetAssetId() is Guid built ? new WorkspaceBuiltSheetSummary(built, BuiltSheetManifest() ?? string.Empty) : null,
             Mode: ModeLabel(_mode),
@@ -1862,12 +1894,19 @@
     private SourceRegionView? SelectedRegion() =>
         _regions.FirstOrDefault(region => _selectedRegionIds.Contains(region.Id));
 
-    private FrameView? NeighborFrame(int offset)
+    private FrameView? NeighborOnionFrame(int offset)
     {
         if (_frameSet is not { } set || _selectedIndex < 0)
             return null;
-        var index = _selectedIndex + offset;
-        return index >= 0 && index < set.Frames.Count ? set.Frames[index] : null;
+
+        for (var index = _selectedIndex + offset; index >= 0 && index < set.Frames.Count; index += offset)
+        {
+            var candidate = set.Frames[index];
+            if (!candidate.HideFromOnionSkin)
+                return candidate;
+        }
+
+        return null;
     }
 
     private FrameView? AnimationFrame()

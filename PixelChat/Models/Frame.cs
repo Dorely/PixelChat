@@ -41,6 +41,7 @@ public class Frame
     public int ContentOffsetY { get; set; }
 
     public int DurationMs { get; set; }
+    public bool HideFromOnionSkin { get; set; }
 
     /// <summary>Optional polygon outline of the source region (JSON array of points).</summary>
     public string ShapeJson { get; set; } = "[]";
