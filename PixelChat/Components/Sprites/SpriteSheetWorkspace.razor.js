@@ -1,5 +1,6 @@
 const sourceStates = new WeakMap();
 const frameStates = new WeakMap();
+const editStates = new WeakMap();
 const imageCache = new Map();
 
 export async function loadSourceCanvas(canvas, dotNetRef, imageUrl, regions, selectedIds, tool) {
@@ -35,7 +36,7 @@ export async function loadSourceCanvas(canvas, dotNetRef, imageUrl, regions, sel
     renderSource(canvas, state);
 }
 
-export async function loadFrameCanvas(canvas, dotNetRef, imageUrl, maskUrl, frame, previousUrl, nextUrl, tool, brushSize, showOnion) {
+export async function loadFrameCanvas(canvas, dotNetRef, imageUrl, frame, previousUrl, nextUrl, tool, showOnion) {
     if (!isCanvas(canvas)) return;
     const image = await loadImage(imageUrl);
     const previous = previousUrl ? await loadImage(previousUrl) : null;
@@ -49,10 +50,7 @@ export async function loadFrameCanvas(canvas, dotNetRef, imageUrl, maskUrl, fram
             previous,
             next,
             frame: null,
-            maskUrl: null,
-            paint: null,
             tool: "content",
-            brushSize: 24,
             showOnion: true,
             view: null,
             drag: null,
@@ -67,22 +65,110 @@ export async function loadFrameCanvas(canvas, dotNetRef, imageUrl, maskUrl, fram
     state.next = next;
     state.frame = normalizeFrame(frame);
     state.tool = tool || "content";
-    state.brushSize = Number(brushSize) || 24;
     state.showOnion = Boolean(showOnion);
     if (state.imageUrl !== imageUrl) {
         state.imageUrl = imageUrl;
         state.view = null;
     }
-    if (state.maskUrl !== maskUrl || !state.paint || state.paint.width !== state.frame.logicalWidth || state.paint.height !== state.frame.logicalHeight) {
-        state.maskUrl = maskUrl;
-        state.paint = document.createElement("canvas");
-        state.paint.width = state.frame.logicalWidth;
-        state.paint.height = state.frame.logicalHeight;
-        if (maskUrl) {
-            await loadMaskIntoPaint(state, maskUrl);
-        }
-    }
     renderFrame(canvas, state);
+}
+
+export async function loadEditCanvas(canvas, imageUrl, maskUrl, tool, brushSize, editSourceWidth, editSourceHeight, cropX, cropY, cropWidth, cropHeight) {
+    if (!isCanvas(canvas)) return;
+    const image = await loadImage(imageUrl);
+    const imageW = imageWidth(image);
+    const imageH = imageHeight(image);
+    const sourceW = Math.max(1, number(editSourceWidth, 0) || imageW);
+    const sourceH = Math.max(1, number(editSourceHeight, 0) || imageH);
+    const target = {
+        x: Math.max(0, number(cropX, 0)),
+        y: Math.max(0, number(cropY, 0)),
+        width: Math.max(1, number(cropWidth, 0) || imageW),
+        height: Math.max(1, number(cropHeight, 0) || imageH),
+    };
+
+    const source = document.createElement("canvas");
+    source.width = sourceW;
+    source.height = sourceH;
+    const sourceCtx = source.getContext("2d");
+    sourceCtx.imageSmoothingEnabled = false;
+    sourceCtx.fillStyle = "#ff00ff";
+    sourceCtx.fillRect(0, 0, sourceW, sourceH);
+    sourceCtx.drawImage(image, target.x, target.y, target.width, target.height);
+
+    const paint = document.createElement("canvas");
+    paint.width = sourceW;
+    paint.height = sourceH;
+
+    let state = editStates.get(canvas);
+    if (!state) {
+        state = {
+            source,
+            paint,
+            target,
+            tool: tool || "mask",
+            brushSize: Number(brushSize) || 28,
+            view: null,
+            drag: null,
+        };
+        editStates.set(canvas, state);
+        attachEdit(canvas, state);
+    } else {
+        state.source = source;
+        state.paint = paint;
+        state.target = target;
+        state.tool = tool || "mask";
+        state.brushSize = Number(brushSize) || 28;
+        state.view = null;
+        state.drag = null;
+    }
+    if (maskUrl) {
+        await loadMaskIntoEditPaint(state, maskUrl);
+    }
+    renderEdit(canvas, state);
+}
+
+export function setEditTool(canvas, tool) {
+    const state = editStates.get(canvas);
+    if (state) state.tool = tool || "mask";
+}
+
+export function setEditBrushSize(canvas, brushSize) {
+    const state = editStates.get(canvas);
+    if (state) state.brushSize = Number(brushSize) || state.brushSize;
+}
+
+export function clearEditMask(canvas) {
+    const state = editStates.get(canvas);
+    if (!state) return;
+    state.paint.getContext("2d").clearRect(0, 0, state.paint.width, state.paint.height);
+    renderEdit(canvas, state);
+}
+
+export function hasEditMaskPaint(canvas) {
+    const state = editStates.get(canvas);
+    return state ? paintHasPixels(state.paint) : false;
+}
+
+export function exportEditSourcePng(canvas) {
+    const state = editStates.get(canvas);
+    if (!state) throw new Error("Edit canvas is not ready.");
+    return state.source.toDataURL("image/png");
+}
+
+export function exportEditMaskPng(canvas) {
+    const state = editStates.get(canvas);
+    if (!state) throw new Error("Edit canvas is not ready.");
+    const mask = document.createElement("canvas");
+    mask.width = state.source.width;
+    mask.height = state.source.height;
+    const ctx = mask.getContext("2d");
+    ctx.fillStyle = "rgba(0,0,0,1)";
+    ctx.fillRect(0, 0, mask.width, mask.height);
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.drawImage(state.paint, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
+    return mask.toDataURL("image/png");
 }
 
 function attachSource(canvas, state) {
@@ -107,6 +193,17 @@ function attachFrame(canvas, state) {
     canvas.addEventListener("pointerup", event => onFramePointerUp(canvas, state, event));
     canvas.addEventListener("pointercancel", event => onFramePointerUp(canvas, state, event));
     canvas.addEventListener("keydown", event => onFrameKeyDown(canvas, state, event));
+}
+
+function attachEdit(canvas, state) {
+    canvas.addEventListener("wheel", event => onEditWheel(canvas, state, event), { passive: false });
+    canvas.addEventListener("pointerdown", event => onEditPointerDown(canvas, state, event));
+    canvas.addEventListener("pointermove", event => onEditPointerMove(canvas, state, event));
+    canvas.addEventListener("pointerup", event => onEditPointerUp(canvas, state, event));
+    canvas.addEventListener("pointercancel", event => onEditPointerUp(canvas, state, event));
+    canvas.addEventListener("pointerleave", event => {
+        if (state.drag) onEditPointerUp(canvas, state, event);
+    });
 }
 
 function onSourceWheel(canvas, state, event) {
@@ -259,7 +356,8 @@ function onSourcePointerUp(canvas, state, event) {
 function onFrameWheel(canvas, state, event) {
     if (!state.frame) return;
     event.preventDefault();
-    ensureView(canvas, state, state.frame.logicalWidth, state.frame.logicalHeight);
+    const workspace = frameWorkspace(state.frame);
+    ensureView(canvas, state, workspace.width, workspace.height, workspace.x, workspace.y);
     const point = canvasPoint(canvas, event);
     const before = screenToWorld(state.view, point.x, point.y);
     const factor = event.deltaY < 0 ? 1.12 : 0.88;
@@ -272,7 +370,8 @@ function onFrameWheel(canvas, state, event) {
 function onFramePointerDown(canvas, state, event) {
     if (!state.frame) return;
     canvas.focus?.();
-    ensureView(canvas, state, state.frame.logicalWidth, state.frame.logicalHeight);
+    const workspace = frameWorkspace(state.frame);
+    ensureView(canvas, state, workspace.width, workspace.height, workspace.x, workspace.y);
     const world = framePoint(canvas, state, event);
     if (!world) return;
     event.preventDefault();
@@ -281,13 +380,6 @@ function onFramePointerDown(canvas, state, event) {
     if (state.tool === "pan") {
         const point = canvasPoint(canvas, event);
         state.drag = { type: "pan", start: point, view: { ...state.view } };
-        return;
-    }
-
-    if (state.tool === "mask" || state.tool === "eraseMask") {
-        state.drag = { type: "mask" };
-        paintMask(state, world, state.tool === "eraseMask");
-        renderFrame(canvas, state);
         return;
     }
 
@@ -314,9 +406,7 @@ function onFramePointerMove(canvas, state, event) {
     }
     const world = framePoint(canvas, state, event);
     if (!world) return;
-    if (state.drag.type === "mask") {
-        paintMask(state, world, state.tool === "eraseMask");
-    } else if (state.drag.type === "content") {
+    if (state.drag.type === "content") {
         state.frame.contentOffsetX = Math.round(state.drag.originalX + world.x - state.drag.start.x);
         state.frame.contentOffsetY = Math.round(state.drag.originalY + world.y - state.drag.start.y);
     }
@@ -332,8 +422,6 @@ function onFramePointerUp(canvas, state, event) {
     renderFrame(canvas, state);
     if (type === "content") {
         state.dotNetRef?.invokeMethodAsync("OnFrameContentOffsetChanged", state.frame.contentOffsetX, state.frame.contentOffsetY);
-    } else if (type === "mask") {
-        state.dotNetRef?.invokeMethodAsync("OnFrameMaskChanged", exportMaskPng(state));
     }
 }
 
@@ -354,6 +442,60 @@ function onFrameKeyDown(canvas, state, event) {
     state.dotNetRef?.invokeMethodAsync("OnFrameContentNudged", dx, dy);
 }
 
+function onEditWheel(canvas, state, event) {
+    if (!state.source) return;
+    event.preventDefault();
+    ensureView(canvas, state, state.source.width, state.source.height);
+    const point = canvasPoint(canvas, event);
+    const before = screenToWorld(state.view, point.x, point.y);
+    const factor = event.deltaY < 0 ? 1.12 : 0.88;
+    state.view.scale = clamp(state.view.scale * factor, 0.05, 64);
+    state.view.x = point.x - before.x * state.view.scale;
+    state.view.y = point.y - before.y * state.view.scale;
+    renderEdit(canvas, state);
+}
+
+function onEditPointerDown(canvas, state, event) {
+    if (!state.source) return;
+    canvas.focus?.();
+    ensureView(canvas, state, state.source.width, state.source.height);
+    event.preventDefault();
+    canvas.setPointerCapture?.(event.pointerId);
+    if (state.tool === "pan") {
+        const point = canvasPoint(canvas, event);
+        state.drag = { type: "pan", start: point, view: { ...state.view } };
+        return;
+    }
+
+    const world = editPoint(canvas, state, event);
+    state.drag = { type: "mask" };
+    paintEditMask(state, world, state.tool === "erase");
+    renderEdit(canvas, state);
+}
+
+function onEditPointerMove(canvas, state, event) {
+    if (!state.drag) return;
+    event.preventDefault();
+    if (state.drag.type === "pan") {
+        const point = canvasPoint(canvas, event);
+        state.view.x = state.drag.view.x + point.x - state.drag.start.x;
+        state.view.y = state.drag.view.y + point.y - state.drag.start.y;
+        renderEdit(canvas, state);
+        return;
+    }
+
+    paintEditMask(state, editPoint(canvas, state, event), state.tool === "erase");
+    renderEdit(canvas, state);
+}
+
+function onEditPointerUp(canvas, state, event) {
+    if (!state.drag) return;
+    event.preventDefault();
+    state.drag = null;
+    try { canvas.releasePointerCapture?.(event.pointerId); } catch { }
+    renderEdit(canvas, state);
+}
+
 function renderSource(canvas, state) {
     const ctx = resizeCanvas(canvas);
     drawStageBackground(ctx, canvas.width, canvas.height);
@@ -368,27 +510,46 @@ function renderSource(canvas, state) {
     ctx.restore();
 }
 
+function renderEdit(canvas, state) {
+    const ctx = resizeCanvas(canvas);
+    drawStageBackground(ctx, canvas.width, canvas.height);
+    if (!state.source) return;
+    ensureView(canvas, state, state.source.width, state.source.height);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.setTransform(state.view.scale, 0, 0, state.view.scale, state.view.x, state.view.y);
+    ctx.drawImage(state.source, 0, 0);
+    ctx.drawImage(state.paint, 0, 0);
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 2 / state.view.scale;
+    ctx.strokeRect(state.target.x + 0.5, state.target.y + 0.5, state.target.width - 1, state.target.height - 1);
+    ctx.restore();
+}
+
 function renderFrame(canvas, state) {
     const ctx = resizeCanvas(canvas);
     drawStageBackground(ctx, canvas.width, canvas.height);
     if (!state.image || !state.frame) return;
-    ensureView(canvas, state, state.frame.logicalWidth, state.frame.logicalHeight);
+    const workspace = frameWorkspace(state.frame);
+    ensureView(canvas, state, workspace.width, workspace.height, workspace.x, workspace.y);
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.setTransform(state.view.scale, 0, 0, state.view.scale, state.view.x, state.view.y);
+    ctx.fillStyle = "#ff00ff";
+    ctx.fillRect(workspace.x, workspace.y, workspace.width, workspace.height);
     if (state.showOnion && state.previous) {
         ctx.globalAlpha = 0.28;
         ctx.drawImage(state.previous, 0, 0, state.frame.logicalWidth, state.frame.logicalHeight);
     }
     ctx.globalAlpha = 1;
-    ctx.drawImage(state.image, 0, 0, state.frame.logicalWidth, state.frame.logicalHeight);
+    const content = contentRect(state.frame);
+    ctx.drawImage(state.image, content.x, content.y, content.width, content.height);
     if (state.showOnion && state.next) {
         ctx.globalAlpha = 0.22;
         ctx.drawImage(state.next, 0, 0, state.frame.logicalWidth, state.frame.logicalHeight);
         ctx.globalAlpha = 1;
     }
     drawFrameOverlays(ctx, state);
-    if (state.paint) ctx.drawImage(state.paint, 0, 0);
     ctx.restore();
 }
 
@@ -469,49 +630,59 @@ function drawFrameOverlays(ctx, state) {
     ctx.restore();
 }
 
-function paintMask(state, point, erase) {
+function paintEditMask(state, point, erase) {
     const ctx = state.paint.getContext("2d");
     ctx.save();
     ctx.globalCompositeOperation = erase ? "destination-out" : "source-over";
-    ctx.fillStyle = "rgba(239,68,68,0.42)";
+    ctx.fillStyle = "rgba(31,111,235,0.46)";
     ctx.beginPath();
     ctx.arc(point.x, point.y, Math.max(1, state.brushSize / 2), 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 }
 
-function exportMaskPng(state) {
+async function loadMaskIntoEditPaint(state, maskUrl) {
+    const image = await loadImage(maskUrl);
+    const maskWidth = imageWidth(image);
+    const maskHeight = imageHeight(image);
     const mask = document.createElement("canvas");
-    mask.width = state.frame.logicalWidth;
-    mask.height = state.frame.logicalHeight;
-    const ctx = mask.getContext("2d");
-    ctx.fillStyle = "rgba(0,0,0,1)";
-    ctx.fillRect(0, 0, mask.width, mask.height);
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.drawImage(state.paint, 0, 0);
-    ctx.globalCompositeOperation = "source-over";
-    return mask.toDataURL("image/png");
+    mask.width = maskWidth;
+    mask.height = maskHeight;
+    const maskCtx = mask.getContext("2d");
+    maskCtx.drawImage(image, 0, 0, maskWidth, maskHeight);
+    const maskPixels = maskCtx.getImageData(0, 0, maskWidth, maskHeight);
+    const paintCtx = state.paint.getContext("2d");
+    const paintPixels = paintCtx.getImageData(0, 0, state.paint.width, state.paint.height);
+    const offsetX = maskWidth === state.paint.width && maskHeight === state.paint.height ? 0 : state.target.x;
+    const offsetY = maskWidth === state.paint.width && maskHeight === state.paint.height ? 0 : state.target.y;
+
+    for (let y = 0; y < maskHeight; y++) {
+        const destY = offsetY + y;
+        if (destY < 0 || destY >= state.paint.height) continue;
+        for (let x = 0; x < maskWidth; x++) {
+            const destX = offsetX + x;
+            if (destX < 0 || destX >= state.paint.width) continue;
+            const maskIndex = ((y * maskWidth) + x) * 4;
+            const maskAlpha = maskPixels.data[maskIndex + 3];
+            if (maskAlpha >= 255) continue;
+            const destIndex = ((destY * state.paint.width) + destX) * 4;
+            paintPixels.data[destIndex + 0] = 31;
+            paintPixels.data[destIndex + 1] = 111;
+            paintPixels.data[destIndex + 2] = 235;
+            paintPixels.data[destIndex + 3] = 255 - maskAlpha;
+        }
+    }
+
+    paintCtx.putImageData(paintPixels, 0, 0);
 }
 
-async function loadMaskIntoPaint(state, maskUrl) {
-    const image = await loadImage(maskUrl);
-    const scratch = document.createElement("canvas");
-    scratch.width = state.frame.logicalWidth;
-    scratch.height = state.frame.logicalHeight;
-    const scratchCtx = scratch.getContext("2d");
-    scratchCtx.drawImage(image, 0, 0, scratch.width, scratch.height);
-    const maskPixels = scratchCtx.getImageData(0, 0, scratch.width, scratch.height);
-    const paintCtx = state.paint.getContext("2d");
-    const paintPixels = paintCtx.createImageData(scratch.width, scratch.height);
-    for (let i = 0; i < maskPixels.data.length; i += 4) {
-        const editable = 255 - maskPixels.data[i + 3];
-        if (editable <= 0) continue;
-        paintPixels.data[i] = 239;
-        paintPixels.data[i + 1] = 68;
-        paintPixels.data[i + 2] = 68;
-        paintPixels.data[i + 3] = Math.min(180, editable);
+function paintHasPixels(paint) {
+    const ctx = paint.getContext("2d", { willReadFrequently: true });
+    const pixels = ctx.getImageData(0, 0, paint.width, paint.height).data;
+    for (let i = 3; i < pixels.length; i += 4) {
+        if (pixels[i] > 0) return true;
     }
-    paintCtx.putImageData(paintPixels, 0, 0);
+    return false;
 }
 
 function commitSource(state) {
@@ -570,6 +741,8 @@ function normalizeFrame(frame) {
         logicalHeight: Math.max(1, number(read(frame, "logicalHeight", "LogicalHeight"), 1)),
         sourceWidth: Math.max(1, number(read(frame, "sourceWidth", "SourceWidth"), 1)),
         sourceHeight: Math.max(1, number(read(frame, "sourceHeight", "SourceHeight"), 1)),
+        workingWidth: Math.max(0, number(read(frame, "workingWidth", "WorkingWidth"), 0)),
+        workingHeight: Math.max(0, number(read(frame, "workingHeight", "WorkingHeight"), 0)),
         contentOffsetX: number(read(frame, "contentOffsetX", "ContentOffsetX"), 0),
         contentOffsetY: number(read(frame, "contentOffsetY", "ContentOffsetY"), 0),
         hasMask: Boolean(read(frame, "hasMask", "HasMask")),
@@ -642,20 +815,30 @@ function contentRect(frame) {
     return {
         x: frame.contentOffsetX,
         y: frame.contentOffsetY,
-        width: frame.sourceWidth,
-        height: frame.sourceHeight,
+        width: frame.workingWidth > 0 ? frame.workingWidth : frame.sourceWidth,
+        height: frame.workingHeight > 0 ? frame.workingHeight : frame.sourceHeight,
     };
 }
 
-function ensureView(canvas, state, width, height) {
+function frameWorkspace(frame) {
+    const margin = clamp(Math.max(64, Math.round(Math.max(frame.logicalWidth, frame.logicalHeight) * 0.5)), 64, 512);
+    return {
+        x: -margin,
+        y: -margin,
+        width: frame.logicalWidth + (margin * 2),
+        height: frame.logicalHeight + (margin * 2),
+    };
+}
+
+function ensureView(canvas, state, width, height, originX = 0, originY = 0) {
     if (state.view) return;
     const ctx = resizeCanvas(canvas);
     const padding = 28 * deviceScale();
     const scale = Math.min((canvas.width - padding * 2) / width, (canvas.height - padding * 2) / height);
     state.view = {
         scale: Math.max(0.05, scale),
-        x: (canvas.width - width * scale) / 2,
-        y: (canvas.height - height * scale) / 2,
+        x: (canvas.width - width * scale) / 2 - originX * scale,
+        y: (canvas.height - height * scale) / 2 - originY * scale,
     };
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
@@ -672,9 +855,19 @@ function sourcePoint(canvas, state, event) {
 function framePoint(canvas, state, event) {
     const point = canvasPoint(canvas, event);
     const world = screenToWorld(state.view, point.x, point.y);
+    const workspace = frameWorkspace(state.frame);
     return {
-        x: Math.round(clamp(world.x, 0, state.frame.logicalWidth - 1)),
-        y: Math.round(clamp(world.y, 0, state.frame.logicalHeight - 1)),
+        x: Math.round(clamp(world.x, workspace.x, workspace.x + workspace.width)),
+        y: Math.round(clamp(world.y, workspace.y, workspace.y + workspace.height)),
+    };
+}
+
+function editPoint(canvas, state, event) {
+    const point = canvasPoint(canvas, event);
+    const world = screenToWorld(state.view, point.x, point.y);
+    return {
+        x: Math.round(clamp(world.x, 0, state.source.width - 1)),
+        y: Math.round(clamp(world.y, 0, state.source.height - 1)),
     };
 }
 

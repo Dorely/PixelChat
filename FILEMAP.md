@@ -63,7 +63,7 @@
 | `SpriteGuideRenderer.cs` | Procedural PNG renderer for lightweight animation guide sheets and diagnostic guide sheets. |
 | `MotionClipCatalog.cs` | Motion clip manifest loader and resolver for external GLTF-backed animation guides. |
 | `GltfMotionGuideRenderer.cs` | GLB sampler/renderer that produces mannequin motion guide sheets from cataloged Quaternius clips. |
-| `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, asset/frame masks, legacy sprite-frame previews, and greenfield frame-set frame previews. |
+| `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, asset/frame masks, legacy sprite-frame previews, and greenfield frame-set frame content/previews. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
 | `BackgroundRemovalOptions.cs` | Configurable local background-removal sidecar defaults for uv, Python, rembg, model list, acceleration, cache paths, alpha matting, and timeout. |
@@ -129,7 +129,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Canvas-first Sprites workspace bound to greenfield SpriteRegion/FrameSet/Frame services. Provides Source/Frames/Sheet/Export modes, source-region drawing/editing, frame content/mask canvas editing, contextual inspector, bottom region/frame strips, sheet build, export, and disabled history placeholders. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Canvas-first Sprites workspace bound to greenfield SpriteRegion/FrameSet/Frame services. Provides Source/Frames/Sheet/Export modes, source-region drawing/editing, frame alignment, modal masked edits, bottom region/frame strips, sheet build, export, and disabled history placeholders. |
 
 ### Llm/
 

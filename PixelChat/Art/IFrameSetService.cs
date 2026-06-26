@@ -18,6 +18,7 @@ public interface IFrameSetService
     Task<FrameSetView> SetFrameLogicalCellAsync(Guid projectId, SetFrameLogicalCellRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> UpdateFrameSourceBoundsAsync(Guid projectId, UpdateFrameSourceBoundsRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> TranslateFrameContentAsync(Guid projectId, TranslateFrameContentRequest request, CancellationToken cancellationToken = default);
+    Task<FrameSetView> ApplyFrameEditCandidateAsync(Guid projectId, ApplyFrameEditCandidateRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> AlignFramesAsync(Guid projectId, AlignFramesRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> GetFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken = default);
     Task<BuildSheetResult> BuildSheetAsync(Guid projectId, BuildSheetRequest request, CancellationToken cancellationToken = default);
@@ -30,5 +31,6 @@ public interface IFrameSetService
     Task<ImageMaskView> UpsertFrameMaskAsync(Guid projectId, UpsertFrameMaskRequest request, CancellationToken cancellationToken = default);
     Task ClearFrameMaskAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
     Task<(byte[] Data, string ContentType)?> GetFrameMaskImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
+    Task<(byte[] Data, string ContentType)?> GetFrameContentImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
     Task<(byte[] Data, string ContentType)?> GetFramePreviewImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
 }

@@ -1157,6 +1157,7 @@ else
         <SpriteSheetWorkspace Workbench="@_workbench"
                               SourceAssetId="@_spriteEditorSourceAssetId"
                               OnChanged="OnSpriteSheetChangedAsync"
+                              OnSourceAssetChanged="OnSpriteEditorSourceAssetChangedAsync"
                               OnExportAsset="OpenExportAsync"
                               OnVisibleStateChanged="OnSpritesVisibleStateChanged" />
     };
@@ -2932,6 +2933,13 @@ else
 
     private async Task OnSpriteSheetChangedAsync()
     {
+        await ReloadWorkbenchAsync();
+        StateHasChanged();
+    }
+
+    private async Task OnSpriteEditorSourceAssetChangedAsync(Guid assetId)
+    {
+        _spriteEditorSourceAssetId = assetId;
         await ReloadWorkbenchAsync();
         StateHasChanged();
     }

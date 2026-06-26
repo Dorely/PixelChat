@@ -19,6 +19,8 @@ public sealed record FrameView(
     int ContentOffsetY,
     int DurationMs,
     string WorkingState,
+    int WorkingWidth,
+    int WorkingHeight,
     bool HasMask,
     Guid? MaskId);
 
@@ -118,6 +120,17 @@ public sealed record TranslateFrameContentRequest(
     Guid FrameId,
     int ContentOffsetX,
     int ContentOffsetY);
+
+public sealed record ApplyFrameEditCandidateRequest(
+    Guid FrameSetId,
+    Guid FrameId,
+    Guid CandidateAssetId,
+    int EditSourceWidth,
+    int EditSourceHeight,
+    int CropX,
+    int CropY,
+    int CropWidth,
+    int CropHeight);
 
 public sealed record UpsertFrameMaskRequest(
     Guid FrameId,

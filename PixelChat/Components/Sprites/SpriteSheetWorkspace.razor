@@ -5,6 +5,7 @@
 @implements IAsyncDisposable
 @inject IArtWorkflowService Workflow
 @inject IFrameSetService FrameSets
+@inject IImageGenerationRuntime ImageRuntime
 @inject IJSRuntime JS
 
 <div class="sprite-workspace">
@@ -49,8 +50,6 @@
                 else if (_mode == SpriteMode.Frames)
                 {
                     <button type="button" class="@ToolButtonClass(_frameTool, "content")" title="Move frame content" @onclick='() => SetFrameToolAsync("content")'>Move</button>
-                    <button type="button" class="@ToolButtonClass(_frameTool, "mask")" title="Paint frame mask" @onclick='() => SetFrameToolAsync("mask")'>Mask</button>
-                    <button type="button" class="@ToolButtonClass(_frameTool, "eraseMask")" title="Erase frame mask" @onclick='() => SetFrameToolAsync("eraseMask")'>Erase</button>
                     <button type="button" class="@ToolButtonClass(_frameTool, "pan")" title="Pan canvas" @onclick='() => SetFrameToolAsync("pan")'>Pan</button>
                 }
                 else
@@ -148,6 +147,7 @@
                         <div class="sprite-inspector-actions">
                             <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(_busy || SelectedSourceAssetId() is null)" @onclick="DetectRegionsAsync">Detect Regions</button>
                             <button type="button" class="btn btn-sm btn-primary" disabled="@(_busy || SelectedSourceAssetId() is null || _regions.Count == 0)" @onclick="CreateFrameSetFromRegionsAsync">Create Frame Set</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_busy || SelectedSourceAssetId() is null)" @onclick="OpenSourceEditModalAsync">Edit</button>
                         </div>
                     </div>
 
@@ -218,18 +218,17 @@
                                 <label><span>Offset X</span><input class="form-control form-control-sm" type="number" value="@selected.ContentOffsetX" @onchange='(e) => SetFrameOffsetAsync(selected, "x", e)' /></label>
                                 <label><span>Offset Y</span><input class="form-control form-control-sm" type="number" value="@selected.ContentOffsetY" @onchange='(e) => SetFrameOffsetAsync(selected, "y", e)' /></label>
                                 <label><span>Duration</span><input class="form-control form-control-sm" type="number" min="1" max="10000" value="@selected.DurationMs" @onchange="(e) => SetFrameDurationAsync(selected.Id, e)" /></label>
-                                <label><span>Brush</span><input class="form-range" type="range" min="4" max="96" @bind="_brushSize" @bind:after="RenderCanvasAsync" /></label>
                             </div>
                             <div class="sprite-inspector-actions">
                                 <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(-1, 0)">Left</button>
                                 <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(1, 0)">Right</button>
                                 <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(0, -1)">Up</button>
                                 <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="() => NudgeSelectedFrameAsync(0, 1)">Down</button>
+                                <button type="button" class="btn btn-sm btn-outline-primary" disabled="@_busy" @onclick="OpenFrameEditModalAsync">Edit</button>
                             </div>
                             <div class="sprite-inspector-actions">
                                 <label class="sprite-axis-toggle"><input type="checkbox" @bind="_showOnion" @bind:after="RenderCanvasAsync" /> Onion</label>
                                 <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_busy" @onclick="() => DeleteFrameAsync(selected.Id)">Delete frame</button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!selected.HasMask || _busy)" @onclick="() => ClearFrameMaskAsync(selected.Id)">Clear mask</button>
                             </div>
                         </div>
                     }
@@ -343,6 +342,85 @@
     </div>
 </div>
 
+@if (_editModalOpen)
+{
+    <div class="sprite-edit-modal-backdrop" role="presentation">
+        <div class="sprite-edit-modal" role="dialog" aria-modal="true" aria-labelledby="sprite-edit-title">
+            <div class="sprite-edit-modal-head">
+                <div>
+                    <h2 id="sprite-edit-title">@EditModalTitle()</h2>
+                    <span>@EditModalSubtitle()</span>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_editGenerating" @onclick="CloseEditModalAsync">Close</button>
+            </div>
+
+            <div class="sprite-edit-modal-body">
+                <div class="sprite-edit-canvas-wrap">
+                    <canvas class="sprite-edit-canvas" @ref="_editCanvas" tabindex="0"></canvas>
+                </div>
+
+                <div class="sprite-edit-controls">
+                    <div class="sprite-edit-tool-row" role="group" aria-label="Mask tools">
+                        <button type="button" class="@EditToolButtonClass("mask")" disabled="@_editGenerating" @onclick='() => SetEditToolAsync("mask")'>Mask</button>
+                        <button type="button" class="@EditToolButtonClass("erase")" disabled="@_editGenerating" @onclick='() => SetEditToolAsync("erase")'>Erase</button>
+                        <button type="button" class="@EditToolButtonClass("pan")" disabled="@_editGenerating" @onclick='() => SetEditToolAsync("pan")'>Pan</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_editGenerating" @onclick="ClearEditMaskAsync">Clear</button>
+                    </div>
+
+                    <label>
+                        <span>Brush</span>
+                        <input class="form-range" type="range" min="4" max="128" @bind="_editBrushSize" @bind:after="UpdateEditBrushAsync" />
+                    </label>
+
+                    <label>
+                        <span>Prompt</span>
+                        <textarea class="form-control form-control-sm sprite-edit-prompt" rows="7" @bind="_editPrompt" @bind:event="oninput"></textarea>
+                    </label>
+
+                    <button type="button" class="btn btn-sm btn-primary"
+                            disabled="@(!CanGenerateEditCandidates())"
+                            @onclick="GenerateEditCandidatesAsync">
+                        @(_editGenerating ? "Generating..." : "Generate")
+                    </button>
+
+                    @if (!string.IsNullOrWhiteSpace(_editModalError))
+                    {
+                        <div class="sprite-error">@_editModalError</div>
+                    }
+                </div>
+            </div>
+
+            <div class="sprite-edit-results">
+                <div class="sprite-edit-results-head">
+                    <span>@EditResultsLabel()</span>
+                    <div class="sprite-section-actions">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_editGenerating || _editCandidates.Count == 0)" @onclick="RejectEditCandidatesAsync">Reject</button>
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@(_editGenerating || _selectedEditCandidateId is null)" @onclick="AcceptEditCandidateAsync">Accept</button>
+                    </div>
+                </div>
+                <div class="sprite-edit-candidate-strip">
+                    @if (_editCandidates.Count == 0)
+                    {
+                        <div class="empty-state compact">No candidates.</div>
+                    }
+                    else
+                    {
+                        @foreach (var candidate in _editCandidates)
+                        {
+                            <button type="button" class="sprite-edit-candidate @(_selectedEditCandidateId == candidate.AssetId ? "is-selected" : "")"
+                                    disabled="@_editGenerating"
+                                    @onclick="() => SelectEditCandidate(candidate.AssetId)">
+                                <img src="@candidate.ImageUrl" alt="@candidate.Label" />
+                                <span>@candidate.Label</span>
+                            </button>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     [Parameter, EditorRequired]
     public WorkbenchView Workbench { get; set; } = null!;
@@ -357,6 +435,9 @@
     public Guid? SourceAssetId { get; set; }
 
     [Parameter]
+    public EventCallback<Guid> OnSourceAssetChanged { get; set; }
+
+    [Parameter]
     public EventCallback<WorkspaceSpritesVisibleState> OnVisibleStateChanged { get; set; }
 
     private static readonly SpriteMode[] SpriteModes = [SpriteMode.Source, SpriteMode.Frames, SpriteMode.Sheet, SpriteMode.Export];
@@ -365,6 +446,7 @@
     private DotNetObjectReference<SpriteSheetWorkspace>? _dotNetRef;
     private ElementReference _sourceCanvas;
     private ElementReference _frameCanvas;
+    private ElementReference _editCanvas;
 
     private SpriteMode _mode = SpriteMode.Source;
     private FrameSetView? _frameSet;
@@ -394,8 +476,26 @@
     private string _sourceAssetIdText = string.Empty;
     private string _sourceTool = "select";
     private string _frameTool = "content";
-    private int _brushSize = 24;
     private bool _showOnion = true;
+
+    private bool _editModalOpen;
+    private bool _editGenerating;
+    private SpriteEditTargetKind _editTargetKind = SpriteEditTargetKind.Source;
+    private Guid? _editTargetSourceAssetId;
+    private Guid? _editTargetFrameSetId;
+    private Guid? _editTargetFrameId;
+    private SpriteEditCrop? _editCrop;
+    private string? _editImageUrl;
+    private string? _editMaskUrl;
+    private string _editTool = "mask";
+    private int _editBrushSize = 28;
+    private string _editPrompt = string.Empty;
+    private string? _editModalError;
+    private Guid? _editBatchId;
+    private Guid? _selectedEditCandidateId;
+    private List<SpriteEditCandidate> _editCandidates = [];
+    private int _editCanvasLoadVersion;
+    private int _renderedEditCanvasLoadVersion = -1;
 
     private Guid? _builtSheetAssetId;
     private string? _builtSheetManifest;
@@ -417,6 +517,7 @@
             _selectedIndex = -1;
             _builtSheetAssetId = null;
             _builtSheetManifest = null;
+            ResetEditModal();
             await LoadActiveFrameSetAsync();
         }
 
@@ -436,6 +537,7 @@
         }
 
         await RenderCanvasAsync();
+        await RenderEditModalCanvasAsync();
     }
 
     private async Task LoadActiveFrameSetAsync()
@@ -529,8 +631,6 @@
         {
             _regions = (await FrameSets.DetectSourceRegionsAsync(Workbench.Project.Id, new DetectSourceRegionsRequest(sourceId))).ToList();
             _selectedRegionIds.Clear();
-            if (_regions.FirstOrDefault() is { } first)
-                _selectedRegionIds.Add(first.Id);
             _status = $"Detected {_regions.Count} region(s).";
             await PublishSpritesStateAsync();
         });
@@ -541,9 +641,10 @@
         if (SelectedSourceAssetId() is not Guid sourceId || _regions.Count == 0)
             return;
 
-        var regionIds = _selectedRegionIds.Count > 0
-            ? _regions.Where(region => _selectedRegionIds.Contains(region.Id)).Select(region => region.Id).ToList()
-            : _regions.Select(region => region.Id).ToList();
+        var regionIds = _regions
+            .OrderBy(region => region.Order)
+            .Select(region => region.Id)
+            .ToList();
 
         await RunAsync("Creating frame set...", async () =>
         {
@@ -760,15 +861,6 @@
         await RenderCanvasAsync();
     }
 
-    private async Task ClearFrameMaskAsync(Guid frameId)
-    {
-        await FrameSets.ClearFrameMaskAsync(Workbench.Project.Id, frameId);
-        if (_frameSet is { } set)
-            ApplyFrameSet(await FrameSets.GetFrameSetAsync(Workbench.Project.Id, set.Id));
-        await PublishSpritesStateAsync();
-        await RenderCanvasAsync();
-    }
-
     private async Task ExportBuiltSheetAsync()
     {
         if (BuiltSheetAssetId() is not Guid assetId)
@@ -777,6 +869,239 @@
         var asset = Workbench.Assets.FirstOrDefault(a => a.Id == assetId);
         if (asset is not null)
             await OnExportAsset.InvokeAsync(asset);
+    }
+
+    private async Task OpenSourceEditModalAsync()
+    {
+        if (SelectedSourceAssetId() is not Guid sourceAssetId)
+            return;
+
+        ResetEditModal();
+        _editModalOpen = true;
+        _editTargetKind = SpriteEditTargetKind.Source;
+        _editTargetSourceAssetId = sourceAssetId;
+        _editImageUrl = AssetFullUrl(sourceAssetId);
+        _editCrop = SpriteEditCrop.SourceDefault(SelectedSourceArtAsset());
+        _editCanvasLoadVersion++;
+        await PublishSpritesStateAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OpenFrameEditModalAsync()
+    {
+        if (_frameSet is not { } set || SelectedFrame() is not { } frame || set.SourceAssetId is not Guid sourceAssetId)
+            return;
+
+        ResetEditModal();
+        var padding = FrameEditPadding(frame);
+        _editModalOpen = true;
+        _editTargetKind = SpriteEditTargetKind.Frame;
+        _editTargetSourceAssetId = sourceAssetId;
+        _editTargetFrameSetId = set.Id;
+        _editTargetFrameId = frame.Id;
+        _editImageUrl = FramePreviewUrl(frame.Id);
+        _editMaskUrl = frame.HasMask ? FrameMaskUrl(frame.Id) : null;
+        _editCrop = new SpriteEditCrop(
+            frame.LogicalWidth + (padding * 2),
+            frame.LogicalHeight + (padding * 2),
+            padding,
+            padding,
+            frame.LogicalWidth,
+            frame.LogicalHeight);
+        _editCanvasLoadVersion++;
+        await PublishSpritesStateAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task CloseEditModalAsync()
+    {
+        if (_editGenerating)
+            return;
+        ResetEditModal();
+        await PublishSpritesStateAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SetEditToolAsync(string tool)
+    {
+        _editTool = tool;
+        if (_module is not null && _editModalOpen)
+            await _module.InvokeVoidAsync("setEditTool", _editCanvas, _editTool);
+    }
+
+    private async Task UpdateEditBrushAsync()
+    {
+        if (_module is not null && _editModalOpen)
+            await _module.InvokeVoidAsync("setEditBrushSize", _editCanvas, _editBrushSize);
+    }
+
+    private async Task ClearEditMaskAsync()
+    {
+        if (_module is not null && _editModalOpen)
+            await _module.InvokeVoidAsync("clearEditMask", _editCanvas);
+    }
+
+    private bool CanGenerateEditCandidates() =>
+        _editModalOpen
+        && !_editGenerating
+        && _editCandidates.Count == 0
+        && _module is not null
+        && _editTargetSourceAssetId is not null
+        && !string.IsNullOrWhiteSpace(_editPrompt)
+        && !ImageRuntime.HasRunningBatch(Workbench.Project.Id);
+
+    private async Task GenerateEditCandidatesAsync()
+    {
+        if (!CanGenerateEditCandidates() || _editTargetSourceAssetId is not Guid sourceAssetId || _module is null)
+            return;
+
+        _editModalError = null;
+        _editGenerating = true;
+        try
+        {
+            var hasPaint = await _module.InvokeAsync<bool>("hasEditMaskPaint", _editCanvas);
+            if (!hasPaint)
+            {
+                _editModalError = "Paint the mask area first.";
+                return;
+            }
+
+            var sourceDataUrl = await _module.InvokeAsync<string>("exportEditSourcePng", _editCanvas);
+            var maskDataUrl = await _module.InvokeAsync<string>("exportEditMaskPng", _editCanvas);
+            var batch = await ImageRuntime.StartEditImageAsync(Workbench.Project.Id, new EditImageRequest(
+                sourceAssetId,
+                _editPrompt,
+                "auto",
+                4,
+                "opaque",
+                null,
+                sourceDataUrl,
+                maskDataUrl,
+                []));
+            _editBatchId = batch.Id;
+            await Workflow.SetWorkspaceModeAsync(Workbench.Project.Id, WorkspaceMode.Sprites);
+
+            var completed = await ImageRuntime.WaitForBatchCompletionAsync(batch.Id, TimeSpan.FromSeconds(620));
+            if (!completed)
+            {
+                _editModalError = "Generation is still running. Close the modal after it finishes or try again later.";
+                return;
+            }
+
+            var refreshed = await Workflow.GetWorkbenchAsync(Workbench.Project.Id);
+            _editCandidates = refreshed.Assets
+                .Where(asset => asset.SourceBatchId == batch.Id)
+                .OrderBy(asset => asset.BatchOutputIndex ?? int.MaxValue)
+                .ThenBy(asset => asset.CreatedAt)
+                .Select(asset => new SpriteEditCandidate(asset.Id, asset.Label, AssetFullUrl(asset.Id)))
+                .ToList();
+            if (_editCandidates.Count == 0)
+            {
+                var completedBatch = refreshed.Batches.FirstOrDefault(item => item.Id == batch.Id);
+                _editModalError = string.IsNullOrWhiteSpace(completedBatch?.Error)
+                    ? "Generation finished without returning candidates."
+                    : completedBatch.Error;
+            }
+
+            await OnChanged.InvokeAsync();
+            await PublishSpritesStateAsync();
+        }
+        catch (Exception ex)
+        {
+            _editModalError = ex.Message;
+        }
+        finally
+        {
+            _editGenerating = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void SelectEditCandidate(Guid assetId)
+    {
+        _selectedEditCandidateId = assetId;
+    }
+
+    private async Task RejectEditCandidatesAsync()
+    {
+        _editCandidates = [];
+        _selectedEditCandidateId = null;
+        _editBatchId = null;
+        _editModalError = null;
+        await PublishSpritesStateAsync();
+    }
+
+    private async Task AcceptEditCandidateAsync()
+    {
+        if (_selectedEditCandidateId is not Guid candidateId)
+            return;
+
+        _editModalError = null;
+        _editGenerating = true;
+        try
+        {
+            if (_editTargetKind == SpriteEditTargetKind.Source)
+            {
+                await SelectSourceAssetAsync(candidateId, clearMismatchedFrameSet: true);
+                ResetEditModal();
+                _status = "Applied edited source candidate.";
+                await PublishSpritesStateAsync();
+                if (OnSourceAssetChanged.HasDelegate)
+                    await OnSourceAssetChanged.InvokeAsync(candidateId);
+                else
+                    await OnChanged.InvokeAsync();
+            }
+            else if (_editTargetFrameSetId is Guid frameSetId
+                && _editTargetFrameId is Guid frameId
+                && _editCrop is { } crop)
+            {
+                var updated = await FrameSets.ApplyFrameEditCandidateAsync(Workbench.Project.Id, new ApplyFrameEditCandidateRequest(
+                    frameSetId,
+                    frameId,
+                    candidateId,
+                    crop.EditSourceWidth,
+                    crop.EditSourceHeight,
+                    crop.CropX,
+                    crop.CropY,
+                    crop.CropWidth,
+                    crop.CropHeight));
+                ApplyFrameSet(updated);
+                ResetEditModal();
+                _status = "Applied edited frame candidate.";
+                await OnChanged.InvokeAsync();
+                await PublishSpritesStateAsync();
+                await RenderCanvasAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _editModalError = ex.Message;
+        }
+        finally
+        {
+            _editGenerating = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ResetEditModal()
+    {
+        _editModalOpen = false;
+        _editGenerating = false;
+        _editTargetKind = SpriteEditTargetKind.Source;
+        _editTargetSourceAssetId = null;
+        _editTargetFrameSetId = null;
+        _editTargetFrameId = null;
+        _editCrop = null;
+        _editImageUrl = null;
+        _editMaskUrl = null;
+        _editTool = "mask";
+        _editPrompt = string.Empty;
+        _editModalError = null;
+        _editBatchId = null;
+        _selectedEditCandidateId = null;
+        _editCandidates = [];
+        _renderedEditCanvasLoadVersion = -1;
     }
 
     private async Task RunAsync(string status, Func<Task> action)
@@ -861,15 +1186,35 @@
                 "loadFrameCanvas",
                 _frameCanvas,
                 _dotNetRef,
-                FramePreviewUrl(frame.Id),
-                frame.HasMask ? FrameMaskUrl(frame.Id) : null,
+                FrameContentUrl(frame.Id),
                 CanvasFrame.From(frame),
                 previous is null ? null : FramePreviewUrl(previous.Id),
                 next is null ? null : FramePreviewUrl(next.Id),
                 _frameTool,
-                _brushSize,
                 _showOnion);
         }
+    }
+
+    private async Task RenderEditModalCanvasAsync()
+    {
+        if (!_editModalOpen || _module is null || _renderedEditCanvasLoadVersion == _editCanvasLoadVersion || _editImageUrl is null)
+            return;
+
+        var crop = _editCrop ?? SpriteEditCrop.SourceDefault(SelectedSourceArtAsset());
+        await _module.InvokeVoidAsync(
+            "loadEditCanvas",
+            _editCanvas,
+            _editImageUrl,
+            _editMaskUrl,
+            _editTool,
+            _editBrushSize,
+            crop.EditSourceWidth,
+            crop.EditSourceHeight,
+            crop.CropX,
+            crop.CropY,
+            crop.CropWidth,
+            crop.CropHeight);
+        _renderedEditCanvasLoadVersion = _editCanvasLoadVersion;
     }
 
     [JSInvokable]
@@ -909,18 +1254,6 @@
             await SetFrameOffsetAsync(frame.Id, frame.ContentOffsetX + dx, frame.ContentOffsetY + dy);
     }
 
-    [JSInvokable]
-    public async Task OnFrameMaskChanged(string maskDataUrl)
-    {
-        if (SelectedFrame() is not { } frame)
-            return;
-        await FrameSets.UpsertFrameMaskAsync(Workbench.Project.Id, new UpsertFrameMaskRequest(frame.Id, maskDataUrl, $"{frame.Name} mask"));
-        if (_frameSet is { } set)
-            ApplyFrameSet(await FrameSets.GetFrameSetAsync(Workbench.Project.Id, set.Id));
-        await PublishSpritesStateAsync();
-        await RenderCanvasAsync();
-    }
-
     private async Task PublishSpritesStateAsync()
     {
         if (!OnVisibleStateChanged.HasDelegate)
@@ -933,7 +1266,16 @@
             SelectedFrames: SelectedFrame() is { } frame ? [new WorkspaceFrameSummary(frame.Id, frame.Index, frame.Name, frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight, frame.LogicalWidth, frame.LogicalHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.DurationMs, frame.WorkingState, frame.HasMask)] : [],
             SelectedMaskId: SelectedFrame()?.MaskId,
             BuiltSheet: BuiltSheetAssetId() is Guid built ? new WorkspaceBuiltSheetSummary(built, BuiltSheetManifest() ?? string.Empty) : null,
-            Mode: ModeLabel(_mode)));
+            Mode: ModeLabel(_mode),
+            EditModal: _editModalOpen
+                ? new WorkspaceSpriteEditModalSummary(
+                    _editTargetKind == SpriteEditTargetKind.Frame ? "frame" : "source",
+                    _editTargetKind == SpriteEditTargetKind.Frame ? _editTargetFrameId : _editTargetSourceAssetId,
+                    _editBatchId,
+                    _editCandidates.Select(candidate => candidate.AssetId).ToList(),
+                    _selectedEditCandidateId,
+                    _editGenerating)
+                : null));
     }
 
     private FrameView? SelectedFrame() =>
@@ -1038,6 +1380,8 @@
 
     private string FramePreviewUrl(Guid frameId) => $"/media/projects/{Workbench.Project.Id}/frame-set-frames/{frameId}/preview?v={_rev}";
 
+    private string FrameContentUrl(Guid frameId) => $"/media/projects/{Workbench.Project.Id}/frame-set-frames/{frameId}/content?v={_rev}";
+
     private string FrameMaskUrl(Guid frameId) => $"/media/projects/{Workbench.Project.Id}/frame-set-frames/{frameId}/mask?v={_rev}";
 
     private string HeaderSummary()
@@ -1067,6 +1411,8 @@
 
     private static string ToolButtonClass(string current, string tool) => current == tool ? "sprite-tool-button is-active" : "sprite-tool-button";
 
+    private string EditToolButtonClass(string tool) => _editTool == tool ? "sprite-edit-tool is-active" : "sprite-edit-tool";
+
     private string StageTitle() => _mode switch
     {
         SpriteMode.Source => "Source regions",
@@ -1082,6 +1428,24 @@
     private static string WorkingBadgeClass(FrameView frame) =>
         string.IsNullOrWhiteSpace(frame.WorkingState) || frame.WorkingState == "none" ? "frame-work-badge is-empty" : "frame-work-badge";
 
+    private string EditModalTitle() => _editTargetKind == SpriteEditTargetKind.Frame ? "Edit Frame" : "Edit Source";
+
+    private string EditModalSubtitle()
+    {
+        if (_editTargetKind == SpriteEditTargetKind.Frame && SelectedFrame() is { } frame)
+            return $"{frame.Name} / mask, prompt, and candidates";
+        return SelectedSourceArtAsset() is { } source ? $"{source.Label} / mask, prompt, and candidates" : "Mask, prompt, and candidates";
+    }
+
+    private string EditResultsLabel() =>
+        _editGenerating ? "Generating candidates..." : _editCandidates.Count == 0 ? "Results" : $"{_editCandidates.Count} candidate(s)";
+
+    private static int FrameEditPadding(FrameView frame)
+    {
+        var largest = Math.Max(frame.LogicalWidth, frame.LogicalHeight);
+        return Math.Clamp(Math.Max(32, largest / 2), 32, 512);
+    }
+
     private static string Capitalize(string value) =>
         string.IsNullOrEmpty(value) ? value : char.ToUpperInvariant(value[0]) + value[1..];
 
@@ -1090,9 +1454,27 @@
     public async ValueTask DisposeAsync()
     {
         StopAnimation();
-        if (_module is not null)
-            await _module.DisposeAsync();
-        _dotNetRef?.Dispose();
+        try
+        {
+            if (_module is not null)
+                await _module.DisposeAsync();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        finally
+        {
+            _dotNetRef?.Dispose();
+        }
+    }
+
+    private enum SpriteEditTargetKind
+    {
+        Source,
+        Frame
     }
 
     private enum SpriteMode
@@ -1131,11 +1513,31 @@
         int LogicalHeight,
         int SourceWidth,
         int SourceHeight,
+        int WorkingWidth,
+        int WorkingHeight,
         int ContentOffsetX,
         int ContentOffsetY,
         bool HasMask)
     {
         public static CanvasFrame From(FrameView frame) =>
-            new(frame.Id.ToString(), frame.Index, frame.Name, frame.LogicalWidth, frame.LogicalHeight, frame.SourceWidth, frame.SourceHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.HasMask);
+            new(frame.Id.ToString(), frame.Index, frame.Name, frame.LogicalWidth, frame.LogicalHeight, frame.SourceWidth, frame.SourceHeight, frame.WorkingWidth, frame.WorkingHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.HasMask);
+    }
+
+    private sealed record SpriteEditCandidate(Guid AssetId, string Label, string ImageUrl);
+
+    private sealed record SpriteEditCrop(
+        int EditSourceWidth,
+        int EditSourceHeight,
+        int CropX,
+        int CropY,
+        int CropWidth,
+        int CropHeight)
+    {
+        public static SpriteEditCrop SourceDefault(ArtAssetView? asset)
+        {
+            var width = Math.Max(0, asset?.Width ?? 0);
+            var height = Math.Max(0, asset?.Height ?? 0);
+            return new SpriteEditCrop(width, height, 0, 0, width, height);
+        }
     }
 }

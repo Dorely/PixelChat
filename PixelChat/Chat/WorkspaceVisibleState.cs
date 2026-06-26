@@ -102,7 +102,16 @@ public sealed record WorkspaceSpritesVisibleState(
     IReadOnlyList<WorkspaceFrameSummary>? SelectedFrames = null,
     Guid? SelectedMaskId = null,
     WorkspaceBuiltSheetSummary? BuiltSheet = null,
-    string Mode = "");
+    string Mode = "",
+    WorkspaceSpriteEditModalSummary? EditModal = null);
+
+public sealed record WorkspaceSpriteEditModalSummary(
+    string TargetKind,
+    Guid? TargetId,
+    Guid? BatchId,
+    IReadOnlyList<Guid> CandidateAssetIds,
+    Guid? SelectedCandidateAssetId,
+    bool IsGenerating);
 
 public sealed record WorkspaceRecipeVisibleState(
     Guid? EditingRecipeId,

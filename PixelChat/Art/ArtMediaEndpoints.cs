@@ -70,6 +70,18 @@ public static class ArtMediaEndpoints
                 : Results.File(image.Value.Data, image.Value.ContentType, enableRangeProcessing: false);
         });
 
+        group.MapGet("/frame-set-frames/{frameId:guid}/content", async (
+            Guid projectId,
+            Guid frameId,
+            IFrameSetService frameSets,
+            CancellationToken cancellationToken) =>
+        {
+            var image = await frameSets.GetFrameContentImageAsync(projectId, frameId, cancellationToken);
+            return image is null
+                ? Results.NotFound()
+                : Results.File(image.Value.Data, image.Value.ContentType, enableRangeProcessing: false);
+        });
+
         return app;
     }
 

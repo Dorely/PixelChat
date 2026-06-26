@@ -198,7 +198,7 @@ public sealed class ArtWorkflowService(
                 .ToListAsync(cancellationToken);
         var masks = await db.ImageMasks
             .AsNoTracking()
-            .Where(m => m.ProjectId == selected.Id)
+            .Where(m => m.ProjectId == selected.Id && m.OwnerKind == "asset")
             .OrderByDescending(m => m.CreatedAt)
             .Select(m => new ImageMaskListItem(
                 m.Id,
@@ -3074,21 +3074,32 @@ public sealed class ArtWorkflowService(
         var references = await MergeRecipeExampleReferenceAsync(projectId, recipe, explicitReferences, sourceAsset.Id, cancellationToken);
 
         var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
+        var batchId = Guid.NewGuid();
         ImageMask? storedMask = null;
         if (!string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
         {
-            storedMask = await UpsertAssetMaskEntityAsync(
-                projectId,
-                sourceAsset,
-                request.MaskPngDataUrl,
-                $"{sourceAsset.Label} mask",
-                requireEditableArea: true,
-                cancellationToken);
+            storedMask = string.IsNullOrWhiteSpace(request.SourcePngDataUrl)
+                ? await UpsertAssetMaskEntityAsync(
+                    projectId,
+                    sourceAsset,
+                    request.MaskPngDataUrl,
+                    $"{sourceAsset.Label} mask",
+                    requireEditableArea: true,
+                    cancellationToken)
+                : await CreateEditSourceMaskEntityAsync(
+                    projectId,
+                    sourceAsset,
+                    batchId,
+                    request.MaskPngDataUrl,
+                    $"{sourceAsset.Label} edit mask",
+                    sourceImage,
+                    cancellationToken);
             ValidateEditImageAndMask(sourceImage, storedMask);
         }
 
         var batch = new GenerationBatch
         {
+            Id = batchId,
             ProjectId = projectId,
             Label = $"Edit {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}",
             Provider = OpenAIAccountProvider.Name,
@@ -3471,7 +3482,7 @@ public sealed class ArtWorkflowService(
             throw new InvalidOperationException("Asset was not found.");
 
         var masks = await db.ImageMasks
-            .Where(m => m.ProjectId == projectId && m.AssetId == assetId)
+            .Where(m => m.ProjectId == projectId && m.AssetId == assetId && m.OwnerKind == "asset")
             .ToListAsync(cancellationToken);
         if (masks.Count == 0)
             return;
@@ -4254,6 +4265,38 @@ public sealed class ArtWorkflowService(
         }, JsonOptions);
     }
 
+    private async Task<ImageMask> CreateEditSourceMaskEntityAsync(
+        Guid projectId,
+        ArtAsset asset,
+        Guid batchId,
+        string maskDataUrl,
+        string label,
+        ImagePayload sourceImage,
+        CancellationToken cancellationToken)
+    {
+        var maskImage = ParsePngDataUrl(maskDataUrl, "Mask must be a PNG data URL.");
+        EnsurePngMaskHasAlpha(maskImage.Data, requireEditableArea: true);
+        var now = DateTime.UtcNow;
+        var mask = new ImageMask
+        {
+            ProjectId = projectId,
+            AssetId = asset.Id,
+            Label = string.IsNullOrWhiteSpace(label) ? $"{asset.Label} edit mask" : label.Trim(),
+            ContentType = maskImage.ContentType,
+            Data = maskImage.Data,
+            Width = maskImage.Width,
+            Height = maskImage.Height,
+            OwnerKind = "editBatch",
+            OwnerId = batchId,
+            CoordinateSpace = "editSource",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        ValidateEditImageAndMask(sourceImage, mask);
+        await db.ImageMasks.AddAsync(mask, cancellationToken);
+        return mask;
+    }
+
     private async Task<ImageMask> UpsertAssetMaskEntityAsync(
         Guid projectId,
         ArtAsset asset,
@@ -4267,7 +4310,7 @@ public sealed class ArtWorkflowService(
         EnsurePngMaskHasAlpha(maskImage.Data, requireEditableArea);
 
         var masks = await db.ImageMasks
-            .Where(m => m.ProjectId == projectId && m.AssetId == asset.Id)
+            .Where(m => m.ProjectId == projectId && m.AssetId == asset.Id && m.OwnerKind == "asset")
             .OrderByDescending(m => m.CreatedAt)
             .ThenByDescending(m => m.Id)
             .ToListAsync(cancellationToken);

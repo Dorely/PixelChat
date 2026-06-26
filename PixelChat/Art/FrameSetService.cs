@@ -466,6 +466,62 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
         return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
     }
 
+    public async Task<FrameSetView> ApplyFrameEditCandidateAsync(
+        Guid projectId,
+        ApplyFrameEditCandidateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
+        var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == request.FrameId, cancellationToken)
+            ?? throw new InvalidOperationException("Frame was not found.");
+        var candidate = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == request.CandidateAssetId, cancellationToken)
+            ?? throw new InvalidOperationException("Edit candidate asset was not found.");
+        if (!ImageRgbaDecoder.TryReadRgba(candidate, out var candidateWidth, out var candidateHeight, out var candidateRgba))
+            throw new InvalidOperationException("Edit candidate image could not be read.");
+
+        var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
+        var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
+        var editSourceWidth = Math.Max(1, request.EditSourceWidth);
+        var editSourceHeight = Math.Max(1, request.EditSourceHeight);
+        var scaleX = candidateWidth / (double)editSourceWidth;
+        var scaleY = candidateHeight / (double)editSourceHeight;
+        var cropX = (int)Math.Round(request.CropX * scaleX);
+        var cropY = (int)Math.Round(request.CropY * scaleY);
+        var cropWidth = Math.Clamp((int)Math.Round(Math.Max(1, request.CropWidth) * scaleX), 1, 8192);
+        var cropHeight = Math.Clamp((int)Math.Round(Math.Max(1, request.CropHeight) * scaleY), 1, 8192);
+        var background = SpriteSheetImageAnalyzer.ResolveBackground(candidateRgba, candidateWidth, candidateHeight);
+        var cropped = CropToRgbaWithFill(candidateRgba, candidateWidth, candidateHeight, cropX, cropY, cropWidth, cropHeight, background);
+        if (cropWidth != cellWidth || cropHeight != cellHeight)
+        {
+            cropped = ResizeNearest(cropped, cropWidth, cropHeight, cellWidth, cellHeight);
+            cropWidth = cellWidth;
+            cropHeight = cellHeight;
+        }
+
+        var cellBackground = SpriteSheetImageAnalyzer.ResolveBackground(cropped, cropWidth, cropHeight);
+        var bounds = SpriteSheetImageAnalyzer.ForegroundBounds(cropped, cropWidth, cropHeight, cellBackground)
+            ?? new SpriteSheetRect(0, 0, cropWidth, cropHeight);
+        bounds = ClampRect(bounds.X, bounds.Y, bounds.Width, bounds.Height, cropWidth, cropHeight);
+        var (workingRgba, workingWidth, workingHeight) = CropToRgba(cropped, cropWidth, cropHeight, bounds.X, bounds.Y, bounds.Width, bounds.Height);
+        var now = DateTime.UtcNow;
+
+        frame.WorkingData = SpriteSheetPngCodec.EncodeRgba(workingWidth, workingHeight, workingRgba);
+        frame.WorkingContentType = "image/png";
+        frame.WorkingWidth = workingWidth;
+        frame.WorkingHeight = workingHeight;
+        frame.WorkingMargin = 0;
+        frame.WorkingState = "edited";
+        frame.WorkingUpdatedAt = now;
+        frame.ContentOffsetX = bounds.X;
+        frame.ContentOffsetY = bounds.Y;
+        frame.UpdatedAt = now;
+        frameSet.UpdatedAt = now;
+
+        await TouchProjectAsync(projectId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+    }
+
     public async Task<FrameSetView> AlignFramesAsync(
         Guid projectId,
         AlignFramesRequest request,
@@ -847,6 +903,27 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
         return mask is null ? null : (mask.Data, mask.ContentType);
     }
 
+    public async Task<(byte[] Data, string ContentType)?> GetFrameContentImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default)
+    {
+        var frame = await db.Frames.Include(f => f.FrameSet).FirstOrDefaultAsync(f => f.ProjectId == projectId && f.Id == frameId, cancellationToken);
+        if (frame is null)
+            return null;
+        if (frame.WorkingData.Length > 0)
+            return (frame.WorkingData, string.IsNullOrWhiteSpace(frame.WorkingContentType) ? "image/png" : frame.WorkingContentType);
+        if (frame.PreviewData.Length > 0)
+            return (frame.PreviewData, string.IsNullOrWhiteSpace(frame.PreviewContentType) ? "image/png" : frame.PreviewContentType);
+
+        var source = frame.FrameSet.SourceAssetId is Guid sourceId
+            ? await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == sourceId, cancellationToken)
+            : null;
+        if (source is null)
+            return null;
+        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
+        var rect = ClampRect(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight, sourceWidth, sourceHeight);
+        var (png, _, _) = CropToPng(sourceRgba, sourceWidth, sourceHeight, rect);
+        return (png, "image/png");
+    }
+
     public async Task<(byte[] Data, string ContentType)?> GetFramePreviewImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default)
     {
         var frame = await db.Frames.Include(f => f.FrameSet).FirstOrDefaultAsync(f => f.ProjectId == projectId && f.Id == frameId, cancellationToken);
@@ -909,6 +986,8 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
                         frame.ContentOffsetY,
                         frame.DurationMs,
                         string.IsNullOrWhiteSpace(frame.WorkingState) ? "none" : frame.WorkingState,
+                        frame.WorkingWidth,
+                        frame.WorkingHeight,
                         mask is not null,
                         mask?.Id);
                 })
@@ -1189,6 +1268,60 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
         for (var row = 0; row < height; row++)
             Array.Copy(sourceRgba, (((y + row) * sourceWidth) + x) * 4, outRgba, row * width * 4, width * 4);
         return (outRgba, width, height);
+    }
+
+    private static byte[] CropToRgbaWithFill(
+        byte[] sourceRgba,
+        int sourceWidth,
+        int sourceHeight,
+        int rectX,
+        int rectY,
+        int rectWidth,
+        int rectHeight,
+        SpriteSheetBackground background)
+    {
+        var outRgba = BuildOpaqueCell(rectWidth, rectHeight, background);
+        for (var y = 0; y < rectHeight; y++)
+        {
+            var sourceY = rectY + y;
+            if (sourceY < 0 || sourceY >= sourceHeight)
+                continue;
+            for (var x = 0; x < rectWidth; x++)
+            {
+                var sourceX = rectX + x;
+                if (sourceX < 0 || sourceX >= sourceWidth)
+                    continue;
+                var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
+                var destIndex = ((y * rectWidth) + x) * 4;
+                outRgba[destIndex + 0] = sourceRgba[sourceIndex + 0];
+                outRgba[destIndex + 1] = sourceRgba[sourceIndex + 1];
+                outRgba[destIndex + 2] = sourceRgba[sourceIndex + 2];
+                outRgba[destIndex + 3] = 255;
+            }
+        }
+
+        return outRgba;
+    }
+
+    private static byte[] ResizeNearest(byte[] sourceRgba, int sourceWidth, int sourceHeight, int destWidth, int destHeight)
+    {
+        var output = new byte[destWidth * destHeight * 4];
+        for (var y = 0; y < destHeight; y++)
+        {
+            var sourceY = Math.Clamp((int)Math.Floor(y * (sourceHeight / (double)destHeight)), 0, sourceHeight - 1);
+            for (var x = 0; x < destWidth; x++)
+            {
+                var sourceX = Math.Clamp((int)Math.Floor(x * (sourceWidth / (double)destWidth)), 0, sourceWidth - 1);
+                var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
+                var destIndex = ((y * destWidth) + x) * 4;
+                output[destIndex + 0] = sourceRgba[sourceIndex + 0];
+                output[destIndex + 1] = sourceRgba[sourceIndex + 1];
+                output[destIndex + 2] = sourceRgba[sourceIndex + 2];
+                output[destIndex + 3] = 255;
+            }
+        }
+
+        return output;
     }
 
     private static void ValidateCanvasSize(int width, int height, string message)
