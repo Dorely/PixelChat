@@ -11,6 +11,7 @@
 @rendermode InteractiveServer
 @implements IAsyncDisposable
 @inject IArtWorkflowService Workflow
+@inject ISpriteWorkspaceActionService SpriteActions
 @inject IAssistantChatService ChatService
 @inject IWorkspaceChatRuntime ChatRuntime
 @inject IWorkspaceVisibleStateStore VisibleState
@@ -133,6 +134,29 @@ else
     private static readonly JsonSerializerOptions UiJsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
+    };
+
+    private static readonly HashSet<string> SpriteToolNames = new(StringComparer.Ordinal)
+    {
+        "detect_source_regions",
+        "save_source_regions",
+        "create_frame_set",
+        "create_frame_set_from_regions",
+        "set_active_frame_set",
+        "set_common_cell_size",
+        "add_frame_from_region",
+        "duplicate_frame",
+        "set_frame_logical_cell",
+        "update_frame_source_bounds",
+        "translate_frame_content",
+        "reorder_frame",
+        "delete_frame",
+        "set_frame_duration",
+        "align_frames",
+        "upsert_frame_mask",
+        "clear_frame_mask",
+        "build_sheet",
+        "export_asset",
     };
 
     private readonly List<ChatRenderableMessage> _messages = [];
@@ -296,6 +320,11 @@ else
             _editAssetId = null;
         if (_spriteEditorSourceAssetId is Guid spriteSourceAssetId && !_workbench.Assets.Any(asset => asset.Id == spriteSourceAssetId))
             _spriteEditorSourceAssetId = null;
+        if (_workbench.Project.ActiveSpriteSourceAssetId is Guid activeSpriteSourceAssetId
+            && _workbench.Assets.Any(asset => asset.Id == activeSpriteSourceAssetId))
+        {
+            _spriteEditorSourceAssetId = activeSpriteSourceAssetId;
+        }
         if (_exportModalAssetId is Guid exportModalAssetId && !_workbench.Assets.Any(asset => asset.Id == exportModalAssetId))
             ResetExportModal();
         _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
@@ -1117,6 +1146,7 @@ else
                               OnChanged="OnSpriteSheetChangedAsync"
                               OnSourceAssetChanged="OnSpriteEditorSourceAssetChangedAsync"
                               OnExportAsset="OpenExportAsync"
+                              AgentStatus="CurrentSpriteAgentStatus()"
                               OnVisibleStateChanged="OnSpritesVisibleStateChanged" />
     };
 
@@ -2716,7 +2746,12 @@ else
 
         await FlushMaskAutosaveAsync();
         _spriteEditorSourceAssetId = asset.Id;
-        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Sprites);
+        await SpriteActions.SetFocusAsync(_workbench.Project.Id, new SpriteWorkspaceFocusUpdate(
+            SpriteWorkspaceModes.Source,
+            asset.Id,
+            FrameSetId: null,
+            FrameId: null,
+            SelectedRegionIds: []));
         await ReloadWorkbenchAsync();
     }
 
@@ -2853,6 +2888,7 @@ else
             var snapshot = ChatRuntime.GetSnapshot();
             ApplyChatRuntimeSnapshot(snapshot);
             _scrollKey++;
+            PublishVisibleState();
             StateHasChanged();
         });
     }
@@ -3336,12 +3372,96 @@ else
                     run.UpdatedAt))
                 .ToList() ?? []);
 
-    private WorkspaceSpritesVisibleState BuildSpritesVisibleState() =>
-        _spritesVisibleState ?? new(_workbench?.ActiveSpriteSheet is null ? null : SpriteSheetSummary(_workbench.ActiveSpriteSheet));
+    private WorkspaceSpritesVisibleState BuildSpritesVisibleState()
+    {
+        var selectedRegionIds = ReadGuidList(_workbench?.Project.ActiveSpriteRegionIdsJson);
+        var state = _spritesVisibleState ?? new(_workbench?.ActiveSpriteSheet is null ? null : SpriteSheetSummary(_workbench.ActiveSpriteSheet));
+        return state with
+        {
+            AgentStatus = CurrentSpriteAgentStatus(),
+            ActiveSourceAssetId = _workbench?.Project.ActiveSpriteSourceAssetId,
+            ActiveFrameSetId = _workbench?.Project.ActiveFrameSetId,
+            ActiveFrameId = _workbench?.Project.ActiveSpriteFrameId,
+            SelectedRegionIds = selectedRegionIds,
+        };
+    }
+
+    private static IReadOnlyList<Guid> ReadGuidList(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json == "[]")
+            return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<Guid>>(json) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private WorkspaceSpriteAgentStatus? CurrentSpriteAgentStatus()
+    {
+        var liveChips = SpriteToolChips(_live).ToList();
+        var running = liveChips.LastOrDefault(chip => !chip.Completed);
+        if (running is not null)
+        {
+            return new WorkspaceSpriteAgentStatus(
+                "running",
+                running.Name,
+                SpriteToolTargetSummary(running),
+                string.Empty);
+        }
+
+        var completed = liveChips.LastOrDefault(chip => chip.Completed);
+
+        if (completed is null)
+            return null;
+
+        return new WorkspaceSpriteAgentStatus(
+            string.IsNullOrWhiteSpace(completed.Error) ? "completed" : "error",
+            completed.Name,
+            SpriteToolTargetSummary(completed),
+            completed.Error ?? string.Empty);
+    }
+
+    private static IEnumerable<ChatToolChip> SpriteToolChips(ChatLiveTurn? live) =>
+        live?.Messages
+            .SelectMany(message => message.Parts)
+            .OfType<ChatToolPart>()
+            .Select(part => part.Chip)
+            .Where(chip => SpriteToolNames.Contains(chip.Name))
+        ?? [];
+
+    private static string SpriteToolTargetSummary(ChatToolChip chip)
+    {
+        if (string.IsNullOrWhiteSpace(chip.ArgumentsJson) || chip.ArgumentsJson == "{}")
+            return string.Empty;
+
+        try
+        {
+            using var document = JsonDocument.Parse(chip.ArgumentsJson);
+            var root = document.RootElement;
+            foreach (var key in new[] { "frameSetId", "frameId", "sourceAssetId", "assetId", "builtSheetId" })
+            {
+                if (root.TryGetProperty(key, out var value))
+                    return $"{key}: {ShortId(value.ToString())}";
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return string.Empty;
+    }
+
+    private static string ShortId(string value) =>
+        Guid.TryParse(value, out var id) ? id.ToString("N")[..8] : value;
 
     private Task OnSpritesVisibleStateChanged(WorkspaceSpritesVisibleState state)
     {
-        _spritesVisibleState = state;
+        _spritesVisibleState = state with { AgentStatus = CurrentSpriteAgentStatus() };
         PublishVisibleState();
         return Task.CompletedTask;
     }

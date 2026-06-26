@@ -11,6 +11,7 @@ namespace PixelChat.Chat;
 public sealed class AssistantToolRegistry(
     IArtWorkflowService workflow,
     IFrameSetService frameSets,
+    ISpriteWorkspaceActionService spriteActions,
     IWorkspaceVisibleStateStore visibleState,
     IImageGenerationRuntime imageRuntime,
     IOptions<AgentOptions> agentOptions)
@@ -41,11 +42,9 @@ public sealed class AssistantToolRegistry(
         "create_sprite_sheet",
         "extract_region_as_asset",
         "detect_source_regions",
-        "list_source_regions",
         "save_source_regions",
         "create_frame_set",
         "create_frame_set_from_regions",
-        "list_frame_sets",
         "set_active_frame_set",
         "set_common_cell_size",
         "add_frame_from_region",
@@ -60,11 +59,11 @@ public sealed class AssistantToolRegistry(
         "upsert_frame_mask",
         "clear_frame_mask",
         "build_sheet",
+        "export_asset",
         "compose_sprite_sheet_from_images",
         "map_sprite_sheet_frames",
         "detect_sprite_frame_boxes",
         "adjust_sprite_frame_box",
-        "review_sprite_animation",
         "stabilize_sprite_sheet_frames",
         "clear_sprite_sheet_stabilization",
         "split_sprite_sheet_frames",
@@ -261,7 +260,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 ExtractRegionAsAssetAsync(projectId, sourceAssetId, x, y, width, height, name, padding, fixedCanvasWidth, fixedCanvasHeight, centerInCanvas, linkToSource, cancellationToken),
             name: "extract_region_as_asset",
-            description: "Extract a rectangular region of a source image into a standalone, opaque project asset (weapon, prop, portrait, tile, UI element, VFX). Coordinates are in source-image pixel space. Optional padding or a fixed centered canvas. The result stays opaque - transparency and background removal are Export-only. Returns the new asset id and its logical size/content offset."),
+            description: "Extract a rectangular region of a source image into a standalone, opaque project asset (weapon, prop, portrait, tile, UI element, VFX) and update the visible Sprites Source workspace. Coordinates are in source-image pixel space. Optional padding or a fixed centered canvas. The result stays opaque - transparency and background removal are Export-only. Returns the new asset id and its logical size/content offset."),
 
         AIFunctionFactory.Create(
             method: (
@@ -272,7 +271,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 DetectSourceRegionsAsync(projectId, sourceAssetId, expectedFrames, layoutHint, replaceExisting, cancellationToken),
             name: "detect_source_regions",
-            description: "Greenfield Source pipeline: detect visual or grid-like frame regions on an image asset, persist them as editable SpriteRegions, and return source-image pixel bounds. Use this before creating a FrameSet when regions can be detected automatically."),
+            description: "Greenfield Source pipeline: detect visual or grid-like frame regions on an image asset, persist them as editable SpriteRegions, update the visible Sprites workspace to Source, and return source-image pixel bounds. Use this before creating a FrameSet when regions can be detected automatically."),
 
         AIFunctionFactory.Create(
             method: (Guid sourceAssetId, CancellationToken cancellationToken = default) =>
@@ -287,7 +286,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 SaveSourceRegionsAsync(projectId, sourceAssetId, regions, cancellationToken),
             name: "save_source_regions",
-            description: "Greenfield Source pipeline: replace a source image's editable SpriteRegions with explicit rectangles or polygon paths. Use for agent-driven draw, move, resize, rename, delete, reorder, and polygon-region commits. Coordinates are source-image pixels."),
+            description: "Greenfield Source pipeline: replace a source image's editable SpriteRegions with explicit rectangles or polygon paths and update the visible Sprites workspace to Source. Use for agent-driven draw, move, resize, rename, delete, reorder, and polygon-region commits. Coordinates are source-image pixels."),
 
         AIFunctionFactory.Create(
             method: (
@@ -298,7 +297,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 CreateFrameSetFromAssetAsync(projectId, sourceAssetId, name, expectedFrames, layoutHint, cancellationToken),
             name: "create_frame_set",
-            description: "Greenfield Frames pipeline: detect frames in a source sheet asset and create a FrameSet of individual frames with explicit source bounds and equal logical cells. Returns the frame set id and per-frame geometry. Deterministic; no image generation."),
+            description: "Greenfield Frames pipeline: detect frames in a source sheet asset, create a FrameSet, and update the visible Sprites workspace to Frames. Returns the frame set id and per-frame geometry. Deterministic; no image generation."),
 
         AIFunctionFactory.Create(
             method: (
@@ -308,7 +307,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 CreateFrameSetFromRegionsAsync(projectId, sourceAssetId, regionIds, name, cancellationToken),
             name: "create_frame_set_from_regions",
-            description: "Greenfield Source -> Frames pipeline: create a FrameSet from selected saved SpriteRegions without re-detecting the source image. Use after manual region placement or correction."),
+            description: "Greenfield Source -> Frames pipeline: create a FrameSet from selected saved SpriteRegions without re-detecting the source image, then update the visible Sprites workspace to Frames. Use after manual region placement or correction."),
 
         AIFunctionFactory.Create(
             method: (CancellationToken cancellationToken = default) =>
@@ -330,7 +329,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 SetCommonCellSizeAsync(projectId, frameSetId, width, height, cancellationToken),
             name: "set_common_cell_size",
-            description: "Greenfield Frames pipeline: set every frame in a FrameSet to a common logical cell size (without resampling artwork) and re-center content. Pass width/height 0 to auto-pick the tightest common cell. Returns updated frame geometry."),
+            description: "Greenfield Frames pipeline: set every frame in a FrameSet to a common logical cell size (without resampling artwork), re-center content, and update the visible Sprites workspace. Pass width/height 0 to auto-pick the tightest common cell. Returns updated frame geometry."),
 
         AIFunctionFactory.Create(
             method: (
@@ -341,7 +340,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 AddFrameFromRegionAsync(projectId, frameSetId, sourceRegionId, insertAt, name, cancellationToken),
             name: "add_frame_from_region",
-            description: "Greenfield Frames pipeline: add one saved Source region as a new editable frame in an existing FrameSet. Use when a user draws an additional region after the frame set exists."),
+            description: "Greenfield Frames pipeline: add one saved Source region as a new editable frame in an existing FrameSet and update the visible Sprites workspace. Use when a user draws an additional region after the frame set exists."),
 
         AIFunctionFactory.Create(
             method: (
@@ -352,7 +351,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 DuplicateFrameAsync(projectId, frameSetId, frameId, insertAt, name, cancellationToken),
             name: "duplicate_frame",
-            description: "Greenfield Frames pipeline: duplicate a frame's source bounds, logical cell, content offset, timing, working image, preview, and frame mask into the same FrameSet."),
+            description: "Greenfield Frames pipeline: duplicate a frame's source bounds, logical cell, content offset, timing, working image, preview, and frame mask into the same FrameSet and update the visible Sprites workspace."),
 
         AIFunctionFactory.Create(
             method: (
@@ -363,7 +362,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 SetFrameLogicalCellAsync(projectId, frameSetId, frameId, width, height, cancellationToken),
             name: "set_frame_logical_cell",
-            description: "Greenfield Frames pipeline: set one frame's logical cell dimensions without moving its source crop or resampling artwork. Use for targeted cell fixes; use set_common_cell_size for whole-set normalization."),
+            description: "Greenfield Frames pipeline: set one frame's logical cell dimensions without moving its source crop or resampling artwork and update the visible Sprites workspace. Use for targeted cell fixes; use set_common_cell_size for whole-set normalization."),
 
         AIFunctionFactory.Create(
             method: (
@@ -377,7 +376,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 UpdateFrameSourceBoundsAsync(projectId, frameSetId, frameId, x, y, width, height, shapePaths, cancellationToken),
             name: "update_frame_source_bounds",
-            description: "Greenfield Frames pipeline: move or resize one frame's source crop in source-image pixel coordinates. This changes which source pixels the frame uses without changing content offset inside the logical cell."),
+            description: "Greenfield Frames pipeline: move or resize one frame's source crop in source-image pixel coordinates and update the visible Sprites workspace. This changes which source pixels the frame uses without changing content offset inside the logical cell."),
 
         AIFunctionFactory.Create(
             method: (
@@ -388,7 +387,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 TranslateFrameContentAsync(projectId, frameSetId, frameId, contentOffsetX, contentOffsetY, cancellationToken),
             name: "translate_frame_content",
-            description: "Greenfield Frames pipeline: set one frame's artwork offset inside its logical cell. Use this for alignment nudges; it does not change source bounds."),
+            description: "Greenfield Frames pipeline: set one frame's artwork offset inside its logical cell and update the visible Sprites workspace. Use this for alignment nudges; it does not change source bounds."),
 
         AIFunctionFactory.Create(
             method: (Guid frameSetId, CancellationToken cancellationToken = default) =>
@@ -404,7 +403,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 ReorderFrameAsync(projectId, frameSetId, frameId, targetIndex, cancellationToken),
             name: "reorder_frame",
-            description: "Greenfield Frames pipeline: move one frame to a new zero-based playback/sheet order index."),
+            description: "Greenfield Frames pipeline: move one frame to a new zero-based playback/sheet order index and update the visible Sprites workspace."),
 
         AIFunctionFactory.Create(
             method: (
@@ -413,7 +412,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 DeleteFrameAsync(projectId, frameSetId, frameId, cancellationToken),
             name: "delete_frame",
-            description: "Greenfield Frames pipeline: delete one frame from a FrameSet and remove its frame-owned masks."),
+            description: "Greenfield Frames pipeline: delete one frame from a FrameSet, remove its frame-owned masks, and update the visible Sprites workspace."),
 
         AIFunctionFactory.Create(
             method: (
@@ -423,7 +422,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 SetFrameDurationAsync(projectId, frameSetId, frameId, durationMs, cancellationToken),
             name: "set_frame_duration",
-            description: "Greenfield Frames pipeline: set one frame's animation duration in milliseconds without changing image geometry."),
+            description: "Greenfield Frames pipeline: set one frame's animation duration in milliseconds without changing image geometry and update the visible Sprites workspace."),
 
         AIFunctionFactory.Create(
             method: (
@@ -440,7 +439,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 BuildSheetAsync(projectId, frameSetId, rows, columns, padding, gutter, outerMargin, ordering, horizontalAnchor, verticalAnchor, name, cancellationToken),
             name: "build_sheet",
-            description: "Greenfield Sheet pipeline: reassemble a FrameSet into a deterministic, opaque sprite-sheet project asset with equal cells, and persist a linked per-frame placement manifest (BuiltSheet). Pass columns 0 to auto-fit. The sheet stays opaque; transparency is Export-only. Returns the output asset id, grid, cell size, and manifest."),
+            description: "Greenfield Sheet pipeline: reassemble a FrameSet into a deterministic, opaque sprite-sheet project asset with equal cells, persist a linked per-frame placement manifest (BuiltSheet), and update the visible Sprites workspace to Sheet. Pass columns 0 to auto-fit. The sheet stays opaque; transparency is Export-only. Returns the output asset id, grid, cell size, and manifest."),
 
         AIFunctionFactory.Create(
             method: (
@@ -451,7 +450,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 AlignFramesAsync(projectId, frameSetId, anchor, axisX, axisY, cancellationToken),
             name: "align_frames",
-            description: "Greenfield Frames pipeline: deterministically align every frame inside its equal logical cell by a detected content anchor (feet | bottom | center | top | left | right). Detects each frame's visible-content bounds, sets the anchor, and renders aligned opaque cell images. Use axisX/axisY to preserve intentional motion on one axis. Run build_sheet afterward. Prefer this over generation for jitter/alignment."),
+            description: "Greenfield Frames pipeline: deterministically align every frame inside its equal logical cell by a detected content anchor (feet | bottom | center | top | left | right), then update the visible Sprites workspace. Detects each frame's visible-content bounds, sets the anchor, and renders aligned opaque cell images. Use axisX/axisY to preserve intentional motion on one axis. Run build_sheet afterward. Prefer this over generation for jitter/alignment."),
 
         AIFunctionFactory.Create(
             method: (
@@ -462,7 +461,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 UpsertFrameMaskAsync(projectId, frameId, maskDataUrl, label, coordinateSpace, cancellationToken),
             name: "upsert_frame_mask",
-            description: "Greenfield Frames pipeline: create or replace a frame-owned mask. The mask payload is a PNG data URL in the requested coordinate space, usually logicalFrame from the frame canvas."),
+            description: "Greenfield Frames pipeline: create or replace a frame-owned mask and update the visible Sprites workspace. The mask payload is a PNG data URL in the requested coordinate space, usually logicalFrame from the frame canvas."),
 
         AIFunctionFactory.Create(
             method: (
@@ -470,7 +469,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 ClearFrameMaskAsync(projectId, frameId, cancellationToken),
             name: "clear_frame_mask",
-            description: "Greenfield Frames pipeline: remove the mask owned by one frame. History/candidate retention remains deferred."),
+            description: "Greenfield Frames pipeline: remove the mask owned by one frame and update the visible Sprites workspace. History/candidate retention remains deferred."),
 
         AIFunctionFactory.Create(
             method: (
@@ -1134,7 +1133,7 @@ public sealed class AssistantToolRegistry(
         bool linkToSource,
         CancellationToken cancellationToken)
     {
-        var result = await workflow.ExtractRegionAsAssetAsync(projectId, new ExtractRegionAsAssetRequest(
+        var result = await spriteActions.ExtractRegionAsAssetAsync(projectId, new ExtractRegionAsAssetRequest(
             sourceAssetId,
             x,
             y,
@@ -1145,7 +1144,7 @@ public sealed class AssistantToolRegistry(
             fixedCanvasWidth,
             fixedCanvasHeight,
             centerInCanvas,
-            linkToSource), cancellationToken);
+            linkToSource), cancellationToken: cancellationToken);
         return JsonSerializer.Serialize(new
         {
             assetId = result.Asset.Id,
@@ -1157,7 +1156,7 @@ public sealed class AssistantToolRegistry(
             logicalHeight = result.LogicalHeight,
             contentOffsetX = result.ContentOffsetX,
             contentOffsetY = result.ContentOffsetY,
-            message = "Region extracted as a standalone opaque project asset.",
+            message = "Region extracted as a standalone opaque project asset and shown in the visible Sprites Source workspace.",
         }, JsonOptions);
     }
 
@@ -1169,7 +1168,7 @@ public sealed class AssistantToolRegistry(
         string? layoutHint,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.CreateFrameSetFromAssetAsync(projectId, new CreateFrameSetFromAssetRequest(
+        var view = await spriteActions.CreateFrameSetFromAssetAsync(projectId, new CreateFrameSetFromAssetRequest(
             sourceAssetId,
             string.IsNullOrWhiteSpace(name) ? null : name,
             expectedFrames,
@@ -1185,7 +1184,7 @@ public sealed class AssistantToolRegistry(
         bool replaceExisting,
         CancellationToken cancellationToken)
     {
-        var regions = await frameSets.DetectSourceRegionsAsync(projectId, new DetectSourceRegionsRequest(
+        var regions = await spriteActions.DetectSourceRegionsAsync(projectId, new DetectSourceRegionsRequest(
             sourceAssetId,
             expectedFrames,
             layoutHint,
@@ -1205,9 +1204,9 @@ public sealed class AssistantToolRegistry(
         SourceRegionEditRequest[]? regions,
         CancellationToken cancellationToken)
     {
-        var saved = await frameSets.SaveSourceRegionsAsync(projectId, new SaveSourceRegionsRequest(
+        var saved = await spriteActions.SaveSourceRegionsAsync(projectId, new SaveSourceRegionsRequest(
             sourceAssetId,
-            regions?.ToList() ?? []), cancellationToken);
+            regions?.ToList() ?? []), cancellationToken: cancellationToken);
         return SerializeSourceRegions(sourceAssetId, saved, "Saved editable source regions.");
     }
 
@@ -1218,7 +1217,7 @@ public sealed class AssistantToolRegistry(
         string? name,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.CreateFrameSetFromRegionsAsync(projectId, new CreateFrameSetFromRegionsRequest(
+        var view = await spriteActions.CreateFrameSetFromRegionsAsync(projectId, new CreateFrameSetFromRegionsRequest(
             sourceAssetId,
             regionIds?.ToList() ?? [],
             string.IsNullOrWhiteSpace(name) ? null : name), cancellationToken);
@@ -1245,7 +1244,7 @@ public sealed class AssistantToolRegistry(
 
     private async Task<string> SetActiveFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken)
     {
-        var view = await frameSets.SetActiveFrameSetAsync(projectId, frameSetId, cancellationToken);
+        var view = await spriteActions.SetActiveFrameSetAsync(projectId, frameSetId, cancellationToken);
         return SerializeFrameSet(view, "Active frame set selected.");
     }
 
@@ -1256,7 +1255,7 @@ public sealed class AssistantToolRegistry(
         int height,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.SetCommonCellSizeAsync(projectId, new SetCommonCellSizeRequest(frameSetId, width, height), cancellationToken);
+        var view = await spriteActions.SetCommonCellSizeAsync(projectId, new SetCommonCellSizeRequest(frameSetId, width, height), cancellationToken);
         return SerializeFrameSet(view, "Common logical cell size applied.");
     }
 
@@ -1268,7 +1267,7 @@ public sealed class AssistantToolRegistry(
         string? name,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.AddFrameFromRegionAsync(projectId, new AddFrameFromRegionRequest(
+        var view = await spriteActions.AddFrameFromRegionAsync(projectId, new AddFrameFromRegionRequest(
             frameSetId,
             sourceRegionId,
             insertAt,
@@ -1284,7 +1283,7 @@ public sealed class AssistantToolRegistry(
         string? name,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.DuplicateFrameAsync(projectId, new DuplicateFrameRequest(
+        var view = await spriteActions.DuplicateFrameAsync(projectId, new DuplicateFrameRequest(
             frameSetId,
             frameId,
             insertAt,
@@ -1300,7 +1299,7 @@ public sealed class AssistantToolRegistry(
         int height,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.SetFrameLogicalCellAsync(projectId, new SetFrameLogicalCellRequest(frameSetId, frameId, width, height), cancellationToken);
+        var view = await spriteActions.SetFrameLogicalCellAsync(projectId, new SetFrameLogicalCellRequest(frameSetId, frameId, width, height), cancellationToken);
         return SerializeFrameSet(view, "Frame logical cell updated.");
     }
 
@@ -1315,7 +1314,7 @@ public sealed class AssistantToolRegistry(
         SpriteSheetShapePath[]? shapePaths,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.UpdateFrameSourceBoundsAsync(projectId, new UpdateFrameSourceBoundsRequest(
+        var view = await spriteActions.UpdateFrameSourceBoundsAsync(projectId, new UpdateFrameSourceBoundsRequest(
             frameSetId,
             frameId,
             x,
@@ -1334,7 +1333,7 @@ public sealed class AssistantToolRegistry(
         int contentOffsetY,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.TranslateFrameContentAsync(projectId, new TranslateFrameContentRequest(
+        var view = await spriteActions.TranslateFrameContentAsync(projectId, new TranslateFrameContentRequest(
             frameSetId,
             frameId,
             contentOffsetX,
@@ -1355,7 +1354,7 @@ public sealed class AssistantToolRegistry(
         int targetIndex,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.ReorderFrameAsync(projectId, frameSetId, frameId, targetIndex, cancellationToken);
+        var view = await spriteActions.ReorderFrameAsync(projectId, frameSetId, frameId, targetIndex, cancellationToken);
         return SerializeFrameSet(view, "Frame reordered.");
     }
 
@@ -1365,7 +1364,7 @@ public sealed class AssistantToolRegistry(
         Guid frameId,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.DeleteFrameAsync(projectId, frameSetId, frameId, cancellationToken);
+        var view = await spriteActions.DeleteFrameAsync(projectId, frameSetId, frameId, cancellationToken);
         return SerializeFrameSet(view, "Frame deleted.");
     }
 
@@ -1376,7 +1375,7 @@ public sealed class AssistantToolRegistry(
         int durationMs,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.SetFrameDurationAsync(projectId, frameSetId, frameId, durationMs, cancellationToken);
+        var view = await spriteActions.SetFrameDurationAsync(projectId, frameSetId, frameId, durationMs, cancellationToken);
         return SerializeFrameSet(view, "Frame duration updated.");
     }
 
@@ -1388,7 +1387,7 @@ public sealed class AssistantToolRegistry(
         bool axisY,
         CancellationToken cancellationToken)
     {
-        var view = await frameSets.AlignFramesAsync(projectId, new AlignFramesRequest(frameSetId, anchor, axisX, axisY), cancellationToken);
+        var view = await spriteActions.AlignFramesAsync(projectId, new AlignFramesRequest(frameSetId, anchor, axisX, axisY), cancellationToken);
         return SerializeFrameSet(view, $"Frames aligned by {anchor}.");
     }
 
@@ -1400,7 +1399,7 @@ public sealed class AssistantToolRegistry(
         string coordinateSpace,
         CancellationToken cancellationToken)
     {
-        var mask = await frameSets.UpsertFrameMaskAsync(projectId, new UpsertFrameMaskRequest(
+        var mask = await spriteActions.UpsertFrameMaskAsync(projectId, new UpsertFrameMaskRequest(
             frameId,
             maskDataUrl,
             string.IsNullOrWhiteSpace(label) ? null : label,
@@ -1418,7 +1417,7 @@ public sealed class AssistantToolRegistry(
 
     private async Task<string> ClearFrameMaskAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken)
     {
-        await frameSets.ClearFrameMaskAsync(projectId, frameId, cancellationToken);
+        await spriteActions.ClearFrameMaskAsync(projectId, frameId, cancellationToken);
         return JsonSerializer.Serialize(new
         {
             frameId,
@@ -1440,7 +1439,7 @@ public sealed class AssistantToolRegistry(
         string? name,
         CancellationToken cancellationToken)
     {
-        var result = await frameSets.BuildSheetAsync(projectId, new BuildSheetRequest(
+        var result = await spriteActions.BuildSheetAsync(projectId, new BuildSheetRequest(
             frameSetId,
             rows,
             columns,
@@ -1507,6 +1506,7 @@ public sealed class AssistantToolRegistry(
                 content = new { f.ContentOffsetX, f.ContentOffsetY },
                 f.DurationMs,
                 f.WorkingState,
+                f.HideFromOnionSkin,
                 f.HasMask,
                 f.MaskId,
             }),

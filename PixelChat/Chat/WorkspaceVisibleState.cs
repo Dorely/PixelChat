@@ -104,7 +104,18 @@ public sealed record WorkspaceSpritesVisibleState(
     WorkspaceBuiltSheetSummary? BuiltSheet = null,
     string Mode = "",
     WorkspaceSpriteEditModalSummary? EditModal = null,
-    WorkspaceSpriteAnchorSummary? Anchor = null);
+    WorkspaceSpriteAnchorSummary? Anchor = null,
+    WorkspaceSpriteAgentStatus? AgentStatus = null,
+    Guid? ActiveSourceAssetId = null,
+    Guid? ActiveFrameSetId = null,
+    Guid? ActiveFrameId = null,
+    IReadOnlyList<Guid>? SelectedRegionIds = null);
+
+public sealed record WorkspaceSpriteAgentStatus(
+    string State,
+    string ToolName,
+    string TargetSummary,
+    string Error);
 
 public sealed record WorkspaceSpriteEditModalSummary(
     string TargetKind,

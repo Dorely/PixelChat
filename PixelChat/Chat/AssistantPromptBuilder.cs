@@ -61,6 +61,7 @@ public static class AssistantPromptBuilder
         Use the greenfield sprite tools for structural work:
 
         - Place or correct source regions first. If automatic detection is close, save corrected regions instead of repeatedly detecting.
+        - Greenfield sprite mutations update the visible Sprites workspace and focus the relevant Source, Frames, or Sheet mode. Use those tools for visible assistant work instead of legacy sprite-sheet operations or hidden state changes.
         - Keep source bounds, logical cells, content offsets, frame order, frame duration, masks, sheet layout, and export behavior as separate decisions.
         - Use frame source-bound changes for bad crops. Use content translation for alignment inside the cell. Use cell changes for normalized workspace size.
         - Build/rebuild sheets from FrameSets. Do not call legacy SpriteSheetDefinition tools on the new editor path unless the current surface is still non-migrated legacy state.

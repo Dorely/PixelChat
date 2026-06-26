@@ -1469,7 +1469,25 @@ namespace PixelChat.Persistence.Migrations
                     b.Property<Guid?>("ActiveFrameSetId")
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid?>("ActiveSpriteFrameId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActiveSpriteMode")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("source");
+
+                    b.Property<string>("ActiveSpriteRegionIdsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]");
+
                     b.Property<Guid?>("ActiveSpriteSheetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ActiveSpriteSourceAssetId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ActiveWorkspaceMode")

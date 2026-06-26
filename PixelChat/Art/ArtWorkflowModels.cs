@@ -56,7 +56,13 @@ public sealed record ProjectView(
     string Name,
     WorkspaceMode ActiveWorkspaceMode,
     Guid? ActiveBatchId,
-    Guid? ActiveSpriteSheetId);
+    Guid? ActiveSpriteSheetId,
+    Guid? ActiveFrameSetId,
+    string ActiveSpriteMode,
+    Guid? ActiveSpriteSourceAssetId,
+    Guid? ActiveSpriteFrameId,
+    string ActiveSpriteRegionIdsJson,
+    DateTime UpdatedAt);
 
 public sealed record ArtAssetView(
     Guid Id,

@@ -6832,7 +6832,18 @@ public sealed class ArtWorkflowService(
     }
 
     private static ProjectView ProjectView(Project project) =>
-        new(project.Id, project.Name, project.ActiveWorkspaceMode, project.ActiveBatchId, project.ActiveSpriteSheetId);
+        new(
+            project.Id,
+            project.Name,
+            project.ActiveWorkspaceMode,
+            project.ActiveBatchId,
+            project.ActiveSpriteSheetId,
+            project.ActiveFrameSetId,
+            string.IsNullOrWhiteSpace(project.ActiveSpriteMode) ? "source" : project.ActiveSpriteMode,
+            project.ActiveSpriteSourceAssetId,
+            project.ActiveSpriteFrameId,
+            string.IsNullOrWhiteSpace(project.ActiveSpriteRegionIdsJson) ? "[]" : project.ActiveSpriteRegionIdsJson,
+            project.UpdatedAt);
 
     private static ArtAssetView AssetView(ArtAsset asset) =>
         AssetView(AssetListItem(asset));

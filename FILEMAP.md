@@ -42,7 +42,7 @@
 |------|-------------|
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, autonomous generation budget wiring/model-only outputs including sprite stabilization diagnostics, Shellmate-style tool streaming/execution, form drafts, and transcript replay. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, throttles streaming state notifications, commits finished turns, and applies workspace/form side effects. |
-| `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact all-tab records including Activity, Review, sprite, asset, and recipe context used by assistant tools. |
+| `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact all-tab records including Activity, Review, live sprite focus/agent status, asset, and recipe context used by assistant tools. |
 | `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt around the Source -> Frames -> Sheet -> Export workflow, deterministic sprite tools, art/animation recipes, review, activity, and export guidance. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records, form draft payloads, animation frame mark payloads, and per-turn autonomous generation budget state. |
 | `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, generation, greenfield source-region/frame-set/frame-mask/sheet operations, legacy sprite repair tools, Review sets, favorites, and exports. |
@@ -55,6 +55,7 @@
 | `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Activity, Review sets, guide generation, sprite sheets/reviews/working-frame stabilization/split/reassembly, greenfield region-to-standalone-asset extraction, exports, art/animation recipes, masks, import, crop, and edits. |
 | `ArtWorkflowModels.cs` | Request/result/view records for the workbench, Activity, lazy media URLs/binaries, animation-guide generation, sprite-sheet composition/provenance/stabilization/animation metadata, per-frame isolation/reassembly, standalone region extraction, art/animation recipe management, and assistant tools. |
 | `IFrameSetService.cs` / `FrameSetService.cs` | Greenfield deterministic Source -> Frames -> Sheet service over SpriteRegion/FrameSet/Frame/Anchor/SheetLayout/BuiltSheet: detect/save regions, create/edit/order/align frames, manage frame masks, and build opaque sheets with linked manifests. |
+| `ISpriteWorkspaceActionService.cs` / `SpriteWorkspaceActionService.cs` | Shared Sprites action layer used by UI clicks and assistant tools to wrap greenfield mutations, update persisted sprite focus, and keep the visible workspace synchronized. |
 | `FrameSetModels.cs` | View/request/result records for the greenfield source-region, frame-set, frame edit, mask, and build-sheet pipeline. |
 | `AnimationGuideModels.cs` | Shared guide-rendering records for animation specs, frame specs, guide layouts, and per-frame slots without restoring the old animation job pipeline. |
 | `SpriteAnimationOptions.cs` | Configuration record for sprite-animation defaults used by guide rendering and animation-generation workflow setup. |
@@ -161,7 +162,7 @@
 
 | File | Description |
 |------|-------------|
-| `Project.cs` | EF entity for art workbench projects, active batch/sprite sheet/frame-set/workspace mode, and owned assets, sprite sheets, frame sets, recipes, and Activity records. |
+| `Project.cs` | EF entity for art workbench projects, active batch/sprite sheet/frame-set/workspace/sprite focus state, and owned assets, sprite sheets, frame sets, recipes, and Activity records. |
 | `ActivityRun.cs` | EF entity for user-visible workflow Activity runs with status, actor, workflow kind, primary artifact, and child steps/artifacts. |
 | `ActivityStep.cs` | EF entity for ordered Activity steps shown in the workflow log. |
 | `ActivityArtifact.cs` | EF entity for Activity artifacts referencing assets, batches, sprite sheets, frames, or other workflow outputs. |
@@ -234,6 +235,7 @@
 | `20260625233000_ActiveFrameSetProjectState.cs` | Corrective EF migration that adds `Projects.ActiveFrameSetId` after the greenfield migration for databases that had already applied the earlier migration. |
 | `20260626000000_SpriteEditSessions.cs` | EF migration adding pending Sprites edit modal sessions with target, batch, mask, candidate, output-state, prompt/count, and crop persistence. |
 | `20260626001500_FrameOnionSkinVisibility.cs` | EF migration adding per-frame onion-skin visibility metadata for the greenfield frame model. |
+| `20260626003000_SpriteWorkspaceFocusState.cs` | EF migration adding persisted Sprites mode/source/frame/region focus state to projects for UI and assistant synchronization. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

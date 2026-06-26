@@ -8,6 +8,10 @@ public class Project
     public Guid? ActiveBatchId { get; set; }
     public Guid? ActiveSpriteSheetId { get; set; }
     public Guid? ActiveFrameSetId { get; set; }
+    public string ActiveSpriteMode { get; set; } = "source";
+    public Guid? ActiveSpriteSourceAssetId { get; set; }
+    public Guid? ActiveSpriteFrameId { get; set; }
+    public string ActiveSpriteRegionIdsJson { get; set; } = "[]";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

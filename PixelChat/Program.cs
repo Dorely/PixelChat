@@ -48,6 +48,7 @@ builder.Services.AddScoped<IChatClientFactory, ChatClientFactory>();
 builder.Services.AddScoped<IImageProvider, OpenAIAccountImageProvider>();
 builder.Services.AddScoped<IArtWorkflowService, ArtWorkflowService>();
 builder.Services.AddScoped<IFrameSetService, FrameSetService>();
+builder.Services.AddScoped<ISpriteWorkspaceActionService, SpriteWorkspaceActionService>();
 builder.Services.AddSingleton<TiktokenTokenCounter>();
 builder.Services.AddSingleton<CharEstimateTokenCounter>();
 builder.Services.AddSingleton<ITokenCounter, CompositeTokenCounter>();

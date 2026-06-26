@@ -116,6 +116,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => e.Name);
             entity.HasIndex(e => e.ActiveSpriteSheetId);
             entity.Property(e => e.ActiveWorkspaceMode).HasConversion<string>();
+            entity.Property(e => e.ActiveSpriteMode).HasDefaultValue("source");
+            entity.Property(e => e.ActiveSpriteRegionIdsJson).HasDefaultValue("[]");
         });
 
         modelBuilder.Entity<ArtAsset>(entity =>

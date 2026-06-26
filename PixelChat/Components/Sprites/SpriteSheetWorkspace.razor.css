@@ -491,6 +491,18 @@
     font-weight: 600;
 }
 
+.sprite-agent-status.is-running {
+    color: #1d4ed8;
+}
+
+.sprite-agent-status.is-completed {
+    color: #047857;
+}
+
+.sprite-agent-status.is-error {
+    color: #b42318;
+}
+
 /* Bottom strip: horizontal source/frame strip. */
 .sprite-bottom-strip {
     display: grid;

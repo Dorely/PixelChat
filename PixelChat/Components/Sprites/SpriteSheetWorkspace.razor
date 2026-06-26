@@ -6,6 +6,7 @@
 @implements IAsyncDisposable
 @inject IArtWorkflowService Workflow
 @inject IFrameSetService FrameSets
+@inject ISpriteWorkspaceActionService SpriteActions
 @inject IImageGenerationRuntime ImageRuntime
 @inject IOptions<ImageGenerationOptions> ImageOptions
 @inject IJSRuntime JS
@@ -333,7 +334,7 @@
         </div>
 
         <div class="sprite-agent-strip" role="status">
-            <span class="sprite-agent-status">Agent idle</span>
+            <span class="sprite-agent-status @AgentStatusClass()">@AgentStatusText()</span>
             <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="Undo task - coming soon">Undo task</button>
         </div>
 
@@ -515,6 +516,9 @@
     [Parameter]
     public EventCallback<WorkspaceSpritesVisibleState> OnVisibleStateChanged { get; set; }
 
+    [Parameter]
+    public WorkspaceSpriteAgentStatus? AgentStatus { get; set; }
+
     private static readonly SpriteMode[] SpriteModes = [SpriteMode.Source, SpriteMode.Frames, SpriteMode.Sheet, SpriteMode.Export];
 
     private IJSObjectReference? _module;
@@ -528,6 +532,13 @@
     private List<SourceRegionView> _regions = [];
     private readonly HashSet<Guid> _selectedRegionIds = [];
     private Guid? _loadedProjectId;
+    private DateTime _loadedProjectUpdatedAt;
+    private Guid? _loadedSourceAssetParameter;
+    private Guid? _loadedActiveFrameSetId;
+    private Guid? _loadedActiveSpriteSourceAssetId;
+    private Guid? _loadedActiveSpriteFrameId;
+    private string _loadedActiveSpriteMode = string.Empty;
+    private string _loadedActiveSpriteRegionIdsJson = string.Empty;
     private Guid? _appliedSourceAssetId;
     private Guid? _dragFrameId;
 
@@ -600,25 +611,18 @@
     protected override async Task OnParametersSetAsync()
     {
         var projectChanged = _loadedProjectId != Workbench.Project.Id;
-        if (_loadedProjectId != Workbench.Project.Id)
-        {
-            _loadedProjectId = Workbench.Project.Id;
-            _appliedSourceAssetId = null;
-            _frameSet = null;
-            _regions = [];
-            _selectedRegionIds.Clear();
-            _selectedIndex = -1;
-            _builtSheetAssetId = null;
-            _builtSheetManifest = null;
-            ResetEditModal();
-            await LoadActiveFrameSetAsync();
-            await LoadPendingEditSessionAsync();
-        }
+        var focusChanged = projectChanged
+            || _loadedProjectUpdatedAt != Workbench.Project.UpdatedAt
+            || _loadedSourceAssetParameter != SourceAssetId
+            || _loadedActiveFrameSetId != Workbench.Project.ActiveFrameSetId
+            || _loadedActiveSpriteSourceAssetId != Workbench.Project.ActiveSpriteSourceAssetId
+            || _loadedActiveSpriteFrameId != Workbench.Project.ActiveSpriteFrameId
+            || !string.Equals(_loadedActiveSpriteMode, Workbench.Project.ActiveSpriteMode, StringComparison.Ordinal)
+            || !string.Equals(_loadedActiveSpriteRegionIdsJson, Workbench.Project.ActiveSpriteRegionIdsJson, StringComparison.Ordinal);
 
-        if (SourceAssetId is Guid sourceId && (projectChanged || _appliedSourceAssetId != sourceId))
+        if (focusChanged)
         {
-            await SelectSourceAssetAsync(sourceId, clearMismatchedFrameSet: true);
-            _status = $"Loaded {SelectedSourceArtAsset()?.Label ?? "source image"}.";
+            await ApplyProjectSpriteFocusAsync(projectChanged);
         }
 
         if (RefreshEditCandidatesFromWorkbench())
@@ -638,6 +642,69 @@
         await RenderEditModalCanvasAsync();
     }
 
+    private async Task ApplyProjectSpriteFocusAsync(bool projectChanged)
+    {
+        if (projectChanged)
+        {
+            _loadedProjectId = Workbench.Project.Id;
+            _appliedSourceAssetId = null;
+            _frameSet = null;
+            _regions = [];
+            _selectedRegionIds.Clear();
+            _selectedIndex = -1;
+            _builtSheetAssetId = null;
+            _builtSheetManifest = null;
+            ResetEditModal();
+        }
+
+        try
+        {
+            FrameSetView? set = null;
+            if (Workbench.Project.ActiveFrameSetId is Guid activeFrameSetId)
+            {
+                set = await FrameSets.GetFrameSetAsync(Workbench.Project.Id, activeFrameSetId);
+            }
+            else
+            {
+                set = await FrameSets.GetActiveFrameSetAsync(Workbench.Project.Id);
+            }
+
+            ApplyFrameSet(set);
+
+            var focusedSourceId = SourceAssetId
+                ?? Workbench.Project.ActiveSpriteSourceAssetId
+                ?? set?.SourceAssetId;
+            if (focusedSourceId is Guid sourceId)
+            {
+                await SelectSourceAssetAsync(
+                    sourceId,
+                    clearMismatchedFrameSet: SourceAssetId is Guid explicitSourceId && set?.SourceAssetId != explicitSourceId,
+                    setMode: false,
+                    persistFocus: false);
+            }
+
+            ApplyProjectSelectedRegions();
+            ApplyProjectSelectedFrame();
+            _mode = SpriteModeFromFocus(Workbench.Project.ActiveSpriteMode);
+            if (_mode == SpriteMode.Frames && _frameSet is null)
+                _mode = SourceImageUrl() is null ? SpriteMode.Source : SpriteMode.Source;
+            if (_mode == SpriteMode.Source && focusedSourceId is null && _frameSet is not null)
+                _mode = SpriteMode.Frames;
+
+            if (projectChanged)
+                await LoadPendingEditSessionAsync();
+
+            CaptureLoadedProjectFocus();
+            await PublishSpritesStateAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            CaptureLoadedProjectFocus();
+        }
+    }
+
     private async Task LoadActiveFrameSetAsync()
     {
         try
@@ -646,7 +713,7 @@
             ApplyFrameSet(set);
             if (set?.SourceAssetId is Guid sourceId)
             {
-                await SelectSourceAssetAsync(sourceId, clearMismatchedFrameSet: false);
+                await SelectSourceAssetAsync(sourceId, clearMismatchedFrameSet: false, setMode: false, persistFocus: false);
             }
             await PublishSpritesStateAsync();
         }
@@ -678,6 +745,66 @@
             _anchorReferenceFrameId = SelectedFrame()?.Id ?? set.Frames.FirstOrDefault()?.Id;
     }
 
+    private void ApplyProjectSelectedRegions()
+    {
+        var selectedIds = ProjectSelectedRegionIds();
+        _selectedRegionIds.Clear();
+        foreach (var id in selectedIds.Where(id => _regions.Any(region => region.Id == id)))
+            _selectedRegionIds.Add(id);
+    }
+
+    private void ApplyProjectSelectedFrame()
+    {
+        if (_frameSet is not { } set)
+        {
+            _selectedIndex = -1;
+            return;
+        }
+
+        if (Workbench.Project.ActiveSpriteFrameId is Guid frameId)
+        {
+            var index = set.Frames.ToList().FindIndex(frame => frame.Id == frameId);
+            if (index >= 0)
+            {
+                _selectedIndex = index;
+                _anchorReferenceFrameId = frameId;
+                return;
+            }
+        }
+
+        if (_selectedIndex < 0 || _selectedIndex >= set.Frames.Count)
+            _selectedIndex = set.Frames.Count == 0 ? -1 : 0;
+        _anchorReferenceFrameId ??= SelectedFrame()?.Id;
+    }
+
+    private IReadOnlyList<Guid> ProjectSelectedRegionIds()
+    {
+        var json = Workbench.Project.ActiveSpriteRegionIdsJson;
+        if (string.IsNullOrWhiteSpace(json) || json == "[]")
+            return [];
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<Guid>>(json) ?? [];
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return [];
+        }
+    }
+
+    private void CaptureLoadedProjectFocus()
+    {
+        _loadedProjectId = Workbench.Project.Id;
+        _loadedProjectUpdatedAt = Workbench.Project.UpdatedAt;
+        _loadedSourceAssetParameter = SourceAssetId;
+        _loadedActiveFrameSetId = Workbench.Project.ActiveFrameSetId;
+        _loadedActiveSpriteSourceAssetId = Workbench.Project.ActiveSpriteSourceAssetId;
+        _loadedActiveSpriteFrameId = Workbench.Project.ActiveSpriteFrameId;
+        _loadedActiveSpriteMode = Workbench.Project.ActiveSpriteMode;
+        _loadedActiveSpriteRegionIdsJson = Workbench.Project.ActiveSpriteRegionIdsJson;
+    }
+
     private async Task ImportSourceAsync(InputFileChangeEventArgs args)
     {
         if (args.File is null)
@@ -702,7 +829,11 @@
         });
     }
 
-    private async Task SelectSourceAssetAsync(Guid sourceId, bool clearMismatchedFrameSet)
+    private async Task SelectSourceAssetAsync(
+        Guid sourceId,
+        bool clearMismatchedFrameSet,
+        bool setMode = true,
+        bool persistFocus = true)
     {
         _sourceAssetIdText = sourceId.ToString();
         _appliedSourceAssetId = sourceId;
@@ -717,7 +848,18 @@
             _builtSheetAssetId = null;
             _builtSheetManifest = null;
         }
-        _mode = SpriteMode.Source;
+        if (setMode)
+            _mode = SpriteMode.Source;
+        if (persistFocus)
+        {
+            await SpriteActions.SetFocusAsync(Workbench.Project.Id, new SpriteWorkspaceFocusUpdate(
+                SpriteWorkspaceModes.Source,
+                sourceId,
+                _frameSet?.Id,
+                FrameId: null,
+                _selectedRegionIds.ToList()));
+            CaptureLoadedProjectFocus();
+        }
         await PublishSpritesStateAsync();
         await InvokeAsync(StateHasChanged);
     }
@@ -729,8 +871,11 @@
 
         await RunAsync("Detecting source regions...", async () =>
         {
-            _regions = (await FrameSets.DetectSourceRegionsAsync(Workbench.Project.Id, new DetectSourceRegionsRequest(sourceId))).ToList();
+            _regions = (await SpriteActions.DetectSourceRegionsAsync(Workbench.Project.Id, new DetectSourceRegionsRequest(sourceId))).ToList();
             _selectedRegionIds.Clear();
+            foreach (var region in _regions)
+                _selectedRegionIds.Add(region.Id);
+            CaptureLoadedProjectFocus();
             _status = $"Detected {_regions.Count} region(s).";
             await PublishSpritesStateAsync();
         });
@@ -748,9 +893,10 @@
 
         await RunAsync("Creating frame set...", async () =>
         {
-            var set = await FrameSets.CreateFrameSetFromRegionsAsync(Workbench.Project.Id, new CreateFrameSetFromRegionsRequest(sourceId, regionIds));
+            var set = await SpriteActions.CreateFrameSetFromRegionsAsync(Workbench.Project.Id, new CreateFrameSetFromRegionsRequest(sourceId, regionIds));
             ApplyFrameSet(set);
             _mode = SpriteMode.Frames;
+            CaptureLoadedProjectFocus();
             _status = $"Created {set.FrameCount} editable frame workspace(s).";
             await OnChanged.InvokeAsync();
             await PublishSpritesStateAsync();
@@ -764,8 +910,9 @@
 
         await RunAsync("Normalizing cells...", async () =>
         {
-            var updated = await FrameSets.SetCommonCellSizeAsync(Workbench.Project.Id, new SetCommonCellSizeRequest(set.Id, auto ? 0 : _cellWidth, auto ? 0 : _cellHeight));
+            var updated = await SpriteActions.SetCommonCellSizeAsync(Workbench.Project.Id, new SetCommonCellSizeRequest(set.Id, auto ? 0 : _cellWidth, auto ? 0 : _cellHeight));
             ApplyFrameSet(updated);
+            CaptureLoadedProjectFocus();
             _status = $"Cells set to {updated.DefaultCellWidth} x {updated.DefaultCellHeight}.";
             await PublishSpritesStateAsync();
         });
@@ -784,7 +931,7 @@
 
         await RunAsync(apply ? "Applying anchor alignment..." : "Previewing anchor alignment...", async () =>
         {
-            var result = await FrameSets.AlignFramesByAnchorRectAsync(Workbench.Project.Id, new AlignFramesByAnchorRectRequest(
+            var result = await SpriteActions.AlignFramesByAnchorRectAsync(Workbench.Project.Id, new AlignFramesByAnchorRectRequest(
                 set.Id,
                 reference.Id,
                 rect,
@@ -795,6 +942,7 @@
                 apply));
             _anchorDiagnostics = result;
             ApplyFrameSet(result.FrameSet);
+            CaptureLoadedProjectFocus();
             _status = apply
                 ? $"Applied anchor alignment to {result.Matches.Count} frame(s)."
                 : $"Previewed anchor alignment for {result.Matches.Count} frame(s).";
@@ -824,6 +972,13 @@
         _anchorReferenceFrameId = frameId;
         _anchorRect = null;
         _anchorDiagnostics = null;
+        await SpriteActions.SetFocusAsync(Workbench.Project.Id, new SpriteWorkspaceFocusUpdate(
+            SpriteWorkspaceModes.Frames,
+            SelectedSourceAssetId(),
+            set.Id,
+            frameId,
+            SelectedRegionIds: []));
+        CaptureLoadedProjectFocus();
         await PublishSpritesStateAsync();
         await RenderCanvasAsync();
     }
@@ -835,8 +990,9 @@
 
         await RunAsync("Reordering frame...", async () =>
         {
-            var updated = await FrameSets.ReorderFrameAsync(Workbench.Project.Id, set.Id, frameId, targetIndex);
+            var updated = await SpriteActions.ReorderFrameAsync(Workbench.Project.Id, set.Id, frameId, targetIndex);
             ApplyFrameSet(updated);
+            CaptureLoadedProjectFocus();
             await PublishSpritesStateAsync();
         });
     }
@@ -856,8 +1012,9 @@
 
         await RunAsync("Deleting frame...", async () =>
         {
-            var updated = await FrameSets.DeleteFrameAsync(Workbench.Project.Id, set.Id, frameId);
+            var updated = await SpriteActions.DeleteFrameAsync(Workbench.Project.Id, set.Id, frameId);
             ApplyFrameSet(updated);
+            CaptureLoadedProjectFocus();
             _status = "Frame deleted.";
             await PublishSpritesStateAsync();
         });
@@ -870,8 +1027,9 @@
 
         await RunAsync("Updating duration...", async () =>
         {
-            var updated = await FrameSets.SetFrameDurationAsync(Workbench.Project.Id, set.Id, frameId, ms);
+            var updated = await SpriteActions.SetFrameDurationAsync(Workbench.Project.Id, set.Id, frameId, ms);
             ApplyFrameSet(updated);
+            CaptureLoadedProjectFocus();
             await PublishSpritesStateAsync();
         });
     }
@@ -883,12 +1041,13 @@
 
         await RunAsync("Updating onion-skin visibility...", async () =>
         {
-            var updated = await FrameSets.SetFrameOnionSkinVisibilityAsync(
+            var updated = await SpriteActions.SetFrameOnionSkinVisibilityAsync(
                 Workbench.Project.Id,
                 set.Id,
                 frame.Id,
                 !frame.HideFromOnionSkin);
             ApplyFrameSet(updated);
+            CaptureLoadedProjectFocus();
             await PublishSpritesStateAsync();
             await RenderCanvasAsync();
         });
@@ -914,8 +1073,9 @@
     {
         if (_frameSet is not { } set)
             return;
-        var updated = await FrameSets.TranslateFrameContentAsync(Workbench.Project.Id, new TranslateFrameContentRequest(set.Id, frameId, x, y));
+        var updated = await SpriteActions.TranslateFrameContentAsync(Workbench.Project.Id, new TranslateFrameContentRequest(set.Id, frameId, x, y));
         ApplyFrameSet(updated);
+        CaptureLoadedProjectFocus();
         await PublishSpritesStateAsync();
         await RenderCanvasAsync();
     }
@@ -927,7 +1087,7 @@
 
         await RunAsync("Building sheet...", async () =>
         {
-            var result = await FrameSets.BuildSheetAsync(Workbench.Project.Id, new BuildSheetRequest(
+            var result = await SpriteActions.BuildSheetAsync(Workbench.Project.Id, new BuildSheetRequest(
                 set.Id,
                 _rows,
                 _columns,
@@ -938,6 +1098,8 @@
             _builtSheetAssetId = result.OutputAssetId;
             _builtSheetManifest = result.ManifestJson;
             _rev++;
+            _mode = SpriteMode.Sheet;
+            CaptureLoadedProjectFocus();
             _status = $"Built {result.Rows}x{result.Columns} sheet, {result.CellWidth} x {result.CellHeight} cells.";
             await OnChanged.InvokeAsync();
             await PublishSpritesStateAsync();
@@ -951,7 +1113,7 @@
 
         await RunAsync("Extracting region...", async () =>
         {
-            var result = await Workflow.ExtractRegionAsAssetAsync(Workbench.Project.Id, new ExtractRegionAsAssetRequest(
+            var result = await SpriteActions.ExtractRegionAsAssetAsync(Workbench.Project.Id, new ExtractRegionAsAssetRequest(
                 sourceId,
                 region.X,
                 region.Y,
@@ -959,7 +1121,9 @@
                 region.Height,
                 Name: region.Name,
                 Padding: 0,
-                LinkToSource: true));
+                LinkToSource: true),
+                _selectedRegionIds.ToList());
+            CaptureLoadedProjectFocus();
             _status = $"Extracted '{result.Asset.Label}'.";
             await OnChanged.InvokeAsync();
             await PublishSpritesStateAsync();
@@ -1002,7 +1166,7 @@
 
     private async Task SaveRegionsAsync(Guid sourceId)
     {
-        _regions = (await FrameSets.SaveSourceRegionsAsync(Workbench.Project.Id, new SaveSourceRegionsRequest(
+        _regions = (await SpriteActions.SaveSourceRegionsAsync(Workbench.Project.Id, new SaveSourceRegionsRequest(
             sourceId,
             _regions
                 .OrderBy(region => region.Order)
@@ -1016,8 +1180,10 @@
                     region.ShapePaths,
                     region.RegionType,
                     index))
-                .ToList()))).ToList();
+                .ToList()),
+            _selectedRegionIds.ToList())).ToList();
         _rev++;
+        CaptureLoadedProjectFocus();
         await PublishSpritesStateAsync();
         await RenderCanvasAsync();
     }
@@ -1121,7 +1287,7 @@
                 ApplyFrameSet(set);
             }
             if (session.TargetSourceAssetId is Guid sourceAssetId && _appliedSourceAssetId != sourceAssetId)
-                await SelectSourceAssetAsync(sourceAssetId, clearMismatchedFrameSet: false);
+                await SelectSourceAssetAsync(sourceAssetId, clearMismatchedFrameSet: false, setMode: false, persistFocus: false);
 
             ApplyEditSession(session);
             RefreshEditCandidatesFromWorkbench();
@@ -1329,7 +1495,7 @@
                 && _editTargetFrameId is Guid frameId
                 && _editCrop is { } crop)
             {
-                var updated = await FrameSets.ApplyFrameEditCandidateAsync(Workbench.Project.Id, new ApplyFrameEditCandidateRequest(
+                var updated = await SpriteActions.ApplyFrameEditCandidateAsync(Workbench.Project.Id, new ApplyFrameEditCandidateRequest(
                     frameSetId,
                     frameId,
                     candidateId,
@@ -1340,6 +1506,7 @@
                     crop.CropWidth,
                     crop.CropHeight));
                 ApplyFrameSet(updated);
+                CaptureLoadedProjectFocus();
                 if (sessionId is Guid id)
                     await FrameSets.CompleteSpriteEditSessionAsync(Workbench.Project.Id, id, "accepted");
                 ResetEditModal();
@@ -1672,6 +1839,13 @@
     private async Task SetModeAsync(SpriteMode mode)
     {
         _mode = mode;
+        await SpriteActions.SetFocusAsync(Workbench.Project.Id, new SpriteWorkspaceFocusUpdate(
+            FocusMode(mode),
+            SelectedSourceAssetId(),
+            _frameSet?.Id,
+            SelectedFrame()?.Id,
+            _selectedRegionIds.ToList()));
+        CaptureLoadedProjectFocus();
         await PublishSpritesStateAsync();
         await InvokeAsync(StateHasChanged);
     }
@@ -1695,6 +1869,13 @@
             _selectedRegionIds.Clear();
             _selectedRegionIds.Add(id);
         }
+        await SpriteActions.SetFocusAsync(Workbench.Project.Id, new SpriteWorkspaceFocusUpdate(
+            SpriteWorkspaceModes.Source,
+            SelectedSourceAssetId(),
+            _frameSet?.Id,
+            FrameId: null,
+            _selectedRegionIds.ToList()));
+        CaptureLoadedProjectFocus();
         await PublishSpritesStateAsync();
         await RenderCanvasAsync();
     }
@@ -1705,6 +1886,13 @@
         _anchorReferenceFrameId = SelectedFrame()?.Id;
         _anchorRect = null;
         _anchorDiagnostics = null;
+        await SpriteActions.SetFocusAsync(Workbench.Project.Id, new SpriteWorkspaceFocusUpdate(
+            SpriteWorkspaceModes.Frames,
+            SelectedSourceAssetId(),
+            _frameSet?.Id,
+            SelectedFrame()?.Id,
+            SelectedRegionIds: []));
+        CaptureLoadedProjectFocus();
         await PublishSpritesStateAsync();
         await RenderCanvasAsync();
     }
@@ -1787,6 +1975,13 @@
         _selectedRegionIds.Clear();
         if (ParseGuid(id) is Guid regionId)
             _selectedRegionIds.Add(regionId);
+        await SpriteActions.SetFocusAsync(Workbench.Project.Id, new SpriteWorkspaceFocusUpdate(
+            SpriteWorkspaceModes.Source,
+            SelectedSourceAssetId(),
+            _frameSet?.Id,
+            FrameId: null,
+            _selectedRegionIds.ToList()));
+        CaptureLoadedProjectFocus();
         await PublishSpritesStateAsync();
     }
 
@@ -1860,7 +2055,12 @@
                 _anchorAxisY,
                 _anchorDiagnostics?.Matches.Count ?? 0,
                 _anchorDiagnostics?.Matches.Count(match => match.LowConfidence) ?? 0,
-                _anchorDiagnostics?.Applied ?? false)));
+                _anchorDiagnostics?.Applied ?? false),
+            AgentStatus: AgentStatus,
+            ActiveSourceAssetId: SelectedSourceAssetId(),
+            ActiveFrameSetId: _frameSet?.Id,
+            ActiveFrameId: SelectedFrame()?.Id,
+            SelectedRegionIds: _selectedRegionIds.ToList()));
     }
 
     private FrameView? SelectedFrame() =>
@@ -2026,9 +2226,53 @@
         _ => mode.ToString(),
     };
 
+    private static SpriteMode SpriteModeFromFocus(string? mode) =>
+        SpriteWorkspaceModes.Normalize(mode) switch
+        {
+            SpriteWorkspaceModes.Frames => SpriteMode.Frames,
+            SpriteWorkspaceModes.Sheet => SpriteMode.Sheet,
+            SpriteWorkspaceModes.Export => SpriteMode.Export,
+            _ => SpriteMode.Source,
+        };
+
+    private static string FocusMode(SpriteMode mode) => mode switch
+    {
+        SpriteMode.Frames => SpriteWorkspaceModes.Frames,
+        SpriteMode.Sheet => SpriteWorkspaceModes.Sheet,
+        SpriteMode.Export => SpriteWorkspaceModes.Export,
+        _ => SpriteWorkspaceModes.Source,
+    };
+
     private string ModeTabClass(SpriteMode mode) => _mode == mode ? "sprite-mode-tab is-active" : "sprite-mode-tab";
 
     private static string ToolButtonClass(string current, string tool) => current == tool ? "sprite-tool-button is-active" : "sprite-tool-button";
+
+    private string AgentStatusText()
+    {
+        if (AgentStatus is null || string.Equals(AgentStatus.State, "idle", StringComparison.OrdinalIgnoreCase))
+            return "Agent idle";
+
+        var tool = CompactToolName(AgentStatus.ToolName);
+        var target = string.IsNullOrWhiteSpace(AgentStatus.TargetSummary) ? string.Empty : $" / {AgentStatus.TargetSummary}";
+        return AgentStatus.State switch
+        {
+            "running" => $"Agent running {tool}{target}",
+            "error" => $"Agent error in {tool}{target}",
+            "completed" => $"Agent completed {tool}{target}",
+            _ => $"Agent {AgentStatus.State} {tool}{target}",
+        };
+    }
+
+    private string AgentStatusClass() => AgentStatus?.State switch
+    {
+        "running" => "is-running",
+        "error" => "is-error",
+        "completed" => "is-completed",
+        _ => string.Empty,
+    };
+
+    private static string CompactToolName(string toolName) =>
+        string.IsNullOrWhiteSpace(toolName) ? "sprite tool" : toolName.Replace('_', ' ');
 
     private string EditToolButtonClass(string tool) => _editTool == tool ? "sprite-edit-tool is-active" : "sprite-edit-tool";
 
