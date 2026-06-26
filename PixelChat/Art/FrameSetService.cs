@@ -997,6 +997,87 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
         await db.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<SpriteEditSessionView?> GetPendingSpriteEditSessionAsync(
+        Guid projectId,
+        CancellationToken cancellationToken = default)
+    {
+        var session = await db.SpriteEditSessions
+            .AsNoTracking()
+            .Where(item => item.ProjectId == projectId && item.Status == "pending")
+            .OrderByDescending(item => item.UpdatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        return session is null ? null : ToSpriteEditSessionView(session);
+    }
+
+    public async Task<SpriteEditSessionView> SaveSpriteEditSessionAsync(
+        Guid projectId,
+        SaveSpriteEditSessionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        _ = await db.Projects
+            .Where(project => project.Id == projectId)
+            .Select(project => project.Id)
+            .FirstAsync(cancellationToken);
+
+        var session = await db.SpriteEditSessions
+            .Where(item => item.ProjectId == projectId && item.Status == "pending")
+            .OrderByDescending(item => item.UpdatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        var now = DateTime.UtcNow;
+        if (session is null)
+        {
+            session = new SpriteEditSession
+            {
+                ProjectId = projectId,
+                Status = "pending",
+                CreatedAt = now,
+            };
+            await db.SpriteEditSessions.AddAsync(session, cancellationToken);
+        }
+
+        session.ModalOpen = request.ModalOpen;
+        session.TargetKind = NormalizeEditTargetKind(request.TargetKind);
+        session.TargetSourceAssetId = request.TargetSourceAssetId;
+        session.TargetFrameSetId = request.TargetFrameSetId;
+        session.TargetFrameId = request.TargetFrameId;
+        session.BatchId = request.BatchId;
+        session.MaskId = request.MaskId;
+        session.SelectedCandidateAssetId = request.SelectedCandidateAssetId;
+        session.SelectedOutputIndex = request.SelectedOutputIndex;
+        session.PreviewOverlayActive = request.PreviewOverlayActive;
+        session.Prompt = request.Prompt;
+        session.Count = Math.Clamp(request.Count, 1, 16);
+        session.CropJson = request.Crop is null ? "{}" : JsonSerializer.Serialize(request.Crop, JsonOptions);
+        session.CandidateAssetIdsJson = JsonSerializer.Serialize(request.CandidateAssetIds.Distinct().ToList(), JsonOptions);
+        session.OutputStatesJson = JsonSerializer.Serialize(request.OutputStates.OrderBy(state => state.OutputIndex).ToList(), JsonOptions);
+        session.UpdatedAt = now;
+        await TouchProjectAsync(projectId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return ToSpriteEditSessionView(session);
+    }
+
+    public async Task CompleteSpriteEditSessionAsync(
+        Guid projectId,
+        Guid sessionId,
+        string status,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = status.Trim().ToLowerInvariant();
+        if (normalized is not ("accepted" or "rejected"))
+            throw new InvalidOperationException("Sprite edit session status must be accepted or rejected.");
+
+        var session = await db.SpriteEditSessions
+            .FirstOrDefaultAsync(item => item.ProjectId == projectId && item.Id == sessionId && item.Status == "pending", cancellationToken);
+        if (session is null)
+            return;
+
+        session.Status = normalized;
+        session.ModalOpen = false;
+        session.UpdatedAt = DateTime.UtcNow;
+        await TouchProjectAsync(projectId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task<(byte[] Data, string ContentType)?> GetFrameMaskImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default)
     {
         var mask = await db.ImageMasks
@@ -1169,6 +1250,72 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
             mask.Width,
             mask.Height,
             mask.CreatedAt);
+
+    private static SpriteEditSessionView ToSpriteEditSessionView(SpriteEditSession session) =>
+        new(
+            session.Id,
+            session.Status,
+            session.ModalOpen,
+            NormalizeEditTargetKind(session.TargetKind),
+            session.TargetSourceAssetId,
+            session.TargetFrameSetId,
+            session.TargetFrameId,
+            session.BatchId,
+            session.MaskId,
+            session.SelectedCandidateAssetId,
+            session.SelectedOutputIndex,
+            session.PreviewOverlayActive,
+            session.Prompt,
+            Math.Max(1, session.Count),
+            DeserializeSpriteEditCrop(session.CropJson),
+            DeserializeGuidList(session.CandidateAssetIdsJson),
+            DeserializeOutputStates(session.OutputStatesJson),
+            session.UpdatedAt);
+
+    private static string NormalizeEditTargetKind(string? value) =>
+        string.Equals(value, "frame", StringComparison.OrdinalIgnoreCase) ? "frame" : "source";
+
+    private static SpriteEditSessionCrop? DeserializeSpriteEditCrop(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json.Trim() == "{}")
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize<SpriteEditSessionCrop>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static IReadOnlyList<Guid> DeserializeGuidList(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<Guid>>(json, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static IReadOnlyList<GenerationOutputStateView> DeserializeOutputStates(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<GenerationOutputStateView>>(json, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
 
     private static (int Width, int Height, byte[] Rgba) DecodeSource(ArtAsset source)
     {

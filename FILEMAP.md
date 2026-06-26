@@ -183,6 +183,7 @@
 | `BuiltSheet.cs` | Greenfield EF entity for a reassembled opaque sheet asset retaining a per-frame placement manifest and links to the frames used, so the sheet stays rebuildable. |
 | `HistoryTask.cs` | Greenfield EF entity (schema only; backend deferred) grouping a user/agent instruction's operations into one undoable task for the planned history system. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets or greenfield frames, including owner and coordinate-space metadata. |
+| `SpriteEditSession.cs` | EF entity for one pending project-scoped Sprites edit modal session, including target, batch/candidate ownership, prompt/count, crop transform, and overlay selection state. |
 | `ChatContextAttachment.cs` | EF entity for persistent visible chat attachments referencing assets, masks, crops, recipes, or batches. |
 | `CompareReviewSet.cs` | EF entities backing the project-scoped Review set and ordered review items referencing assets, batches, sprite sheets, animations, or frames. |
 | `AssistantConversation.cs` | EF entity for project-scoped persistent assistant conversations. |
@@ -230,6 +231,7 @@
 | `20260625173222_SpriteSheetStabilization.cs` / `.Designer.cs` | EF migration adding saved sprite-sheet stabilization metadata JSON to sprite-sheet definitions. |
 | `*_SpriteGreenfieldModel.cs` / `.Designer.cs` | EF migration adding the greenfield sprite tables (SpriteRegions, StandaloneAssets, FrameSets, Frames, Anchors, SheetLayouts, BuiltSheets, HistoryTasks), the new `Extracted` asset kind, and ImageMask owner/coordinate-space columns. |
 | `20260625233000_ActiveFrameSetProjectState.cs` | Corrective EF migration that adds `Projects.ActiveFrameSetId` after the greenfield migration for databases that had already applied the earlier migration. |
+| `20260626000000_SpriteEditSessions.cs` | EF migration adding pending Sprites edit modal sessions with target, batch, mask, candidate, output-state, prompt/count, and crop persistence. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

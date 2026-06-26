@@ -31,6 +31,9 @@ public interface IFrameSetService
     Task<FrameSetView> SetFrameDurationAsync(Guid projectId, Guid frameSetId, Guid frameId, int durationMs, CancellationToken cancellationToken = default);
     Task<ImageMaskView> UpsertFrameMaskAsync(Guid projectId, UpsertFrameMaskRequest request, CancellationToken cancellationToken = default);
     Task ClearFrameMaskAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
+    Task<SpriteEditSessionView?> GetPendingSpriteEditSessionAsync(Guid projectId, CancellationToken cancellationToken = default);
+    Task<SpriteEditSessionView> SaveSpriteEditSessionAsync(Guid projectId, SaveSpriteEditSessionRequest request, CancellationToken cancellationToken = default);
+    Task CompleteSpriteEditSessionAsync(Guid projectId, Guid sessionId, string status, CancellationToken cancellationToken = default);
     Task<(byte[] Data, string ContentType)?> GetFrameMaskImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
     Task<(byte[] Data, string ContentType)?> GetFrameContentImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
     Task<(byte[] Data, string ContentType)?> GetFramePreviewImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);

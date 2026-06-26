@@ -114,7 +114,20 @@ public sealed record WorkspaceSpriteEditModalSummary(
     Guid? SelectedCandidateAssetId,
     bool IsGenerating,
     int CandidateCount = 1,
-    string CandidateSetState = "");
+    string CandidateSetState = "",
+    int? SelectedOutputIndex = null,
+    bool PreviewOverlayActive = false,
+    string SessionStatus = "",
+    bool CanAccept = false,
+    IReadOnlyList<WorkspaceSpriteEditCandidateSummary>? OutputStatuses = null);
+
+public sealed record WorkspaceSpriteEditCandidateSummary(
+    int OutputIndex,
+    Guid? AssetId,
+    string Status,
+    bool HasPartial,
+    bool IsFinal,
+    string Error);
 
 public sealed record WorkspaceSpriteAnchorSummary(
     Guid? ReferenceFrameId,

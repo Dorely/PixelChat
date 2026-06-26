@@ -1246,6 +1246,106 @@ namespace PixelChat.Persistence.Migrations
                     b.ToTable("ImageMasks");
                 });
 
+            modelBuilder.Entity("PixelChat.Models.SpriteEditSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CandidateAssetIdsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]");
+
+                    b.Property<int>("Count")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CropJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("{}");
+
+                    b.Property<Guid?>("MaskId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("ModalOpen")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("OutputStatesJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]");
+
+                    b.Property<bool>("PreviewOverlayActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Prompt")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("SelectedCandidateAssetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("SelectedOutputIndex")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("pending");
+
+                    b.Property<Guid?>("TargetFrameId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("TargetFrameSetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TargetKind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("source");
+
+                    b.Property<Guid?>("TargetSourceAssetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BatchId");
+
+                    b.HasIndex("MaskId");
+
+                    b.HasIndex("ProjectId")
+                        .IsUnique()
+                        .HasFilter("Status = 'pending'");
+
+                    b.HasIndex("SelectedCandidateAssetId");
+
+                    b.HasIndex("TargetFrameId");
+
+                    b.HasIndex("TargetFrameSetId");
+
+                    b.HasIndex("TargetSourceAssetId");
+
+                    b.ToTable("SpriteEditSessions");
+                });
+
             modelBuilder.Entity("PixelChat.Models.LlmProvider", b =>
                 {
                     b.Property<int>("Id")
@@ -2382,6 +2482,47 @@ namespace PixelChat.Persistence.Migrations
                     b.Navigation("Project");
                 });
 
+            modelBuilder.Entity("PixelChat.Models.SpriteEditSession", b =>
+                {
+                    b.HasOne("PixelChat.Models.GenerationBatch", null)
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("PixelChat.Models.ImageMask", null)
+                        .WithMany()
+                        .HasForeignKey("MaskId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("PixelChat.Models.Project", "Project")
+                        .WithMany("SpriteEditSessions")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PixelChat.Models.ArtAsset", null)
+                        .WithMany()
+                        .HasForeignKey("SelectedCandidateAssetId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("PixelChat.Models.Frame", null)
+                        .WithMany()
+                        .HasForeignKey("TargetFrameId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("PixelChat.Models.FrameSet", null)
+                        .WithMany()
+                        .HasForeignKey("TargetFrameSetId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("PixelChat.Models.ArtAsset", null)
+                        .WithMany()
+                        .HasForeignKey("TargetSourceAssetId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Project");
+                });
+
             modelBuilder.Entity("PixelChat.Models.LlmProvider", b =>
                 {
                     b.HasOne("PixelChat.Models.LlmProvider", "CredentialSource")
@@ -2650,6 +2791,8 @@ namespace PixelChat.Persistence.Migrations
                     b.Navigation("SheetLayouts");
 
                     b.Navigation("SpriteRegions");
+
+                    b.Navigation("SpriteEditSessions");
 
                     b.Navigation("SpriteSheetFrameRecords");
 

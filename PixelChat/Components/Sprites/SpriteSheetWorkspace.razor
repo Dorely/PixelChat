@@ -391,7 +391,7 @@
                     <h2 id="sprite-edit-title">@EditModalTitle()</h2>
                     <span>@EditModalSubtitle()</span>
                 </div>
-                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@_editGenerating" @onclick="CloseEditModalAsync">Close</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CloseEditModalAsync">Close</button>
             </div>
 
             <div class="sprite-edit-modal-body">
@@ -414,12 +414,12 @@
 
                     <label>
                         <span>Prompt</span>
-                        <textarea class="form-control form-control-sm sprite-edit-prompt" rows="7" @bind="_editPrompt" @bind:event="oninput"></textarea>
+                        <textarea class="form-control form-control-sm sprite-edit-prompt" rows="7" @bind="_editPrompt" @bind:event="oninput" @bind:after="PersistEditSessionAsync"></textarea>
                     </label>
 
                     <label>
                         <span>Candidates</span>
-                        <input class="form-control form-control-sm" type="number" min="1" max="@ImageOptions.Value.MaxOutputs" @bind="_editCount" />
+                        <input class="form-control form-control-sm" type="number" min="1" max="@ImageOptions.Value.MaxOutputs" @bind="_editCount" @bind:after="PersistEditSessionAsync" />
                     </label>
 
                     <button type="button" class="btn btn-sm btn-primary"
@@ -436,27 +436,43 @@
             </div>
 
             <div class="sprite-edit-results">
+                @{
+                    var editCandidateOutputs = EditCandidateOutputs();
+                }
                 <div class="sprite-edit-results-head">
                     <span>@EditResultsLabel()</span>
                     <div class="sprite-section-actions">
-                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_editGenerating || _editCandidates.Count == 0)" @onclick="RejectEditCandidatesAsync">Reject</button>
-                        <button type="button" class="btn btn-sm btn-primary" disabled="@(_editGenerating || _selectedEditCandidateId is null)" @onclick="AcceptEditCandidateAsync">Accept</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!_editPreviewOverlayActive)" @onclick="() => ClearEditPreviewAsync()">Clear Preview</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(editCandidateOutputs.Count == 0)" @onclick="RejectEditCandidatesAsync">Reject</button>
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@(!CanAcceptEditCandidate())" @onclick="AcceptEditCandidateAsync">Accept</button>
                     </div>
                 </div>
                 <div class="sprite-edit-candidate-strip">
-                    @if (_editCandidates.Count == 0)
+                    @if (editCandidateOutputs.Count == 0)
                     {
                         <div class="empty-state compact">No candidates.</div>
                     }
                     else
                     {
-                        @foreach (var candidate in _editCandidates)
+                        @foreach (var candidate in editCandidateOutputs)
                         {
-                            <button type="button" class="sprite-edit-candidate @(_selectedEditCandidateId == candidate.AssetId ? "is-selected" : "")"
-                                    disabled="@_editGenerating"
-                                    @onclick="() => SelectEditCandidate(candidate.AssetId)">
-                                <img src="@candidate.ImageUrl" alt="@candidate.Label" />
+                            <button type="button" class="sprite-edit-candidate @(EditCandidateClass(candidate))"
+                                    disabled="@(string.IsNullOrWhiteSpace(candidate.ImageUrl))"
+                                    @onclick="() => SelectEditCandidateOutputAsync(candidate)">
+                                @if (string.IsNullOrWhiteSpace(candidate.ImageUrl))
+                                {
+                                    <div class="sprite-edit-candidate-placeholder">@candidate.StatusLabel</div>
+                                }
+                                else
+                                {
+                                    <img src="@candidate.ImageUrl" alt="@candidate.Label" />
+                                }
                                 <span>@candidate.Label</span>
+                                <small>@candidate.StatusLabel</small>
+                                @if (!string.IsNullOrWhiteSpace(candidate.Error))
+                                {
+                                    <strong>@candidate.Error</strong>
+                                }
                             </button>
                         }
                     }
@@ -529,6 +545,7 @@
 
     private bool _editModalOpen;
     private bool _editGenerating;
+    private Guid? _editSessionId;
     private SpriteEditTargetKind _editTargetKind = SpriteEditTargetKind.Source;
     private Guid? _editTargetSourceAssetId;
     private Guid? _editTargetFrameSetId;
@@ -542,8 +559,14 @@
     private string _editPrompt = string.Empty;
     private string? _editModalError;
     private Guid? _editBatchId;
+    private Guid? _editMaskId;
     private Guid? _selectedEditCandidateId;
-    private List<SpriteEditCandidate> _editCandidates = [];
+    private int? _selectedEditOutputIndex;
+    private bool _editPreviewOverlayActive;
+    private List<Guid> _editCandidateAssetIds = [];
+    private List<GenerationOutputStateView> _editPersistedOutputStates = [];
+    private HashSet<int> _observedEditTerminalOutputs = [];
+    private ImageGenerationRuntimeSnapshot _generationRuntimeSnapshot = new([]);
     private int _editCanvasLoadVersion;
     private int _renderedEditCanvasLoadVersion = -1;
 
@@ -553,6 +576,12 @@
     private int _animIndex;
     private bool _animPlaying;
     private CancellationTokenSource? _animCts;
+
+    protected override void OnInitialized()
+    {
+        _generationRuntimeSnapshot = ImageRuntime.GetSnapshot();
+        ImageRuntime.StateChanged += OnImageGenerationRuntimeStateChanged;
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -569,6 +598,7 @@
             _builtSheetManifest = null;
             ResetEditModal();
             await LoadActiveFrameSetAsync();
+            await LoadPendingEditSessionAsync();
         }
 
         if (SourceAssetId is Guid sourceId && (projectChanged || _appliedSourceAssetId != sourceId))
@@ -576,6 +606,10 @@
             await SelectSourceAssetAsync(sourceId, clearMismatchedFrameSet: true);
             _status = $"Loaded {SelectedSourceArtAsset()?.Label ?? "source image"}.";
         }
+
+        if (RefreshEditCandidatesFromWorkbench())
+            await PersistEditSessionAsync();
+        RefreshEditGeneratingState();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -971,6 +1005,9 @@
         if (SelectedSourceAssetId() is not Guid sourceAssetId)
             return;
 
+        if (await OpenPendingEditSessionAsync())
+            return;
+
         ResetEditModal();
         _editModalOpen = true;
         _editTargetKind = SpriteEditTargetKind.Source;
@@ -978,6 +1015,7 @@
         _editImageUrl = AssetFullUrl(sourceAssetId);
         _editCrop = SpriteEditCrop.SourceDefault(SelectedSourceArtAsset());
         _editCanvasLoadVersion++;
+        await PersistEditSessionAsync();
         await PublishSpritesStateAsync();
         await InvokeAsync(StateHasChanged);
     }
@@ -985,6 +1023,9 @@
     private async Task OpenFrameEditModalAsync()
     {
         if (_frameSet is not { } set || SelectedFrame() is not { } frame || set.SourceAssetId is not Guid sourceAssetId)
+            return;
+
+        if (await OpenPendingEditSessionAsync())
             return;
 
         ResetEditModal();
@@ -1004,17 +1045,99 @@
             frame.LogicalWidth,
             frame.LogicalHeight);
         _editCanvasLoadVersion++;
+        await PersistEditSessionAsync();
         await PublishSpritesStateAsync();
         await InvokeAsync(StateHasChanged);
     }
 
     private async Task CloseEditModalAsync()
     {
-        if (_editGenerating)
-            return;
-        ResetEditModal();
+        _editModalOpen = false;
+        await PersistEditSessionAsync();
         await PublishSpritesStateAsync();
         await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task<bool> OpenPendingEditSessionAsync()
+    {
+        if (_editSessionId is null)
+            await LoadPendingEditSessionAsync();
+        if (_editSessionId is null)
+            return false;
+
+        _editModalOpen = true;
+        RefreshEditImageUrls();
+        RefreshEditGeneratingState();
+        _editCanvasLoadVersion++;
+        await PersistEditSessionAsync();
+        await PublishSpritesStateAsync();
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
+    private async Task LoadPendingEditSessionAsync()
+    {
+        try
+        {
+            var session = await FrameSets.GetPendingSpriteEditSessionAsync(Workbench.Project.Id);
+            if (session is null)
+                return;
+
+            if (session.TargetFrameSetId is Guid frameSetId && _frameSet?.Id != frameSetId)
+            {
+                var set = await FrameSets.GetFrameSetAsync(Workbench.Project.Id, frameSetId);
+                ApplyFrameSet(set);
+            }
+            if (session.TargetSourceAssetId is Guid sourceAssetId && _appliedSourceAssetId != sourceAssetId)
+                await SelectSourceAssetAsync(sourceAssetId, clearMismatchedFrameSet: false);
+
+            ApplyEditSession(session);
+            RefreshEditCandidatesFromWorkbench();
+            RefreshEditGeneratingState();
+            await PublishSpritesStateAsync();
+        }
+        catch (Exception ex)
+        {
+            _editModalError = ex.Message;
+        }
+    }
+
+    private void ApplyEditSession(SpriteEditSessionView session)
+    {
+        _editSessionId = session.Id;
+        _editModalOpen = session.ModalOpen;
+        _editTargetKind = string.Equals(session.TargetKind, "frame", StringComparison.OrdinalIgnoreCase)
+            ? SpriteEditTargetKind.Frame
+            : SpriteEditTargetKind.Source;
+        _editTargetSourceAssetId = session.TargetSourceAssetId;
+        _editTargetFrameSetId = session.TargetFrameSetId;
+        _editTargetFrameId = session.TargetFrameId;
+        _editBatchId = session.BatchId;
+        _editMaskId = session.MaskId;
+        _selectedEditCandidateId = session.SelectedCandidateAssetId;
+        _selectedEditOutputIndex = session.SelectedOutputIndex;
+        _editPreviewOverlayActive = session.PreviewOverlayActive;
+        _editPrompt = session.Prompt;
+        _editCount = Math.Clamp(session.Count, 1, Math.Max(1, ImageOptions.Value.MaxOutputs));
+        _editCrop = session.Crop is null
+            ? null
+            : new SpriteEditCrop(
+                session.Crop.EditSourceWidth,
+                session.Crop.EditSourceHeight,
+                session.Crop.CropX,
+                session.Crop.CropY,
+                session.Crop.CropWidth,
+                session.Crop.CropHeight);
+        _editCandidateAssetIds = session.CandidateAssetIds.ToList();
+        _editPersistedOutputStates = session.OutputStates.ToList();
+        _observedEditTerminalOutputs = session.OutputStates
+            .Where(state => IsTerminalGenerationOutputStatus(state.Status))
+            .Select(state => state.OutputIndex)
+            .ToHashSet();
+        _editModalError = null;
+        RefreshEditImageUrls();
+        _editCanvasLoadVersion++;
+        _renderedEditCanvasLoadVersion = -1;
     }
 
     private async Task SetEditToolAsync(string tool)
@@ -1034,12 +1157,15 @@
     {
         if (_module is not null && _editModalOpen)
             await _module.InvokeVoidAsync("clearEditMask", _editCanvas);
+        _editMaskId = null;
+        await PersistEditSessionAsync();
     }
 
     private bool CanGenerateEditCandidates() =>
         _editModalOpen
         && !_editGenerating
-        && _editCandidates.Count == 0
+        && _editBatchId is null
+        && _editCandidateAssetIds.Count == 0
         && _module is not null
         && _editTargetSourceAssetId is not null
         && !string.IsNullOrWhiteSpace(_editPrompt)
@@ -1054,6 +1180,7 @@
         _editGenerating = true;
         try
         {
+            await ClearEditPreviewAsync(persist: false);
             var hasPaint = await _module.InvokeAsync<bool>("hasEditMaskPaint", _editCanvas);
             var sourceDataUrl = await _module.InvokeAsync<string>("exportEditSourcePng", _editCanvas);
             var maskDataUrl = hasPaint
@@ -1073,70 +1200,91 @@
                 [],
                 SwitchToCompare: false));
             _editBatchId = batch.Id;
-            await Workflow.SetWorkspaceModeAsync(Workbench.Project.Id, WorkspaceMode.Sprites);
-
-            var completed = await ImageRuntime.WaitForBatchCompletionAsync(batch.Id, TimeSpan.FromSeconds(620));
-            if (!completed)
-            {
-                _editModalError = "Generation is still running. Close the modal after it finishes or try again later.";
-                return;
-            }
-
-            var refreshed = await Workflow.GetWorkbenchAsync(Workbench.Project.Id);
-            _editCandidates = refreshed.Assets
-                .Where(asset => asset.SourceBatchId == batch.Id)
-                .OrderBy(asset => asset.BatchOutputIndex ?? int.MaxValue)
-                .ThenBy(asset => asset.CreatedAt)
-                .Select(asset => new SpriteEditCandidate(asset.Id, asset.Label, AssetFullUrl(asset.Id)))
+            _editMaskId = batch.InputMaskIds.FirstOrDefault() is Guid maskId && maskId != Guid.Empty ? maskId : null;
+            _editCandidateAssetIds = [];
+            _editPersistedOutputStates = Enumerable.Range(0, count)
+                .Select(index => new GenerationOutputStateView(index, GenerationOutputStatus.Queued, Message: "Waiting for image request."))
                 .ToList();
-            if (_editCandidates.Count == 0)
-            {
-                var completedBatch = refreshed.Batches.FirstOrDefault(item => item.Id == batch.Id);
-                _editModalError = string.IsNullOrWhiteSpace(completedBatch?.Error)
-                    ? "Generation finished without returning candidates."
-                    : completedBatch.Error;
-            }
-
-            await OnChanged.InvokeAsync();
+            _observedEditTerminalOutputs = [];
+            await Workflow.SetWorkspaceModeAsync(Workbench.Project.Id, WorkspaceMode.Sprites);
+            _generationRuntimeSnapshot = ImageRuntime.GetSnapshot();
+            RefreshEditGeneratingState();
+            await PersistEditSessionAsync();
             await PublishSpritesStateAsync();
         }
         catch (Exception ex)
         {
             _editModalError = ex.Message;
+            _editGenerating = false;
         }
         finally
         {
-            _editGenerating = false;
             await InvokeAsync(StateHasChanged);
         }
     }
 
-    private void SelectEditCandidate(Guid assetId)
+    private async Task SelectEditCandidateOutputAsync(SpriteEditCandidateOutput candidate)
     {
-        _selectedEditCandidateId = assetId;
+        if (string.IsNullOrWhiteSpace(candidate.ImageUrl))
+            return;
+
+        if (_selectedEditOutputIndex == candidate.OutputIndex && _editPreviewOverlayActive)
+        {
+            await ClearEditPreviewAsync();
+            return;
+        }
+
+        _selectedEditOutputIndex = candidate.OutputIndex;
+        _selectedEditCandidateId = candidate.AssetId;
+        _editPreviewOverlayActive = true;
+        await SetEditPreviewOverlayAsync(candidate.ImageUrl);
+        await PersistEditSessionAsync();
+        await PublishSpritesStateAsync();
+    }
+
+    private async Task ClearEditPreviewAsync(bool persist = true)
+    {
+        _selectedEditOutputIndex = null;
+        _selectedEditCandidateId = null;
+        _editPreviewOverlayActive = false;
+        await SetEditPreviewOverlayAsync(null);
+        if (persist)
+        {
+            await PersistEditSessionAsync();
+            await PublishSpritesStateAsync();
+        }
     }
 
     private async Task RejectEditCandidatesAsync()
     {
-        _editCandidates = [];
-        _selectedEditCandidateId = null;
+        await ClearEditPreviewAsync(persist: false);
+        _editCandidateAssetIds = [];
+        _editPersistedOutputStates = [];
+        _observedEditTerminalOutputs = [];
         _editBatchId = null;
+        _editMaskId = null;
         _editModalError = null;
+        _editGenerating = false;
+        await PersistEditSessionAsync();
         await PublishSpritesStateAsync();
     }
 
     private async Task AcceptEditCandidateAsync()
     {
-        if (_selectedEditCandidateId is not Guid candidateId)
+        var selected = SelectedEditCandidateOutput();
+        if (selected?.AssetId is not Guid candidateId)
             return;
 
         _editModalError = null;
         _editGenerating = true;
+        var sessionId = _editSessionId;
         try
         {
             if (_editTargetKind == SpriteEditTargetKind.Source)
             {
                 await SelectSourceAssetAsync(candidateId, clearMismatchedFrameSet: true);
+                if (sessionId is Guid id)
+                    await FrameSets.CompleteSpriteEditSessionAsync(Workbench.Project.Id, id, "accepted");
                 ResetEditModal();
                 _status = "Applied edited source candidate.";
                 await PublishSpritesStateAsync();
@@ -1160,6 +1308,8 @@
                     crop.CropWidth,
                     crop.CropHeight));
                 ApplyFrameSet(updated);
+                if (sessionId is Guid id)
+                    await FrameSets.CompleteSpriteEditSessionAsync(Workbench.Project.Id, id, "accepted");
                 ResetEditModal();
                 _status = "Applied edited frame candidate.";
                 await OnChanged.InvokeAsync();
@@ -1189,13 +1339,281 @@
         _editCrop = null;
         _editImageUrl = null;
         _editMaskUrl = null;
+        _editSessionId = null;
+        _editMaskId = null;
         _editTool = "mask";
         _editPrompt = string.Empty;
         _editModalError = null;
         _editBatchId = null;
         _selectedEditCandidateId = null;
-        _editCandidates = [];
+        _selectedEditOutputIndex = null;
+        _editPreviewOverlayActive = false;
+        _editCandidateAssetIds = [];
+        _editPersistedOutputStates = [];
+        _observedEditTerminalOutputs = [];
         _renderedEditCanvasLoadVersion = -1;
+    }
+
+    private async Task PersistEditSessionAsync()
+    {
+        if (_editTargetSourceAssetId is not Guid)
+            return;
+
+        var outputStates = CurrentEditOutputStates();
+        var candidateIds = EditCandidateOutputs()
+            .Where(candidate => candidate.AssetId is Guid)
+            .Select(candidate => candidate.AssetId!.Value)
+            .Distinct()
+            .ToList();
+        var view = await FrameSets.SaveSpriteEditSessionAsync(Workbench.Project.Id, new SaveSpriteEditSessionRequest(
+            _editModalOpen,
+            _editTargetKind == SpriteEditTargetKind.Frame ? "frame" : "source",
+            _editTargetSourceAssetId,
+            _editTargetFrameSetId,
+            _editTargetFrameId,
+            _editBatchId,
+            _editMaskId,
+            _selectedEditCandidateId,
+            _selectedEditOutputIndex,
+            _editPreviewOverlayActive,
+            _editPrompt,
+            Math.Clamp(_editCount, 1, Math.Max(1, ImageOptions.Value.MaxOutputs)),
+            _editCrop is null
+                ? null
+                : new SpriteEditSessionCrop(
+                    _editCrop.EditSourceWidth,
+                    _editCrop.EditSourceHeight,
+                    _editCrop.CropX,
+                    _editCrop.CropY,
+                    _editCrop.CropWidth,
+                    _editCrop.CropHeight),
+            candidateIds,
+            outputStates));
+        _editSessionId = view.Id;
+        _editPersistedOutputStates = view.OutputStates.ToList();
+        _editCandidateAssetIds = view.CandidateAssetIds.ToList();
+    }
+
+    private void RefreshEditImageUrls()
+    {
+        _editImageUrl = _editTargetKind == SpriteEditTargetKind.Frame && _editTargetFrameId is Guid frameId
+            ? FramePreviewUrl(frameId)
+            : _editTargetSourceAssetId is Guid sourceAssetId
+                ? AssetFullUrl(sourceAssetId)
+                : null;
+        _editMaskUrl = _editMaskId is Guid maskId
+            ? MaskUrl(maskId)
+            : _editTargetKind == SpriteEditTargetKind.Frame
+                && _editTargetFrameId is Guid targetFrameId
+                && _frameSet?.Frames.FirstOrDefault(frame => frame.Id == targetFrameId) is { HasMask: true }
+                    ? FrameMaskUrl(targetFrameId)
+                    : null;
+    }
+
+    private bool RefreshEditCandidatesFromWorkbench()
+    {
+        if (_editBatchId is not Guid batchId)
+            return false;
+
+        var ids = Workbench.Assets
+            .Where(asset => asset.SourceBatchId == batchId || _editCandidateAssetIds.Contains(asset.Id))
+            .OrderBy(asset => asset.BatchOutputIndex ?? int.MaxValue)
+            .ThenBy(asset => asset.CreatedAt)
+            .Select(asset => asset.Id)
+            .Distinct()
+            .ToList();
+        if (_editCandidateAssetIds.SequenceEqual(ids))
+            return false;
+
+        _editCandidateAssetIds = ids;
+        if (_selectedEditCandidateId is Guid selectedAssetId
+            && !_editCandidateAssetIds.Contains(selectedAssetId))
+        {
+            _selectedEditCandidateId = null;
+            _selectedEditOutputIndex = null;
+            _editPreviewOverlayActive = false;
+        }
+        if (_selectedEditOutputIndex is int outputIndex
+            && EditCandidateAssetsByOutput().TryGetValue(outputIndex, out var selectedAsset))
+        {
+            if (_selectedEditCandidateId != selectedAsset.Id)
+            {
+                _selectedEditCandidateId = selectedAsset.Id;
+                if (_editPreviewOverlayActive)
+                    _editCanvasLoadVersion++;
+            }
+        }
+        return true;
+    }
+
+    private void RefreshEditGeneratingState()
+    {
+        if (_editBatchId is not Guid batchId)
+        {
+            _editGenerating = false;
+            return;
+        }
+
+        var runtimeRunning = _generationRuntimeSnapshot.Batches.Any(batch => batch.BatchId == batchId && batch.IsRunning);
+        var persistedRunning = Workbench.Batches.FirstOrDefault(batch => batch.Id == batchId)?.Status is GenerationBatchStatus.Queued or GenerationBatchStatus.Running;
+        _editGenerating = runtimeRunning || persistedRunning;
+    }
+
+    private void OnImageGenerationRuntimeStateChanged(object? sender, EventArgs args)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            var snapshot = ImageRuntime.GetSnapshot();
+            _generationRuntimeSnapshot = snapshot;
+            if (_editBatchId is Guid batchId)
+            {
+                RefreshEditGeneratingState();
+                var activeBatch = snapshot.Batches.FirstOrDefault(batch => batch.BatchId == batchId);
+                var sawTerminalOutput = false;
+                if (activeBatch is not null)
+                {
+                    foreach (var output in activeBatch.Outputs.Where(output => IsTerminalGenerationOutputStatus(output.Status)))
+                    {
+                        if (_observedEditTerminalOutputs.Add(output.OutputIndex))
+                            sawTerminalOutput = true;
+                    }
+                }
+
+                if (sawTerminalOutput)
+                    await OnChanged.InvokeAsync();
+
+                _editPersistedOutputStates = CurrentEditOutputStates().ToList();
+                await PersistEditSessionAsync();
+                await PublishSpritesStateAsync();
+            }
+            StateHasChanged();
+        });
+    }
+
+    private IReadOnlyList<SpriteEditCandidateOutput> EditCandidateOutputs()
+    {
+        if (_editBatchId is not Guid batchId && _editCandidateAssetIds.Count == 0)
+            return [];
+
+        var runtimeBatch = _editBatchId is Guid id
+            ? _generationRuntimeSnapshot.Batches.FirstOrDefault(batch => batch.BatchId == id)
+            : null;
+        var persistedBatch = _editBatchId is Guid persistedId
+            ? Workbench.Batches.FirstOrDefault(batch => batch.Id == persistedId)
+            : null;
+        var assetsByOutput = EditCandidateAssetsByOutput();
+        var statesByIndex = CurrentEditOutputStates().ToDictionary(state => state.OutputIndex);
+        var maxIndex = new[]
+            {
+                Math.Max(0, _editCount - 1),
+                runtimeBatch?.Outputs.Select(output => output.OutputIndex).DefaultIfEmpty(-1).Max() ?? -1,
+                persistedBatch?.OutputStates.Select(state => state.OutputIndex).DefaultIfEmpty(-1).Max() ?? -1,
+                assetsByOutput.Keys.DefaultIfEmpty(-1).Max(),
+            }
+            .Max();
+
+        var outputs = new List<SpriteEditCandidateOutput>();
+        for (var index = 0; index <= maxIndex; index++)
+        {
+            assetsByOutput.TryGetValue(index, out var asset);
+            var runtime = runtimeBatch?.Outputs.FirstOrDefault(output => output.OutputIndex == index);
+            statesByIndex.TryGetValue(index, out var state);
+            var imageUrl = asset is not null
+                ? AssetFullUrl(asset.Id)
+                : runtime?.PartialImageDataUrl;
+            var status = asset is not null
+                ? "saved"
+                : !string.IsNullOrWhiteSpace(runtime?.PartialImageDataUrl)
+                    ? "partial"
+                    : (runtime?.Status ?? state?.Status ?? GenerationOutputStatus.Queued).ToString().ToLowerInvariant();
+            var error = runtime?.Error;
+            if (string.IsNullOrWhiteSpace(error))
+                error = state?.Error;
+            outputs.Add(new SpriteEditCandidateOutput(
+                index,
+                asset?.Id,
+                asset?.Label ?? $"Image {index + 1}",
+                imageUrl,
+                status,
+                error ?? string.Empty,
+                asset is null && !string.IsNullOrWhiteSpace(runtime?.PartialImageDataUrl),
+                asset is not null));
+        }
+
+        return outputs;
+    }
+
+    private Dictionary<int, ArtAssetView> EditCandidateAssetsByOutput()
+    {
+        var candidates = Workbench.Assets
+            .Where(asset => (_editBatchId is Guid batchId && asset.SourceBatchId == batchId) || _editCandidateAssetIds.Contains(asset.Id))
+            .OrderBy(asset => asset.BatchOutputIndex ?? int.MaxValue)
+            .ThenBy(asset => asset.CreatedAt)
+            .ToList();
+        var result = new Dictionary<int, ArtAssetView>();
+        var fallbackIndex = 0;
+        foreach (var asset in candidates)
+        {
+            var outputIndex = asset.BatchOutputIndex ?? fallbackIndex;
+            while (result.ContainsKey(outputIndex))
+                outputIndex++;
+            result[outputIndex] = asset;
+            fallbackIndex = Math.Max(fallbackIndex + 1, outputIndex + 1);
+        }
+
+        return result;
+    }
+
+    private IReadOnlyList<GenerationOutputStateView> CurrentEditOutputStates()
+    {
+        var byIndex = _editPersistedOutputStates.ToDictionary(state => state.OutputIndex);
+        if (_editBatchId is Guid batchId
+            && Workbench.Batches.FirstOrDefault(batch => batch.Id == batchId) is { } persistedBatch)
+        {
+            foreach (var state in persistedBatch.OutputStates)
+                byIndex[state.OutputIndex] = state;
+        }
+
+        if (_editBatchId is Guid runtimeBatchId
+            && _generationRuntimeSnapshot.Batches.FirstOrDefault(batch => batch.BatchId == runtimeBatchId) is { } runtimeBatch)
+        {
+            foreach (var output in runtimeBatch.Outputs)
+            {
+                byIndex[output.OutputIndex] = new GenerationOutputStateView(
+                    output.OutputIndex,
+                    output.Status,
+                    output.Attempt,
+                    output.Message,
+                    output.Error,
+                    output.ErrorKind,
+                    output.RequestId,
+                    output.ResponseId,
+                    output.CallId,
+                    output.LastEventType,
+                    output.EventCount,
+                    UpdatedAt: DateTime.UtcNow,
+                    CompletedAt: IsTerminalGenerationOutputStatus(output.Status) ? DateTime.UtcNow : null);
+            }
+        }
+
+        return byIndex.Values.OrderBy(state => state.OutputIndex).ToList();
+    }
+
+    private SpriteEditCandidateOutput? SelectedEditCandidateOutput()
+    {
+        if (_selectedEditOutputIndex is int outputIndex)
+            return EditCandidateOutputs().FirstOrDefault(candidate => candidate.OutputIndex == outputIndex);
+        if (_selectedEditCandidateId is Guid assetId)
+            return EditCandidateOutputs().FirstOrDefault(candidate => candidate.AssetId == assetId);
+        return null;
+    }
+
+    private bool CanAcceptEditCandidate() => SelectedEditCandidateOutput()?.AssetId is Guid;
+
+    private async Task SetEditPreviewOverlayAsync(string? imageUrl)
+    {
+        if (_module is not null && _editModalOpen)
+            await _module.InvokeVoidAsync("setEditPreviewOverlay", _editCanvas, imageUrl);
     }
 
     private async Task RunAsync(string status, Func<Task> action)
@@ -1313,6 +1731,8 @@
             crop.CropWidth,
             crop.CropHeight);
         _renderedEditCanvasLoadVersion = _editCanvasLoadVersion;
+        if (_editPreviewOverlayActive && SelectedEditCandidateOutput()?.ImageUrl is { } overlayUrl)
+            await SetEditPreviewOverlayAsync(overlayUrl);
     }
 
     [JSInvokable]
@@ -1380,11 +1800,24 @@
                     _editTargetKind == SpriteEditTargetKind.Frame ? "frame" : "source",
                     _editTargetKind == SpriteEditTargetKind.Frame ? _editTargetFrameId : _editTargetSourceAssetId,
                     _editBatchId,
-                    _editCandidates.Select(candidate => candidate.AssetId).ToList(),
+                    EditCandidateOutputs().Where(candidate => candidate.AssetId is Guid).Select(candidate => candidate.AssetId!.Value).ToList(),
                     _selectedEditCandidateId,
                     _editGenerating,
                     _editCount,
-                    EditCandidateSetState())
+                    EditCandidateSetState(),
+                    _selectedEditOutputIndex,
+                    _editPreviewOverlayActive,
+                    _editSessionId is null ? "" : "pending",
+                    CanAcceptEditCandidate(),
+                    EditCandidateOutputs()
+                        .Select(candidate => new WorkspaceSpriteEditCandidateSummary(
+                            candidate.OutputIndex,
+                            candidate.AssetId,
+                            candidate.StatusLabel,
+                            candidate.HasPartial,
+                            candidate.IsFinal,
+                            candidate.Error))
+                        .ToList())
                 : null,
             Anchor: new WorkspaceSpriteAnchorSummary(
                 _anchorReferenceFrameId,
@@ -1416,9 +1849,12 @@
     {
         if (_editGenerating)
             return "generating";
-        if (_editCandidates.Count > 0 && _selectedEditCandidateId is Guid)
+        var outputs = EditCandidateOutputs();
+        if (outputs.Count > 0 && CanAcceptEditCandidate())
             return "candidate-selected";
-        if (_editCandidates.Count > 0)
+        if (outputs.Count > 0 && _selectedEditOutputIndex is not null)
+            return "partial-selected";
+        if (outputs.Count > 0)
             return "candidates-pending";
         return "empty";
     }
@@ -1526,6 +1962,8 @@
 
     private string FrameMaskUrl(Guid frameId) => $"/media/projects/{Workbench.Project.Id}/frame-set-frames/{frameId}/mask?v={_rev}";
 
+    private string MaskUrl(Guid maskId) => $"/media/projects/{Workbench.Project.Id}/masks/{maskId}?v={_rev}";
+
     private string HeaderSummary()
     {
         if (_frameSet is not { } set)
@@ -1579,8 +2017,20 @@
         return SelectedSourceArtAsset() is { } source ? $"{source.Label} / mask, prompt, and candidates" : "Mask, prompt, and candidates";
     }
 
-    private string EditResultsLabel() =>
-        _editGenerating ? "Generating candidates..." : _editCandidates.Count == 0 ? "Results" : $"{_editCandidates.Count} candidate(s)";
+    private string EditResultsLabel()
+    {
+        var outputs = EditCandidateOutputs();
+        if (_editGenerating)
+            return outputs.Count == 0 ? "Generating candidates..." : $"Generating / {outputs.Count} output(s)";
+        return outputs.Count == 0 ? "Results" : $"{outputs.Count} output(s)";
+    }
+
+    private string EditCandidateClass(SpriteEditCandidateOutput candidate)
+    {
+        var selected = _selectedEditOutputIndex == candidate.OutputIndex && _editPreviewOverlayActive ? " is-selected" : "";
+        var state = candidate.IsFinal ? " is-final" : candidate.HasPartial ? " is-partial" : candidate.StatusLabel == "failed" ? " is-failed" : "";
+        return string.Concat(selected, state);
+    }
 
     private static int FrameEditPadding(FrameView frame)
     {
@@ -1591,11 +2041,15 @@
     private static string Capitalize(string value) =>
         string.IsNullOrEmpty(value) ? value : char.ToUpperInvariant(value[0]) + value[1..];
 
+    private static bool IsTerminalGenerationOutputStatus(GenerationOutputStatus status) =>
+        status is GenerationOutputStatus.Succeeded or GenerationOutputStatus.Failed or GenerationOutputStatus.Cancelled;
+
     private static Guid? ParseGuid(string? value) => Guid.TryParse(value, out var id) ? id : null;
 
     public async ValueTask DisposeAsync()
     {
         StopAnimation();
+        ImageRuntime.StateChanged -= OnImageGenerationRuntimeStateChanged;
         try
         {
             if (_module is not null)
@@ -1665,7 +2119,15 @@
             new(frame.Id.ToString(), frame.Index, frame.Name, frame.LogicalWidth, frame.LogicalHeight, frame.SourceWidth, frame.SourceHeight, frame.WorkingWidth, frame.WorkingHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.HasMask);
     }
 
-    private sealed record SpriteEditCandidate(Guid AssetId, string Label, string ImageUrl);
+    private sealed record SpriteEditCandidateOutput(
+        int OutputIndex,
+        Guid? AssetId,
+        string Label,
+        string? ImageUrl,
+        string StatusLabel,
+        string Error,
+        bool HasPartial,
+        bool IsFinal);
 
     private sealed record SpriteEditCrop(
         int EditSourceWidth,

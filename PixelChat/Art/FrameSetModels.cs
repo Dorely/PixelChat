@@ -204,3 +204,48 @@ public sealed record BuildSheetResult(
     int Height,
     string ManifestJson,
     IReadOnlyList<string> Warnings);
+
+public sealed record SpriteEditSessionCrop(
+    int EditSourceWidth,
+    int EditSourceHeight,
+    int CropX,
+    int CropY,
+    int CropWidth,
+    int CropHeight);
+
+public sealed record SpriteEditSessionView(
+    Guid Id,
+    string Status,
+    bool ModalOpen,
+    string TargetKind,
+    Guid? TargetSourceAssetId,
+    Guid? TargetFrameSetId,
+    Guid? TargetFrameId,
+    Guid? BatchId,
+    Guid? MaskId,
+    Guid? SelectedCandidateAssetId,
+    int? SelectedOutputIndex,
+    bool PreviewOverlayActive,
+    string Prompt,
+    int Count,
+    SpriteEditSessionCrop? Crop,
+    IReadOnlyList<Guid> CandidateAssetIds,
+    IReadOnlyList<GenerationOutputStateView> OutputStates,
+    DateTime UpdatedAt);
+
+public sealed record SaveSpriteEditSessionRequest(
+    bool ModalOpen,
+    string TargetKind,
+    Guid? TargetSourceAssetId,
+    Guid? TargetFrameSetId,
+    Guid? TargetFrameId,
+    Guid? BatchId,
+    Guid? MaskId,
+    Guid? SelectedCandidateAssetId,
+    int? SelectedOutputIndex,
+    bool PreviewOverlayActive,
+    string Prompt,
+    int Count,
+    SpriteEditSessionCrop? Crop,
+    IReadOnlyList<Guid> CandidateAssetIds,
+    IReadOnlyList<GenerationOutputStateView> OutputStates);

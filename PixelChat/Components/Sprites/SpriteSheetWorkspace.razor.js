@@ -112,6 +112,7 @@ export async function loadEditCanvas(canvas, imageUrl, maskUrl, tool, brushSize,
             brushSize: Number(brushSize) || 28,
             view: null,
             drag: null,
+            previewOverlay: null,
         };
         editStates.set(canvas, state);
         attachEdit(canvas, state);
@@ -123,6 +124,7 @@ export async function loadEditCanvas(canvas, imageUrl, maskUrl, tool, brushSize,
         state.brushSize = Number(brushSize) || 28;
         state.view = null;
         state.drag = null;
+        state.previewOverlay = null;
     }
     if (maskUrl) {
         await loadMaskIntoEditPaint(state, maskUrl);
@@ -144,6 +146,23 @@ export function clearEditMask(canvas) {
     const state = editStates.get(canvas);
     if (!state) return;
     state.paint.getContext("2d").clearRect(0, 0, state.paint.width, state.paint.height);
+    renderEdit(canvas, state);
+}
+
+export async function setEditPreviewOverlay(canvas, imageUrl) {
+    const state = editStates.get(canvas);
+    if (!state) return;
+    if (!imageUrl) {
+        state.previewOverlay = null;
+        renderEdit(canvas, state);
+        return;
+    }
+
+    try {
+        state.previewOverlay = await loadImage(imageUrl);
+    } catch {
+        state.previewOverlay = null;
+    }
     renderEdit(canvas, state);
 }
 
@@ -535,6 +554,9 @@ function renderEdit(canvas, state) {
     ctx.imageSmoothingEnabled = false;
     ctx.setTransform(state.view.scale, 0, 0, state.view.scale, state.view.x, state.view.y);
     ctx.drawImage(state.source, 0, 0);
+    if (state.previewOverlay) {
+        ctx.drawImage(state.previewOverlay, 0, 0, state.source.width, state.source.height);
+    }
     ctx.drawImage(state.paint, 0, 0);
     ctx.strokeStyle = "#38bdf8";
     ctx.lineWidth = 2 / state.view.scale;
