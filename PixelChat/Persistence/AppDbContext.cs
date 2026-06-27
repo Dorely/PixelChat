@@ -20,9 +20,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<PromptRecipeVersion> PromptRecipeVersions => Set<PromptRecipeVersion>();
     public DbSet<AnimationRecipe> AnimationRecipes => Set<AnimationRecipe>();
     public DbSet<AnimationRecipeVersion> AnimationRecipeVersions => Set<AnimationRecipeVersion>();
-    public DbSet<ActivityRun> ActivityRuns => Set<ActivityRun>();
-    public DbSet<ActivityStep> ActivitySteps => Set<ActivityStep>();
-    public DbSet<ActivityArtifact> ActivityArtifacts => Set<ActivityArtifact>();
     public DbSet<SpriteSheetDefinition> SpriteSheetDefinitions => Set<SpriteSheetDefinition>();
     public DbSet<SpriteSheetFrameRecord> SpriteSheetFrameRecords => Set<SpriteSheetFrameRecord>();
     public DbSet<SpriteRegion> SpriteRegions => Set<SpriteRegion>();
@@ -40,6 +37,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<CompareReviewSetItem> CompareReviewSetItems => Set<CompareReviewSetItem>();
     public DbSet<AssistantConversation> AssistantConversations => Set<AssistantConversation>();
     public DbSet<AssistantMessage> AssistantMessages => Set<AssistantMessage>();
+    public DbSet<AssistantMessageVisual> AssistantMessageVisuals => Set<AssistantMessageVisual>();
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
         SaveChangesWithLockRetryAsync(acceptAllChangesOnSuccess: true, cancellationToken);
@@ -272,52 +270,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasOne(e => e.AnimationRecipe)
                 .WithMany(r => r.Versions)
                 .HasForeignKey(e => e.AnimationRecipeId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        modelBuilder.Entity<ActivityRun>(entity =>
-        {
-            entity.HasIndex(e => new { e.ProjectId, e.UpdatedAt });
-            entity.HasIndex(e => new { e.ProjectId, e.WorkflowKind });
-            entity.Property(e => e.Status).HasDefaultValue("running");
-            entity.Property(e => e.Actor).HasDefaultValue("system");
-
-            entity.HasOne(e => e.Project)
-                .WithMany(p => p.ActivityRuns)
-                .HasForeignKey(e => e.ProjectId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        modelBuilder.Entity<ActivityStep>(entity =>
-        {
-            entity.HasIndex(e => new { e.ActivityRunId, e.SortOrder });
-            entity.Property(e => e.Status).HasDefaultValue("completed");
-            entity.Property(e => e.PayloadJson).HasDefaultValue("{}");
-
-            entity.HasOne(e => e.Project)
-                .WithMany(p => p.ActivitySteps)
-                .HasForeignKey(e => e.ProjectId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            entity.HasOne(e => e.ActivityRun)
-                .WithMany(r => r.Steps)
-                .HasForeignKey(e => e.ActivityRunId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        modelBuilder.Entity<ActivityArtifact>(entity =>
-        {
-            entity.HasIndex(e => new { e.ActivityRunId, e.SortOrder });
-            entity.HasIndex(e => new { e.ProjectId, e.Kind, e.RefId });
-
-            entity.HasOne(e => e.Project)
-                .WithMany(p => p.ActivityArtifacts)
-                .HasForeignKey(e => e.ProjectId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            entity.HasOne(e => e.ActivityRun)
-                .WithMany(r => r.Artifacts)
-                .HasForeignKey(e => e.ActivityRunId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -660,6 +612,18 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => new { e.ConversationId, e.Order });
             entity.Property(e => e.Role).HasConversion<string>();
             entity.Property(e => e.Status).HasConversion<string>();
+        });
+
+        modelBuilder.Entity<AssistantMessageVisual>(entity =>
+        {
+            entity.HasIndex(e => new { e.AssistantMessageId, e.SortOrder });
+            entity.HasIndex(e => e.ToolCallId);
+            entity.HasIndex(e => new { e.SourceKind, e.SourceRefId });
+
+            entity.HasOne(e => e.AssistantMessage)
+                .WithMany(e => e.Visuals)
+                .HasForeignKey(e => e.AssistantMessageId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

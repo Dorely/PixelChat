@@ -51,7 +51,6 @@ else
 
             <nav class="mode-tabs" aria-label="Workspace mode">
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Generate)" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">Generate</button>
-                <button type="button" class="@ModeButtonClass(WorkspaceMode.Runs)" @onclick="() => SetModeAsync(WorkspaceMode.Runs)">Activity</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Compare)" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Review</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Edit)" @onclick="() => SetModeAsync(WorkspaceMode.Edit)">Edit</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Sprites)" @onclick="() => SetModeAsync(WorkspaceMode.Sprites)">Sprites</button>
@@ -82,7 +81,8 @@ else
                              ResetComposerKey="@_resetComposerKey"
                              OnSend="SendAsync"
                              OnStop="StopAsync"
-                             OnClearError="ClearError">
+                             OnClearError="ClearError"
+                             OnImageOpen="OpenChatVisualPreview">
                     <HeaderActions>
                         <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_running" @onclick="ResetChatAsync">Reset</button>
                     </HeaderActions>
@@ -102,9 +102,6 @@ else
                 {
                     case WorkspaceMode.Generate:
                         @RenderGenerateWorkspace()
-                        break;
-                    case WorkspaceMode.Runs:
-                        @RenderRunsWorkspace()
                         break;
                     case WorkspaceMode.Compare:
                         @RenderCompareWorkspace()
@@ -346,7 +343,7 @@ else
         if (!ChatRuntime.IsRunning)
             await ChatService.RecoverInterruptedToolCallsAsync(_workbench.Project.Id);
         var persistedMessages = await ChatService.LoadMessagesAsync(conversation.Id);
-        _messages.AddRange(ToRenderable(persistedMessages));
+        _messages.AddRange(ToRenderable(persistedMessages, _workbench.Project.Id));
 
         var availability = await ProviderService.GetDefaultChatProviderAvailabilityAsync();
         _hasWorkingProvider = availability.IsAvailable && availability.Provider is not null;
@@ -544,203 +541,6 @@ else
                 }
             </div>
         </div>
-    };
-
-    private RenderFragment RenderRunsWorkspace() => __builder =>
-    {
-        var activityRuns = _workbench!.ActivityRuns
-            .OrderByDescending(run => run.UpdatedAt)
-            .ToList();
-
-        <div class="workspace-panel runs-panel">
-            <div class="panel-head">
-                <div>
-                    <h1>Activity</h1>
-                    <span>@($"{activityRuns.Count} workflow event(s), {_workbench.Batches.Count} generation batch(es)")</span>
-                </div>
-                <div class="panel-actions">
-                    <button type="button" class="btn btn-outline-secondary" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Review</button>
-                    <button type="button" class="btn btn-outline-secondary" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">Generate</button>
-                </div>
-            </div>
-
-            <div class="runs-layout">
-                <aside class="runs-sidebar">
-                    <div class="section-title">Workflow Activity</div>
-                    @if (activityRuns.Count == 0)
-                    {
-                        <div class="empty-context">No activity has been recorded yet.</div>
-                    }
-                    else
-                    {
-                        @foreach (var activity in activityRuns.Take(24))
-                        {
-                            <div class="run-list-row">
-                                <span class="run-list-title">@activity.Title</span>
-                                <span class="@RunStatusClass(activity.Status)">@activity.Status</span>
-                                <small>@(string.IsNullOrWhiteSpace(activity.Summary) ? activity.WorkflowKind : activity.Summary)</small>
-                                <small>@activity.UpdatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)</small>
-                            </div>
-                        }
-                    }
-
-                    <div class="section-title">Recent Batches</div>
-                    <div class="run-batch-list">
-                        @foreach (var batch in _workbench.Batches.Take(8))
-                        {
-                            <button type="button" class="batch-row @(batch.Id == _workbench.Project.ActiveBatchId ? "is-active" : "")"
-                                    @onclick="() => SelectBatchAsync(batch.Id)">
-                                <span>@batch.Label</span>
-                                <span>@batch.Status</span>
-                            </button>
-                        }
-                    </div>
-                </aside>
-
-                <section class="runs-detail">
-                    <div class="empty-state">Workflow activity appears here as the assistant and editor create candidates, split frames, repair, review, and export.</div>
-                    @RenderActivityDetailSection(activityRuns)
-                    @RenderRunBatchesSection()
-                </section>
-            </div>
-        </div>
-    };
-
-    private RenderFragment RenderActivityDetailSection(IReadOnlyList<ActivityRunView> activityRuns) => __builder =>
-    {
-        <section class="run-section">
-            <div class="section-title">Recent Activity</div>
-            @if (activityRuns.Count == 0)
-            {
-                <div class="empty-context">No workflow steps have been recorded.</div>
-            }
-            else
-            {
-                <div class="run-timeline">
-                    @foreach (var activity in activityRuns.Take(20))
-                    {
-                        <details class="run-event" open="@(activity == activityRuns.First())">
-                            <summary>
-                                <span class="@RunStatusClass(activity.Status)">@activity.Status</span>
-                                <strong>@activity.Title</strong>
-                                <span>@activity.Summary</span>
-                                <small>@activity.UpdatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)</small>
-                            </summary>
-                            @if (activity.Steps.Count > 0)
-                            {
-                                <div class="run-frame-table">
-                                    <div class="run-frame-header">
-                                        <span>Step</span>
-                                        <span>Status</span>
-                                        <span>Detail</span>
-                                        <span>Time</span>
-                                    </div>
-                                    @foreach (var step in activity.Steps.OrderBy(step => step.SortOrder))
-                                    {
-                                        <div class="run-frame-row">
-                                            <span>@step.Title</span>
-                                            <span class="@RunStatusClass(step.Status)">@step.Status</span>
-                                            <span>@step.Detail</span>
-                                            <span>@step.CreatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)</span>
-                                        </div>
-                                    }
-                                </div>
-                            }
-                            @if (activity.Artifacts.Count > 0)
-                            {
-                                <div class="run-artifact-strip">
-                                    @foreach (var artifact in activity.Artifacts)
-                                    {
-                                        <div class="run-artifact">
-                                            <span>@artifact.Kind</span>
-                                            <small>@artifact.Label</small>
-                                        </div>
-                                    }
-                                </div>
-                            }
-                        </details>
-                    }
-                </div>
-            }
-        </section>
-    };
-
-    private RenderFragment RenderRunBatchesSection() => __builder =>
-    {
-        var batches = _workbench!.Batches.Take(6).ToList();
-        <section class="run-section">
-            <div class="section-title">Generation Batches</div>
-            @if (batches.Count == 0)
-            {
-                <div class="empty-context">No generation batches yet.</div>
-            }
-            else
-            {
-                <div class="run-generation-batches">
-                    @foreach (var batch in batches)
-                    {
-                        var outputAssetsByIndex = batch.OutputAssetIds
-                            .Select(assetId => _workbench.Assets.FirstOrDefault(asset => asset.Id == assetId))
-                            .OfType<ArtAssetView>()
-                            .Select((asset, fallbackIndex) => new
-                            {
-                                Asset = asset,
-                                OutputIndex = asset.BatchOutputIndex ?? fallbackIndex,
-                            })
-                            .Where(item => item.OutputIndex >= 0 && item.OutputIndex < batch.Count)
-                            .GroupBy(item => item.OutputIndex)
-                            .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.Asset.CreatedAt).First().Asset);
-                        var outputStatesByIndex = batch.OutputStates
-                            .Where(state => state.OutputIndex >= 0 && state.OutputIndex < batch.Count)
-                            .GroupBy(state => state.OutputIndex)
-                            .ToDictionary(group => group.Key, group => group.Last());
-                        var runtimeOutputsByIndex = _generationRuntimeSnapshot.Batches
-                            .FirstOrDefault(item => item.BatchId == batch.Id)
-                            ?.Outputs
-                            .Where(output => output.OutputIndex >= 0 && output.OutputIndex < batch.Count)
-                            .GroupBy(output => output.OutputIndex)
-                            .ToDictionary(group => group.Key, group => group.Last())
-                            ?? [];
-
-                        <article class="run-batch-card">
-                            <button type="button" class="run-batch-head" @onclick="() => SelectBatchAsync(batch.Id)">
-                                <strong>@batch.Label</strong>
-                                <span class="@RunStatusClass(batch.Status.ToString())">@batch.Status</span>
-                                <small>@($"{batch.Count} image(s) / {batch.Size}")</small>
-                            </button>
-                            <div class="run-batch-output-grid">
-                                @for (var index = 0; index < batch.Count; index++)
-                                {
-                                    if (outputAssetsByIndex.TryGetValue(index, out var asset))
-                                    {
-                                        <button type="button" class="run-batch-output" @onclick="() => OpenAssetReviewPreview(asset)">
-                                            <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" />
-                                        </button>
-                                    }
-                                    else
-                                    {
-                                        var outputState = ResolveOutputState(index, outputStatesByIndex, runtimeOutputsByIndex);
-                                        var runtimeOutput = runtimeOutputsByIndex.GetValueOrDefault(index);
-                                        if (!string.IsNullOrWhiteSpace(runtimeOutput?.PartialImageDataUrl))
-                                        {
-                                            <button type="button"
-                                                    class="run-batch-output"
-                                                    @onclick="() => OpenGenerationPartialReviewPreview(outputState, runtimeOutput.PartialImageDataUrl!, outputState.Status.ToString())">
-                                                <img src="@runtimeOutput.PartialImageDataUrl" alt="@($"Partial image {index + 1}")" />
-                                            </button>
-                                        }
-                                        else
-                                        {
-                                            <div class="run-batch-output-placeholder">@outputState.Status</div>
-                                        }
-                                    }
-                                }
-                            </div>
-                        </article>
-                    }
-                </div>
-            }
-        </section>
     };
 
     private RenderFragment RenderCompareWorkspace() => __builder =>
@@ -2325,6 +2125,9 @@ else
         StateHasChanged();
     }
 
+    private void OpenChatVisualPreview(ChatImageVisual visual) =>
+        OpenImageReviewPreview(visual.Title, visual.FullImageUrl, ChatVisualSubtitle(visual));
+
     private void OpenGenerationPartialReviewPreview(GenerationOutputStateView outputState, string imageUrl, string statusLabel) =>
         OpenImageReviewPreview($"Image {LabelForIndex(outputState.OutputIndex)} partial", imageUrl, statusLabel);
 
@@ -2995,7 +2798,7 @@ else
         if (_workbench?.Project.Id != turn.ProjectId)
             return;
 
-        ReconcileOptimisticUserMessage(turn.UserMessageId);
+        ReconcileOptimisticUserMessage(turn.UserMessageId, turn.UserMessageVisuals);
 
         if (turn.AssistantMessageIds.Count > 0)
         {
@@ -3040,7 +2843,7 @@ else
         _scrollKey++;
     }
 
-    private void ReconcileOptimisticUserMessage(Guid? persistedUserMessageId)
+    private void ReconcileOptimisticUserMessage(Guid? persistedUserMessageId, IReadOnlyList<ChatImageVisual> visuals)
     {
         if (_optimisticUserMessageId is not Guid optimisticUserMessageId)
             return;
@@ -3049,9 +2852,15 @@ else
         if (messageIndex >= 0)
         {
             if (persistedUserMessageId is Guid userMessageId)
-                _messages[messageIndex] = _messages[messageIndex] with { Id = userMessageId };
+            {
+                var parts = _messages[messageIndex].Parts.ToList();
+                AppendVisualParts(parts, visuals);
+                _messages[messageIndex] = _messages[messageIndex] with { Id = userMessageId, Parts = parts };
+            }
             else
+            {
                 _messages.RemoveAt(messageIndex);
+            }
         }
 
         _optimisticUserMessageId = null;
@@ -3090,6 +2899,12 @@ else
             chip.Error ??= fallbackError;
             chip.MarkArgumentsComplete();
         }
+    }
+
+    private static void AppendVisualParts(List<ChatMessagePart> parts, IReadOnlyList<ChatImageVisual> visuals)
+    {
+        foreach (var visual in visuals)
+            parts.Add(new ChatImagePart(visual));
     }
 
     private async Task ApplyFormDraftAsync(AssistantFormDraft draft)
@@ -3204,7 +3019,7 @@ else
         ChatRuntime.ClearError();
     }
 
-    private static List<ChatRenderableMessage> ToRenderable(IReadOnlyList<AssistantMessage> messages)
+    private static List<ChatRenderableMessage> ToRenderable(IReadOnlyList<AssistantMessage> messages, Guid projectId)
     {
         var toolRowsByCallId = messages
             .Where(message => message.Role == AssistantMessageRole.Tool && !string.IsNullOrWhiteSpace(message.ToolCallId))
@@ -3221,7 +3036,7 @@ else
                 message.Id,
                 ToChatRole(message.Role),
                 ToChatStatus(message.Status),
-                BuildMessageParts(message, toolRowsByCallId)));
+                BuildMessageParts(message, toolRowsByCallId, projectId)));
         }
 
         return renderable;
@@ -3229,16 +3044,29 @@ else
 
     private static List<ChatMessagePart> BuildMessageParts(
         AssistantMessage message,
-        IReadOnlyDictionary<string, AssistantMessage> toolRowsByCallId)
+        IReadOnlyDictionary<string, AssistantMessage> toolRowsByCallId,
+        Guid projectId)
     {
         if (message.Role != AssistantMessageRole.Assistant)
-            return string.IsNullOrEmpty(message.Content) ? [] : [new ChatTextPart(message.Content)];
+        {
+            var userParts = new List<ChatMessagePart>();
+            if (!string.IsNullOrEmpty(message.Content))
+                userParts.Add(new ChatTextPart(message.Content));
+            AppendVisualParts(
+                userParts,
+                message.Visuals
+                    .Where(visual => string.IsNullOrWhiteSpace(visual.ToolCallId))
+                    .OrderBy(visual => visual.SortOrder)
+                    .Select(visual => ToChatVisual(projectId, visual))
+                    .ToList());
+            return userParts;
+        }
 
         var calls = ChatTranscriptHelpers.ReadPersistedCalls(message.ToolCallsJson);
         if (calls.Count == 0)
             return string.IsNullOrEmpty(message.Content) ? [] : [new ChatTextPart(message.Content)];
 
-        var parts = new List<ChatMessagePart>();
+        var assistantParts = new List<ChatMessagePart>();
         var text = message.Content ?? string.Empty;
         var cursor = 0;
         foreach (var item in calls
@@ -3248,23 +3076,24 @@ else
         {
             var offset = Math.Clamp(item.Call.TextOffset ?? text.Length, 0, text.Length);
             if (offset > cursor)
-                parts.Add(new ChatTextPart(text[cursor..offset]));
+                assistantParts.Add(new ChatTextPart(text[cursor..offset]));
 
-            parts.Add(new ChatToolPart(BuildToolChip(item.Call, toolRowsByCallId)));
+            assistantParts.Add(new ChatToolPart(BuildToolChip(item.Call, toolRowsByCallId, projectId)));
             cursor = Math.Max(cursor, offset);
         }
 
         if (cursor < text.Length)
-            parts.Add(new ChatTextPart(text[cursor..]));
+            assistantParts.Add(new ChatTextPart(text[cursor..]));
 
-        return parts;
+        return assistantParts;
     }
 
     private static ChatToolChip BuildToolChip(
         ChatPersistedToolCall call,
-        IReadOnlyDictionary<string, AssistantMessage> toolRowsByCallId)
+        IReadOnlyDictionary<string, AssistantMessage> toolRowsByCallId,
+        Guid projectId)
     {
-        var chip = new ChatToolChip(call.CallId, call.Name, call.ArgumentsJson, argumentsComplete: true);
+        var chip = new ChatToolChip(call.CallId, call.Name, call.ArgumentsJson, argumentsComplete: true, call.DisplayTitle);
         if (!toolRowsByCallId.TryGetValue(call.CallId, out var toolRow))
             return chip;
 
@@ -3277,7 +3106,48 @@ else
                 : toolRow.ErrorMessage;
         }
 
+        chip.Visuals.AddRange(toolRow.Visuals
+            .OrderBy(visual => visual.SortOrder)
+            .Select(visual => ToChatVisual(projectId, visual)));
+
         return chip;
+    }
+
+    private static ChatImageVisual ToChatVisual(Guid projectId, AssistantMessageVisual visual) =>
+        new(
+            visual.Id,
+            visual.Title,
+            visual.Caption,
+            ChatVisualPreviewImageUrl(projectId, visual),
+            ChatVisualFullImageUrl(projectId, visual),
+            visual.Width,
+            visual.Height,
+            visual.ToolCallId);
+
+    private static string ChatVisualPreviewImageUrl(Guid projectId, AssistantMessageVisual visual) =>
+        $"/media/projects/{projectId:D}/chat-visuals/{visual.Id:D}/preview{ChatVisualVersionQuery(visual)}";
+
+    private static string ChatVisualFullImageUrl(Guid projectId, AssistantMessageVisual visual) =>
+        $"/media/projects/{projectId:D}/chat-visuals/{visual.Id:D}/full{ChatVisualVersionQuery(visual)}";
+
+    private static string ChatVisualVersionQuery(AssistantMessageVisual visual)
+    {
+        var createdAt = visual.CreatedAt.Kind == DateTimeKind.Utc
+            ? visual.CreatedAt
+            : DateTime.SpecifyKind(visual.CreatedAt, DateTimeKind.Utc);
+        return $"?v={createdAt.Ticks.ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    private static string ChatVisualSubtitle(ChatImageVisual visual)
+    {
+        if (visual.Width is int width && visual.Height is int height)
+        {
+            return string.IsNullOrWhiteSpace(visual.Caption)
+                ? $"{width} x {height}"
+                : $"{visual.Caption} - {width} x {height}";
+        }
+
+        return visual.Caption;
     }
 
     private static ChatMessageRole ToChatRole(AssistantMessageRole role) =>
@@ -3306,7 +3176,6 @@ else
             BuildGenerateVisibleState(),
             BuildEditVisibleState(),
             BuildCompareVisibleState(),
-            BuildActivityVisibleState(),
             BuildSpritesVisibleState(),
             BuildRecipeVisibleState(),
             BuildAssetsVisibleState(),
@@ -3352,25 +3221,6 @@ else
             _workbench?.ActiveBatch is null ? null : BatchSummary(_workbench.ActiveBatch),
             _workbench?.Batches.Take(8).Select(BatchSummary).ToList() ?? [],
             _workbench?.CompareReviewSet is null ? null : CompareReviewSetSummary(_workbench.CompareReviewSet));
-
-    private WorkspaceActivityVisibleState BuildActivityVisibleState() =>
-        new(
-            _workbench?.ActivityRuns.Count ?? 0,
-            _workbench?.Batches.Count ?? 0,
-            _workbench?.ActivityRuns
-                .OrderByDescending(run => run.UpdatedAt)
-                .Take(12)
-                .Select(run => new WorkspaceActivitySummary(
-                    run.Id,
-                    run.Title,
-                    run.Summary,
-                    run.Status,
-                    run.Actor,
-                    run.WorkflowKind,
-                    run.PrimaryArtifactId,
-                    run.PrimaryArtifactKind,
-                    run.UpdatedAt))
-                .ToList() ?? []);
 
     private WorkspaceSpritesVisibleState BuildSpritesVisibleState()
     {
@@ -3948,19 +3798,6 @@ else
 
     private string ModeButtonClass(WorkspaceMode mode) =>
         _activeWorkspaceMode == mode ? "mode-tab is-active" : "mode-tab";
-
-    private static string RunStatusClass(string? status) =>
-        NormalizeRunStatus(status) switch
-        {
-            "packaged" or "done" or "pass" or "accepted" or "succeeded" => "run-status run-status-ok",
-            "repair_required" or "warning" or "raw_qa" or "frame_qa" or "motion_qa" => "run-status run-status-warn",
-            "error" or "failed" or "reject" or "rejected" => "run-status run-status-error",
-            "generating" or "running" or "guides_ready" or "planned" => "run-status run-status-active",
-            _ => "run-status",
-        };
-
-    private static string NormalizeRunStatus(string? status) =>
-        string.IsNullOrWhiteSpace(status) ? string.Empty : status.Trim().Replace('-', '_').Replace(' ', '_').ToLowerInvariant();
 
     private string EditorToolClass(string tool) =>
         _editorTool == tool ? "segmented-button is-active" : "segmented-button";

@@ -2,15 +2,21 @@
 
 @{
     var summaryText = SummaryText;
+    var displayTitle = Chip.DisplayTitle ?? FormatToolName(Chip.Name);
+    var toolName = FormatToolName(Chip.Name);
 }
 
 <details class="chat-chip @StateClass">
     <summary>
         <span class="chat-chip-icon">@IconText</span>
-        <span class="chat-chip-name">@FormatToolName(Chip.Name)</span>
+        <span class="chat-chip-name">@displayTitle</span>
         @if (!string.IsNullOrWhiteSpace(summaryText))
         {
             <span class="chat-chip-args">@summaryText</span>
+        }
+        else if (!string.Equals(displayTitle, toolName, StringComparison.Ordinal))
+        {
+            <span class="chat-chip-args">@toolName</span>
         }
         @if (Chip.DurationMs is { } duration)
         {
@@ -18,6 +24,11 @@
         }
     </summary>
     <div class="chat-chip-body">
+        @if (!string.Equals(displayTitle, toolName, StringComparison.Ordinal))
+        {
+            <div class="chat-chip-section">tool</div>
+            <pre class="chat-chip-pre">@Chip.Name</pre>
+        }
         @if (Chip.HasArguments || !Chip.ArgumentsComplete)
         {
             <div class="chat-chip-section">args</div>

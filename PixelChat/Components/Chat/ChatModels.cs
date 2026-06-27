@@ -39,29 +39,53 @@ public sealed class ChatToolPart(ChatToolChip chip) : ChatMessagePart
     public ChatToolChip Chip { get; } = chip;
 }
 
+public sealed class ChatImagePart(ChatImageVisual visual) : ChatMessagePart
+{
+    public ChatImageVisual Visual { get; } = visual;
+}
+
+public sealed record ChatImageVisual(
+    Guid Id,
+    string Title,
+    string Caption,
+    string PreviewImageUrl,
+    string FullImageUrl,
+    int? Width,
+    int? Height,
+    string? ToolCallId = null);
+
 public sealed class ChatToolChip
 {
     private readonly StringBuilder _arguments = new();
 
-    public ChatToolChip(string callId, string name, string argumentsJson, bool argumentsComplete = true)
+    public ChatToolChip(string callId, string name, string argumentsJson, bool argumentsComplete = true, string? displayTitle = null)
     {
         CallId = callId;
         Name = name;
+        DisplayTitle = displayTitle;
         SetArguments(argumentsJson);
         ArgumentsComplete = argumentsComplete;
     }
 
     public string CallId { get; }
     public string Name { get; private set; }
+    public string? DisplayTitle { get; private set; }
     public string ArgumentsJson => _arguments.ToString();
     public string? Result { get; set; }
     public string? Error { get; set; }
     public double? DurationMs { get; set; }
     public bool Completed { get; set; }
     public bool ArgumentsComplete { get; private set; }
+    public List<ChatImageVisual> Visuals { get; } = [];
     public bool HasArguments => !string.IsNullOrWhiteSpace(ArgumentsJson) && ArgumentsJson != "{}";
 
     public void Rename(string name) => Name = name;
+
+    public void SetDisplayTitle(string? displayTitle)
+    {
+        if (!string.IsNullOrWhiteSpace(displayTitle))
+            DisplayTitle = displayTitle.Trim();
+    }
 
     public void SetArguments(string argumentsJson)
     {
@@ -86,13 +110,14 @@ public sealed class ChatToolChip
 
     public ChatToolChip Clone()
     {
-        var clone = new ChatToolChip(CallId, Name, ArgumentsJson, ArgumentsComplete)
+        var clone = new ChatToolChip(CallId, Name, ArgumentsJson, ArgumentsComplete, DisplayTitle)
         {
             Result = Result,
             Error = Error,
             DurationMs = DurationMs,
             Completed = Completed
         };
+        clone.Visuals.AddRange(Visuals);
         return clone;
     }
 }
@@ -114,18 +139,19 @@ public sealed class ChatLiveTurn
         CurrentMessage().AppendText(text);
     }
 
-    public void StartToolCall(string callId, string name, string argumentsJson, bool argumentsComplete)
+    public void StartToolCall(string callId, string name, string argumentsJson, bool argumentsComplete, string? displayTitle = null)
     {
         IsThinking = false;
         var chip = FindToolChip(callId);
         if (chip is null)
         {
-            chip = new ChatToolChip(callId, name, argumentsJson, argumentsComplete);
+            chip = new ChatToolChip(callId, name, argumentsJson, argumentsComplete, displayTitle);
             ToolMessage().Parts.Add(new ChatToolPart(chip));
             return;
         }
 
         chip.Rename(name);
+        chip.SetDisplayTitle(displayTitle);
         if (!string.IsNullOrEmpty(argumentsJson))
             chip.SetArguments(argumentsJson);
         if (argumentsComplete)
@@ -145,7 +171,12 @@ public sealed class ChatLiveTurn
         chip.AppendArguments(argumentsDelta, argumentsComplete);
     }
 
-    public void CompleteToolCall(string callId, string? result, string? error, double? durationMs = null)
+    public void CompleteToolCall(
+        string callId,
+        string? result,
+        string? error,
+        double? durationMs = null,
+        IReadOnlyList<ChatImageVisual>? visuals = null)
     {
         var chip = FindToolChip(callId);
         if (chip is not null)
@@ -155,6 +186,8 @@ public sealed class ChatLiveTurn
             chip.DurationMs = durationMs;
             chip.Completed = true;
             chip.MarkArgumentsComplete();
+            if (visuals is { Count: > 0 })
+                chip.Visuals.AddRange(visuals);
         }
 
         IsThinking = true;
@@ -233,6 +266,9 @@ public sealed class ChatLiveMessage
                 case ChatToolPart toolPart:
                     clone.Parts.Add(new ChatToolPart(toolPart.Chip.Clone()));
                     break;
+                case ChatImagePart imagePart:
+                    clone.Parts.Add(new ChatImagePart(imagePart.Visual));
+                    break;
             }
         }
 
@@ -246,7 +282,8 @@ public sealed record ChatPersistedToolCall(
     string CallId,
     string Name,
     string ArgumentsJson,
-    int? TextOffset = null);
+    int? TextOffset = null,
+    string? DisplayTitle = null);
 
 public static class ChatTranscriptHelpers
 {

@@ -7,7 +7,6 @@ public sealed record WorkbenchView(
     IReadOnlyList<ProjectView> Projects,
     IReadOnlyList<ArtAssetView> Assets,
     IReadOnlyList<GenerationBatchView> Batches,
-    IReadOnlyList<ActivityRunView> ActivityRuns,
     IReadOnlyList<PromptRecipeView> Recipes,
     IReadOnlyList<AnimationRecipeView> AnimationRecipes,
     IReadOnlyList<SpriteSheetDefinitionView> SpriteSheets,
@@ -17,39 +16,6 @@ public sealed record WorkbenchView(
     GenerationBatchView? ActiveBatch,
     SpriteSheetDefinitionView? ActiveSpriteSheet,
     ProviderStatusView ImageProviderStatus);
-
-public sealed record ActivityRunView(
-    Guid Id,
-    string Title,
-    string Summary,
-    string Status,
-    string Actor,
-    string WorkflowKind,
-    Guid? PrimaryArtifactId,
-    string PrimaryArtifactKind,
-    IReadOnlyList<ActivityStepView> Steps,
-    IReadOnlyList<ActivityArtifactView> Artifacts,
-    DateTime CreatedAt,
-    DateTime UpdatedAt);
-
-public sealed record ActivityStepView(
-    Guid Id,
-    int SortOrder,
-    string Kind,
-    string Status,
-    string Title,
-    string Detail,
-    string PayloadJson,
-    DateTime CreatedAt);
-
-public sealed record ActivityArtifactView(
-    Guid Id,
-    string Kind,
-    Guid RefId,
-    string Label,
-    string Notes,
-    int SortOrder,
-    DateTime CreatedAt);
 
 public sealed record ProjectView(
     Guid Id,

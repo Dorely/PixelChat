@@ -228,29 +228,6 @@ public sealed class ArtWorkflowService(
                 .OrderBy(item => item.SortOrder)
                 .ThenBy(item => item.CreatedAt)
                 .ToListAsync(cancellationToken);
-        var activityRuns = await db.ActivityRuns
-            .AsNoTracking()
-            .Where(run => run.ProjectId == selected.Id)
-            .OrderByDescending(run => run.UpdatedAt)
-            .Take(60)
-            .ToListAsync(cancellationToken);
-        var activityRunIds = activityRuns.Select(run => run.Id).ToList();
-        var activitySteps = activityRunIds.Count == 0
-            ? new List<ActivityStep>()
-            : await db.ActivitySteps
-                .AsNoTracking()
-                .Where(step => step.ProjectId == selected.Id && activityRunIds.Contains(step.ActivityRunId))
-                .OrderBy(step => step.SortOrder)
-                .ThenBy(step => step.CreatedAt)
-                .ToListAsync(cancellationToken);
-        var activityArtifacts = activityRunIds.Count == 0
-            ? new List<ActivityArtifact>()
-            : await db.ActivityArtifacts
-                .AsNoTracking()
-                .Where(artifact => artifact.ProjectId == selected.Id && activityRunIds.Contains(artifact.ActivityRunId))
-                .OrderBy(artifact => artifact.SortOrder)
-                .ThenBy(artifact => artifact.CreatedAt)
-                .ToListAsync(cancellationToken);
         var currentRecipeVersions = await LoadCurrentRecipeVersionsAsync(selected.Id, recipes.Select(recipe => recipe.Id).ToList(), cancellationToken);
         var assetViews = assets.Select(AssetView).ToList();
         var batchViews = batches.Select(batch => BatchView(batch, assets)).ToList();
@@ -266,12 +243,6 @@ public sealed class ArtWorkflowService(
         var spriteSheetViews = spriteSheets
             .Select(sheet => SpriteSheetViewFromListItems(sheet, spriteSheetFramesBySheet.GetValueOrDefault(sheet.Id, [])))
             .ToList();
-        var activityRunViews = activityRuns
-            .Select(run => ActivityRunView(
-                run,
-                activitySteps.Where(step => step.ActivityRunId == run.Id).ToList(),
-                activityArtifacts.Where(artifact => artifact.ActivityRunId == run.Id).ToList()))
-            .ToList();
         var maskViews = masks.Select(MaskView).ToList();
         var attachmentViews = attachments.Select(AttachmentView).ToList();
 
@@ -281,7 +252,6 @@ public sealed class ArtWorkflowService(
             projects.Select(ProjectView).ToList(),
             assetViews,
             batchViews,
-            activityRunViews,
             recipeViews,
             animationRecipeViews,
             spriteSheetViews,
@@ -380,6 +350,65 @@ public sealed class ArtWorkflowService(
             frame.PreviewData,
             string.IsNullOrWhiteSpace(frame.Label) ? $"sprite-frame-{frame.Index + 1}.png" : CleanFileName(frame.Label, $"sprite-frame-{frame.Index + 1}") + ".png",
             frame.UpdatedAt);
+    }
+
+    public async Task<ImageBinaryView> GetChatVisualImageAsync(
+        Guid projectId,
+        Guid visualId,
+        bool preview,
+        CancellationToken cancellationToken = default)
+    {
+        var visual = await db.AssistantMessageVisuals
+            .Include(v => v.AssistantMessage)
+            .ThenInclude(m => m.Conversation)
+            .FirstOrDefaultAsync(
+                v => v.Id == visualId
+                    && v.AssistantMessage.Conversation.ProjectId == projectId,
+                cancellationToken)
+            ?? throw new InvalidOperationException("Chat visual was not found.");
+
+        if (visual.Data is { Length: > 0 } data)
+        {
+            var servedData = data;
+            var contentType = string.IsNullOrWhiteSpace(visual.ContentType)
+                ? "image/png"
+                : visual.ContentType;
+            if (preview)
+            {
+                if (visual.ThumbnailData is { Length: > 0 } thumbnail)
+                {
+                    servedData = thumbnail;
+                    contentType = "image/png";
+                }
+                else if (contentType.Equals("image/png", StringComparison.OrdinalIgnoreCase)
+                    && TryBuildAssetThumbnail(data, out var thumbnailData))
+                {
+                    visual.ThumbnailData = thumbnailData;
+                    await db.SaveChangesAsync(cancellationToken);
+                    servedData = thumbnailData;
+                    contentType = "image/png";
+                }
+            }
+
+            return new ImageBinaryView(
+                contentType,
+                servedData,
+                ChatVisualFileName(visual, preview),
+                visual.CreatedAt);
+        }
+
+        if (visual.SourceRefId is not Guid sourceRefId)
+            throw new InvalidOperationException("Chat visual image data was not found.");
+
+        return visual.SourceKind.Trim().ToLowerInvariant() switch
+        {
+            "asset" => preview
+                ? await GetAssetPreviewImageAsync(projectId, sourceRefId, cancellationToken)
+                : await GetAssetFullImageAsync(projectId, sourceRefId, cancellationToken),
+            "mask" => await GetMaskImageAsync(projectId, sourceRefId, cancellationToken),
+            "spriteframe" => await GetSpriteFramePreviewImageAsync(projectId, sourceRefId, cancellationToken),
+            _ => throw new InvalidOperationException("Chat visual source was not found."),
+        };
     }
 
     public async Task<ArtAssetExportView> GetAssetForExportAsync(
@@ -2198,19 +2227,6 @@ public sealed class ArtWorkflowService(
         project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
         project.UpdatedAt = now;
         await db.SaveChangesAsync(cancellationToken);
-        await LogActivityAsync(
-            projectId,
-            "Sprite frames split",
-            $"Isolated {records.Count} frame(s) for alignment and repair.",
-            "sprite-sheet",
-            "user",
-            "completed",
-            "Frames isolated",
-            $"Margin: {marginValue}px.",
-            "spriteSheet",
-            definition.Id,
-            definition.Label,
-            cancellationToken);
 
         return records
             .OrderBy(record => record.Index)
@@ -2464,19 +2480,6 @@ public sealed class ArtWorkflowService(
         project.UpdatedAt = now;
         definition.UpdatedAt = now;
         await db.SaveChangesAsync(cancellationToken);
-        await LogActivityAsync(
-            projectId,
-            "Sprite sheet reassembled",
-            $"Reassembled {records.Count} isolated frame(s) into one equal-cell row.",
-            "sprite-sheet",
-            "user",
-            "completed",
-            "Single-row export sheet created",
-            $"Rows: 1, columns: {records.Count}, cell: {render.FrameWidth}x{render.FrameHeight}.",
-            "spriteSheet",
-            definition.Id,
-            definition.Label,
-            cancellationToken);
 
         var saved = await LoadSpriteSheetViewAsync(projectId, definition.Id, cancellationToken);
         return new ReassembleSpriteSheetResult(
@@ -2677,19 +2680,6 @@ public sealed class ArtWorkflowService(
         project.ActiveWorkspaceMode = WorkspaceMode.Compare;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
-        await LogActivityAsync(
-            projectId,
-            "Image generation",
-            $"Started {count} image candidate(s).",
-            "generate",
-            "user",
-            "running",
-            "Generation batch started",
-            Preview(prompt, 500),
-            "generationBatch",
-            batch.Id,
-            batch.Label,
-            cancellationToken);
 
         logger.LogDebug(
             "Image generation batch created: projectId={ProjectId}, batchId={BatchId}, count={Count}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, promptChars={PromptChars}",
@@ -3127,19 +3117,6 @@ public sealed class ArtWorkflowService(
             project.ActiveWorkspaceMode = WorkspaceMode.Compare;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
-        await LogActivityAsync(
-            projectId,
-            "Image edit",
-            $"Started {count} edited candidate(s).",
-            "edit",
-            "user",
-            "running",
-            "Edit batch started",
-            Preview(prompt, 500),
-            "generationBatch",
-            batch.Id,
-            batch.Label,
-            cancellationToken);
 
         logger.LogDebug(
             "Image edit batch created: projectId={ProjectId}, batchId={BatchId}, sourceAssetId={SourceAssetId}, count={Count}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, hasMask={HasMask}, promptChars={PromptChars}",
@@ -3908,22 +3885,6 @@ public sealed class ArtWorkflowService(
         await db.ArtAssets.AddRangeAsync([guide, diagnostic], cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
 
-        await LogActivityAsync(
-            projectId,
-            "Animation guide generated",
-            $"{spec.AnimationKind} guide rendered as {layout.Columns}x{layout.Rows} frames.",
-            "animation-guide",
-            "assistant",
-            "completed",
-            "Rendered guide assets",
-            MotionClipCatalog.IsExternalMotionSpec(spec)
-                ? $"Rendered {renderer} guide from motion clip {spec.MotionClipId}."
-                : "Rendered procedural guide layout.",
-            "asset",
-            guide.Id,
-            guide.Label,
-            cancellationToken);
-
         return new AnimationGuideRenderView(
             guide.Id,
             diagnostic.Id,
@@ -3956,69 +3917,6 @@ public sealed class ArtWorkflowService(
             motionRender?.Metadata.SourceLicense ?? spec.GuideSourceLicense,
             motionRender?.Metadata.SourceUrl,
             "Animation guide assets saved as SpriteGuide. Use guideAssetId first in generate_sprite_sheet_candidates references.");
-    }
-
-    public async Task<ActivityRunView> LogActivityAsync(
-        Guid projectId,
-        string title,
-        string summary,
-        string workflowKind,
-        string actor,
-        string status,
-        string stepTitle,
-        string stepDetail,
-        string artifactKind,
-        Guid? artifactId,
-        string artifactLabel,
-        CancellationToken cancellationToken = default)
-    {
-        _ = await GetProjectAsync(projectId, cancellationToken);
-        var now = DateTime.UtcNow;
-        var run = new ActivityRun
-        {
-            ProjectId = projectId,
-            Title = Clean(title),
-            Summary = Clean(summary),
-            WorkflowKind = Clean(workflowKind),
-            Actor = string.IsNullOrWhiteSpace(actor) ? "system" : actor.Trim(),
-            Status = string.IsNullOrWhiteSpace(status) ? "completed" : status.Trim(),
-            PrimaryArtifactKind = Clean(artifactKind),
-            PrimaryArtifactId = artifactId,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var step = new ActivityStep
-        {
-            ProjectId = projectId,
-            ActivityRunId = run.Id,
-            SortOrder = 0,
-            Kind = string.IsNullOrWhiteSpace(workflowKind) ? "workflow" : workflowKind.Trim(),
-            Status = run.Status,
-            Title = string.IsNullOrWhiteSpace(stepTitle) ? run.Title : stepTitle.Trim(),
-            Detail = Clean(stepDetail),
-            CreatedAt = now,
-        };
-        await db.ActivityRuns.AddAsync(run, cancellationToken);
-        await db.ActivitySteps.AddAsync(step, cancellationToken);
-
-        ActivityArtifact? artifact = null;
-        if (artifactId is Guid refId && !string.IsNullOrWhiteSpace(artifactKind))
-        {
-            artifact = new ActivityArtifact
-            {
-                ProjectId = projectId,
-                ActivityRunId = run.Id,
-                Kind = artifactKind.Trim(),
-                RefId = refId,
-                Label = string.IsNullOrWhiteSpace(artifactLabel) ? artifactKind.Trim() : artifactLabel.Trim(),
-                SortOrder = 0,
-                CreatedAt = now,
-            };
-            await db.ActivityArtifacts.AddAsync(artifact, cancellationToken);
-        }
-
-        await db.SaveChangesAsync(cancellationToken);
-        return ActivityRunView(run, [step], artifact is null ? [] : [artifact]);
     }
 
     public async Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default)
@@ -4235,33 +4133,15 @@ public sealed class ArtWorkflowService(
                 .OrderBy(item => item.SortOrder)
                 .ThenBy(item => item.CreatedAt)
                 .ToListAsync(cancellationToken);
-        var activityRuns = await db.ActivityRuns
-            .AsNoTracking()
-            .Where(run => run.ProjectId == projectId)
-            .OrderByDescending(run => run.UpdatedAt)
-            .Take(12)
-            .ToListAsync(cancellationToken);
         var providerStatus = await BuildProviderStatusAsync(cancellationToken);
 
         return JsonSerializer.Serialize(new
         {
             snapshotMissing = true,
-            note = "No live UI snapshot has been published. This fallback only includes persisted project, active ids, visible chat attachments, current review set, recent activity, and provider status.",
+            note = "No live UI snapshot has been published. This fallback only includes persisted project, active ids, visible chat attachments, current review set, and provider status.",
             project = ProjectView(project),
             chatAttachments = attachments.Select(AttachmentView),
             reviewSet = compareReviewSet is null ? null : CompareReviewSetView(compareReviewSet, compareReviewItems),
-            activity = activityRuns.Select(run => new
-            {
-                run.Id,
-                run.Title,
-                run.Summary,
-                run.Status,
-                run.Actor,
-                run.WorkflowKind,
-                run.PrimaryArtifactKind,
-                run.PrimaryArtifactId,
-                run.UpdatedAt,
-            }),
             provider = providerStatus,
         }, JsonOptions);
     }
@@ -7269,47 +7149,6 @@ public sealed class ArtWorkflowService(
             version.ChangeSummary,
             version.CreatedAt);
 
-    private static ActivityRunView ActivityRunView(
-        ActivityRun run,
-        IReadOnlyList<ActivityStep> steps,
-        IReadOnlyList<ActivityArtifact> artifacts) =>
-        new(
-            run.Id,
-            run.Title,
-            run.Summary,
-            run.Status,
-            run.Actor,
-            run.WorkflowKind,
-            run.PrimaryArtifactId,
-            run.PrimaryArtifactKind,
-            steps
-                .OrderBy(step => step.SortOrder)
-                .ThenBy(step => step.CreatedAt)
-                .Select(step => new ActivityStepView(
-                    step.Id,
-                    step.SortOrder,
-                    step.Kind,
-                    step.Status,
-                    step.Title,
-                    step.Detail,
-                    step.PayloadJson,
-                    step.CreatedAt))
-                .ToList(),
-            artifacts
-                .OrderBy(artifact => artifact.SortOrder)
-                .ThenBy(artifact => artifact.CreatedAt)
-                .Select(artifact => new ActivityArtifactView(
-                    artifact.Id,
-                    artifact.Kind,
-                    artifact.RefId,
-                    artifact.Label,
-                    artifact.Notes,
-                    artifact.SortOrder,
-                    artifact.CreatedAt))
-                .ToList(),
-            run.CreatedAt,
-            run.UpdatedAt);
-
     private static ImageMaskView MaskView(ImageMask mask) =>
         MaskView(ToImageMaskListItem(mask));
 
@@ -7561,6 +7400,27 @@ public sealed class ArtWorkflowService(
         if (string.IsNullOrWhiteSpace(extension))
             extension = "." + ExtensionForContentType(asset.ContentType);
         return CleanFileName($"{stem}-{suffix}", $"asset-{suffix}") + extension;
+    }
+
+    private static string ChatVisualFileName(AssistantMessageVisual visual, bool preview)
+    {
+        var fileName = string.IsNullOrWhiteSpace(visual.FileName)
+            ? $"chat-visual-{visual.Id:N}.{ExtensionForContentType(visual.ContentType)}"
+            : visual.FileName;
+        if (!preview)
+            return CleanFileName(Path.GetFileNameWithoutExtension(fileName), $"chat-visual-{visual.Id:N}")
+                + (Path.GetExtension(fileName) is { Length: > 0 } extension
+                    ? extension
+                    : "." + ExtensionForContentType(visual.ContentType));
+
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var previewExtension = visual.ThumbnailData is { Length: > 0 }
+            ? ".png"
+            : Path.GetExtension(fileName);
+        if (string.IsNullOrWhiteSpace(previewExtension))
+            previewExtension = "." + ExtensionForContentType(visual.ContentType);
+
+        return CleanFileName($"{stem}-preview", $"chat-visual-{visual.Id:N}-preview") + previewExtension;
     }
 
     private static string CleanFileName(string value, string fallback)

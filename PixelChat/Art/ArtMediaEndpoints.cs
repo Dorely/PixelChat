@@ -46,6 +46,26 @@ public static class ArtMediaEndpoints
             return ImageResult(image);
         });
 
+        group.MapGet("/chat-visuals/{visualId:guid}/preview", async (
+            Guid projectId,
+            Guid visualId,
+            IArtWorkflowService workflow,
+            CancellationToken cancellationToken) =>
+        {
+            var image = await workflow.GetChatVisualImageAsync(projectId, visualId, preview: true, cancellationToken);
+            return ImageResult(image);
+        });
+
+        group.MapGet("/chat-visuals/{visualId:guid}/full", async (
+            Guid projectId,
+            Guid visualId,
+            IArtWorkflowService workflow,
+            CancellationToken cancellationToken) =>
+        {
+            var image = await workflow.GetChatVisualImageAsync(projectId, visualId, preview: false, cancellationToken);
+            return ImageResult(image);
+        });
+
         group.MapGet("/frame-set-frames/{frameId:guid}/preview", async (
             Guid projectId,
             Guid frameId,

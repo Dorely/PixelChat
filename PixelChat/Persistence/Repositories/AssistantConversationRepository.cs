@@ -22,12 +22,15 @@ public class AssistantConversationRepository(AppDbContext db) : IAssistantConver
 
     public async Task<IReadOnlyList<AssistantMessage>> LoadMessagesAsync(Guid conversationId, CancellationToken cancellationToken = default) =>
         await db.AssistantMessages
+            .Include(m => m.Visuals)
             .Where(m => m.ConversationId == conversationId)
             .OrderBy(m => m.Order)
             .ToListAsync(cancellationToken);
 
     public Task<AssistantMessage?> GetMessageAsync(Guid messageId, CancellationToken cancellationToken = default) =>
-        db.AssistantMessages.FirstOrDefaultAsync(m => m.Id == messageId, cancellationToken);
+        db.AssistantMessages
+            .Include(m => m.Visuals)
+            .FirstOrDefaultAsync(m => m.Id == messageId, cancellationToken);
 
     public async Task<int> GetMaxOrderAsync(Guid conversationId, CancellationToken cancellationToken = default) =>
         await db.AssistantMessages
@@ -37,6 +40,9 @@ public class AssistantConversationRepository(AppDbContext db) : IAssistantConver
 
     public async Task AddMessageAsync(AssistantMessage message, CancellationToken cancellationToken = default) =>
         await db.AssistantMessages.AddAsync(message, cancellationToken);
+
+    public async Task AddMessageVisualsAsync(IEnumerable<AssistantMessageVisual> visuals, CancellationToken cancellationToken = default) =>
+        await db.AssistantMessageVisuals.AddRangeAsync(visuals, cancellationToken);
 
     public void UpdateMessage(AssistantMessage message) => db.AssistantMessages.Update(message);
 

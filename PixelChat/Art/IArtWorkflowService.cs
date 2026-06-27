@@ -11,6 +11,7 @@ public interface IArtWorkflowService
     Task<ImageBinaryView> GetAssetFullImageAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<ImageBinaryView> GetMaskImageAsync(Guid projectId, Guid maskId, CancellationToken cancellationToken = default);
     Task<ImageBinaryView> GetSpriteFramePreviewImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
+    Task<ImageBinaryView> GetChatVisualImageAsync(Guid projectId, Guid visualId, bool preview, CancellationToken cancellationToken = default);
     Task<ArtAssetExportView> GetAssetForExportAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<string> ListAssetsJsonAsync(Guid projectId, string? kind = null, string? query = null, bool? favorite = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadAssetJsonAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
@@ -88,7 +89,6 @@ public interface IArtWorkflowService
     Task<string> ListAnimationRecipeVersionsJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task DeleteAnimationRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<AnimationGuideRenderView> GenerateAnimationGuideAsync(Guid projectId, GenerateAnimationGuideRequest request, CancellationToken cancellationToken = default);
-    Task<ActivityRunView> LogActivityAsync(Guid projectId, string title, string summary, string workflowKind, string actor, string status, string stepTitle, string stepDetail, string artifactKind, Guid? artifactId, string artifactLabel, CancellationToken cancellationToken = default);
     Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default);
     Task DeleteAssetAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<ChatContextAttachmentView> AttachContextAsync(Guid projectId, ChatContextAttachmentType type, Guid refId, string? label = null, CancellationToken cancellationToken = default);

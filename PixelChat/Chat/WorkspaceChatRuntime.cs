@@ -118,6 +118,7 @@ public sealed class WorkspaceChatRuntime(
     {
         var assistantMessageIds = new List<Guid>();
         Guid? userMessageId = null;
+        var userMessageVisuals = new List<ChatImageVisual>();
         var finalStatus = ChatMessageStatus.Completed;
         string? finalError = null;
 
@@ -130,6 +131,7 @@ public sealed class WorkspaceChatRuntime(
                 if (update is AssistantUserMessagePersisted userPersisted)
                 {
                     userMessageId = userPersisted.MessageId;
+                    userMessageVisuals = userPersisted.Visuals.Select(ToChatImageVisual).ToList();
                     persisted.TrySetResult();
                     continue;
                 }
@@ -177,6 +179,7 @@ public sealed class WorkspaceChatRuntime(
                     finished = new WorkspaceChatTurnFinished(
                         projectId,
                         userMessageId,
+                        userMessageVisuals.ToList(),
                         _live?.Clone() ?? new ChatLiveTurn(),
                         assistantMessageIds.ToList(),
                         finalStatus,
@@ -220,7 +223,8 @@ public sealed class WorkspaceChatRuntime(
                         started.CallId,
                         started.ToolName,
                         started.ArgumentsJson,
-                        started.ArgumentsComplete);
+                        started.ArgumentsComplete,
+                        started.DisplayTitle);
                     break;
 
                 case AssistantToolCallArgumentsDelta delta:
@@ -235,7 +239,8 @@ public sealed class WorkspaceChatRuntime(
                         completed.CallId,
                         completed.Result,
                         completed.Error,
-                        completed.DurationMs);
+                        completed.DurationMs,
+                        completed.Visuals.Select(ToChatImageVisual).ToList());
                     break;
 
                 case AssistantFormDraftProposed draft:
@@ -379,4 +384,15 @@ public sealed class WorkspaceChatRuntime(
             }
         }
     }
+
+    private static ChatImageVisual ToChatImageVisual(AssistantMessageVisualUpdate visual) =>
+        new(
+            visual.Id,
+            visual.Title,
+            visual.Caption,
+            visual.PreviewImageUrl,
+            visual.FullImageUrl,
+            visual.Width,
+            visual.Height,
+            visual.ToolCallId);
 }

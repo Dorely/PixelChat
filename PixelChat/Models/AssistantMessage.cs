@@ -15,6 +15,7 @@ public class AssistantMessage
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public AssistantConversation Conversation { get; set; } = null!;
+    public ICollection<AssistantMessageVisual> Visuals { get; set; } = [];
 }
 
 public enum AssistantMessageRole

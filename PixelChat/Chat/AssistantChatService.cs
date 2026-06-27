@@ -123,7 +123,18 @@ public sealed class AssistantChatService(
         await conversations.AddMessageAsync(userMessage, cancellationToken);
         conversation.UpdatedAt = DateTime.UtcNow;
         await conversations.SaveChangesAsync(cancellationToken);
-        yield return new AssistantUserMessagePersisted(userMessage.Id);
+
+        var workbenchForUserMessage = await workflow.GetWorkbenchAsync(projectId, cancellationToken);
+        var userVisuals = BuildUserMessageVisuals(userMessage.Id, workbenchForUserMessage);
+        if (userVisuals.Count > 0)
+        {
+            await conversations.AddMessageVisualsAsync(userVisuals, cancellationToken);
+            await conversations.SaveChangesAsync(cancellationToken);
+        }
+
+        yield return new AssistantUserMessagePersisted(
+            userMessage.Id,
+            userVisuals.Select(visual => ToVisualUpdate(projectId, visual)).ToList());
 
         IChatClient chat = null!;
         string? setupError = null;
@@ -237,7 +248,12 @@ public sealed class AssistantChatService(
                                             started.CallId,
                                             started.ToolName,
                                             started.ArgumentsJson,
-                                            started.ArgumentsComplete));
+                                            started.ArgumentsComplete,
+                                            BuildToolDisplayTitle(
+                                                started.ToolName,
+                                                started.ArgumentsJson,
+                                                textBuilder.ToString(),
+                                                textBuilder.Length)));
                                         break;
 
                                     case StreamingToolCallArgumentsDeltaUpdate delta:
@@ -253,7 +269,12 @@ public sealed class AssistantChatService(
                                             ready.CallId,
                                             ready.ToolName,
                                             ready.ArgumentsJson,
-                                            ready.TextOffset));
+                                            ready.TextOffset,
+                                            BuildToolDisplayTitle(
+                                                ready.ToolName,
+                                                ready.ArgumentsJson,
+                                                textBuilder.ToString(),
+                                                ready.TextOffset)));
                                         tokenContextChanged = true;
                                         break;
                                 }
@@ -330,11 +351,7 @@ public sealed class AssistantChatService(
             }
 
             var manifest = pendingCalls
-                .Select(pendingCall => new PersistedToolCall(
-                    pendingCall.CallId,
-                    pendingCall.Name,
-                    pendingCall.ArgumentsJson,
-                    pendingCall.TextOffset))
+                .Select(ToPersistedToolCall)
                 .ToList();
 
             activeAssistant.Content = textBuilder.ToString();
@@ -384,7 +401,7 @@ public sealed class AssistantChatService(
                     yield break;
                 }
 
-                await PersistToolResultAsync(
+                var toolMessage = await PersistToolResultAsync(
                     conversation.Id,
                     nextOrder++,
                     pendingCall.CallId,
@@ -392,6 +409,10 @@ public sealed class AssistantChatService(
                     outcome.Result,
                     outcome.Error);
                 completedCallIds.Add(pendingCall.CallId);
+
+                IReadOnlyList<AssistantMessageVisual> toolVisuals = outcome.Error is null
+                    ? await PersistToolVisualsAsync(toolMessage, pendingCall, projectId, outcome.Result, outcome.ModelOnlyContents, cancellationToken)
+                    : Array.Empty<AssistantMessageVisual>();
 
                 resultContents.Add(new FunctionResultContent(
                     pendingCall.CallId,
@@ -402,7 +423,8 @@ public sealed class AssistantChatService(
                     pendingCall.Name,
                     outcome.Result,
                     outcome.Error,
-                    outcome.DurationMs);
+                    outcome.DurationMs,
+                    toolVisuals.Select(visual => ToVisualUpdate(projectId, visual)).ToList());
                 yield return BuildTokenCountUpdate(BuildToolPreviewMessages(messages, resultContents, modelOnlyContents), modelName);
 
                 if (outcome.Error is null && TryReadFormDraft(pendingCall.Name, outcome.Result, out var draft))
@@ -661,7 +683,8 @@ public sealed class AssistantChatService(
             pendingCall.CallId,
             pendingCall.Name,
             pendingCall.ArgumentsJson,
-            pendingCall.TextOffset);
+            pendingCall.TextOffset,
+            pendingCall.DisplayTitle);
 
     private async Task<ChatMessage> BuildCurrentUserMessageAsync(
         string text,
@@ -1409,6 +1432,445 @@ public sealed class AssistantChatService(
             ? element.GetString()
             : null;
 
+    private static List<AssistantMessageVisual> BuildUserMessageVisuals(
+        Guid messageId,
+        WorkbenchView workbench)
+    {
+        var visuals = new List<AssistantMessageVisual>();
+        var includedAssetIds = new HashSet<Guid>();
+        var sortOrder = 0;
+
+        foreach (var attachment in workbench.Attachments.OrderBy(attachment => attachment.SortOrder))
+        {
+            switch (attachment.Type)
+            {
+                case ChatContextAttachmentType.Asset:
+                case ChatContextAttachmentType.Crop:
+                    var asset = workbench.Assets.FirstOrDefault(item => item.Id == attachment.RefId);
+                    if (asset is not null && includedAssetIds.Add(asset.Id))
+                    {
+                        visuals.Add(new AssistantMessageVisual
+                        {
+                            AssistantMessageId = messageId,
+                            SortOrder = sortOrder++,
+                            Title = VisualTitle(attachment.Label, asset.Label),
+                            Caption = "Visible chat image context.",
+                            SourceKind = "asset",
+                            SourceRefId = asset.Id,
+                            ContentType = asset.ContentType,
+                            FileName = asset.FileName,
+                            Width = asset.Width,
+                            Height = asset.Height,
+                        });
+                    }
+                    break;
+
+                case ChatContextAttachmentType.Mask:
+                    var mask = workbench.Masks.FirstOrDefault(item => item.Id == attachment.RefId);
+                    if (mask is not null)
+                    {
+                        visuals.Add(new AssistantMessageVisual
+                        {
+                            AssistantMessageId = messageId,
+                            SortOrder = sortOrder++,
+                            Title = VisualTitle(attachment.Label, mask.Label),
+                            Caption = "Visible chat mask context.",
+                            SourceKind = "mask",
+                            SourceRefId = mask.Id,
+                            ContentType = mask.ContentType,
+                            FileName = $"{CleanVisualFileName(mask.Label, "mask")}.png",
+                            Width = mask.Width,
+                            Height = mask.Height,
+                        });
+                    }
+                    break;
+
+                case ChatContextAttachmentType.SpriteFrame:
+                    var frame = workbench.SpriteSheets
+                        .SelectMany(sheet => sheet.Frames)
+                        .FirstOrDefault(item => item.Id == attachment.RefId);
+                    if (frame is not null)
+                    {
+                        visuals.Add(new AssistantMessageVisual
+                        {
+                            AssistantMessageId = messageId,
+                            SortOrder = sortOrder++,
+                            Title = VisualTitle(attachment.Label, frame.Label),
+                            Caption = "Visible chat sprite-frame context.",
+                            SourceKind = "spriteFrame",
+                            SourceRefId = frame.Id,
+                            ContentType = "image/png",
+                            FileName = $"{CleanVisualFileName(frame.Label, $"sprite-frame-{frame.Index + 1}")}.png",
+                            Width = frame.PreviewWidth,
+                            Height = frame.PreviewHeight,
+                        });
+                    }
+                    break;
+            }
+        }
+
+        return visuals;
+    }
+
+    private async Task<IReadOnlyList<AssistantMessageVisual>> PersistToolVisualsAsync(
+        AssistantMessage toolMessage,
+        PendingToolCall pendingCall,
+        Guid projectId,
+        string toolResult,
+        IReadOnlyList<AIContent> modelOnlyContents,
+        CancellationToken cancellationToken)
+    {
+        var drafts = await BuildToolVisualDraftsAsync(pendingCall, projectId, toolResult, modelOnlyContents, cancellationToken);
+        if (drafts.Count == 0)
+            return Array.Empty<AssistantMessageVisual>();
+
+        var visuals = drafts
+            .Select((draft, index) => draft.ToVisual(toolMessage.Id, pendingCall.CallId, index))
+            .ToList();
+        await conversations.AddMessageVisualsAsync(visuals, cancellationToken);
+        await conversations.SaveChangesAsync(cancellationToken);
+        return visuals;
+    }
+
+    private async Task<List<ToolVisualDraft>> BuildToolVisualDraftsAsync(
+        PendingToolCall pendingCall,
+        Guid projectId,
+        string toolResult,
+        IReadOnlyList<AIContent> modelOnlyContents,
+        CancellationToken cancellationToken)
+    {
+        var sourceBacked = await BuildSourceBackedToolVisualDraftsAsync(pendingCall, projectId, toolResult, cancellationToken);
+        return sourceBacked.Count > 0
+            ? sourceBacked
+            : BuildDataContentToolVisualDrafts(pendingCall, modelOnlyContents);
+    }
+
+    private async Task<List<ToolVisualDraft>> BuildSourceBackedToolVisualDraftsAsync(
+        PendingToolCall pendingCall,
+        Guid projectId,
+        string toolResult,
+        CancellationToken cancellationToken)
+    {
+        var drafts = new List<ToolVisualDraft>();
+        var seenAssetIds = new HashSet<Guid>();
+
+        if (string.Equals(pendingCall.Name, "read_asset", StringComparison.Ordinal)
+            && ReadGuidArgument(pendingCall, "assetId") is Guid assetId)
+        {
+            if (await TryCreateAssetVisualDraftAsync(
+                    projectId,
+                    assetId,
+                    pendingCall.DisplayTitle ?? "Inspect asset",
+                    "Model-only image returned by read_asset.",
+                    cancellationToken) is { } draft)
+            {
+                drafts.Add(draft);
+            }
+
+            return drafts;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(toolResult);
+            var root = document.RootElement;
+            if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal)
+                && root.TryGetProperty("batch", out var batch)
+                && batch.TryGetProperty("outputAssetIds", out var outputAssetIds)
+                && outputAssetIds.ValueKind == JsonValueKind.Array)
+            {
+                var maxImages = Math.Clamp(agentOptions.Value.MaxImagesPerGenerationRound <= 0 ? 2 : agentOptions.Value.MaxImagesPerGenerationRound, 1, 2);
+                var outputIndex = 1;
+                foreach (var item in outputAssetIds.EnumerateArray().Take(maxImages))
+                {
+                    if (item.ValueKind != JsonValueKind.String
+                        || !Guid.TryParse(item.GetString(), out var outputAssetId)
+                        || !seenAssetIds.Add(outputAssetId))
+                    {
+                        continue;
+                    }
+
+                    if (await TryCreateAssetVisualDraftAsync(
+                            projectId,
+                            outputAssetId,
+                            pendingCall.DisplayTitle ?? "Generate candidates",
+                            $"Generated output {outputIndex}.",
+                            cancellationToken) is { } draft)
+                    {
+                        drafts.Add(draft);
+                        outputIndex++;
+                    }
+                }
+
+                return drafts;
+            }
+
+            if (string.Equals(pendingCall.Name, "generate_animation_guide", StringComparison.Ordinal))
+            {
+                if (TryReadGuidProperty(root, "guideAssetId", out var guideAssetId)
+                    && await TryCreateAssetVisualDraftAsync(
+                        projectId,
+                        guideAssetId,
+                        pendingCall.DisplayTitle ?? "Generate animation guide",
+                        "Animation guide asset.",
+                        cancellationToken) is { } guideDraft)
+                {
+                    drafts.Add(guideDraft);
+                }
+
+                if (TryReadGuidProperty(root, "diagnosticGuideAssetId", out var diagnosticGuideAssetId)
+                    && await TryCreateAssetVisualDraftAsync(
+                        projectId,
+                        diagnosticGuideAssetId,
+                        "Review animation guide diagnostic",
+                        "Diagnostic animation guide asset.",
+                        cancellationToken) is { } diagnosticDraft)
+                {
+                    drafts.Add(diagnosticDraft);
+                }
+
+                return drafts;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not JsonException)
+        {
+            logger.LogDebug(ex, "Could not build source-backed visuals for tool '{Tool}'.", pendingCall.Name);
+        }
+        catch (JsonException)
+        {
+        }
+
+        return drafts;
+    }
+
+    private async Task<ToolVisualDraft?> TryCreateAssetVisualDraftAsync(
+        Guid projectId,
+        Guid assetId,
+        string title,
+        string caption,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var asset = await workflow.GetAssetForExportAsync(projectId, assetId, cancellationToken);
+            return new ToolVisualDraft(
+                VisualTitle(title, asset.Label),
+                caption,
+                "asset",
+                asset.Id,
+                asset.ContentType,
+                asset.FileName,
+                asset.Width,
+                asset.Height,
+                Data: null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Could not build chat visual reference for asset {AssetId}.", assetId);
+            return null;
+        }
+    }
+
+    private static List<ToolVisualDraft> BuildDataContentToolVisualDrafts(
+        PendingToolCall pendingCall,
+        IReadOnlyList<AIContent> modelOnlyContents)
+    {
+        var drafts = new List<ToolVisualDraft>();
+        var caption = string.Empty;
+        var imageIndex = 1;
+        foreach (var content in modelOnlyContents)
+        {
+            if (content is TextContent textContent && !string.IsNullOrWhiteSpace(textContent.Text))
+            {
+                caption = CompactText(textContent.Text, 220);
+                continue;
+            }
+
+            if (content is not DataContent dataContent
+                || !dataContent.HasTopLevelMediaType("image"))
+            {
+                continue;
+            }
+
+            var contentType = string.IsNullOrWhiteSpace(dataContent.MediaType)
+                ? "image/png"
+                : dataContent.MediaType;
+            var data = dataContent.Data.ToArray();
+            if (data.Length == 0)
+                continue;
+
+            var (width, height) = ImageMetadataReader.TryReadSize(data, contentType);
+            var fileName = string.IsNullOrWhiteSpace(dataContent.Name)
+                ? $"{CleanVisualFileName(pendingCall.Name, "tool-image")}-{imageIndex}.{ExtensionForVisualContentType(contentType)}"
+                : dataContent.Name!;
+            var title = pendingCall.DisplayTitle ?? FallbackToolTitle(pendingCall.Name, pendingCall.ArgumentsJson);
+            if (drafts.Count > 0 && !string.IsNullOrWhiteSpace(dataContent.Name))
+                title = CleanVisualTitle(dataContent.Name!);
+
+            drafts.Add(new ToolVisualDraft(
+                title,
+                string.IsNullOrWhiteSpace(caption)
+                    ? $"Model-only image returned by {pendingCall.Name}."
+                    : caption,
+                "modelOnly",
+                null,
+                contentType,
+                fileName,
+                width,
+                height,
+                data));
+            imageIndex++;
+        }
+
+        return drafts;
+    }
+
+    private static AssistantMessageVisualUpdate ToVisualUpdate(Guid projectId, AssistantMessageVisual visual) =>
+        new(
+            visual.Id,
+            visual.ToolCallId,
+            visual.Title,
+            visual.Caption,
+            ChatVisualPreviewImageUrl(projectId, visual),
+            ChatVisualFullImageUrl(projectId, visual),
+            visual.Width,
+            visual.Height);
+
+    private static string ChatVisualPreviewImageUrl(Guid projectId, AssistantMessageVisual visual) =>
+        $"/media/projects/{projectId:D}/chat-visuals/{visual.Id:D}/preview{VisualVersionQuery(visual)}";
+
+    private static string ChatVisualFullImageUrl(Guid projectId, AssistantMessageVisual visual) =>
+        $"/media/projects/{projectId:D}/chat-visuals/{visual.Id:D}/full{VisualVersionQuery(visual)}";
+
+    private static string VisualVersionQuery(AssistantMessageVisual visual)
+    {
+        var createdAt = visual.CreatedAt.Kind == DateTimeKind.Utc
+            ? visual.CreatedAt
+            : DateTime.SpecifyKind(visual.CreatedAt, DateTimeKind.Utc);
+        return $"?v={createdAt.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    private static string BuildToolDisplayTitle(
+        string toolName,
+        string argumentsJson,
+        string assistantText,
+        int textOffset) =>
+        CaptureToolPurpose(assistantText, textOffset) ?? FallbackToolTitle(toolName, argumentsJson);
+
+    private static string? CaptureToolPurpose(string assistantText, int textOffset)
+    {
+        if (string.IsNullOrWhiteSpace(assistantText))
+            return null;
+
+        var before = assistantText[..Math.Clamp(textOffset, 0, assistantText.Length)].Trim();
+        if (string.IsNullOrWhiteSpace(before))
+            return null;
+
+        var lastLine = before
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .LastOrDefault();
+        if (string.IsNullOrWhiteSpace(lastLine))
+            return null;
+
+        var candidate = lastLine.Trim().TrimStart('-', '*', ' ');
+        var lastBoundary = Math.Max(candidate.LastIndexOf('.'), Math.Max(candidate.LastIndexOf('?'), candidate.LastIndexOf('!')));
+        if (lastBoundary >= 0 && lastBoundary < candidate.Length - 1)
+            candidate = candidate[(lastBoundary + 1)..].Trim();
+
+        candidate = candidate.TrimEnd(':').Trim();
+        return string.IsNullOrWhiteSpace(candidate)
+            ? null
+            : CompactText(candidate, 96);
+    }
+
+    private static string FallbackToolTitle(string toolName, string argumentsJson)
+    {
+        var baseTitle = toolName switch
+        {
+            "read_asset" => "Inspect asset",
+            "list_assets" => "Inspect assets",
+            "run_generation_round" => "Generate candidates",
+            "draft_generate_form" => "Draft generate form",
+            "draft_edit_form" => "Draft edit form",
+            "draft_prompt_recipe_form" => "Draft recipe form",
+            "review_sprite_animation" => "Review sprite frames",
+            "detect_sprite_frame_boxes" => "Detect sprite frames",
+            "map_sprite_sheet_frames" => "Map sprite frames",
+            "repair_sprite_sheet_frames" => "Repair sprite frames",
+            "stabilize_sprite_sheet_frames" => "Stabilize sprite frames",
+            "generate_animation_guide" => "Generate animation guide",
+            "switch_workspace" => "Switch workspace",
+            _ => CleanVisualTitle(toolName.Replace('_', ' ')),
+        };
+
+        var keyArg = TryReadFirstKeyArgument(argumentsJson);
+        return string.IsNullOrWhiteSpace(keyArg) ? baseTitle : $"{baseTitle}: {keyArg}";
+    }
+
+    private static string? TryReadFirstKeyArgument(string argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson) || argumentsJson == "{}")
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(argumentsJson);
+            foreach (var name in new[] { "label", "query", "kind", "mode", "assetId", "spriteSheetId", "recipeId" })
+            {
+                if (document.RootElement.TryGetProperty(name, out var element)
+                    && element.ValueKind is JsonValueKind.String or JsonValueKind.Number)
+                {
+                    return CompactText(element.ToString(), 42);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return null;
+    }
+
+    private static string VisualTitle(params string?[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate))
+                return CleanVisualTitle(candidate);
+        }
+
+        return "Image";
+    }
+
+    private static string CleanVisualTitle(string value)
+    {
+        var title = value.Replace('_', ' ').Trim();
+        return string.IsNullOrWhiteSpace(title)
+            ? "Image"
+            : CompactText(title, 96);
+    }
+
+    private static string CompactText(string value, int maxLength)
+    {
+        var compact = string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return compact.Length <= maxLength
+            ? compact
+            : compact[..Math.Max(0, maxLength - 3)] + "...";
+    }
+
+    private static string CleanVisualFileName(string value, string fallback)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string((string.IsNullOrWhiteSpace(value) ? fallback : value.Trim())
+            .Select(character => invalid.Contains(character) ? '-' : character)
+            .ToArray())
+            .Trim();
+        return string.IsNullOrWhiteSpace(cleaned) ? fallback : cleaned;
+    }
+
+    private static string ExtensionForVisualContentType(string contentType) =>
+        contentType.Equals("image/jpeg", StringComparison.OrdinalIgnoreCase) ? "jpg" : "png";
+
     private static Guid? ReadGuidArgument(PendingToolCall pendingCall, string name)
     {
         var arguments = ToolCallArguments.ParseObjectOrNull(pendingCall.ArgumentsJson) ?? pendingCall.Content.Arguments;
@@ -1483,7 +1945,7 @@ public sealed class AssistantChatService(
         return nextOrder;
     }
 
-    private async Task PersistToolResultAsync(
+    private async Task<AssistantMessage> PersistToolResultAsync(
         Guid conversationId,
         int order,
         string callId,
@@ -1505,6 +1967,7 @@ public sealed class AssistantChatService(
         };
         await conversations.AddMessageAsync(toolMessage, cancellationToken);
         await conversations.SaveChangesAsync(cancellationToken);
+        return toolMessage;
     }
 
     private static List<PersistedToolCall> ReadPersistedToolCalls(string toolCallsJson)
@@ -1599,7 +2062,37 @@ public sealed class AssistantChatService(
         string CallId,
         string Name,
         string ArgumentsJson,
-        int TextOffset);
+        int TextOffset,
+        string? DisplayTitle);
+
+    private sealed record ToolVisualDraft(
+        string Title,
+        string Caption,
+        string SourceKind,
+        Guid? SourceRefId,
+        string ContentType,
+        string FileName,
+        int? Width,
+        int? Height,
+        byte[]? Data)
+    {
+        public AssistantMessageVisual ToVisual(Guid messageId, string? toolCallId, int sortOrder) =>
+            new()
+            {
+                AssistantMessageId = messageId,
+                ToolCallId = toolCallId,
+                SortOrder = sortOrder,
+                Title = Title,
+                Caption = Caption,
+                SourceKind = SourceKind,
+                SourceRefId = SourceRefId,
+                ContentType = ContentType,
+                FileName = FileName,
+                Width = Width,
+                Height = Height,
+                Data = Data,
+            };
+    }
 
     private sealed record ToolInvocationOutcome(
         string Result,

@@ -21,9 +21,6 @@ public class Project
     public ICollection<PromptRecipeVersion> PromptRecipeVersions { get; set; } = [];
     public ICollection<AnimationRecipe> AnimationRecipes { get; set; } = [];
     public ICollection<AnimationRecipeVersion> AnimationRecipeVersions { get; set; } = [];
-    public ICollection<ActivityRun> ActivityRuns { get; set; } = [];
-    public ICollection<ActivityStep> ActivitySteps { get; set; } = [];
-    public ICollection<ActivityArtifact> ActivityArtifacts { get; set; } = [];
     public ICollection<SpriteSheetDefinition> SpriteSheets { get; set; } = [];
     public ICollection<SpriteSheetFrameRecord> SpriteSheetFrameRecords { get; set; } = [];
     public ICollection<SpriteRegion> SpriteRegions { get; set; } = [];
@@ -44,7 +41,6 @@ public class Project
 public enum WorkspaceMode
 {
     Generate,
-    Runs,
     Compare,
     Edit,
     Sprites,

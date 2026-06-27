@@ -6,7 +6,8 @@ public sealed record PersistedToolCall(
     string CallId,
     string Name,
     string ArgumentsJson,
-    int? TextOffset = null);
+    int? TextOffset = null,
+    string? DisplayTitle = null);
 
 [JsonConverter(typeof(JsonStringEnumConverter<AssistantFormDraftTarget>))]
 public enum AssistantFormDraftTarget

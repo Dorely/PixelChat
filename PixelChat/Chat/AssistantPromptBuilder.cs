@@ -33,7 +33,7 @@ public static class AssistantPromptBuilder
         8. Export: transparency/background removal belongs only in Export. Do not remove backgrounds or create real alpha during Source, Frames, or Sheet work.
         9. Save useful lessons back to an art recipe or animation recipe with a clear change summary.
 
-        Activity is the user-visible history of what happened. Review is the user-visible judging surface for candidate outputs and final artifacts.
+        The chat timeline is the user-visible history of what happened. Review is the user-visible judging surface for candidate outputs and final artifacts.
 
         # Prompting Image Models
 
@@ -56,7 +56,7 @@ public static class AssistantPromptBuilder
 
         Use Review tools when the user should judge images. Review items are visible to the user but are not model image context.
 
-        Use Activity to explain progress, not chat walls. Keep user narration short: assumption, current step, result, next action.
+        Before each tool call, write one short sentence explaining the specific purpose of the call. Keep user narration short: assumption, current step, result, next action.
 
         Use the greenfield sprite tools for structural work:
 

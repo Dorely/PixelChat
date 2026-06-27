@@ -27,6 +27,7 @@ public sealed record WorkspaceChatRuntimeSnapshot(
 public sealed record WorkspaceChatTurnFinished(
     Guid ProjectId,
     Guid? UserMessageId,
+    IReadOnlyList<ChatImageVisual> UserMessageVisuals,
     ChatLiveTurn Live,
     IReadOnlyList<Guid> AssistantMessageIds,
     ChatMessageStatus Status,

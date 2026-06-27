@@ -519,7 +519,7 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (string mode) => SwitchWorkspaceModeAsync(projectId, mode),
             name: "switch_workspace_mode",
-            description: "Switch the visible workspace mode. Allowed values: generate, activity, review, edit, sprites, recipes, assets. Legacy aliases runs and compare are accepted."),
+            description: "Switch the visible workspace mode. Allowed values: generate, review, edit, sprites, recipes, assets. Legacy alias compare is accepted."),
 
         AIFunctionFactory.Create(
             method: (string? title = null, string? summary = null, CompareReviewToolItem[]? items = null, bool switchToCompare = true, CancellationToken cancellationToken = default) =>
@@ -2606,7 +2606,6 @@ public sealed class AssistantToolRegistry(
         NormalizeToken(mode) switch
         {
             "generate" => WorkspaceMode.Generate,
-            "activity" or "activities" or "runs" or "run" or "jobs" or "job" => WorkspaceMode.Runs,
             "review" or "compare" => WorkspaceMode.Compare,
             "edit" => WorkspaceMode.Edit,
             "sprites" or "sprite" or "spritesheet" or "spritesheets" => WorkspaceMode.Sprites,
