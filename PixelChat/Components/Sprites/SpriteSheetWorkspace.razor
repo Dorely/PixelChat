@@ -41,34 +41,33 @@
     </div>
 
     <div class="sprite-editor-body">
-        <div class="sprite-stage-row">
-            <nav class="sprite-tool-rail" aria-label="Tools">
-                @if (_mode == SpriteMode.Source)
-                {
-                    <button type="button" class="@ToolButtonClass(_sourceTool, "select")" title="Select/move regions" @onclick='() => SetSourceToolAsync("select")'>Select</button>
-                    <button type="button" class="@ToolButtonClass(_sourceTool, "draw")" title="Draw rectangular region" @onclick='() => SetSourceToolAsync("draw")'>Rect</button>
-                    <button type="button" class="@ToolButtonClass(_sourceTool, "polygon")" title="Draw polygon region" @onclick='() => SetSourceToolAsync("polygon")'>Poly</button>
-                    <button type="button" class="@ToolButtonClass(_sourceTool, "pan")" title="Pan canvas" @onclick='() => SetSourceToolAsync("pan")'>Pan</button>
-                    <button type="button" class="sprite-tool-button" title="Edit source with mask and prompt" disabled="@(_busy || SelectedSourceAssetId() is null)" @onclick="OpenSourceEditModalAsync">Edit</button>
-                }
-                else if (_mode == SpriteMode.Frames)
-                {
-                    <button type="button" class="@ToolButtonClass(_frameTool, "content")" title="Move frame content" @onclick='() => SetFrameToolAsync("content")'>Move</button>
-                    <button type="button" class="@ToolButtonClass(_frameTool, "anchor")" title="Draw anchor rectangle" @onclick='() => SetFrameToolAsync("anchor")'>Anchor</button>
-                    <button type="button" class="@ToolButtonClass(_frameTool, "pan")" title="Pan canvas" @onclick='() => SetFrameToolAsync("pan")'>Pan</button>
-                    <button type="button" class="sprite-tool-button" title="Edit selected frame with mask and prompt" disabled="@(_busy || SelectedFrame() is null)" @onclick="OpenFrameEditModalAsync">Edit</button>
-                }
-                else if (_mode == SpriteMode.Sheet)
-                {
-                    <button type="button" class="sprite-tool-button" title="Build normalized sprite sheet" disabled="@(_busy || _frameSet is null)" @onclick="BuildSheetAsync">Build</button>
-                }
-                else
-                {
-                    <span class="sprite-tool-rail-hint">@ToolRailHint()</span>
-                }
-            </nav>
+        <div class="@StageRowClass()">
+            @if (_mode != SpriteMode.Export)
+            {
+                <nav class="sprite-tool-rail" aria-label="Tools">
+                    @if (_mode == SpriteMode.Source)
+                    {
+                        <button type="button" class="@ToolButtonClass(_sourceTool, "select")" title="Select/move regions" @onclick='() => SetSourceToolAsync("select")'>Select</button>
+                        <button type="button" class="@ToolButtonClass(_sourceTool, "draw")" title="Draw rectangular region" @onclick='() => SetSourceToolAsync("draw")'>Rect</button>
+                        <button type="button" class="@ToolButtonClass(_sourceTool, "polygon")" title="Draw polygon region" @onclick='() => SetSourceToolAsync("polygon")'>Poly</button>
+                        <button type="button" class="@ToolButtonClass(_sourceTool, "pan")" title="Pan canvas" @onclick='() => SetSourceToolAsync("pan")'>Pan</button>
+                        <button type="button" class="sprite-tool-button" title="Edit source with mask and prompt" disabled="@(_busy || SelectedSourceAssetId() is null)" @onclick="OpenSourceEditModalAsync">Edit</button>
+                    }
+                    else if (_mode == SpriteMode.Frames)
+                    {
+                        <button type="button" class="@ToolButtonClass(_frameTool, "content")" title="Move frame content" @onclick='() => SetFrameToolAsync("content")'>Move</button>
+                        <button type="button" class="@ToolButtonClass(_frameTool, "anchor")" title="Draw anchor rectangle" @onclick='() => SetFrameToolAsync("anchor")'>Anchor</button>
+                        <button type="button" class="@ToolButtonClass(_frameTool, "pan")" title="Pan canvas" @onclick='() => SetFrameToolAsync("pan")'>Pan</button>
+                        <button type="button" class="sprite-tool-button" title="Edit selected frame with mask and prompt" disabled="@(_busy || SelectedFrame() is null)" @onclick="OpenFrameEditModalAsync">Edit</button>
+                    }
+                    else if (_mode == SpriteMode.Sheet)
+                    {
+                        <button type="button" class="sprite-tool-button" title="Build normalized sprite sheet" disabled="@(_busy || _frameSet is null)" @onclick="BuildSheetAsync">Build</button>
+                    }
+                </nav>
+            }
 
-            <section class="sprite-stage">
+            <section class="@StagePanelClass()">
                 <div class="sprite-section-title-row">
                     <div class="section-title">@StageTitle()</div>
                     @if (_busy)
@@ -141,8 +140,10 @@
                 }
             </section>
 
-            <aside class="sprite-inspector">
-                @if (_mode == SpriteMode.Source)
+            @if (_mode != SpriteMode.Export)
+            {
+                <aside class="sprite-inspector">
+                    @if (_mode == SpriteMode.Source)
                 {
                     <div class="sprite-settings-panel">
                         <div class="section-title">Source</div>
@@ -191,7 +192,7 @@
                         }
                     </div>
                 }
-                else if (_mode == SpriteMode.Frames)
+                    else if (_mode == SpriteMode.Frames)
                 {
                     <div class="sprite-anim-cluster">
                         <div class="sprite-section-title-row">
@@ -307,7 +308,7 @@
                         </div>
                     }
                 }
-                else if (_mode == SpriteMode.Sheet)
+                    else if (_mode == SpriteMode.Sheet)
                 {
                     <div class="sprite-settings-panel">
                         <div class="section-title">Sheet Settings</div>
@@ -323,14 +324,8 @@
                         </div>
                     </div>
                 }
-                else
-                {
-                    <div class="sprite-settings-panel">
-                        <div class="section-title">Export</div>
-                        <p class="sprite-inspector-hint">Produce final engine-ready output. Transparency and background removal are applied at this stage only.</p>
-                    </div>
-                }
-            </aside>
+                </aside>
+            }
         </div>
 
         <div class="sprite-agent-strip" role="status">
@@ -2210,13 +2205,6 @@
         return $"{set.Name} / {set.FrameCount} frame(s) / {set.DefaultCellWidth} x {set.DefaultCellHeight}";
     }
 
-    private string ToolRailHint() => _mode switch
-    {
-        SpriteMode.Sheet => "Configure and build.",
-        SpriteMode.Export => "Export final files.",
-        _ => string.Empty,
-    };
-
     private static string ModeLabel(SpriteMode mode) => mode switch
     {
         SpriteMode.Source => "Source",
@@ -2244,6 +2232,10 @@
     };
 
     private string ModeTabClass(SpriteMode mode) => _mode == mode ? "sprite-mode-tab is-active" : "sprite-mode-tab";
+
+    private string StageRowClass() => _mode == SpriteMode.Export ? "sprite-stage-row is-export-layout" : "sprite-stage-row";
+
+    private string StagePanelClass() => _mode == SpriteMode.Export ? "sprite-stage sprite-export-workflow" : "sprite-stage";
 
     private static string ToolButtonClass(string current, string tool) => current == tool ? "sprite-tool-button is-active" : "sprite-tool-button";
 
