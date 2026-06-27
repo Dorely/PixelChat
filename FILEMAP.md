@@ -43,10 +43,10 @@
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, chat-visual persistence, autonomous generation budget wiring/model-only outputs including sprite diagnostics, tool streaming/execution, form drafts, and transcript replay. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, throttles streaming state notifications, commits finished turns with visuals, and applies workspace/form side effects. |
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact workspace records for Review, live sprite focus/agent status, asset, and recipe context used by assistant tools. |
-| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt around the Source -> Frames -> Sheet -> Export workflow, deterministic sprite tools, art/animation recipes, review, chat-timeline tool purpose titles, and export guidance. |
-| `AssistantToolModels.cs` | Persisted tool-call manifest records with display titles, form draft payloads, animation frame mark payloads, and per-turn autonomous generation budget state. |
-| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, generation, greenfield source-region/frame-set/frame-mask/sheet operations, legacy sprite repair tools, Review sets, favorites, and exports. |
-| `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, display titles, visual metadata, completions, form drafts, workspace mutations, and errors. |
+| `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt around the Source -> Frames -> Sheet -> Export workflow, deterministic sprite tools, art/animation recipes, explicit tool display titles, review, and export guidance. |
+| `AssistantToolModels.cs` | Persisted tool-call manifest records with explicit display titles, form draft payloads, animation frame mark payloads, and per-turn autonomous generation budget state. |
+| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, generation, sprite operations, Review sets, favorites, exports, and global `displayTitle` tool metadata schema. |
+| `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, explicit display title metadata, visual metadata, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
 
@@ -106,7 +106,7 @@
 
 | File | Description |
 |------|-------------|
-| `ChatModels.cs` | UI-only ordered chat text/tool/image parts, compact tool chip state with display titles and visuals, live-turn state, and persisted tool-call helpers used by chat components. |
+| `ChatModels.cs` | UI-only ordered chat text/tool/image parts, compact tool chip state with explicit display titles and visuals, live-turn state, and persisted tool-call helpers used by chat components. |
 | `ChatSurface.razor` / `.razor.css` / `.razor.js` | Reusable chat shell for ordered text/tool/image transcript rendering, visual preview clicks, streaming state, composer autosize, enter-to-send, and scroll-follow behavior. |
 | `ChatToolChipView.razor` / `.razor.css` | Expandable compact tool-call chip used for live and persisted assistant tool timeline entries. |
 

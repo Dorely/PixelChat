@@ -56,7 +56,7 @@ public static class AssistantPromptBuilder
 
         Use Review tools when the user should judge images. Review items are visible to the user but are not model image context.
 
-        Before each tool call, write one short sentence explaining the specific purpose of the call. Keep user narration short: assumption, current step, result, next action.
+        Every tool has an optional displayTitle argument. For every nontrivial tool call, set displayTitle to a short user-visible purpose label such as "Inspect source sprite", "Generate walk candidates", or "Align frames by feet". This title is UI metadata only; do not repeat it as a special pre-tool chat line. Keep normal chat narration short: assumption, current step, result, next action.
 
         Use the greenfield sprite tools for structural work:
 

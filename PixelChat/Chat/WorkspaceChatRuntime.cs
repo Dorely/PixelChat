@@ -224,7 +224,7 @@ public sealed class WorkspaceChatRuntime(
                         started.ToolName,
                         started.ArgumentsJson,
                         started.ArgumentsComplete,
-                        started.DisplayTitle);
+                        started.ExplicitDisplayTitle);
                     break;
 
                 case AssistantToolCallArgumentsDelta delta:

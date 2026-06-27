@@ -25,7 +25,7 @@ public sealed record AssistantToolCallStarted(
     string ToolName,
     string ArgumentsJson,
     bool ArgumentsComplete,
-    string? DisplayTitle) : AssistantTurnUpdate;
+    string? ExplicitDisplayTitle) : AssistantTurnUpdate;
 
 public sealed record AssistantToolCallArgumentsDelta(string CallId, string ArgumentsDelta, bool ArgumentsComplete) : AssistantTurnUpdate;
 

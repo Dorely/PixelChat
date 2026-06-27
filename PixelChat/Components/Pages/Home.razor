@@ -3093,7 +3093,7 @@ else
         IReadOnlyDictionary<string, AssistantMessage> toolRowsByCallId,
         Guid projectId)
     {
-        var chip = new ChatToolChip(call.CallId, call.Name, call.ArgumentsJson, argumentsComplete: true, call.DisplayTitle);
+        var chip = new ChatToolChip(call.CallId, call.Name, call.ArgumentsJson, argumentsComplete: true, call.ExplicitDisplayTitle);
         if (!toolRowsByCallId.TryGetValue(call.CallId, out var toolRow))
             return chip;
 

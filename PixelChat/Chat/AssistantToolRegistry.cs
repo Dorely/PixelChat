@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
@@ -75,7 +76,8 @@ public sealed class AssistantToolRegistry(
     };
 
     public IList<AITool> Build(Guid projectId, AssistantTurnGenerationBudget budget) =>
-    [
+        WithDisplayTitleParameters(
+        [
         AIFunctionFactory.Create(
             method: () => ListWorkspaceStateAsync(projectId),
             name: "list_workspace_state",
@@ -714,9 +716,46 @@ public sealed class AssistantToolRegistry(
             method: (Guid assetId) => ExportAssetAsync(projectId, assetId),
             name: "export_asset",
             description: "Prepare an existing asset for export by identifying it for the visible export modal. Export uses a persisted applied-step stack with key-color cleanup as the default next step; the user can apply fast cleanup, key-color cleanup, and Local AI in sequence, choose None to download the current preview without adding a processing step, reset to the original image, then download the current PNG."),
-    ];
+    ]);
+
+    private static IList<AITool> WithDisplayTitleParameters(AITool[] tools) =>
+        tools.Select(tool => tool is AIFunction function
+            ? new DisplayTitleAIFunction(function)
+            : tool).ToList();
 
     public bool IsWorkspaceMutation(string toolName) => WorkspaceMutationTools.Contains(toolName);
+
+    private sealed class DisplayTitleAIFunction(AIFunction innerFunction) : DelegatingAIFunction(innerFunction)
+    {
+        private const string DisplayTitleDescription =
+            "Short user-visible title for this tool chip. Set this for every nontrivial call. Omit only for trivial reads where the formatted tool name is enough.";
+
+        private readonly Lazy<JsonElement> _jsonSchema = new(() => AddDisplayTitleParameter(innerFunction.JsonSchema));
+
+        public override JsonElement JsonSchema => _jsonSchema.Value;
+
+        private static JsonElement AddDisplayTitleParameter(JsonElement schema)
+        {
+            var node = JsonNode.Parse(schema.GetRawText()) as JsonObject ?? new JsonObject();
+            var properties = node["properties"] as JsonObject;
+            if (properties is null)
+            {
+                properties = new JsonObject();
+                node["properties"] = properties;
+            }
+
+            if (!properties.ContainsKey("displayTitle"))
+            {
+                properties["displayTitle"] = new JsonObject
+                {
+                    ["type"] = "string",
+                    ["description"] = DisplayTitleDescription,
+                };
+            }
+
+            return JsonSerializer.SerializeToElement(node, JsonOptions);
+        }
+    }
 
     private async Task<string> ListWorkspaceStateAsync(Guid projectId)
     {

@@ -58,18 +58,18 @@ public sealed class ChatToolChip
 {
     private readonly StringBuilder _arguments = new();
 
-    public ChatToolChip(string callId, string name, string argumentsJson, bool argumentsComplete = true, string? displayTitle = null)
+    public ChatToolChip(string callId, string name, string argumentsJson, bool argumentsComplete = true, string? explicitDisplayTitle = null)
     {
         CallId = callId;
         Name = name;
-        DisplayTitle = displayTitle;
+        ExplicitDisplayTitle = explicitDisplayTitle;
         SetArguments(argumentsJson);
         ArgumentsComplete = argumentsComplete;
     }
 
     public string CallId { get; }
     public string Name { get; private set; }
-    public string? DisplayTitle { get; private set; }
+    public string? ExplicitDisplayTitle { get; private set; }
     public string ArgumentsJson => _arguments.ToString();
     public string? Result { get; set; }
     public string? Error { get; set; }
@@ -81,10 +81,10 @@ public sealed class ChatToolChip
 
     public void Rename(string name) => Name = name;
 
-    public void SetDisplayTitle(string? displayTitle)
+    public void SetExplicitDisplayTitle(string? explicitDisplayTitle)
     {
-        if (!string.IsNullOrWhiteSpace(displayTitle))
-            DisplayTitle = displayTitle.Trim();
+        if (!string.IsNullOrWhiteSpace(explicitDisplayTitle))
+            ExplicitDisplayTitle = explicitDisplayTitle.Trim();
     }
 
     public void SetArguments(string argumentsJson)
@@ -110,7 +110,7 @@ public sealed class ChatToolChip
 
     public ChatToolChip Clone()
     {
-        var clone = new ChatToolChip(CallId, Name, ArgumentsJson, ArgumentsComplete, DisplayTitle)
+        var clone = new ChatToolChip(CallId, Name, ArgumentsJson, ArgumentsComplete, ExplicitDisplayTitle)
         {
             Result = Result,
             Error = Error,
@@ -139,19 +139,19 @@ public sealed class ChatLiveTurn
         CurrentMessage().AppendText(text);
     }
 
-    public void StartToolCall(string callId, string name, string argumentsJson, bool argumentsComplete, string? displayTitle = null)
+    public void StartToolCall(string callId, string name, string argumentsJson, bool argumentsComplete, string? explicitDisplayTitle = null)
     {
         IsThinking = false;
         var chip = FindToolChip(callId);
         if (chip is null)
         {
-            chip = new ChatToolChip(callId, name, argumentsJson, argumentsComplete, displayTitle);
+            chip = new ChatToolChip(callId, name, argumentsJson, argumentsComplete, explicitDisplayTitle);
             ToolMessage().Parts.Add(new ChatToolPart(chip));
             return;
         }
 
         chip.Rename(name);
-        chip.SetDisplayTitle(displayTitle);
+        chip.SetExplicitDisplayTitle(explicitDisplayTitle);
         if (!string.IsNullOrEmpty(argumentsJson))
             chip.SetArguments(argumentsJson);
         if (argumentsComplete)
@@ -283,7 +283,7 @@ public sealed record ChatPersistedToolCall(
     string Name,
     string ArgumentsJson,
     int? TextOffset = null,
-    string? DisplayTitle = null);
+    string? ExplicitDisplayTitle = null);
 
 public static class ChatTranscriptHelpers
 {

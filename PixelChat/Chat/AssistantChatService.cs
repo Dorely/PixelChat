@@ -28,6 +28,7 @@ public sealed class AssistantChatService(
     private const string InterruptedToolError = "PixelChat was interrupted before this tool call produced a saved result.";
     private const string CancelledToolResult = "Error: PixelChat was cancelled before this tool call produced a saved result.";
     private const string CancelledToolError = "PixelChat was cancelled before this tool call produced a saved result.";
+    private const string DisplayTitleArgumentName = "displayTitle";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -244,37 +245,40 @@ public sealed class AssistantChatService(
                                 switch (toolUpdate)
                                 {
                                     case StreamingToolCallStartedUpdate started:
+                                        var startedArguments = ExtractToolDisplayMetadata(started.ArgumentsJson);
                                         updatesToYield.Add(new AssistantToolCallStarted(
                                             started.CallId,
                                             started.ToolName,
-                                            started.ArgumentsJson,
+                                            startedArguments.ArgumentsJson,
                                             started.ArgumentsComplete,
-                                            BuildToolDisplayTitle(
-                                                started.ToolName,
-                                                started.ArgumentsJson,
-                                                textBuilder.ToString(),
-                                                textBuilder.Length)));
+                                            startedArguments.ExplicitDisplayTitle));
                                         break;
 
                                     case StreamingToolCallArgumentsDeltaUpdate delta:
-                                        updatesToYield.Add(new AssistantToolCallArgumentsDelta(
-                                            delta.CallId,
-                                            delta.ArgumentsDelta,
-                                            delta.ArgumentsComplete));
+                                        if (!delta.ArgumentsComplete)
+                                        {
+                                            updatesToYield.Add(new AssistantToolCallArgumentsDelta(
+                                                delta.CallId,
+                                                delta.ArgumentsDelta,
+                                                delta.ArgumentsComplete));
+                                        }
                                         break;
 
                                     case StreamingToolCallReadyUpdate ready:
+                                        var readyArguments = ExtractToolDisplayMetadata(ready.ArgumentsJson);
+                                        updatesToYield.Add(new AssistantToolCallStarted(
+                                            ready.CallId,
+                                            ready.ToolName,
+                                            readyArguments.ArgumentsJson,
+                                            ArgumentsComplete: true,
+                                            readyArguments.ExplicitDisplayTitle));
                                         pendingCalls.Add(new PendingToolCall(
                                             ready.Content,
                                             ready.CallId,
                                             ready.ToolName,
-                                            ready.ArgumentsJson,
+                                            readyArguments.ArgumentsJson,
                                             ready.TextOffset,
-                                            BuildToolDisplayTitle(
-                                                ready.ToolName,
-                                                ready.ArgumentsJson,
-                                                textBuilder.ToString(),
-                                                ready.TextOffset)));
+                                            readyArguments.ExplicitDisplayTitle));
                                         tokenContextChanged = true;
                                         break;
                                 }
@@ -684,7 +688,7 @@ public sealed class AssistantChatService(
             pendingCall.Name,
             pendingCall.ArgumentsJson,
             pendingCall.TextOffset,
-            pendingCall.DisplayTitle);
+            pendingCall.ExplicitDisplayTitle);
 
     private async Task<ChatMessage> BuildCurrentUserMessageAsync(
         string text,
@@ -1560,7 +1564,7 @@ public sealed class AssistantChatService(
             if (await TryCreateAssetVisualDraftAsync(
                     projectId,
                     assetId,
-                    pendingCall.DisplayTitle ?? "Inspect asset",
+                    pendingCall.ExplicitDisplayTitle ?? "Inspect asset",
                     "Model-only image returned by read_asset.",
                     cancellationToken) is { } draft)
             {
@@ -1593,7 +1597,7 @@ public sealed class AssistantChatService(
                     if (await TryCreateAssetVisualDraftAsync(
                             projectId,
                             outputAssetId,
-                            pendingCall.DisplayTitle ?? "Generate candidates",
+                            pendingCall.ExplicitDisplayTitle ?? "Generate candidates",
                             $"Generated output {outputIndex}.",
                             cancellationToken) is { } draft)
                     {
@@ -1611,7 +1615,7 @@ public sealed class AssistantChatService(
                     && await TryCreateAssetVisualDraftAsync(
                         projectId,
                         guideAssetId,
-                        pendingCall.DisplayTitle ?? "Generate animation guide",
+                        pendingCall.ExplicitDisplayTitle ?? "Generate animation guide",
                         "Animation guide asset.",
                         cancellationToken) is { } guideDraft)
                 {
@@ -1703,7 +1707,7 @@ public sealed class AssistantChatService(
             var fileName = string.IsNullOrWhiteSpace(dataContent.Name)
                 ? $"{CleanVisualFileName(pendingCall.Name, "tool-image")}-{imageIndex}.{ExtensionForVisualContentType(contentType)}"
                 : dataContent.Name!;
-            var title = pendingCall.DisplayTitle ?? FallbackToolTitle(pendingCall.Name, pendingCall.ArgumentsJson);
+            var title = pendingCall.ExplicitDisplayTitle ?? CleanVisualTitle(pendingCall.Name.Replace('_', ' '));
             if (drafts.Count > 0 && !string.IsNullOrWhiteSpace(dataContent.Name))
                 title = CleanVisualTitle(dataContent.Name!);
 
@@ -1750,85 +1754,50 @@ public sealed class AssistantChatService(
         return $"?v={createdAt.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
     }
 
-    private static string BuildToolDisplayTitle(
-        string toolName,
-        string argumentsJson,
-        string assistantText,
-        int textOffset) =>
-        CaptureToolPurpose(assistantText, textOffset) ?? FallbackToolTitle(toolName, argumentsJson);
-
-    private static string? CaptureToolPurpose(string assistantText, int textOffset)
+    private static ToolDisplayMetadata ExtractToolDisplayMetadata(string argumentsJson)
     {
-        if (string.IsNullOrWhiteSpace(assistantText))
-            return null;
-
-        var before = assistantText[..Math.Clamp(textOffset, 0, assistantText.Length)].Trim();
-        if (string.IsNullOrWhiteSpace(before))
-            return null;
-
-        var lastLine = before
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .LastOrDefault();
-        if (string.IsNullOrWhiteSpace(lastLine))
-            return null;
-
-        var candidate = lastLine.Trim().TrimStart('-', '*', ' ');
-        var lastBoundary = Math.Max(candidate.LastIndexOf('.'), Math.Max(candidate.LastIndexOf('?'), candidate.LastIndexOf('!')));
-        if (lastBoundary >= 0 && lastBoundary < candidate.Length - 1)
-            candidate = candidate[(lastBoundary + 1)..].Trim();
-
-        candidate = candidate.TrimEnd(':').Trim();
-        return string.IsNullOrWhiteSpace(candidate)
-            ? null
-            : CompactText(candidate, 96);
-    }
-
-    private static string FallbackToolTitle(string toolName, string argumentsJson)
-    {
-        var baseTitle = toolName switch
-        {
-            "read_asset" => "Inspect asset",
-            "list_assets" => "Inspect assets",
-            "run_generation_round" => "Generate candidates",
-            "draft_generate_form" => "Draft generate form",
-            "draft_edit_form" => "Draft edit form",
-            "draft_prompt_recipe_form" => "Draft recipe form",
-            "review_sprite_animation" => "Review sprite frames",
-            "detect_sprite_frame_boxes" => "Detect sprite frames",
-            "map_sprite_sheet_frames" => "Map sprite frames",
-            "repair_sprite_sheet_frames" => "Repair sprite frames",
-            "stabilize_sprite_sheet_frames" => "Stabilize sprite frames",
-            "generate_animation_guide" => "Generate animation guide",
-            "switch_workspace" => "Switch workspace",
-            _ => CleanVisualTitle(toolName.Replace('_', ' ')),
-        };
-
-        var keyArg = TryReadFirstKeyArgument(argumentsJson);
-        return string.IsNullOrWhiteSpace(keyArg) ? baseTitle : $"{baseTitle}: {keyArg}";
-    }
-
-    private static string? TryReadFirstKeyArgument(string argumentsJson)
-    {
-        if (string.IsNullOrWhiteSpace(argumentsJson) || argumentsJson == "{}")
-            return null;
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return new("{}", null);
 
         try
         {
             using var document = JsonDocument.Parse(argumentsJson);
-            foreach (var name in new[] { "label", "query", "kind", "mode", "assetId", "spriteSheetId", "recipeId" })
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return new(argumentsJson, null);
+
+            var sanitized = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            var foundDisplayTitle = false;
+            string? explicitDisplayTitle = null;
+            foreach (var property in document.RootElement.EnumerateObject())
             {
-                if (document.RootElement.TryGetProperty(name, out var element)
-                    && element.ValueKind is JsonValueKind.String or JsonValueKind.Number)
+                if (string.Equals(property.Name, DisplayTitleArgumentName, StringComparison.Ordinal))
                 {
-                    return CompactText(element.ToString(), 42);
+                    foundDisplayTitle = true;
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        explicitDisplayTitle = NormalizeExplicitDisplayTitle(property.Value.GetString());
+                    continue;
                 }
+
+                sanitized[property.Name] = property.Value.Clone();
             }
+
+            if (!foundDisplayTitle)
+                return new(argumentsJson, explicitDisplayTitle);
+
+            return new(JsonSerializer.Serialize(sanitized, JsonOptions), explicitDisplayTitle);
         }
         catch (JsonException)
         {
+            return new(argumentsJson, null);
         }
+    }
 
-        return null;
+    private static string? NormalizeExplicitDisplayTitle(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return CompactText(value.Trim(), 96);
     }
 
     private static string VisualTitle(params string?[] candidates)
@@ -2063,7 +2032,11 @@ public sealed class AssistantChatService(
         string Name,
         string ArgumentsJson,
         int TextOffset,
-        string? DisplayTitle);
+        string? ExplicitDisplayTitle);
+
+    private sealed record ToolDisplayMetadata(
+        string ArgumentsJson,
+        string? ExplicitDisplayTitle);
 
     private sealed record ToolVisualDraft(
         string Title,

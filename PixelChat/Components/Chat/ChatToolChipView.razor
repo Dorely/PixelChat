@@ -2,7 +2,7 @@
 
 @{
     var summaryText = SummaryText;
-    var displayTitle = Chip.DisplayTitle ?? FormatToolName(Chip.Name);
+    var displayTitle = Chip.ExplicitDisplayTitle ?? FormatToolName(Chip.Name);
     var toolName = FormatToolName(Chip.Name);
 }
 
@@ -29,10 +29,10 @@
             <div class="chat-chip-section">tool</div>
             <pre class="chat-chip-pre">@Chip.Name</pre>
         }
-        @if (Chip.HasArguments || !Chip.ArgumentsComplete)
+        @if (Chip.ArgumentsComplete && Chip.HasArguments)
         {
             <div class="chat-chip-section">args</div>
-            <pre class="chat-chip-pre">@Chip.ArgumentsJson@if (!Chip.ArgumentsComplete) { <span class="chat-cursor">|</span> }</pre>
+            <pre class="chat-chip-pre">@Chip.ArgumentsJson</pre>
         }
         @if (Chip.Error is not null)
         {
@@ -54,7 +54,7 @@
 @code {
     [Parameter, EditorRequired] public ChatToolChip Chip { get; set; } = null!;
 
-    private string? SummaryText => Chip.HasArguments
+    private string? SummaryText => Chip.ArgumentsComplete && Chip.HasArguments
         ? ChatTranscriptHelpers.TruncateInline(Chip.ArgumentsJson, 96)
         : null;
 
