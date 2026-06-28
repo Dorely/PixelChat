@@ -163,14 +163,15 @@
 | File | Description |
 |------|-------------|
 | `Project.cs` | EF entity for art workbench projects, active batch/sprite sheet/frame-set/workspace/sprite focus state, and owned assets, sprite sheets, frame sets, and recipes. |
-| `AnimationRecipe.cs` | EF entity for reusable animation/motion recipes with guide asset, frame order, expected boxes, anchor strategy, prompt scaffold, export defaults, and primary example. |
-| `AnimationRecipeVersion.cs` | EF entity for append-only animation recipe snapshots and change summaries. |
+| `AnimationRecipe.cs` | EF entity for reusable animation/motion recipe prompts with private notes, current version, and ordered asset attachments. |
+| `AnimationRecipeVersion.cs` | EF entity for append-only animation recipe name/prompt/notes snapshots and change summaries. |
 | `ArtAsset.cs` | EF entity for imported, generated, edited, cropped, sprite-guide, and sprite-sheet image BLOBs plus lineage, source art/animation recipe versions, favorite flag, prompt, and metadata. |
 | `BackgroundRemovalExportCache.cs` | EF entity for cached Local AI export PNGs keyed by source asset bytes, model, rembg version, and processing options. |
 | `ExportStepCache.cs` | EF entity for persisted applied export-step PNGs per source asset and source image hash. |
 | `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, output errors, lineage, status, and stamped art/animation recipe versions. |
-| `PromptRecipe.cs` | EF entity backing art recipes: reusable prompt/style/production guides, avoid rules, one active example image, and preferred defaults. |
-| `PromptRecipeVersion.cs` | EF entity for append-only art recipe snapshots including the active example image used by user/assistant saves and restore. |
+| `PromptRecipe.cs` | EF entity backing reusable art recipe prompts with private notes, version history, and ordered example/guide attachments. |
+| `PromptRecipeVersion.cs` | EF entity for append-only art recipe name/prompt/notes snapshots used by user/assistant saves and restore. |
+| `RecipeAssetAttachment.cs` | EF entity for ordered art/animation recipe asset attachments with example or guide roles. |
 | `SpriteSheetDefinition.cs` | EF entity for row-based sprite-sheet definitions linking immutable source assets to mutable working sprite-sheet assets plus layout, background fill, stabilization metadata, FPS, and loop defaults. |
 | `SpriteSheetFrameRecord.cs` | EF entity for durable sprite frame records, source/output rectangles, per-frame source-image provenance, pivots/timing/root offsets, previews, hidden working-frame PNGs, labels, dimensions, and timestamps. (Legacy sprite model; being replaced by the greenfield FrameSet/Frame entities.) |
 | `SpriteRegion.cs` | Greenfield EF entity for a source-image region (rect/polygon, type, order) that stays linked to source pixels and can be extracted as an asset or turned into frames. |
@@ -236,6 +237,7 @@
 | `20260626003000_SpriteWorkspaceFocusState.cs` | EF migration adding persisted Sprites mode/source/frame/region focus state to projects for UI and assistant synchronization. |
 | `20260626234709_ChatMessageVisualsRemoveActivity.cs` / `.Designer.cs` | EF migration adding assistant message visuals, dropping Activity tables, and normalizing old `Runs` workspace mode values. |
 | `20260627061347_AnimationRecipeGenerationUsage.cs` / `.Designer.cs` | EF migration adding nullable animation recipe/version provenance to generation batches and generated/derived assets. |
+| `20260628063511_SimplifyRecipesAndAttachments.cs` / `.Designer.cs` | EF migration simplifying art/animation recipes to named prompts and notes, adding typed recipe asset attachments, and backfilling old example/guide references. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

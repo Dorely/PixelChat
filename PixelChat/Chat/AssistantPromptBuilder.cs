@@ -14,10 +14,10 @@ public static class AssistantPromptBuilder
 
         PixelChat has two reusable recipe types:
 
-        - Art recipes: durable style and production guidance for generating more assets in the same visual language. Existing prompt recipes are art recipes.
-        - Animation recipes: reusable motion, guide, frame layout, anchor, prompt scaffold, timing, and export defaults. They are not tied to one art style.
+        - Art recipes: named reusable prompts for visual style and production guidance, plus private notes and optional example/guide asset attachments.
+        - Animation recipes: named reusable prompts for motion and animation guidance, plus private notes and optional example/guide asset attachments. They are not tied to one art style unless their prompt explicitly says so.
 
-        Use either, both, or neither depending on the task. Do not fold art style details into animation recipes unless the recipe is intentionally style-specific.
+        Use either, both, or neither depending on the task. Recipe notes are local bookkeeping and are never sent to image generation. Recipe attachments are automatically included as image references when the recipe is selected. Do not treat recipes as storage for provider/model/size choices, avoid-rule lists, frame boxes, fps/loop settings, anchor strategy, export defaults, or one-off task details.
 
         # Staged Sprite Workflow
 
@@ -44,7 +44,7 @@ public static class AssistantPromptBuilder
         - Layout constraints: frame count/order, boundaries, no overlap, equal spacing, one subject per frame.
         - Preservation constraints: keep identity/style consistent, do not invent unrelated props, do not change facing unless requested.
         - Cleanup constraints: do not reproduce guide lines, labels, boxes, numbers, skeleton marks, or construction marks in the output.
-        - Anchor strategy from the animation recipe. Do not hardcode humanoid-specific terms such as pelvis unless the recipe or user explicitly calls for it.
+        - Alignment or anchor requirements only when the user or selected animation recipe prompt explicitly states them. Do not hardcode humanoid-specific terms such as pelvis unless the recipe or user explicitly calls for it.
 
         Prefer direct instructions over long rule stacks. If a result fails, change the smallest relevant part of the prompt or workflow.
 

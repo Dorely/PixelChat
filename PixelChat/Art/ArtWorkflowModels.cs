@@ -541,39 +541,34 @@ public enum GenerationOutputStatus
 public sealed record PromptRecipeView(
     Guid Id,
     string Name,
-    string AssetType,
-    string PromptTemplate,
-    IReadOnlyList<string> StyleRules,
-    IReadOnlyList<string> AvoidRules,
-    Guid? ExampleAssetId,
-    string PreferredProvider,
-    string PreferredModel,
-    string PreferredSize,
+    string Prompt,
     string Notes,
+    IReadOnlyList<RecipeAssetAttachmentView> Attachments,
     int CurrentVersion,
     DateTime CreatedAt);
 
 public sealed record AnimationRecipeView(
     Guid Id,
     string Name,
-    string AnimationKind,
-    string Facing,
-    int FrameCount,
-    IReadOnlyList<int> FrameOrder,
-    int Fps,
-    bool Loop,
-    Guid? GuideAssetId,
-    IReadOnlyList<SpriteSheetRect> ExpectedFrameBoxes,
-    string AnchorStrategy,
-    string PromptScaffold,
-    string ExportDefaultsJson,
+    string Prompt,
     string Notes,
-    Guid? PrimaryExampleSpriteSheetId,
+    IReadOnlyList<RecipeAssetAttachmentView> Attachments,
     int CurrentVersion,
     DateTime CreatedAt,
-    DateTime UpdatedAt,
-    string GuideAssetKind,
-    bool GuideAssetValid);
+    DateTime UpdatedAt);
+
+public sealed record RecipeAssetAttachmentView(
+    Guid Id,
+    Guid AssetId,
+    string Role,
+    int SortOrder,
+    string Notes,
+    string AssetLabel,
+    ArtAssetKind AssetKind,
+    string PreviewImageUrl,
+    int? Width,
+    int? Height,
+    DateTime CreatedAt);
 
 public sealed record ImageMaskView(
     Guid Id,
@@ -701,67 +696,36 @@ public sealed record ExtractRegionAsAssetResult(
 
 public sealed record SavePromptRecipeRequest(
     string Name,
-    string AssetType,
-    string PromptTemplate,
-    IReadOnlyList<string> StyleRules,
-    IReadOnlyList<string> AvoidRules,
-    Guid? ExampleAssetId,
-    string PreferredProvider,
-    string PreferredModel,
-    string PreferredSize,
+    string Prompt,
     string Notes,
     string Source = "user",
     string ChangeSummary = "");
 
 public sealed record UpdatePromptRecipeRequest(
     string Name,
-    string AssetType,
-    string PromptTemplate,
-    IReadOnlyList<string> StyleRules,
-    IReadOnlyList<string> AvoidRules,
-    Guid? ExampleAssetId,
-    string PreferredProvider,
-    string PreferredModel,
-    string PreferredSize,
+    string Prompt,
     string Notes,
     string Source = "user",
     string ChangeSummary = "");
 
 public sealed record SaveAnimationRecipeRequest(
     string Name,
-    string AnimationKind,
-    string Facing,
-    int FrameCount,
-    IReadOnlyList<int> FrameOrder,
-    int Fps,
-    bool Loop,
-    Guid? GuideAssetId,
-    IReadOnlyList<SpriteSheetRect> ExpectedFrameBoxes,
-    string AnchorStrategy,
-    string PromptScaffold,
-    string ExportDefaultsJson,
+    string Prompt,
     string Notes,
-    Guid? PrimaryExampleSpriteSheetId,
     string Source = "user",
     string ChangeSummary = "");
 
 public sealed record UpdateAnimationRecipeRequest(
     string Name,
-    string AnimationKind,
-    string Facing,
-    int FrameCount,
-    IReadOnlyList<int> FrameOrder,
-    int Fps,
-    bool Loop,
-    Guid? GuideAssetId,
-    IReadOnlyList<SpriteSheetRect> ExpectedFrameBoxes,
-    string AnchorStrategy,
-    string PromptScaffold,
-    string ExportDefaultsJson,
+    string Prompt,
     string Notes,
-    Guid? PrimaryExampleSpriteSheetId,
     string Source = "user",
     string ChangeSummary = "");
+
+public sealed record RecipeAssetAttachmentRequest(
+    Guid AssetId,
+    string Role,
+    string? Notes = null);
 
 public sealed record GenerateAnimationGuideRequest(
     Guid? ReferenceAssetId,
@@ -822,9 +786,9 @@ public sealed record PromptRecipeVersionView(
     Guid RecipeId,
     int Version,
     string Name,
+    string Notes,
     string Source,
     string ChangeSummary,
-    Guid? ExampleAssetId,
     DateTime CreatedAt);
 
 public sealed record AnimationRecipeVersionView(
@@ -832,19 +796,7 @@ public sealed record AnimationRecipeVersionView(
     Guid AnimationRecipeId,
     int Version,
     string Name,
-    string AnimationKind,
-    string Facing,
-    int FrameCount,
-    IReadOnlyList<int> FrameOrder,
-    int Fps,
-    bool Loop,
-    Guid? GuideAssetId,
-    IReadOnlyList<SpriteSheetRect> ExpectedFrameBoxes,
-    string AnchorStrategy,
-    string PromptScaffold,
-    string ExportDefaultsJson,
     string Notes,
-    Guid? PrimaryExampleSpriteSheetId,
     string Source,
     string ChangeSummary,
     DateTime CreatedAt);

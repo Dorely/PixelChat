@@ -158,7 +158,6 @@ else
 
     private readonly List<ChatRenderableMessage> _messages = [];
     private readonly HashSet<Guid> _draftReferenceAssetIds = [];
-    private Guid? _recipeExampleAssetId;
     private WorkbenchView? _workbench;
     private WorkspaceSpritesVisibleState? _spritesVisibleState;
     private Guid? _spriteEditorSourceAssetId;
@@ -212,28 +211,19 @@ else
     private bool _recipeEditorDirty;
     private bool _recipeChangedExternally;
     private string _recipeName = string.Empty;
-    private string _recipeAssetType = "sprite";
-    private string _recipePromptTemplate = string.Empty;
-    private string _recipeStyleRules = string.Empty;
-    private string _recipeAvoidRules = string.Empty;
+    private string _recipePrompt = string.Empty;
     private string _recipeNotes = string.Empty;
-    private string _recipePreferredSize = "auto";
+    private readonly List<RecipeAttachmentDraft> _recipeAttachments = [];
+    private string _newRecipeAttachmentAssetText = string.Empty;
+    private string _newRecipeAttachmentRole = RecipeAssetAttachmentRoles.Example;
     private Guid? _editingAnimationRecipeId;
     private IReadOnlyList<AnimationRecipeVersionView> _animationRecipeVersions = [];
     private string _animationRecipeName = string.Empty;
-    private string _animationRecipeKind = "walk";
-    private string _animationRecipeFacing = string.Empty;
-    private int _animationRecipeFrameCount = 8;
-    private string _animationRecipeFrameOrder = string.Empty;
-    private int _animationRecipeFps = 8;
-    private bool _animationRecipeLoop = true;
-    private string _animationRecipeGuideAssetText = string.Empty;
-    private string _animationRecipeExpectedFrameBoxesJson = "[]";
-    private string _animationRecipeAnchorStrategy = "root-baseline";
-    private string _animationRecipePromptScaffold = string.Empty;
-    private string _animationRecipeExportDefaultsJson = "{}";
+    private string _animationRecipePrompt = string.Empty;
     private string _animationRecipeNotes = string.Empty;
-    private string _animationRecipeExampleSpriteSheetText = string.Empty;
+    private readonly List<RecipeAttachmentDraft> _animationRecipeAttachments = [];
+    private string _newAnimationRecipeAttachmentAssetText = string.Empty;
+    private string _newAnimationRecipeAttachmentRole = RecipeAssetAttachmentRoles.Guide;
     private bool _animationRecipeEditorDirty;
     private string _editPrompt = string.Empty;
     private string _editSize = "auto";
@@ -248,6 +238,14 @@ else
     private Guid? _exportModalAssetId;
     private ReviewPreviewState? _reviewPreview;
     private bool _reviewPreviewEscapeBound;
+
+    private sealed class RecipeAttachmentDraft
+    {
+        public Guid Key { get; } = Guid.NewGuid();
+        public Guid AssetId { get; set; }
+        public string Role { get; set; } = RecipeAssetAttachmentRoles.Example;
+        public string Notes { get; set; } = string.Empty;
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -326,8 +324,8 @@ else
         if (_exportModalAssetId is Guid exportModalAssetId && !_workbench.Assets.Any(asset => asset.Id == exportModalAssetId))
             ResetExportModal();
         _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
-        if (_recipeExampleAssetId is Guid recipeExampleAssetId && !_workbench.Assets.Any(asset => asset.Id == recipeExampleAssetId))
-            _recipeExampleAssetId = null;
+        _recipeAttachments.RemoveAll(attachment => !_workbench.Assets.Any(asset => asset.Id == attachment.AssetId));
+        _animationRecipeAttachments.RemoveAll(attachment => !_workbench.Assets.Any(asset => asset.Id == attachment.AssetId));
         await RefreshRecipeEditorAfterWorkbenchReloadAsync();
         PublishVisibleState();
     }
@@ -965,7 +963,6 @@ else
     {
         var selectedRecipe = SelectedRecipeForEditor();
         var selectedAnimationRecipe = SelectedAnimationRecipeForEditor();
-        var exampleAsset = RecipeExampleAsset();
         var outputGroups = RecipeOutputGroups(selectedRecipe?.Id ?? _editingRecipeId);
         var relatedBatches = RecipeBatches(selectedRecipe?.Id ?? _editingRecipeId).ToList();
 
@@ -997,7 +994,7 @@ else
                                         class="recipe-row @(recipe.Id == _editingRecipeId ? "is-active" : "")"
                                         @onclick="() => LoadRecipeEditorAsync(recipe)">
                                     <span>@recipe.Name</span>
-                                    <small>@(string.IsNullOrWhiteSpace(recipe.AssetType) ? "Unspecified" : recipe.AssetType)</small>
+                                    <small>@RecipeAttachmentSummary(recipe.Attachments)</small>
                                 </button>
                             }
                         </div>
@@ -1017,15 +1014,7 @@ else
                                         class="@AnimationRecipeRowClass(recipe.Id)"
                                         @onclick="() => LoadAnimationRecipeEditorAsync(recipe)">
                                     <span>@recipe.Name</span>
-                                    <small>@($"{recipe.AnimationKind} / {recipe.FrameCount} frames / {recipe.Fps} fps")</small>
-                                    @if (!recipe.GuideAssetValid)
-                                    {
-                                        <small>Invalid guide</small>
-                                    }
-                                    @if (!string.IsNullOrWhiteSpace(recipe.Facing))
-                                    {
-                                        <small>@recipe.Facing</small>
-                                    }
+                                    <small>@RecipeAttachmentSummary(recipe.Attachments)</small>
                                 </button>
                             }
                         </div>
@@ -1045,36 +1034,17 @@ else
                                 <span>Name</span>
                                 <input class="form-control" @bind="_recipeName" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty" />
                             </label>
-                            <label>
-                                <span>Use Case</span>
-                                <input class="form-control" @bind="_recipeAssetType" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty" />
-                            </label>
-                            <label>
-                                <span>Preferred Size</span>
-                                <select class="form-select" @bind="_recipePreferredSize" @bind:after="MarkRecipeEditorDirty">
-                                    <option value="auto">Auto</option>
-                                    <option value="1024x1024">1024 x 1024</option>
-                                    <option value="1024x1536">1024 x 1536</option>
-                                    <option value="1536x1024">1536 x 1024</option>
-                                </select>
-                            </label>
                             <label class="recipe-template-field">
-                                <span>Art Recipe Prompt</span>
-                                <textarea class="form-control" rows="6" @bind="_recipePromptTemplate" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
-                            </label>
-                            <label>
-                                <span>Reusable Rules</span>
-                                <textarea class="form-control" rows="5" @bind="_recipeStyleRules" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
-                            </label>
-                            <label>
-                                <span>Avoid Rules</span>
-                                <textarea class="form-control" rows="5" @bind="_recipeAvoidRules" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
+                                <span>Prompt</span>
+                                <textarea class="form-control" rows="8" @bind="_recipePrompt" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
                             </label>
                             <label class="recipe-notes">
                                 <span>Notes</span>
                                 <textarea class="form-control" rows="4" @bind="_recipeNotes" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
                             </label>
                         </div>
+
+                        @RenderRecipeAttachmentEditor(animation: false)
 
                         <div class="recipe-action-row">
                             <button type="button" class="btn btn-primary" disabled="@(!CanSaveRecipe)" @onclick="SaveRecipeAsync">
@@ -1127,20 +1097,6 @@ else
                         }
 
                         <section>
-                            <div class="section-title">Example Image</div>
-                            @if (exampleAsset is null)
-                            {
-                                <div class="empty-context">No example image selected.</div>
-                            }
-                            else
-                            {
-                                <div class="recipe-image-grid">
-                                    @RenderAssetCard(exampleAsset, compact: true)
-                                </div>
-                            }
-                        </section>
-
-                        <section>
                             <div class="section-title">Generated Outputs</div>
                             @if (outputGroups.Count == 0)
                             {
@@ -1155,7 +1111,7 @@ else
                                         <div class="recipe-image-grid">
                                             @foreach (var asset in group.Assets)
                                             {
-                                                @RenderAssetCard(asset, compact: true, canSetRecipeExample: true)
+                                                @RenderAssetCard(asset, compact: true)
                                             }
                                         </div>
                                     </div>
@@ -1189,11 +1145,84 @@ else
         </div>
     };
 
+    private RenderFragment RenderRecipeAttachmentEditor(bool animation) => __builder =>
+    {
+        var attachments = animation ? _animationRecipeAttachments : _recipeAttachments;
+        var selectedAssetText = animation ? _newAnimationRecipeAttachmentAssetText : _newRecipeAttachmentAssetText;
+        var selectedRole = animation ? _newAnimationRecipeAttachmentRole : _newRecipeAttachmentRole;
+
+        <section class="recipe-attachment-editor">
+            <div class="section-title">Attachments</div>
+            <div class="form-grid">
+                <label>
+                    <span>Asset</span>
+                    <select class="form-select" value="@selectedAssetText" @onchange="args => SetNewRecipeAttachmentAsset(animation, args.Value?.ToString())">
+                        <option value="">Select asset</option>
+                        @foreach (var asset in AssetsForAttachmentPicker())
+                        {
+                            <option value="@asset.Id">@asset.Label</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    <span>Role</span>
+                    <select class="form-select" value="@selectedRole" @onchange="args => SetNewRecipeAttachmentRole(animation, args.Value?.ToString())">
+                        <option value="@RecipeAssetAttachmentRoles.Example">Example</option>
+                        <option value="@RecipeAssetAttachmentRoles.Guide">Guide</option>
+                    </select>
+                </label>
+                <div class="recipe-action-row">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="() => AddRecipeAttachment(animation)">Add Attachment</button>
+                </div>
+            </div>
+
+            @if (attachments.Count == 0)
+            {
+                <div class="empty-context">No assets attached.</div>
+            }
+            else
+            {
+                <div class="batch-list">
+                    @foreach (var attachment in attachments)
+                    {
+                        var asset = RecipeAttachmentAsset(attachment.AssetId);
+                        <div class="batch-row">
+                            <span>
+                                @if (asset is not null)
+                                {
+                                    <button type="button"
+                                            class="draft-reference-thumb"
+                                            title="@($"Preview {asset.Label}")"
+                                            aria-label="@($"Preview {asset.Label}")"
+                                            @onclick="() => OpenAssetReviewPreview(asset)">
+                                        <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" Width="44" Height="44" />
+                                    </button>
+                                    <span>@asset.Label</span>
+                                }
+                                else
+                                {
+                                    <span>Missing asset</span>
+                                }
+                            </span>
+                            <select class="form-select" value="@attachment.Role" @onchange="args => UpdateRecipeAttachmentRole(animation, attachment.Key, args.Value?.ToString())">
+                                <option value="@RecipeAssetAttachmentRoles.Example">Example</option>
+                                <option value="@RecipeAssetAttachmentRoles.Guide">Guide</option>
+                            </select>
+                            <input class="form-control" placeholder="Attachment notes" value="@attachment.Notes" @onchange="args => UpdateRecipeAttachmentNotes(animation, attachment.Key, args.Value?.ToString())" />
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => MoveRecipeAttachment(animation, attachment.Key, -1)">Up</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => MoveRecipeAttachment(animation, attachment.Key, 1)">Down</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveRecipeAttachment(animation, attachment.Key)">Remove</button>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+    };
+
     private RenderFragment RenderAnimationRecipeEditor(AnimationRecipeView? selectedRecipe) => __builder =>
     {
-        var guideWarning = AnimationGuideWarning(selectedRecipe);
-        var guideAsset = SelectedAnimationGuideAsset();
-        var exampleSheet = SelectedAnimationExampleSpriteSheet();
+        var outputGroups = AnimationRecipeOutputGroups(selectedRecipe?.Id ?? _editingAnimationRecipeId);
+        var relatedBatches = AnimationRecipeBatches(selectedRecipe?.Id ?? _editingAnimationRecipeId).ToList();
 
         <div class="form-stack">
             <div class="form-grid recipe-management-grid">
@@ -1201,68 +1230,9 @@ else
                     <span>Name</span>
                     <input class="form-control" @bind="_animationRecipeName" @bind:event="oninput" @bind:after="MarkAnimationRecipeEditorDirty" />
                 </label>
-                <label>
-                    <span>Animation Kind</span>
-                    <input class="form-control" @bind="_animationRecipeKind" @bind:event="oninput" @bind:after="MarkAnimationRecipeEditorDirty" />
-                </label>
-                <label>
-                    <span>Facing</span>
-                    <input class="form-control" placeholder="side_right, three_quarter_front_left..." @bind="_animationRecipeFacing" @bind:event="oninput" @bind:after="MarkAnimationRecipeEditorDirty" />
-                </label>
-                <label>
-                    <span>Frame Count</span>
-                    <input class="form-control" type="number" min="1" max="256" @bind="_animationRecipeFrameCount" @bind:after="MarkAnimationRecipeEditorDirty" />
-                </label>
-                <label>
-                    <span>Frame Order</span>
-                    <input class="form-control" @bind="_animationRecipeFrameOrder" @bind:event="oninput" @bind:after="MarkAnimationRecipeEditorDirty" />
-                </label>
-                <label>
-                    <span>FPS</span>
-                    <input class="form-control" type="number" min="1" max="60" @bind="_animationRecipeFps" @bind:after="MarkAnimationRecipeEditorDirty" />
-                </label>
-                <label>
-                    <span>Loop</span>
-                    <select class="form-select" @bind="_animationRecipeLoop" @bind:after="MarkAnimationRecipeEditorDirty">
-                        <option value="true">Loop</option>
-                        <option value="false">One shot</option>
-                    </select>
-                </label>
-                <label>
-                    <span>Guide Asset</span>
-                    <select class="form-select" @bind="_animationRecipeGuideAssetText" @bind:after="MarkAnimationRecipeEditorDirty">
-                        <option value="">No guide</option>
-                        @foreach (var guide in GuideAssetsByLatest())
-                        {
-                            <option value="@guide.Id">@guide.Label</option>
-                        }
-                    </select>
-                </label>
-                <label>
-                    <span>Primary Example Sheet</span>
-                    <select class="form-select" @bind="_animationRecipeExampleSpriteSheetText" @bind:after="MarkAnimationRecipeEditorDirty">
-                        <option value="">No example</option>
-                        @foreach (var sheet in _workbench!.SpriteSheets)
-                        {
-                            <option value="@sheet.Id">@sheet.Label</option>
-                        }
-                    </select>
-                </label>
-                <label>
-                    <span>Anchor Strategy</span>
-                    <input class="form-control" @bind="_animationRecipeAnchorStrategy" @bind:event="oninput" @bind:after="MarkAnimationRecipeEditorDirty" />
-                </label>
                 <label class="recipe-template-field">
-                    <span>Prompt Scaffold</span>
-                    <textarea class="form-control" rows="8" @bind="_animationRecipePromptScaffold" @bind:event="oninput" @bind:after="MarkAnimationRecipeEditorDirty"></textarea>
-                </label>
-                <label>
-                    <span>Expected Frame Boxes JSON</span>
-                    <textarea class="form-control" rows="6" @bind="_animationRecipeExpectedFrameBoxesJson" @bind:event="oninput" @bind:after="MarkAnimationRecipeEditorDirty"></textarea>
-                </label>
-                <label>
-                    <span>Export Defaults JSON</span>
-                    <textarea class="form-control" rows="6" @bind="_animationRecipeExportDefaultsJson" @bind:event="oninput" @bind:after="MarkAnimationRecipeEditorDirty"></textarea>
+                    <span>Prompt</span>
+                    <textarea class="form-control" rows="8" @bind="_animationRecipePrompt" @bind:event="oninput" @bind:after="MarkAnimationRecipeEditorDirty"></textarea>
                 </label>
                 <label class="recipe-notes">
                     <span>Notes</span>
@@ -1270,10 +1240,7 @@ else
                 </label>
             </div>
 
-            @if (!string.IsNullOrWhiteSpace(guideWarning))
-            {
-                <div class="recipe-external-change">@guideWarning</div>
-            }
+            @RenderRecipeAttachmentEditor(animation: true)
 
             <div class="recipe-action-row">
                 <button type="button" class="btn btn-primary" disabled="@(!CanSaveAnimationRecipe)" @onclick="SaveAnimationRecipeAsync">
@@ -1305,43 +1272,56 @@ else
                                     <div>
                                         <strong>v@version.Version</strong>
                                         <span class="recipe-version-date">@version.CreatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)</span>
-                                        <span class="recipe-source-badge recipe-source-@version.Source">@version.Source</span>
-                                    </div>
-                                    <p>@(string.IsNullOrWhiteSpace(version.ChangeSummary) ? "Saved." : version.ChangeSummary)</p>
+                                                <span class="recipe-source-badge recipe-source-@version.Source">@version.Source</span>
+                                            </div>
+                                            <p>@(string.IsNullOrWhiteSpace(version.ChangeSummary) ? "Saved." : version.ChangeSummary)</p>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => RestoreAnimationRecipeVersionAsync(version.Version)">Restore</button>
+                                        </div>
+                                    }
                                 </div>
-                            }
-                        </div>
                     }
                 </section>
             }
 
             <section>
-                <div class="section-title">Guide</div>
-                @if (guideAsset is null)
+                <div class="section-title">Generated Outputs</div>
+                @if (outputGroups.Count == 0)
                 {
-                    <div class="empty-context">No SpriteGuide selected.</div>
+                    <div class="empty-context">No generated or edited outputs linked to this animation recipe.</div>
                 }
                 else
                 {
-                    <div class="recipe-image-grid">
-                        @RenderAssetCard(guideAsset, compact: true, guideCard: true)
-                    </div>
+                    @foreach (var group in outputGroups)
+                    {
+                        <div class="recipe-output-group">
+                            <div class="recipe-output-group-title">@group.Label</div>
+                            <div class="recipe-image-grid">
+                                @foreach (var asset in group.Assets)
+                                {
+                                    @RenderAssetCard(asset, compact: true)
+                                }
+                            </div>
+                        </div>
+                    }
                 }
             </section>
 
             <section>
-                <div class="section-title">Primary Example Sheet</div>
-                @if (exampleSheet is null)
+                <div class="section-title">Recipe Batches</div>
+                @if (relatedBatches.Count == 0)
                 {
-                    <div class="empty-context">No primary example sheet selected.</div>
+                    <div class="empty-context">No batches linked to this animation recipe.</div>
                 }
                 else
                 {
                     <div class="batch-list">
-                        <button type="button" class="batch-row" @onclick="() => SetModeAsync(WorkspaceMode.Sprites)">
-                            <span>@exampleSheet.Label</span>
-                            <span>@($"{exampleSheet.Frames.Count} frames / {exampleSheet.Fps} fps")</span>
-                        </button>
+                        @foreach (var batch in relatedBatches)
+                        {
+                            <button type="button" class="batch-row" @onclick="() => SelectBatchAsync(batch.Id)">
+                                <span>@batch.Label</span>
+                                <span>@AnimationBatchRecipeVersionLabel(batch) / @batch.Status</span>
+                            </button>
+                        }
                     </div>
                 }
             </section>
@@ -1481,7 +1461,7 @@ else
         </div>
     };
 
-    private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact, bool canSetRecipeExample = false, bool guideCard = false) => __builder =>
+    private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact, bool guideCard = false) => __builder =>
     {
         <article class="asset-card @(compact ? "asset-card-compact" : "")" @key="asset.Id">
             @if (!guideCard)
@@ -1519,10 +1499,6 @@ else
                         <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenSpriteSheetAsync(asset)">Sprite Sheet</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!CanComposeSpriteFrame(asset))" @onclick="() => AddAssetToSpriteSheetAsync(asset)">Add Frame</button>
-                        @if (canSetRecipeExample && _editingRecipeId is not null)
-                        {
-                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!CanSaveRecipe)" @onclick="() => SetRecipeExampleFromOutputAsync(asset.Id)">Set as example</button>
-                        }
                     }
                     <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => AskDeleteAsset(asset.Id)">Delete</button>
                     @if (!guideCard)
@@ -1706,7 +1682,6 @@ else
     private void OnGenerateRecipeChanged(ChangeEventArgs args)
     {
         _generateRecipeText = args.Value?.ToString() ?? string.Empty;
-        ApplySelectedGenerateRecipeDefaults();
     }
 
     private void OnGenerateAnimationRecipeChanged(ChangeEventArgs args)
@@ -1717,7 +1692,6 @@ else
     private void OnEditRecipeChanged(ChangeEventArgs args)
     {
         _editRecipeText = args.Value?.ToString() ?? string.Empty;
-        ApplySelectedEditRecipeDefaults();
     }
 
     private async Task SaveRecipeAsync()
@@ -1727,77 +1701,36 @@ else
 
         var request = new SavePromptRecipeRequest(
             _recipeName,
-            _recipeAssetType,
-            RecipePromptTemplateForSave(),
-            SplitLines(_recipeStyleRules),
-            SplitLines(_recipeAvoidRules),
-            _recipeExampleAssetId,
-            "openai-account",
-            string.Empty,
-            _recipePreferredSize,
+            RecipePromptForSave(),
             _recipeNotes);
 
         await RunWorkflowAsync(_editingRecipeId is null ? "Saving recipe..." : "Updating recipe...", async () =>
         {
+            PromptRecipeView saved;
             if (_editingRecipeId is Guid recipeId)
             {
-                var updated = await Workflow.UpdatePromptRecipeAsync(_workbench.Project.Id, recipeId, new UpdatePromptRecipeRequest(
+                saved = await Workflow.UpdatePromptRecipeAsync(_workbench.Project.Id, recipeId, new UpdatePromptRecipeRequest(
                     request.Name,
-                    request.AssetType,
-                    request.PromptTemplate,
-                    request.StyleRules,
-                    request.AvoidRules,
-                    request.ExampleAssetId,
-                    request.PreferredProvider,
-                    request.PreferredModel,
-                    request.PreferredSize,
+                    request.Prompt,
                     request.Notes));
-                LoadRecipeEditor(updated);
-                await LoadRecipeVersionsAsync(updated.Id);
             }
             else
             {
-                var created = await Workflow.SavePromptRecipeAsync(_workbench.Project.Id, request);
-                LoadRecipeEditor(created);
-                await LoadRecipeVersionsAsync(created.Id);
+                saved = await Workflow.SavePromptRecipeAsync(_workbench.Project.Id, request);
             }
-        });
-    }
 
-    private async Task SetRecipeExampleFromOutputAsync(Guid assetId)
-    {
-        if (_workbench is null || _editingRecipeId is not Guid recipeId || !CanSaveRecipe)
-            return;
-
-        await RunWorkflowAsync("Setting recipe example...", async () =>
-        {
-            var updated = await Workflow.UpdatePromptRecipeAsync(_workbench.Project.Id, recipeId, new UpdatePromptRecipeRequest(
-                _recipeName,
-                _recipeAssetType,
-                RecipePromptTemplateForSave(),
-                SplitLines(_recipeStyleRules),
-                SplitLines(_recipeAvoidRules),
-                assetId,
-                "openai-account",
-                string.Empty,
-                _recipePreferredSize,
-                _recipeNotes,
-                "user",
-                "Set example image"));
-            LoadRecipeEditor(updated);
-            await LoadRecipeVersionsAsync(updated.Id);
+            saved = await Workflow.ReplacePromptRecipeAttachmentsAsync(_workbench.Project.Id, saved.Id, RecipeAttachmentRequests(_recipeAttachments));
+            LoadRecipeEditor(saved);
+            await LoadRecipeVersionsAsync(saved.Id);
         });
     }
 
     private void NewRecipeDraft()
     {
         ClearRecipeEditor();
-        _recipePromptTemplate = string.IsNullOrWhiteSpace(_generatePrompt) ? string.Empty : _generatePrompt;
-        _recipeAvoidRules = _negativePrompt;
-        _recipePreferredSize = string.IsNullOrWhiteSpace(_generateSize) ? "auto" : _generateSize;
-        _recipeExampleAssetId = CurrentReferenceAssetIds().FirstOrDefault();
-        if (_recipeExampleAssetId == Guid.Empty)
-            _recipeExampleAssetId = null;
+        _recipePrompt = string.IsNullOrWhiteSpace(_generatePrompt) ? string.Empty : _generatePrompt;
+        foreach (var assetId in CurrentReferenceAssetIds())
+            _recipeAttachments.Add(new RecipeAttachmentDraft { AssetId = assetId, Role = RecipeAssetAttachmentRoles.Example });
         MarkRecipeEditorDirty();
     }
 
@@ -1807,13 +1740,11 @@ else
         _editingRecipeId = null;
         _editingAnimationRecipeId = null;
         _recipeName = string.Empty;
-        _recipeAssetType = "sprite";
-        _recipePromptTemplate = string.Empty;
-        _recipeStyleRules = string.Empty;
-        _recipeAvoidRules = string.Empty;
+        _recipePrompt = string.Empty;
         _recipeNotes = string.Empty;
-        _recipePreferredSize = "auto";
-        _recipeExampleAssetId = null;
+        _recipeAttachments.Clear();
+        _newRecipeAttachmentAssetText = string.Empty;
+        _newRecipeAttachmentRole = RecipeAssetAttachmentRoles.Example;
         _recipeVersions = [];
         _loadedRecipeSnapshot = string.Empty;
         _recipeEditorDirty = false;
@@ -1832,13 +1763,9 @@ else
         _editingRecipeId = recipe.Id;
         _editingAnimationRecipeId = null;
         _recipeName = recipe.Name;
-        _recipeAssetType = recipe.AssetType;
-        _recipePromptTemplate = recipe.PromptTemplate;
-        _recipeStyleRules = string.Join('\n', recipe.StyleRules);
-        _recipeAvoidRules = string.Join('\n', recipe.AvoidRules);
+        _recipePrompt = recipe.Prompt;
         _recipeNotes = recipe.Notes;
-        _recipePreferredSize = string.IsNullOrWhiteSpace(recipe.PreferredSize) ? "auto" : recipe.PreferredSize;
-        _recipeExampleAssetId = recipe.ExampleAssetId;
+        LoadRecipeAttachmentDrafts(_recipeAttachments, recipe.Attachments);
         _loadedRecipeSnapshot = RecipeSnapshot(recipe);
         _recipeEditorDirty = false;
         _recipeChangedExternally = false;
@@ -1876,6 +1803,20 @@ else
         });
     }
 
+    private async Task RestoreAnimationRecipeVersionAsync(int version)
+    {
+        if (_workbench is null || _editingAnimationRecipeId is not Guid recipeId)
+            return;
+
+        await RunWorkflowAsync($"Restoring animation recipe v{version}...", async () =>
+        {
+            var restored = await Workflow.RevertAnimationRecipeAsync(_workbench.Project.Id, recipeId, version, "user");
+            await ReloadWorkbenchAsync();
+            LoadAnimationRecipeEditor(restored);
+            await LoadAnimationRecipeVersionsAsync(restored.Id);
+        });
+    }
+
     private async Task DuplicateRecipeAsync()
     {
         if (_workbench is null || _editingRecipeId is not Guid recipeId)
@@ -1905,7 +1846,7 @@ else
     private void NewAnimationRecipeDraft()
     {
         ClearAnimationRecipeEditor();
-        _animationRecipePromptScaffold = string.IsNullOrWhiteSpace(_generatePrompt) ? string.Empty : _generatePrompt;
+        _animationRecipePrompt = string.IsNullOrWhiteSpace(_generatePrompt) ? string.Empty : _generatePrompt;
         MarkAnimationRecipeEditorDirty();
     }
 
@@ -1915,19 +1856,11 @@ else
         _editingAnimationRecipeId = null;
         _editingRecipeId = null;
         _animationRecipeName = string.Empty;
-        _animationRecipeKind = "walk";
-        _animationRecipeFacing = string.Empty;
-        _animationRecipeFrameCount = 8;
-        _animationRecipeFrameOrder = "1, 2, 3, 4, 5, 6, 7, 8";
-        _animationRecipeFps = 8;
-        _animationRecipeLoop = true;
-        _animationRecipeGuideAssetText = string.Empty;
-        _animationRecipeExpectedFrameBoxesJson = "[]";
-        _animationRecipeAnchorStrategy = "root-baseline";
-        _animationRecipePromptScaffold = string.Empty;
-        _animationRecipeExportDefaultsJson = "{}";
+        _animationRecipePrompt = string.Empty;
         _animationRecipeNotes = string.Empty;
-        _animationRecipeExampleSpriteSheetText = string.Empty;
+        _animationRecipeAttachments.Clear();
+        _newAnimationRecipeAttachmentAssetText = string.Empty;
+        _newAnimationRecipeAttachmentRole = RecipeAssetAttachmentRoles.Guide;
         _animationRecipeVersions = [];
         _animationRecipeEditorDirty = false;
     }
@@ -1944,21 +1877,9 @@ else
         _editingAnimationRecipeId = recipe.Id;
         _editingRecipeId = null;
         _animationRecipeName = recipe.Name;
-        _animationRecipeKind = recipe.AnimationKind;
-        _animationRecipeFacing = recipe.Facing;
-        _animationRecipeFrameCount = recipe.FrameCount;
-        _animationRecipeFrameOrder = string.Join(", ", recipe.FrameOrder.Count == 0
-            ? Enumerable.Range(1, Math.Max(1, recipe.FrameCount))
-            : recipe.FrameOrder);
-        _animationRecipeFps = recipe.Fps;
-        _animationRecipeLoop = recipe.Loop;
-        _animationRecipeGuideAssetText = recipe.GuideAssetId?.ToString() ?? string.Empty;
-        _animationRecipeExpectedFrameBoxesJson = JsonSerializer.Serialize(recipe.ExpectedFrameBoxes, UiJsonOptions);
-        _animationRecipeAnchorStrategy = string.IsNullOrWhiteSpace(recipe.AnchorStrategy) ? "recipe-defined" : recipe.AnchorStrategy;
-        _animationRecipePromptScaffold = recipe.PromptScaffold;
-        _animationRecipeExportDefaultsJson = string.IsNullOrWhiteSpace(recipe.ExportDefaultsJson) ? "{}" : recipe.ExportDefaultsJson;
+        _animationRecipePrompt = recipe.Prompt;
         _animationRecipeNotes = recipe.Notes;
-        _animationRecipeExampleSpriteSheetText = recipe.PrimaryExampleSpriteSheetId?.ToString() ?? string.Empty;
+        LoadRecipeAttachmentDrafts(_animationRecipeAttachments, recipe.Attachments);
         _animationRecipeEditorDirty = false;
     }
 
@@ -1975,63 +1896,27 @@ else
         if (_workbench is null || !CanSaveAnimationRecipe)
             return;
 
-        IReadOnlyList<int> frameOrder;
-        IReadOnlyList<SpriteSheetRect> expectedBoxes;
-        try
-        {
-            frameOrder = ParseAnimationFrameOrder();
-            expectedBoxes = ParseAnimationExpectedBoxes();
-        }
-        catch (JsonException ex)
-        {
-            _error = $"Expected frame boxes JSON is invalid: {ex.Message}";
-            return;
-        }
-        var guideAssetId = SelectedAnimationGuideAssetIdOrNull();
-        var primaryExampleSpriteSheetId = SelectedAnimationExampleSpriteSheetIdOrNull();
-
         await RunWorkflowAsync(_editingAnimationRecipeId is null ? "Saving animation recipe..." : "Updating animation recipe...", async () =>
         {
+            AnimationRecipeView saved;
             if (_editingAnimationRecipeId is Guid recipeId)
             {
-                var updated = await Workflow.UpdateAnimationRecipeAsync(_workbench.Project.Id, recipeId, new UpdateAnimationRecipeRequest(
+                saved = await Workflow.UpdateAnimationRecipeAsync(_workbench.Project.Id, recipeId, new UpdateAnimationRecipeRequest(
                     _animationRecipeName,
-                    _animationRecipeKind,
-                    _animationRecipeFacing,
-                    _animationRecipeFrameCount,
-                    frameOrder,
-                    _animationRecipeFps,
-                    _animationRecipeLoop,
-                    guideAssetId,
-                    expectedBoxes,
-                    _animationRecipeAnchorStrategy,
-                    _animationRecipePromptScaffold,
-                    string.IsNullOrWhiteSpace(_animationRecipeExportDefaultsJson) ? "{}" : _animationRecipeExportDefaultsJson,
-                    _animationRecipeNotes,
-                    primaryExampleSpriteSheetId));
-                LoadAnimationRecipeEditor(updated);
-                await LoadAnimationRecipeVersionsAsync(updated.Id);
+                    _animationRecipePrompt,
+                    _animationRecipeNotes));
             }
             else
             {
-                var created = await Workflow.SaveAnimationRecipeAsync(_workbench.Project.Id, new SaveAnimationRecipeRequest(
+                saved = await Workflow.SaveAnimationRecipeAsync(_workbench.Project.Id, new SaveAnimationRecipeRequest(
                     _animationRecipeName,
-                    _animationRecipeKind,
-                    _animationRecipeFacing,
-                    _animationRecipeFrameCount,
-                    frameOrder,
-                    _animationRecipeFps,
-                    _animationRecipeLoop,
-                    guideAssetId,
-                    expectedBoxes,
-                    _animationRecipeAnchorStrategy,
-                    _animationRecipePromptScaffold,
-                    string.IsNullOrWhiteSpace(_animationRecipeExportDefaultsJson) ? "{}" : _animationRecipeExportDefaultsJson,
-                    _animationRecipeNotes,
-                    primaryExampleSpriteSheetId));
-                LoadAnimationRecipeEditor(created);
-                await LoadAnimationRecipeVersionsAsync(created.Id);
+                    _animationRecipePrompt,
+                    _animationRecipeNotes));
             }
+
+            saved = await Workflow.ReplaceAnimationRecipeAttachmentsAsync(_workbench.Project.Id, saved.Id, RecipeAttachmentRequests(_animationRecipeAttachments));
+            LoadAnimationRecipeEditor(saved);
+            await LoadAnimationRecipeVersionsAsync(saved.Id);
         });
     }
 
@@ -2053,7 +1938,6 @@ else
     {
         await LoadRecipeEditorAsync(recipe);
         _generateRecipeText = recipe.Id.ToString();
-        ApplySelectedGenerateRecipeDefaults();
         await SetModeAsync(WorkspaceMode.Generate);
     }
 
@@ -2655,8 +2539,8 @@ else
         {
             await Workflow.DeleteAssetAsync(_workbench.Project.Id, assetId);
             _draftReferenceAssetIds.Remove(assetId);
-            if (_recipeExampleAssetId == assetId)
-                _recipeExampleAssetId = null;
+            _recipeAttachments.RemoveAll(attachment => attachment.AssetId == assetId);
+            _animationRecipeAttachments.RemoveAll(attachment => attachment.AssetId == assetId);
             if (_editAssetId == assetId)
                 _editAssetId = null;
             _assetDeleteCandidateId = null;
@@ -2949,7 +2833,6 @@ else
                 _generateCount = NormalizeDraftCount(draft.Count, _generateCount);
                 _generateRecipeText = ValidRecipeId(draft.PromptRecipeId)?.ToString() ?? _generateRecipeText;
                 _generateAnimationRecipeText = ValidAnimationRecipeId(draft.AnimationRecipeId)?.ToString() ?? _generateAnimationRecipeText;
-                ApplySelectedGenerateRecipeDefaults();
                 if (draft.ReferenceAssetIds is not null)
                     SetDraftReferences(draft.ReferenceAssetIds);
                 await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Generate);
@@ -2962,7 +2845,6 @@ else
                 _editBackground = NormalizeDraftBackground(draft.Background, _editBackground);
                 _editCount = NormalizeDraftCount(draft.Count, _editCount);
                 _editRecipeText = ValidRecipeId(draft.PromptRecipeId)?.ToString() ?? _editRecipeText;
-                ApplySelectedEditRecipeDefaults();
                 await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Edit);
                 await ReloadWorkbenchAsync();
                 break;
@@ -2970,13 +2852,8 @@ else
             case AssistantFormDraftTarget.Recipe:
                 ClearRecipeEditor();
                 _recipeName = draft.RecipeName ?? string.Empty;
-                _recipeAssetType = draft.AssetType ?? "sprite";
-                _recipePromptTemplate = draft.PromptTemplate ?? draft.Prompt ?? string.Empty;
-                _recipeStyleRules = string.Join('\n', draft.StyleRules ?? Array.Empty<string>());
-                _recipeAvoidRules = string.Join('\n', draft.AvoidRules ?? Array.Empty<string>());
+                _recipePrompt = draft.Prompt ?? string.Empty;
                 _recipeNotes = draft.Notes ?? string.Empty;
-                _recipePreferredSize = NormalizeDraftSize(draft.PreferredSize ?? draft.Size, _recipePreferredSize);
-                SetRecipeExample(draft.RecipeExampleAssetId);
                 _recipeEditorDirty = true;
                 _recipeChangedExternally = false;
                 _loadedRecipeSnapshot = string.Empty;
@@ -3351,15 +3228,12 @@ else
     private WorkspaceRecipeVisibleState BuildRecipeVisibleState() =>
         new(
             _editingRecipeId,
-            _recipeName,
-            _recipeAssetType,
-            _recipePromptTemplate,
-            _recipeStyleRules,
-            _recipeAvoidRules,
-            _recipeNotes,
-            _recipePreferredSize,
-            _recipeExampleAssetId,
-            RecipeExampleAsset() is { } exampleAsset ? AssetSummary(exampleAsset) : null);
+            _editingAnimationRecipeId,
+            _recipeEditorKind,
+            _recipeEditorKind == "animation" ? _animationRecipeName : _recipeName,
+            _recipeEditorKind == "animation" ? _animationRecipePrompt : _recipePrompt,
+            _recipeEditorKind == "animation" ? _animationRecipeNotes : _recipeNotes,
+            VisibleRecipeAttachments(_recipeEditorKind == "animation"));
 
     private WorkspaceAssetsVisibleState BuildAssetsVisibleState() =>
         new(
@@ -3476,16 +3350,6 @@ else
             _draftReferenceAssetIds.Add(assetId);
     }
 
-    private void SetRecipeExample(Guid? assetId)
-    {
-        _recipeExampleAssetId = null;
-        if (_workbench is null || assetId is not Guid id)
-            return;
-
-        if (_workbench.Assets.Any(asset => asset.Id == id))
-            _recipeExampleAssetId = id;
-    }
-
     private Guid? ValidRecipeId(Guid? recipeId)
     {
         if (recipeId is not Guid id || _workbench is null)
@@ -3500,26 +3364,6 @@ else
             return null;
 
         return _workbench.AnimationRecipes.Any(recipe => recipe.Id == id) ? id : null;
-    }
-
-    private void ApplySelectedGenerateRecipeDefaults()
-    {
-        var recipe = SelectedRecipeForGenerate();
-        if (recipe is null || string.IsNullOrWhiteSpace(recipe.PreferredSize))
-            return;
-
-        if (string.IsNullOrWhiteSpace(_generateSize) || string.Equals(_generateSize, "auto", StringComparison.OrdinalIgnoreCase))
-            _generateSize = recipe.PreferredSize;
-    }
-
-    private void ApplySelectedEditRecipeDefaults()
-    {
-        var recipe = SelectedRecipeForEdit();
-        if (recipe is null || string.IsNullOrWhiteSpace(recipe.PreferredSize))
-            return;
-
-        if (string.IsNullOrWhiteSpace(_editSize) || string.Equals(_editSize, "auto", StringComparison.OrdinalIgnoreCase))
-            _editSize = recipe.PreferredSize;
     }
 
     private PromptRecipeView? SelectedRecipeForGenerate()
@@ -3668,10 +3512,9 @@ else
         var animationRecipe = SelectedAnimationRecipeForGenerate();
         if (animationRecipe is not null)
         {
-            var prefix = animationRecipe.GuideAssetId is not null && animationRecipe.GuideAssetValid
-                ? "Animation guide"
-                : "Animation recipe";
-            return count == 0 ? $"{prefix} selected" : $"{prefix} + {count} reference(s) selected";
+            return count == 0
+                ? "Animation recipe selected"
+                : $"Animation recipe + {count} reference(s) selected";
         }
 
         return count == 0 ? "No references selected" : $"{count} reference(s) selected";
@@ -3695,15 +3538,11 @@ else
 
     private bool CanSaveRecipe =>
         !string.IsNullOrWhiteSpace(_recipeName)
-        && !string.IsNullOrWhiteSpace(RecipePromptTemplateForSave());
+        && !string.IsNullOrWhiteSpace(RecipePromptForSave());
 
     private bool CanSaveAnimationRecipe =>
         !string.IsNullOrWhiteSpace(_animationRecipeName)
-        && !string.IsNullOrWhiteSpace(_animationRecipeKind)
-        && _animationRecipeFrameCount > 0
-        && _animationRecipeFps > 0
-        && !string.IsNullOrWhiteSpace(_animationRecipePromptScaffold)
-        && SelectedAnimationGuideAssetIsValid();
+        && !string.IsNullOrWhiteSpace(_animationRecipePrompt);
 
     private PromptRecipeView? SelectedRecipeForEditor() =>
         _editingRecipeId is Guid recipeId
@@ -3715,76 +3554,170 @@ else
             ? _workbench?.AnimationRecipes.FirstOrDefault(recipe => recipe.Id == recipeId)
             : null;
 
-    private ArtAssetView? RecipeExampleAsset() =>
-        _recipeExampleAssetId is Guid assetId
-            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId)
-            : null;
-
-    private ArtAssetView? SelectedAnimationGuideAsset() =>
-        SelectedAnimationGuideAssetIdOrNull() is Guid assetId
-            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId)
-            : null;
-
-    private SpriteSheetDefinitionView? SelectedAnimationExampleSpriteSheet() =>
-        SelectedAnimationExampleSpriteSheetIdOrNull() is Guid spriteSheetId
-            ? _workbench?.SpriteSheets.FirstOrDefault(sheet => sheet.Id == spriteSheetId)
-            : null;
-
-    private Guid? SelectedAnimationGuideAssetIdOrNull() =>
-        ParseOptionalGuid(_animationRecipeGuideAssetText);
-
-    private Guid? SelectedAnimationExampleSpriteSheetIdOrNull() =>
-        ParseOptionalGuid(_animationRecipeExampleSpriteSheetText);
-
-    private bool SelectedAnimationGuideAssetIsValid()
-    {
-        var guideId = SelectedAnimationGuideAssetIdOrNull();
-        if (guideId is null)
-            return string.IsNullOrWhiteSpace(_animationRecipeGuideAssetText);
-
-        return _workbench?.Assets.Any(asset => asset.Id == guideId && asset.Kind == ArtAssetKind.SpriteGuide) == true;
-    }
-
-    private string AnimationGuideWarning(AnimationRecipeView? selectedRecipe)
-    {
-        var guideId = SelectedAnimationGuideAssetIdOrNull();
-        if (guideId is null)
-            return string.IsNullOrWhiteSpace(_animationRecipeGuideAssetText)
-                ? string.Empty
-                : "Selected guide value is not a valid asset id.";
-
-        var asset = _workbench?.Assets.FirstOrDefault(item => item.Id == guideId);
-        if (asset is null)
-            return "Selected guide asset is missing from this project.";
-        if (asset.Kind != ArtAssetKind.SpriteGuide)
-            return $"Selected guide asset is {asset.Kind}; animation recipe guides must be SpriteGuide assets.";
-        if (selectedRecipe is not null && !selectedRecipe.GuideAssetValid)
-            return "This recipe has an invalid guide reference and must be saved with a SpriteGuide before use.";
-        return string.Empty;
-    }
-
-    private IReadOnlyList<int> ParseAnimationFrameOrder()
-    {
-        var values = _animationRecipeFrameOrder
-            .Split([',', '\n', '\r', '\t', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(value => int.TryParse(value, out var frame) ? frame : 0)
-            .Where(frame => frame > 0)
-            .ToList();
-        return values.Count == 0
-            ? Enumerable.Range(1, Math.Max(1, _animationRecipeFrameCount)).ToList()
-            : values;
-    }
-
-    private IReadOnlyList<SpriteSheetRect> ParseAnimationExpectedBoxes()
-    {
-        if (string.IsNullOrWhiteSpace(_animationRecipeExpectedFrameBoxesJson))
-            return [];
-
-        return JsonSerializer.Deserialize<List<SpriteSheetRect>>(_animationRecipeExpectedFrameBoxesJson, UiJsonOptions) ?? [];
-    }
-
     private static Guid? ParseOptionalGuid(string value) =>
         Guid.TryParse(value, out var id) && id != Guid.Empty ? id : null;
+
+    private static string RecipeAttachmentSummary(IReadOnlyList<RecipeAssetAttachmentView> attachments)
+    {
+        if (attachments.Count == 0)
+            return "No attachments";
+
+        var guideCount = attachments.Count(attachment => string.Equals(attachment.Role, RecipeAssetAttachmentRoles.Guide, StringComparison.OrdinalIgnoreCase));
+        var exampleCount = attachments.Count(attachment => string.Equals(attachment.Role, RecipeAssetAttachmentRoles.Example, StringComparison.OrdinalIgnoreCase));
+        var otherCount = attachments.Count - guideCount - exampleCount;
+        var parts = new List<string>();
+        if (exampleCount > 0)
+            parts.Add($"{exampleCount} example(s)");
+        if (guideCount > 0)
+            parts.Add($"{guideCount} guide(s)");
+        if (otherCount > 0)
+            parts.Add($"{otherCount} other");
+        return string.Join(", ", parts);
+    }
+
+    private IEnumerable<ArtAssetView> AssetsForAttachmentPicker() =>
+        (_workbench?.Assets ?? [])
+            .OrderByDescending(asset => asset.IsFavorite)
+            .ThenByDescending(asset => asset.CreatedAt);
+
+    private ArtAssetView? RecipeAttachmentAsset(Guid assetId) =>
+        _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId);
+
+    private void SetNewRecipeAttachmentAsset(bool animation, string? value)
+    {
+        if (animation)
+            _newAnimationRecipeAttachmentAssetText = value ?? string.Empty;
+        else
+            _newRecipeAttachmentAssetText = value ?? string.Empty;
+    }
+
+    private void SetNewRecipeAttachmentRole(bool animation, string? value)
+    {
+        if (animation)
+            _newAnimationRecipeAttachmentRole = NormalizeRecipeAttachmentRole(value);
+        else
+            _newRecipeAttachmentRole = NormalizeRecipeAttachmentRole(value);
+    }
+
+    private void AddRecipeAttachment(bool animation)
+    {
+        var assetText = animation ? _newAnimationRecipeAttachmentAssetText : _newRecipeAttachmentAssetText;
+        var assetId = ParseOptionalGuid(assetText);
+        if (assetId is not Guid id || _workbench?.Assets.Any(asset => asset.Id == id) != true)
+            return;
+
+        var role = NormalizeRecipeAttachmentRole(animation ? _newAnimationRecipeAttachmentRole : _newRecipeAttachmentRole);
+        RecipeAttachmentDrafts(animation).Add(new RecipeAttachmentDraft
+        {
+            AssetId = id,
+            Role = role,
+        });
+
+        if (animation)
+        {
+            _newAnimationRecipeAttachmentAssetText = string.Empty;
+            MarkAnimationRecipeEditorDirty();
+        }
+        else
+        {
+            _newRecipeAttachmentAssetText = string.Empty;
+            MarkRecipeEditorDirty();
+        }
+    }
+
+    private void UpdateRecipeAttachmentRole(bool animation, Guid key, string? role)
+    {
+        var attachment = RecipeAttachmentDrafts(animation).FirstOrDefault(item => item.Key == key);
+        if (attachment is null)
+            return;
+
+        attachment.Role = NormalizeRecipeAttachmentRole(role);
+        MarkRecipeAttachmentEditorDirty(animation);
+    }
+
+    private void UpdateRecipeAttachmentNotes(bool animation, Guid key, string? notes)
+    {
+        var attachment = RecipeAttachmentDrafts(animation).FirstOrDefault(item => item.Key == key);
+        if (attachment is null)
+            return;
+
+        attachment.Notes = notes ?? string.Empty;
+        MarkRecipeAttachmentEditorDirty(animation);
+    }
+
+    private void MoveRecipeAttachment(bool animation, Guid key, int delta)
+    {
+        var attachments = RecipeAttachmentDrafts(animation);
+        var index = attachments.FindIndex(item => item.Key == key);
+        if (index < 0)
+            return;
+
+        var newIndex = Math.Clamp(index + delta, 0, attachments.Count - 1);
+        if (newIndex == index)
+            return;
+
+        var attachment = attachments[index];
+        attachments.RemoveAt(index);
+        attachments.Insert(newIndex, attachment);
+        MarkRecipeAttachmentEditorDirty(animation);
+    }
+
+    private void RemoveRecipeAttachment(bool animation, Guid key)
+    {
+        var attachments = RecipeAttachmentDrafts(animation);
+        var removed = attachments.RemoveAll(item => item.Key == key) > 0;
+        if (removed)
+            MarkRecipeAttachmentEditorDirty(animation);
+    }
+
+    private List<RecipeAttachmentDraft> RecipeAttachmentDrafts(bool animation) =>
+        animation ? _animationRecipeAttachments : _recipeAttachments;
+
+    private void MarkRecipeAttachmentEditorDirty(bool animation)
+    {
+        if (animation)
+            MarkAnimationRecipeEditorDirty();
+        else
+            MarkRecipeEditorDirty();
+    }
+
+    private static IReadOnlyList<RecipeAssetAttachmentRequest> RecipeAttachmentRequests(IEnumerable<RecipeAttachmentDraft> attachments) =>
+        attachments
+            .Where(attachment => attachment.AssetId != Guid.Empty)
+            .Select(attachment => new RecipeAssetAttachmentRequest(
+                attachment.AssetId,
+                NormalizeRecipeAttachmentRole(attachment.Role),
+                attachment.Notes))
+            .ToList();
+
+    private static void LoadRecipeAttachmentDrafts(List<RecipeAttachmentDraft> target, IReadOnlyList<RecipeAssetAttachmentView> source)
+    {
+        target.Clear();
+        target.AddRange(source
+            .OrderBy(attachment => attachment.SortOrder)
+            .Select(attachment => new RecipeAttachmentDraft
+            {
+                AssetId = attachment.AssetId,
+                Role = NormalizeRecipeAttachmentRole(attachment.Role),
+                Notes = attachment.Notes,
+            }));
+    }
+
+    private IReadOnlyList<WorkspaceRecipeAttachmentSummary> VisibleRecipeAttachments(bool animation) =>
+        RecipeAttachmentDrafts(animation)
+            .Select((attachment, index) => new WorkspaceRecipeAttachmentSummary(
+                attachment.Key,
+                attachment.AssetId,
+                NormalizeRecipeAttachmentRole(attachment.Role),
+                index,
+                attachment.Notes,
+                RecipeAttachmentAsset(attachment.AssetId) is { } asset ? AssetSummary(asset) : null))
+            .ToList();
+
+    private static string NormalizeRecipeAttachmentRole(string? role) =>
+        string.Equals(role, RecipeAssetAttachmentRoles.Guide, StringComparison.OrdinalIgnoreCase)
+            ? RecipeAssetAttachmentRoles.Guide
+            : RecipeAssetAttachmentRoles.Example;
 
     private IEnumerable<ArtAssetView> RecipeOutputAssets(Guid? recipeId) =>
         recipeId is Guid id
@@ -3810,6 +3743,30 @@ else
     private static string BatchRecipeVersionLabel(GenerationBatchView batch) =>
         batch.PromptRecipeVersion is int version ? $"v{version}" : "Earlier";
 
+    private IEnumerable<ArtAssetView> AnimationRecipeOutputAssets(Guid? recipeId) =>
+        recipeId is Guid id
+            ? _workbench?.Assets.Where(asset => asset.SourceAnimationRecipeId == id) ?? Enumerable.Empty<ArtAssetView>()
+            : Enumerable.Empty<ArtAssetView>();
+
+    private IReadOnlyList<RecipeOutputGroup> AnimationRecipeOutputGroups(Guid? recipeId) =>
+        AnimationRecipeOutputAssets(recipeId)
+            .GroupBy(asset => asset.SourceAnimationRecipeVersion)
+            .OrderByDescending(group => group.Key.HasValue)
+            .ThenByDescending(group => group.Key ?? 0)
+            .Select(group => new RecipeOutputGroup(
+                group.Key is int version ? $"v{version}" : "Earlier",
+                group.Key,
+                group.OrderByDescending(asset => asset.CreatedAt).ToList()))
+            .ToList();
+
+    private IEnumerable<GenerationBatchView> AnimationRecipeBatches(Guid? recipeId) =>
+        recipeId is Guid id
+            ? _workbench?.Batches.Where(batch => batch.AnimationRecipeId == id) ?? Enumerable.Empty<GenerationBatchView>()
+            : Enumerable.Empty<GenerationBatchView>();
+
+    private static string AnimationBatchRecipeVersionLabel(GenerationBatchView batch) =>
+        batch.AnimationRecipeVersion is int version ? $"v{version}" : "Earlier";
+
     private void MarkRecipeEditorDirty()
     {
         _recipeEditorDirty = true;
@@ -3823,20 +3780,16 @@ else
     private static string RecipeSnapshot(PromptRecipeView recipe) =>
         string.Join('\u001f',
             recipe.Name,
-            recipe.AssetType,
-            recipe.PromptTemplate,
-            string.Join('\u001e', recipe.StyleRules),
-            string.Join('\u001e', recipe.AvoidRules),
-            recipe.ExampleAssetId?.ToString("N") ?? string.Empty,
-            recipe.PreferredProvider,
-            recipe.PreferredModel,
-            recipe.PreferredSize,
+            recipe.Prompt,
+            string.Join('\u001e', recipe.Attachments
+                .OrderBy(attachment => attachment.SortOrder)
+                .Select(attachment => string.Join('\u001d',
+                    attachment.AssetId.ToString("N"),
+                    attachment.Role,
+                    attachment.Notes))),
             recipe.Notes);
 
-    private string RecipePromptTemplateForSave()
-    {
-        return _recipePromptTemplate;
-    }
+    private string RecipePromptForSave() => _recipePrompt;
 
     private static string NormalizeDraftSize(string? size, string current) =>
         string.IsNullOrWhiteSpace(size) ? current : size.Trim();

@@ -79,14 +79,17 @@ public interface IArtWorkflowService
     Task<PromptRecipeView> SavePromptRecipeAsync(Guid projectId, SavePromptRecipeRequest request, CancellationToken cancellationToken = default);
     Task<PromptRecipeView> UpdatePromptRecipeAsync(Guid projectId, Guid recipeId, UpdatePromptRecipeRequest request, CancellationToken cancellationToken = default);
     Task<PromptRecipeView> DuplicatePromptRecipeAsync(Guid projectId, Guid recipeId, string? name = null, string source = "user", string changeSummary = "", CancellationToken cancellationToken = default);
+    Task<PromptRecipeView> ReplacePromptRecipeAttachmentsAsync(Guid projectId, Guid recipeId, IReadOnlyList<RecipeAssetAttachmentRequest> attachments, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<PromptRecipeVersionView>> ListPromptRecipeVersionsAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<string> ListPromptRecipeVersionsJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<PromptRecipeView> RevertPromptRecipeAsync(Guid projectId, Guid recipeId, int version, string source, CancellationToken cancellationToken = default);
     Task DeletePromptRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<AnimationRecipeView> SaveAnimationRecipeAsync(Guid projectId, SaveAnimationRecipeRequest request, CancellationToken cancellationToken = default);
     Task<AnimationRecipeView> UpdateAnimationRecipeAsync(Guid projectId, Guid recipeId, UpdateAnimationRecipeRequest request, CancellationToken cancellationToken = default);
+    Task<AnimationRecipeView> ReplaceAnimationRecipeAttachmentsAsync(Guid projectId, Guid recipeId, IReadOnlyList<RecipeAssetAttachmentRequest> attachments, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AnimationRecipeVersionView>> ListAnimationRecipeVersionsAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<string> ListAnimationRecipeVersionsJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<AnimationRecipeView> RevertAnimationRecipeAsync(Guid projectId, Guid recipeId, int version, string source, CancellationToken cancellationToken = default);
     Task DeleteAnimationRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<AnimationGuideRenderView> GenerateAnimationGuideAsync(Guid projectId, GenerateAnimationGuideRequest request, CancellationToken cancellationToken = default);
     Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default);

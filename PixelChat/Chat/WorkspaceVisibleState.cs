@@ -137,15 +137,20 @@ public sealed record WorkspaceSpriteAnchorSummary(
 
 public sealed record WorkspaceRecipeVisibleState(
     Guid? EditingRecipeId,
+    Guid? EditingAnimationRecipeId,
+    string Kind,
     string Name,
-    string UseCase,
-    string PromptTemplate,
-    string StyleRules,
-    string AvoidRules,
+    string Prompt,
     string Notes,
-    string PreferredSize,
-    Guid? ExampleAssetId,
-    WorkspaceAssetSummary? ExampleAsset);
+    IReadOnlyList<WorkspaceRecipeAttachmentSummary> Attachments);
+
+public sealed record WorkspaceRecipeAttachmentSummary(
+    Guid Id,
+    Guid AssetId,
+    string Role,
+    int SortOrder,
+    string Notes,
+    WorkspaceAssetSummary? Asset);
 
 public sealed record WorkspaceAssetsVisibleState(
     string Organization,

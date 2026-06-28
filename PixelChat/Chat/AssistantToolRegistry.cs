@@ -36,8 +36,11 @@ public sealed class AssistantToolRegistry(
         "reset_sprite_sheet_to_original",
         "run_generation_round",
         "save_prompt_recipe",
+        "set_prompt_recipe_attachments",
         "save_animation_recipe",
+        "set_animation_recipe_attachments",
         "revert_recipe_version",
+        "revert_animation_recipe_version",
         "generate_animation_guide",
         "generate_sprite_sheet_candidates",
         "create_sprite_sheet",
@@ -98,39 +101,40 @@ public sealed class AssistantToolRegistry(
             method: (string? query = null, int? limit = null) =>
                 workflow.ListPromptRecipesJsonAsync(projectId, query, limit),
             name: "list_recipes",
-            description: "List compact saved prompt recipe summaries for the current project, including current version and single example image id. Use read_recipe for full reusable style and production guidance."),
+            description: "List compact saved art recipe summaries for the current project, including current version and attachment counts. Use read_recipe for the full reusable prompt, notes, and attachments."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId) => workflow.ReadPromptRecipeJsonAsync(projectId, recipeId),
             name: "read_recipe",
-            description: "Read a saved prompt recipe's full reusable guide, durable rules, avoid rules, notes, preferred defaults, current version, and single example image id. This is read-only."),
+            description: "Read a saved art recipe's reusable prompt, private notes, current version, and example/guide attachments. Notes are never sent to image generation. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (string? query = null, int? limit = null) =>
                 workflow.ListAnimationRecipesJsonAsync(projectId, query, limit),
             name: "list_animation_recipes",
-            description: "List compact saved animation recipes for reusable motion, guide, frame layout, anchor, prompt scaffold, timing, and export defaults. Animation recipes are independent of art style."),
+            description: "List compact saved animation recipes for reusable motion prompt guidance, notes, and attachments. Animation recipes are independent of art style unless their prompt explicitly says otherwise."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId) => workflow.ReadAnimationRecipeJsonAsync(projectId, recipeId),
             name: "read_animation_recipe",
-            description: "Read one animation recipe's guide asset id, animation kind, facing, frame order, expected boxes, anchor strategy, prompt scaffold, timing, export defaults, notes, and primary successful example. This is read-only."),
+            description: "Read one animation recipe's reusable motion prompt, private notes, current version, and example/guide attachments. Notes are never sent to image generation. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (Guid? recipeId,
                 string name,
-                string promptTemplate,
+                string prompt,
                 string changeSummary,
-                string? assetType = null,
-                string[]? styleRules = null,
-                string[]? avoidRules = null,
-                Guid? exampleAssetId = null,
-                string? preferredSize = null,
                 string? notes = null,
                 CancellationToken cancellationToken = default) =>
-                SavePromptRecipeToolAsync(projectId, recipeId, name, promptTemplate, changeSummary, assetType, styleRules, avoidRules, exampleAssetId, preferredSize, notes, cancellationToken),
+                SavePromptRecipeToolAsync(projectId, recipeId, name, prompt, changeSummary, notes, cancellationToken),
             name: "save_prompt_recipe",
-            description: "Create or update a durable prompt recipe directly during autonomous iteration. Recipes are reusable style guides, not one-off task prompts. The optional exampleAssetId is automatically sent as a style reference whenever the recipe is used; when an iteration produces an accepted result, set the best output as the example. Always provide a meaningful changeSummary. Every save is versioned and revertible."),
+            description: "Create or update an art recipe. Recipes are reusable prompt guidance plus private notes and optional asset attachments; do not save provider/model/size, avoid rules, or one-off request metadata. Always provide changeSummary. Every save is versioned and revertible."),
+
+        AIFunctionFactory.Create(
+            method: (Guid recipeId, RecipeAttachmentToolItem[]? attachments = null, CancellationToken cancellationToken = default) =>
+                SetPromptRecipeAttachmentsToolAsync(projectId, recipeId, attachments, cancellationToken),
+            name: "set_prompt_recipe_attachments",
+            description: "Replace an art recipe's ordered asset attachments. Attachments can point to any project asset and use role 'example' or 'guide'. Attached assets are automatically used as references when the recipe is selected."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId) => workflow.ListPromptRecipeVersionsJsonAsync(projectId, recipeId),
@@ -146,30 +150,31 @@ public sealed class AssistantToolRegistry(
             method: (
                 Guid? recipeId,
                 string name,
-                string animationKind,
-                string promptScaffold,
+                string prompt,
                 string changeSummary,
-                string? facing = null,
-                int frameCount = 0,
-                int[]? frameOrder = null,
-                int fps = 8,
-                bool loop = true,
-                Guid? guideAssetId = null,
-                SpriteSheetRect[]? expectedFrameBoxes = null,
-                string? anchorStrategy = null,
-                string? exportDefaultsJson = null,
                 string? notes = null,
-                Guid? primaryExampleSpriteSheetId = null,
                 CancellationToken cancellationToken = default) =>
-                SaveAnimationRecipeToolAsync(projectId, recipeId, name, animationKind, promptScaffold, changeSummary, facing, frameCount, frameOrder, fps, loop, guideAssetId, expectedFrameBoxes, anchorStrategy, exportDefaultsJson, notes, primaryExampleSpriteSheetId, cancellationToken),
+                SaveAnimationRecipeToolAsync(projectId, recipeId, name, prompt, changeSummary, notes, cancellationToken),
             name: "save_animation_recipe",
-            description: "Create or update a durable animation recipe for reusable motion/layout work. If guideAssetId is supplied it must be an existing SpriteGuide asset in this project; generated images and sprite sheets are rejected. Include generic guide/layout guidance, expected frame boxes if known, frame order, fps/loop, anchor strategy, prompt scaffold, export defaults, notes, and a primary successful sprite-sheet example when available. Do not put art style rules here unless the recipe is intentionally style-specific. Always provide changeSummary."),
+            description: "Create or update an animation recipe for reusable motion prompt guidance. Do not save frame boxes, fps/loop, anchor strategy, export defaults, or art style unless the prompt is intentionally style-specific. Always provide changeSummary."),
+
+        AIFunctionFactory.Create(
+            method: (Guid recipeId, RecipeAttachmentToolItem[]? attachments = null, CancellationToken cancellationToken = default) =>
+                SetAnimationRecipeAttachmentsToolAsync(projectId, recipeId, attachments, cancellationToken),
+            name: "set_animation_recipe_attachments",
+            description: "Replace an animation recipe's ordered asset attachments. Use role 'guide' for motion/layout guide assets and 'example' for successful outputs or visual references. Attachments can point to any project asset and are automatically used as references when the recipe is selected."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId, int version, CancellationToken cancellationToken = default) =>
                 RevertPromptRecipeToolAsync(projectId, recipeId, version, cancellationToken),
             name: "revert_recipe_version",
             description: "Restore an older prompt recipe snapshot as a new assistant-authored version. This is non-destructive and appends a new version entry."),
+
+        AIFunctionFactory.Create(
+            method: (Guid recipeId, int version, CancellationToken cancellationToken = default) =>
+                RevertAnimationRecipeToolAsync(projectId, recipeId, version, cancellationToken),
+            name: "revert_animation_recipe_version",
+            description: "Restore an older animation recipe name/prompt/notes snapshot as a new assistant-authored version. Attachments are current recipe state and are not restored."),
 
         AIFunctionFactory.Create(
             method: (
@@ -229,7 +234,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 RunGenerationRoundAsync(projectId, budget, prompt, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, animationRecipeId: animationRecipeId, cancellationToken: cancellationToken),
             name: "generate_sprite_sheet_candidates",
-            description: "Generate sprite-sheet candidates from a concise prompt plus ordered references. Pass animationRecipeId to use a saved animation recipe; its SpriteGuide asset is prepended automatically when available. For new guide-driven animation, first call generate_animation_guide and then save or use an animation recipe, or put the returned SpriteGuide asset first manually. Starter/reference sprite and optional style reference/art recipe should follow. Do not use old SpriteSheet, Generated, Edited, Imported, or Cropped assets as motion guides. The prompt should define frame count/order, boundaries, no overlap, preservation, and guide-mark cleanup. Returns model-only candidate images; add promising batches/assets to Review for the user."),
+            description: "Generate sprite-sheet candidates from a concise prompt plus ordered references. Pass animationRecipeId to use a saved animation recipe; its guide attachments are prepended automatically. For new guide-driven animation, first call generate_animation_guide and attach the returned guide asset to an animation recipe, or put it first manually in referenceAssetIds. Starter/reference sprite and optional art recipe/style references should follow. The prompt should define frame count/order, boundaries, no overlap, preservation, and guide-mark cleanup. Returns model-only candidate images; add promising batches/assets to Review for the user."),
 
         AIFunctionFactory.Create(
             method: (int? limit = null) => workflow.ListSpriteSheetsJsonAsync(projectId, limit),
@@ -575,15 +580,10 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (
                 string name,
-                string promptTemplate,
-                string? assetType = null,
-                string[]? styleRules = null,
-                string[]? avoidRules = null,
-                Guid? exampleAssetId = null,
-                string? preferredSize = null,
-                string? notes = null) => DraftPromptRecipeFormAsync(name, promptTemplate, assetType, styleRules, avoidRules, exampleAssetId, preferredSize, notes),
+                string prompt,
+                string? notes = null) => DraftPromptRecipeFormAsync(name, prompt, notes),
             name: "draft_prompt_recipe_form",
-            description: "Draft values for the prompt recipe editor. Recipes are reusable style and production guides for repeatable asset classes, not specific one-off asset prompts. Use exampleAssetId for the single image that should anchor future recipe generations. Keep promptTemplate and styleRules durable across many future requests, and put only reusable constraints in avoidRules. This does not save a recipe; the user reviews the form and clicks Save manually."),
+            description: "Draft values for the recipe editor. Recipes are reusable named prompts with private notes and optional asset attachments, not one-off asset requests or structured provider defaults. This does not save a recipe; the user reviews the form and clicks Save manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -828,13 +828,8 @@ public sealed class AssistantToolRegistry(
         Guid projectId,
         Guid? recipeId,
         string name,
-        string promptTemplate,
+        string prompt,
         string changeSummary,
-        string? assetType,
-        string[]? styleRules,
-        string[]? avoidRules,
-        Guid? exampleAssetId,
-        string? preferredSize,
         string? notes,
         CancellationToken cancellationToken)
     {
@@ -843,14 +838,7 @@ public sealed class AssistantToolRegistry(
         {
             saved = await workflow.UpdatePromptRecipeAsync(projectId, existingRecipeId, new UpdatePromptRecipeRequest(
                 name,
-                assetType ?? string.Empty,
-                promptTemplate,
-                styleRules ?? [],
-                avoidRules ?? [],
-                exampleAssetId,
-                "openai-account",
-                string.Empty,
-                string.IsNullOrWhiteSpace(preferredSize) ? "auto" : preferredSize,
+                prompt,
                 notes ?? string.Empty,
                 "assistant",
                 changeSummary), cancellationToken);
@@ -859,14 +847,7 @@ public sealed class AssistantToolRegistry(
         {
             saved = await workflow.SavePromptRecipeAsync(projectId, new SavePromptRecipeRequest(
                 name,
-                assetType ?? string.Empty,
-                promptTemplate,
-                styleRules ?? [],
-                avoidRules ?? [],
-                exampleAssetId,
-                "openai-account",
-                string.Empty,
-                string.IsNullOrWhiteSpace(preferredSize) ? "auto" : preferredSize,
+                prompt,
                 notes ?? string.Empty,
                 "assistant",
                 changeSummary), cancellationToken);
@@ -877,8 +858,29 @@ public sealed class AssistantToolRegistry(
             recipeId = saved.Id,
             recipeName = saved.Name,
             version = saved.CurrentVersion,
-            saved.ExampleAssetId,
+            attachmentCount = saved.Attachments.Count,
             message = "Prompt recipe saved and versioned.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> SetPromptRecipeAttachmentsToolAsync(
+        Guid projectId,
+        Guid recipeId,
+        RecipeAttachmentToolItem[]? attachments,
+        CancellationToken cancellationToken)
+    {
+        var saved = await workflow.ReplacePromptRecipeAttachmentsAsync(
+            projectId,
+            recipeId,
+            ToAttachmentRequests(attachments),
+            cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            recipeId = saved.Id,
+            recipeName = saved.Name,
+            attachmentCount = saved.Attachments.Count,
+            attachments = saved.Attachments,
+            message = "Prompt recipe attachments replaced.",
         }, JsonOptions);
     }
 
@@ -886,20 +888,9 @@ public sealed class AssistantToolRegistry(
         Guid projectId,
         Guid? recipeId,
         string name,
-        string animationKind,
-        string promptScaffold,
+        string prompt,
         string changeSummary,
-        string? facing,
-        int frameCount,
-        int[]? frameOrder,
-        int fps,
-        bool loop,
-        Guid? guideAssetId,
-        SpriteSheetRect[]? expectedFrameBoxes,
-        string? anchorStrategy,
-        string? exportDefaultsJson,
         string? notes,
-        Guid? primaryExampleSpriteSheetId,
         CancellationToken cancellationToken)
     {
         AnimationRecipeView saved;
@@ -907,19 +898,8 @@ public sealed class AssistantToolRegistry(
         {
             saved = await workflow.UpdateAnimationRecipeAsync(projectId, existingRecipeId, new UpdateAnimationRecipeRequest(
                 name,
-                animationKind,
-                facing ?? string.Empty,
-                frameCount,
-                frameOrder ?? [],
-                Math.Clamp(fps <= 0 ? 8 : fps, 1, 60),
-                loop,
-                guideAssetId,
-                expectedFrameBoxes ?? [],
-                anchorStrategy ?? "recipe-defined",
-                promptScaffold,
-                exportDefaultsJson ?? "{}",
+                prompt,
                 notes ?? string.Empty,
-                primaryExampleSpriteSheetId,
                 "assistant",
                 changeSummary), cancellationToken);
         }
@@ -927,19 +907,8 @@ public sealed class AssistantToolRegistry(
         {
             saved = await workflow.SaveAnimationRecipeAsync(projectId, new SaveAnimationRecipeRequest(
                 name,
-                animationKind,
-                facing ?? string.Empty,
-                frameCount,
-                frameOrder ?? [],
-                Math.Clamp(fps <= 0 ? 8 : fps, 1, 60),
-                loop,
-                guideAssetId,
-                expectedFrameBoxes ?? [],
-                anchorStrategy ?? "recipe-defined",
-                promptScaffold,
-                exportDefaultsJson ?? "{}",
+                prompt,
                 notes ?? string.Empty,
-                primaryExampleSpriteSheetId,
                 "assistant",
                 changeSummary), cancellationToken);
         }
@@ -948,15 +917,30 @@ public sealed class AssistantToolRegistry(
         {
             animationRecipeId = saved.Id,
             saved.Name,
-            saved.AnimationKind,
-            saved.Facing,
-            saved.FrameCount,
-            saved.Fps,
-            saved.Loop,
             saved.CurrentVersion,
-            saved.GuideAssetId,
-            saved.PrimaryExampleSpriteSheetId,
+            attachmentCount = saved.Attachments.Count,
             message = "Animation recipe saved and versioned.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> SetAnimationRecipeAttachmentsToolAsync(
+        Guid projectId,
+        Guid recipeId,
+        RecipeAttachmentToolItem[]? attachments,
+        CancellationToken cancellationToken)
+    {
+        var saved = await workflow.ReplaceAnimationRecipeAttachmentsAsync(
+            projectId,
+            recipeId,
+            ToAttachmentRequests(attachments),
+            cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            animationRecipeId = saved.Id,
+            saved.Name,
+            attachmentCount = saved.Attachments.Count,
+            attachments = saved.Attachments,
+            message = "Animation recipe attachments replaced.",
         }, JsonOptions);
     }
 
@@ -1037,9 +1021,27 @@ public sealed class AssistantToolRegistry(
             recipeId = saved.Id,
             recipeName = saved.Name,
             version = saved.CurrentVersion,
-            saved.ExampleAssetId,
+            attachmentCount = saved.Attachments.Count,
             revertedTo = version,
             message = $"Prompt recipe reverted to version {version} as a new version.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> RevertAnimationRecipeToolAsync(
+        Guid projectId,
+        Guid recipeId,
+        int version,
+        CancellationToken cancellationToken)
+    {
+        var saved = await workflow.RevertAnimationRecipeAsync(projectId, recipeId, version, "assistant", cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            animationRecipeId = saved.Id,
+            saved.Name,
+            version = saved.CurrentVersion,
+            attachmentCount = saved.Attachments.Count,
+            revertedTo = version,
+            message = $"Animation recipe reverted to version {version} as a new version.",
         }, JsonOptions);
     }
 
@@ -1736,24 +1738,14 @@ public sealed class AssistantToolRegistry(
 
     private static Task<string> DraftPromptRecipeFormAsync(
         string name,
-        string promptTemplate,
-        string? assetType,
-        string[]? styleRules,
-        string[]? avoidRules,
-        Guid? exampleAssetId,
-        string? preferredSize,
+        string prompt,
         string? notes)
     {
         var draft = new AssistantFormDraft(
             AssistantFormDraftTarget.Recipe,
-            RecipeExampleAssetId: exampleAssetId,
             RecipeName: name,
-            AssetType: assetType ?? string.Empty,
-            PromptTemplate: promptTemplate,
-            StyleRules: styleRules ?? [],
-            AvoidRules: avoidRules ?? [],
-            Notes: notes ?? string.Empty,
-            PreferredSize: preferredSize ?? "auto");
+            Prompt: prompt,
+            Notes: notes ?? string.Empty);
         return Task.FromResult(JsonSerializer.Serialize(draft, JsonOptions));
     }
 
@@ -2635,6 +2627,12 @@ public sealed class AssistantToolRegistry(
                 item.RefId,
                 item.Label,
                 item.Notes))
+            .ToList() ?? [];
+
+    private static IReadOnlyList<RecipeAssetAttachmentRequest> ToAttachmentRequests(RecipeAttachmentToolItem[]? attachments) =>
+        attachments?
+            .Where(item => item.AssetId != Guid.Empty)
+            .Select(item => new RecipeAssetAttachmentRequest(item.AssetId, item.Role, item.Notes))
             .ToList() ?? [];
 
     private static CompareReviewItemKind ParseCompareReviewItemKind(string kind) =>

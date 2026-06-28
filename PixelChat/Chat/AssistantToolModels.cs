@@ -27,19 +27,18 @@ public sealed record AssistantFormDraft(
     Guid? PromptRecipeId = null,
     Guid? AnimationRecipeId = null,
     IReadOnlyList<Guid>? ReferenceAssetIds = null,
-    Guid? RecipeExampleAssetId = null,
     string? RecipeName = null,
-    string? AssetType = null,
-    string? PromptTemplate = null,
-    IReadOnlyList<string>? StyleRules = null,
-    IReadOnlyList<string>? AvoidRules = null,
-    string? Notes = null,
-    string? PreferredSize = null);
+    string? Notes = null);
 
 public sealed record CompareReviewToolItem(
     string Kind,
     Guid RefId,
     string? Label = null,
+    string? Notes = null);
+
+public sealed record RecipeAttachmentToolItem(
+    Guid AssetId,
+    string Role = "example",
     string? Notes = null);
 
 public sealed record AnimationFrameMark(

@@ -20,6 +20,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<PromptRecipeVersion> PromptRecipeVersions => Set<PromptRecipeVersion>();
     public DbSet<AnimationRecipe> AnimationRecipes => Set<AnimationRecipe>();
     public DbSet<AnimationRecipeVersion> AnimationRecipeVersions => Set<AnimationRecipeVersion>();
+    public DbSet<RecipeAssetAttachment> RecipeAssetAttachments => Set<RecipeAssetAttachment>();
     public DbSet<SpriteSheetDefinition> SpriteSheetDefinitions => Set<SpriteSheetDefinition>();
     public DbSet<SpriteSheetFrameRecord> SpriteSheetFrameRecords => Set<SpriteSheetFrameRecord>();
     public DbSet<SpriteRegion> SpriteRegions => Set<SpriteRegion>();
@@ -242,37 +243,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
         modelBuilder.Entity<AnimationRecipe>(entity =>
         {
             entity.HasIndex(e => new { e.ProjectId, e.Name });
-            entity.HasIndex(e => e.GuideAssetId);
-            entity.HasIndex(e => e.PrimaryExampleSpriteSheetId);
-            entity.Property(e => e.FrameOrderJson).HasDefaultValue("[]");
-            entity.Property(e => e.ExpectedFrameBoxesJson).HasDefaultValue("[]");
-            entity.Property(e => e.AnchorStrategy).HasDefaultValue("recipe-defined");
-            entity.Property(e => e.ExportDefaultsJson).HasDefaultValue("{}");
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.AnimationRecipes)
                 .HasForeignKey(e => e.ProjectId)
                 .OnDelete(DeleteBehavior.Cascade);
-
-            entity.HasOne(e => e.GuideAsset)
-                .WithMany()
-                .HasForeignKey(e => e.GuideAssetId)
-                .OnDelete(DeleteBehavior.SetNull);
-
-            entity.HasOne(e => e.PrimaryExampleSpriteSheet)
-                .WithMany()
-                .HasForeignKey(e => e.PrimaryExampleSpriteSheetId)
-                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<AnimationRecipeVersion>(entity =>
         {
             entity.HasIndex(e => new { e.AnimationRecipeId, e.Version }).IsUnique();
             entity.HasIndex(e => new { e.ProjectId, e.AnimationRecipeId });
-            entity.Property(e => e.FrameOrderJson).HasDefaultValue("[]");
-            entity.Property(e => e.ExpectedFrameBoxesJson).HasDefaultValue("[]");
-            entity.Property(e => e.AnchorStrategy).HasDefaultValue("recipe-defined");
-            entity.Property(e => e.ExportDefaultsJson).HasDefaultValue("{}");
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.AnimationRecipeVersions)
@@ -282,6 +263,37 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasOne(e => e.AnimationRecipe)
                 .WithMany(r => r.Versions)
                 .HasForeignKey(e => e.AnimationRecipeId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RecipeAssetAttachment>(entity =>
+        {
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_RecipeAssetAttachments_OneRecipeParent",
+                "((PromptRecipeId IS NOT NULL AND AnimationRecipeId IS NULL) OR (PromptRecipeId IS NULL AND AnimationRecipeId IS NOT NULL))"));
+            entity.HasIndex(e => new { e.ProjectId, e.PromptRecipeId, e.SortOrder });
+            entity.HasIndex(e => new { e.ProjectId, e.AnimationRecipeId, e.SortOrder });
+            entity.HasIndex(e => e.AssetId);
+            entity.Property(e => e.Role).HasDefaultValue(RecipeAssetAttachmentRoles.Example);
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.RecipeAssetAttachments)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.PromptRecipe)
+                .WithMany(r => r.Attachments)
+                .HasForeignKey(e => e.PromptRecipeId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.AnimationRecipe)
+                .WithMany(r => r.Attachments)
+                .HasForeignKey(e => e.AnimationRecipeId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Asset)
+                .WithMany()
+                .HasForeignKey(e => e.AssetId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

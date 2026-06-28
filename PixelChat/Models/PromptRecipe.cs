@@ -8,17 +8,10 @@ public class PromptRecipe
     public Project Project { get; set; } = null!;
 
     public required string Name { get; set; }
-    public string AssetType { get; set; } = string.Empty;
-    public string PromptTemplate { get; set; } = string.Empty;
-    public string StyleRulesJson { get; set; } = "[]";
-    public string AvoidRulesJson { get; set; } = "[]";
-    public Guid? ExampleAssetId { get; set; }
-    public string PreferredProvider { get; set; } = string.Empty;
-    public string PreferredModel { get; set; } = string.Empty;
-    public string PreferredSize { get; set; } = string.Empty;
-    public string ExportDefaultsJson { get; set; } = "{}";
+    public string Prompt { get; set; } = string.Empty;
     public string Notes { get; set; } = string.Empty;
     public ICollection<PromptRecipeVersion> Versions { get; set; } = [];
+    public ICollection<RecipeAssetAttachment> Attachments { get; set; } = [];
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
