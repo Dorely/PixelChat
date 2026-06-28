@@ -203,6 +203,7 @@ else
     private string _generateBackground = "removable";
     private int _generateCount = 1;
     private string _generateRecipeText = string.Empty;
+    private string _generateAnimationRecipeText = string.Empty;
     private string _editRecipeText = string.Empty;
     private string _recipeEditorKind = "art";
     private Guid? _editingRecipeId;
@@ -483,6 +484,16 @@ else
                         <select class="form-select" value="@_generateRecipeText" @onchange="OnGenerateRecipeChanged">
                             <option value="">None</option>
                             @foreach (var recipe in _workbench.Recipes)
+                            {
+                                <option value="@recipe.Id">@recipe.Name</option>
+                            }
+                        </select>
+                    </label>
+                    <label>
+                        <span>Animation Recipe</span>
+                        <select class="form-select" value="@_generateAnimationRecipeText" @onchange="OnGenerateAnimationRecipeChanged">
+                            <option value="">None</option>
+                            @foreach (var recipe in _workbench.AnimationRecipes)
                             {
                                 <option value="@recipe.Id">@recipe.Name</option>
                             }
@@ -1269,6 +1280,10 @@ else
                     @(_editingAnimationRecipeId is null ? "Save Animation Recipe" : "Update Animation Recipe")
                 </button>
                 <button type="button" class="btn btn-outline-danger" disabled="@(_editingAnimationRecipeId is null)" @onclick="DeleteAnimationRecipeAsync">Delete</button>
+                @if (selectedRecipe is not null)
+                {
+                    <button type="button" class="btn btn-outline-secondary" @onclick="() => UseAnimationRecipeInGenerate(selectedRecipe)">Use in Generate</button>
+                }
             </div>
         </div>
 
@@ -1663,6 +1678,7 @@ else
                 _generateCount,
                 _generateBackground,
                 SelectedGenerateRecipeIdOrNull(),
+                SelectedGenerateAnimationRecipeIdOrNull(),
                 CurrentReferenceAssetIds(),
                 _workbench.Project.ActiveBatchId));
             await ReloadWorkbenchAsync();
@@ -1691,6 +1707,11 @@ else
     {
         _generateRecipeText = args.Value?.ToString() ?? string.Empty;
         ApplySelectedGenerateRecipeDefaults();
+    }
+
+    private void OnGenerateAnimationRecipeChanged(ChangeEventArgs args)
+    {
+        _generateAnimationRecipeText = args.Value?.ToString() ?? string.Empty;
     }
 
     private void OnEditRecipeChanged(ChangeEventArgs args)
@@ -2022,6 +2043,8 @@ else
         await RunWorkflowAsync("Deleting animation recipe...", async () =>
         {
             await Workflow.DeleteAnimationRecipeAsync(_workbench.Project.Id, recipeId);
+            if (SelectedGenerateAnimationRecipeIdOrNull() == recipeId)
+                _generateAnimationRecipeText = string.Empty;
             ClearAnimationRecipeEditor();
         });
     }
@@ -2031,6 +2054,13 @@ else
         await LoadRecipeEditorAsync(recipe);
         _generateRecipeText = recipe.Id.ToString();
         ApplySelectedGenerateRecipeDefaults();
+        await SetModeAsync(WorkspaceMode.Generate);
+    }
+
+    private async Task UseAnimationRecipeInGenerate(AnimationRecipeView recipe)
+    {
+        await LoadAnimationRecipeEditorAsync(recipe);
+        _generateAnimationRecipeText = recipe.Id.ToString();
         await SetModeAsync(WorkspaceMode.Generate);
     }
 
@@ -2918,6 +2948,7 @@ else
                 _generateBackground = NormalizeDraftBackground(draft.Background, _generateBackground);
                 _generateCount = NormalizeDraftCount(draft.Count, _generateCount);
                 _generateRecipeText = ValidRecipeId(draft.PromptRecipeId)?.ToString() ?? _generateRecipeText;
+                _generateAnimationRecipeText = ValidAnimationRecipeId(draft.AnimationRecipeId)?.ToString() ?? _generateAnimationRecipeText;
                 ApplySelectedGenerateRecipeDefaults();
                 if (draft.ReferenceAssetIds is not null)
                     SetDraftReferences(draft.ReferenceAssetIds);
@@ -3190,6 +3221,7 @@ else
             _generateBackground,
             _generateCount,
             SelectedGenerateRecipeIdOrNull(),
+            SelectedGenerateAnimationRecipeIdOrNull(),
             CurrentReferenceAssetIds(),
             DraftReferenceAssets().Select(AssetSummary).ToList());
 
@@ -3462,6 +3494,14 @@ else
         return _workbench.Recipes.Any(recipe => recipe.Id == id) ? id : null;
     }
 
+    private Guid? ValidAnimationRecipeId(Guid? recipeId)
+    {
+        if (recipeId is not Guid id || _workbench is null)
+            return null;
+
+        return _workbench.AnimationRecipes.Any(recipe => recipe.Id == id) ? id : null;
+    }
+
     private void ApplySelectedGenerateRecipeDefaults()
     {
         var recipe = SelectedRecipeForGenerate();
@@ -3488,6 +3528,14 @@ else
             return null;
 
         return _workbench.Recipes.FirstOrDefault(recipe => recipe.Id == recipeId);
+    }
+
+    private AnimationRecipeView? SelectedAnimationRecipeForGenerate()
+    {
+        if (_workbench is null || SelectedGenerateAnimationRecipeIdOrNull() is not Guid recipeId)
+            return null;
+
+        return _workbench.AnimationRecipes.FirstOrDefault(recipe => recipe.Id == recipeId);
     }
 
     private PromptRecipeView? SelectedRecipeForEdit()
@@ -3617,6 +3665,15 @@ else
     private string ReferenceSummary()
     {
         var count = CurrentReferenceAssetIds().Count;
+        var animationRecipe = SelectedAnimationRecipeForGenerate();
+        if (animationRecipe is not null)
+        {
+            var prefix = animationRecipe.GuideAssetId is not null && animationRecipe.GuideAssetValid
+                ? "Animation guide"
+                : "Animation recipe";
+            return count == 0 ? $"{prefix} selected" : $"{prefix} + {count} reference(s) selected";
+        }
+
         return count == 0 ? "No references selected" : $"{count} reference(s) selected";
     }
 
@@ -3624,6 +3681,7 @@ else
         !string.IsNullOrWhiteSpace(_generatePrompt)
         && string.IsNullOrWhiteSpace(_busyText)
         && _workbench is not null
+        && SelectedGenerateAnimationRecipeIsValid()
         && !ImageRuntime.HasRunningBatch(_workbench.Project.Id);
 
     private bool CanEditImage =>
@@ -3812,7 +3870,12 @@ else
 
     private Guid? SelectedGenerateRecipeIdOrNull() => ParseRecipeIdOrNull(_generateRecipeText);
 
+    private Guid? SelectedGenerateAnimationRecipeIdOrNull() => ValidAnimationRecipeId(ParseRecipeIdOrNull(_generateAnimationRecipeText));
+
     private Guid? SelectedEditRecipeIdOrNull() => ParseRecipeIdOrNull(_editRecipeText);
+
+    private bool SelectedGenerateAnimationRecipeIsValid() =>
+        string.IsNullOrWhiteSpace(_generateAnimationRecipeText) || SelectedAnimationRecipeForGenerate() is not null;
 
     private static Guid? ParseRecipeIdOrNull(string value) =>
         Guid.TryParse(value, out var id) && id != Guid.Empty ? id : null;

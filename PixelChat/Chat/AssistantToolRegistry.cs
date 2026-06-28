@@ -210,24 +210,26 @@ public sealed class AssistantToolRegistry(
                 Guid[]? referenceAssetIds = null,
                 Guid? editSourceAssetId = null,
                 Guid? recipeId = null,
+                Guid? animationRecipeId = null,
                 CancellationToken cancellationToken = default) =>
-                RunGenerationRoundAsync(projectId, budget, specificRequest, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId, recipeId, cancellationToken),
+                RunGenerationRoundAsync(projectId, budget, specificRequest, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId, recipeId, animationRecipeId, cancellationToken),
             name: "run_generation_round",
-            description: "Run one generic autonomous generation or edit round and wait for completion. Use for starter assets, art recipe tests, focused variations, and non-sheet image edits. For recipe tests, first save the art recipe revision and pass recipeId. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
+            description: "Run one generic autonomous generation or edit round and wait for completion. Use for starter assets, art recipe tests, focused variations, and non-sheet image edits. For recipe tests, first save the art recipe revision and pass recipeId. For generation, pass animationRecipeId when a saved motion/layout recipe should guide a sprite-sheet request; edits ignore animationRecipeId. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
 
         AIFunctionFactory.Create(
             method: (
                 string prompt,
                 Guid[]? referenceAssetIds = null,
                 Guid? artRecipeId = null,
+                Guid? animationRecipeId = null,
                 string? negativePrompt = null,
                 string? size = null,
                 string? background = null,
                 int count = 2,
                 CancellationToken cancellationToken = default) =>
-                RunGenerationRoundAsync(projectId, budget, prompt, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, cancellationToken),
+                RunGenerationRoundAsync(projectId, budget, prompt, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, animationRecipeId: animationRecipeId, cancellationToken: cancellationToken),
             name: "generate_sprite_sheet_candidates",
-            description: "Generate sprite-sheet candidates from a concise prompt plus ordered references. For guide-driven animation, first call generate_animation_guide and put the returned SpriteGuide asset first, starter/reference sprite second, and optional style reference/art recipe after that. Do not use old SpriteSheet, Generated, Edited, Imported, or Cropped assets as motion guides. The prompt should define frame count/order, boundaries, no overlap, preservation, and guide-mark cleanup. Returns model-only candidate images; add promising batches/assets to Review for the user."),
+            description: "Generate sprite-sheet candidates from a concise prompt plus ordered references. Pass animationRecipeId to use a saved animation recipe; its SpriteGuide asset is prepended automatically when available. For new guide-driven animation, first call generate_animation_guide and then save or use an animation recipe, or put the returned SpriteGuide asset first manually. Starter/reference sprite and optional style reference/art recipe should follow. Do not use old SpriteSheet, Generated, Edited, Imported, or Cropped assets as motion guides. The prompt should define frame count/order, boundaries, no overlap, preservation, and guide-mark cleanup. Returns model-only candidate images; add promising batches/assets to Review for the user."),
 
         AIFunctionFactory.Create(
             method: (int? limit = null) => workflow.ListSpriteSheetsJsonAsync(projectId, limit),
@@ -554,10 +556,11 @@ public sealed class AssistantToolRegistry(
                 string? size = null,
                 string? background = null,
                 Guid? recipeId = null,
+                Guid? animationRecipeId = null,
                 int? count = null,
-                Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, background, recipeId, count, referenceAssetIds),
+                Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, background, recipeId, animationRecipeId, count, referenceAssetIds),
             name: "draft_generate_form",
-            description: "Draft values for the Generate form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select a saved reusable recipe guide for the asset class; keep prompt focused on the new one-off asset request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
+            description: "Draft values for the Generate form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select a saved reusable art recipe for style/production guidance and animationRecipeId to select a saved motion/layout recipe for sprite-sheet generation. Keep prompt focused on the new one-off asset request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -1051,6 +1054,7 @@ public sealed class AssistantToolRegistry(
         Guid[]? referenceAssetIds,
         Guid? editSourceAssetId,
         Guid? recipeId,
+        Guid? animationRecipeId,
         CancellationToken cancellationToken)
     {
         if (budget.IsExhausted)
@@ -1116,6 +1120,7 @@ public sealed class AssistantToolRegistry(
                 outputCount,
                 normalizedBackground,
                 recipeId,
+                animationRecipeId,
                 references,
                 ParentBatchId: null), cancellationToken);
         }
@@ -1695,6 +1700,7 @@ public sealed class AssistantToolRegistry(
         string? size,
         string? background,
         Guid? recipeId,
+        Guid? animationRecipeId,
         int? count,
         Guid[]? referenceAssetIds)
     {
@@ -1706,6 +1712,7 @@ public sealed class AssistantToolRegistry(
             Background: NormalizeBackground(background),
             Count: count is int countValue ? ClampCount(countValue) : null,
             PromptRecipeId: recipeId,
+            AnimationRecipeId: animationRecipeId,
             ReferenceAssetIds: referenceAssetIds);
         return Task.FromResult(JsonSerializer.Serialize(draft, JsonOptions));
     }

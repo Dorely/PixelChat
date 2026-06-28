@@ -25,6 +25,7 @@ public sealed record AssistantFormDraft(
     string? Background = null,
     int? Count = null,
     Guid? PromptRecipeId = null,
+    Guid? AnimationRecipeId = null,
     IReadOnlyList<Guid>? ReferenceAssetIds = null,
     Guid? RecipeExampleAssetId = null,
     string? RecipeName = null,

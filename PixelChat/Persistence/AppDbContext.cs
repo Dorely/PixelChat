@@ -123,6 +123,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
             entity.HasIndex(e => e.ParentAssetId);
             entity.HasIndex(e => e.SourceBatchId);
+            entity.HasIndex(e => e.SourceAnimationRecipeId).IsUnique(false);
             entity.Property(e => e.Kind).HasConversion<string>();
 
             entity.HasOne(e => e.Project)
@@ -143,6 +144,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasOne(e => e.SourcePromptRecipe)
                 .WithMany()
                 .HasForeignKey(e => e.SourcePromptRecipeId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.SourceAnimationRecipe)
+                .WithMany()
+                .HasForeignKey(e => e.SourceAnimationRecipeId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
@@ -181,6 +187,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
         modelBuilder.Entity<GenerationBatch>(entity =>
         {
             entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
+            entity.HasIndex(e => e.AnimationRecipeId);
             entity.Property(e => e.Status).HasConversion<string>();
             entity.Property(e => e.Background).HasDefaultValue("auto");
             entity.Property(e => e.OutputStatesJson).HasDefaultValue("[]");
@@ -198,6 +205,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasOne(e => e.PromptRecipe)
                 .WithMany()
                 .HasForeignKey(e => e.PromptRecipeId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.AnimationRecipe)
+                .WithMany()
+                .HasForeignKey(e => e.AnimationRecipeId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 

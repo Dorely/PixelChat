@@ -165,10 +165,10 @@
 | `Project.cs` | EF entity for art workbench projects, active batch/sprite sheet/frame-set/workspace/sprite focus state, and owned assets, sprite sheets, frame sets, and recipes. |
 | `AnimationRecipe.cs` | EF entity for reusable animation/motion recipes with guide asset, frame order, expected boxes, anchor strategy, prompt scaffold, export defaults, and primary example. |
 | `AnimationRecipeVersion.cs` | EF entity for append-only animation recipe snapshots and change summaries. |
-| `ArtAsset.cs` | EF entity for imported, generated, edited, cropped, sprite-guide, and sprite-sheet image BLOBs plus lineage, source recipe version, favorite flag, prompt, and metadata. |
+| `ArtAsset.cs` | EF entity for imported, generated, edited, cropped, sprite-guide, and sprite-sheet image BLOBs plus lineage, source art/animation recipe versions, favorite flag, prompt, and metadata. |
 | `BackgroundRemovalExportCache.cs` | EF entity for cached Local AI export PNGs keyed by source asset bytes, model, rembg version, and processing options. |
 | `ExportStepCache.cs` | EF entity for persisted applied export-step PNGs per source asset and source image hash. |
-| `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, output errors, lineage, status, and stamped recipe version. |
+| `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, inputs, masks, outputs, output errors, lineage, status, and stamped art/animation recipe versions. |
 | `PromptRecipe.cs` | EF entity backing art recipes: reusable prompt/style/production guides, avoid rules, one active example image, and preferred defaults. |
 | `PromptRecipeVersion.cs` | EF entity for append-only art recipe snapshots including the active example image used by user/assistant saves and restore. |
 | `SpriteSheetDefinition.cs` | EF entity for row-based sprite-sheet definitions linking immutable source assets to mutable working sprite-sheet assets plus layout, background fill, stabilization metadata, FPS, and loop defaults. |
@@ -235,6 +235,7 @@
 | `20260626001500_FrameOnionSkinVisibility.cs` | EF migration adding per-frame onion-skin visibility metadata for the greenfield frame model. |
 | `20260626003000_SpriteWorkspaceFocusState.cs` | EF migration adding persisted Sprites mode/source/frame/region focus state to projects for UI and assistant synchronization. |
 | `20260626234709_ChatMessageVisualsRemoveActivity.cs` / `.Designer.cs` | EF migration adding assistant message visuals, dropping Activity tables, and normalizing old `Runs` workspace mode values. |
+| `20260627061347_AnimationRecipeGenerationUsage.cs` / `.Designer.cs` | EF migration adding nullable animation recipe/version provenance to generation batches and generated/derived assets. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

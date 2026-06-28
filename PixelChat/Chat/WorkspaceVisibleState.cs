@@ -55,6 +55,7 @@ public sealed record WorkspaceGenerateVisibleState(
     string Background,
     int Count,
     Guid? PromptRecipeId,
+    Guid? AnimationRecipeId,
     IReadOnlyList<Guid> ReferenceAssetIds,
     IReadOnlyList<WorkspaceAssetSummary> ReferenceAssets);
 

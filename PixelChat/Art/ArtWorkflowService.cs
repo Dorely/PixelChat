@@ -31,6 +31,19 @@ public sealed class ArtWorkflowService(
         string PromptTemplate,
         string StyleRulesJson,
         string AvoidRulesJson);
+    private sealed record AnimationRecipePromptGuidance(
+        string Name,
+        string AnimationKind,
+        string Facing,
+        int FrameCount,
+        string FrameOrderJson,
+        int Fps,
+        bool Loop,
+        string ExpectedFrameBoxesJson,
+        string AnchorStrategy,
+        string PromptScaffold,
+        string ExportDefaultsJson,
+        string Notes);
     private sealed record LayoutProfile(
         double ForegroundAspect,
         double ForegroundCoverage,
@@ -93,6 +106,8 @@ public sealed class ArtWorkflowService(
                 a.SourceBatchId,
                 a.SourcePromptRecipeId,
                 a.SourcePromptRecipeVersion,
+                a.SourceAnimationRecipeId,
+                a.SourceAnimationRecipeVersion,
                 a.IsFavorite,
                 a.Notes,
                 a.Prompt,
@@ -120,6 +135,8 @@ public sealed class ArtWorkflowService(
                 b.ParentBatchId,
                 b.PromptRecipeId,
                 b.PromptRecipeVersion,
+                b.AnimationRecipeId,
+                b.AnimationRecipeVersion,
                 b.Status,
                 b.Error,
                 b.OutputErrorsJson,
@@ -1369,6 +1386,8 @@ public sealed class ArtWorkflowService(
             source.SourceBatchId,
             source.SourcePromptRecipeId,
             source.SourcePromptRecipeVersion,
+            source.SourceAnimationRecipeId,
+            source.SourceAnimationRecipeVersion,
             source.Prompt,
             new
             {
@@ -1500,6 +1519,8 @@ public sealed class ArtWorkflowService(
                 sourceBatchId: null,
                 promptRecipeId: null,
                 promptRecipeVersion: null,
+                animationRecipeId: null,
+                animationRecipeVersion: null,
                 prompt: string.Empty,
                 metadata: new
                 {
@@ -1522,6 +1543,8 @@ public sealed class ArtWorkflowService(
                 sourceBatchId: null,
                 promptRecipeId: null,
                 promptRecipeVersion: null,
+                animationRecipeId: null,
+                animationRecipeVersion: null,
                 prompt: string.Empty,
                 metadata: new
                 {
@@ -2332,7 +2355,7 @@ public sealed class ArtWorkflowService(
 
         var background = NormalizeBackground(request.Background ?? imageOptions.Value.DefaultBackground);
         var providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
-            BuildPrompt(prompt, string.Empty, recipe: null, background),
+            BuildPrompt(prompt, string.Empty, recipe: null, animationRecipe: null, background: background),
             NormalizeSize(imageOptions.Value.DefaultSize),
             1,
             imageOptions.Value.DefaultMainlineModel,
@@ -2652,7 +2675,20 @@ public sealed class ArtWorkflowService(
             promptRecipeVersion = await GetCurrentRecipeVersionAsync(recipe.Id, cancellationToken);
         }
 
-        var references = await MergeRecipeExampleReferenceAsync(projectId, recipe, explicitReferences, excludedAssetId: null, cancellationToken);
+        AnimationRecipe? animationRecipe = null;
+        int? animationRecipeVersion = null;
+        if (request.AnimationRecipeId is Guid animationRecipeId)
+        {
+            animationRecipe = await db.AnimationRecipes
+                .Include(r => r.GuideAsset)
+                .FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == animationRecipeId, cancellationToken)
+                ?? throw new InvalidOperationException("Animation recipe was not found.");
+            animationRecipeVersion = animationRecipe.CurrentVersion > 0
+                ? animationRecipe.CurrentVersion
+                : await GetCurrentAnimationRecipeVersionAsync(animationRecipe.Id, cancellationToken);
+        }
+
+        var references = await MergeGenerationReferencesAsync(projectId, recipe, animationRecipe, explicitReferences, excludedAssetId: null, cancellationToken);
 
         var batch = new GenerationBatch
         {
@@ -2672,6 +2708,8 @@ public sealed class ArtWorkflowService(
             ParentBatchId = request.ParentBatchId,
             PromptRecipeId = recipe?.Id,
             PromptRecipeVersion = promptRecipeVersion,
+            AnimationRecipeId = animationRecipe?.Id,
+            AnimationRecipeVersion = animationRecipeVersion,
             Status = GenerationBatchStatus.Running,
             OutputStatesJson = SerializeOutputStates(CreateInitialOutputStates(count)),
         };
@@ -2707,6 +2745,7 @@ public sealed class ArtWorkflowService(
             ?? throw new InvalidOperationException("Generation batch was not found.");
         var references = await ResolveAssetsAsync(projectId, DeserializeIds(batch.InputAssetIdsJson), cancellationToken);
         var recipeGuidance = await LoadRecipePromptGuidanceForBatchAsync(projectId, batch, cancellationToken);
+        var animationRecipeGuidance = await LoadAnimationRecipePromptGuidanceForBatchAsync(projectId, batch, cancellationToken);
 
         logger.LogDebug(
             "Image generation output starting: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, promptChars={PromptChars}",
@@ -2723,7 +2762,7 @@ public sealed class ArtWorkflowService(
         try
         {
             providerResult = await imageProvider.GenerateAsync(new ImageProviderGenerateRequest(
-                BuildPrompt(batch.Prompt, batch.NegativePrompt, recipeGuidance, batch.Background),
+                BuildPrompt(batch.Prompt, batch.NegativePrompt, recipeGuidance, animationRecipeGuidance, batch.Background),
                 Clean(batch.NegativePrompt),
                 batch.Size,
                 1,
@@ -2766,11 +2805,14 @@ public sealed class ArtWorkflowService(
             sourceBatchId: batch.Id,
             promptRecipeId: batch.PromptRecipeId,
             promptRecipeVersion: batch.PromptRecipeVersion,
+            animationRecipeId: batch.AnimationRecipeId,
+            animationRecipeVersion: batch.AnimationRecipeVersion,
             prompt: batch.Prompt,
             metadata: new
             {
                 OutputIndex = outputIndex,
                 batch.PromptRecipeVersion,
+                batch.AnimationRecipeVersion,
                 image.RevisedPrompt,
                 image.ResponseId,
                 image.CallId,
@@ -3184,7 +3226,7 @@ public sealed class ArtWorkflowService(
         try
         {
             providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
-                BuildPrompt(batch.Prompt, string.Empty, recipeGuidance, batch.Background),
+                BuildPrompt(batch.Prompt, string.Empty, recipeGuidance, animationRecipe: null, background: batch.Background),
                 batch.Size,
                 1,
                 batch.MainlineModel,
@@ -3228,6 +3270,8 @@ public sealed class ArtWorkflowService(
             batch.Id,
             batch.PromptRecipeId,
             batch.PromptRecipeVersion,
+            batch.AnimationRecipeId,
+            batch.AnimationRecipeVersion,
             batch.Prompt,
             new
             {
@@ -3276,6 +3320,8 @@ public sealed class ArtWorkflowService(
             sourceBatchId: null,
             promptRecipeId: null,
             promptRecipeVersion: null,
+            animationRecipeId: null,
+            animationRecipeVersion: null,
             prompt: string.Empty,
             metadata: new { Source = "import" });
         await db.ArtAssets.AddAsync(asset, cancellationToken);
@@ -3301,6 +3347,8 @@ public sealed class ArtWorkflowService(
             parent.SourceBatchId,
             parent.SourcePromptRecipeId,
             parent.SourcePromptRecipeVersion,
+            parent.SourceAnimationRecipeId,
+            parent.SourceAnimationRecipeVersion,
             parent.Prompt,
             new { ParentAssetId = parent.Id });
         await db.ArtAssets.AddAsync(asset, cancellationToken);
@@ -3390,6 +3438,8 @@ public sealed class ArtWorkflowService(
             source.SourceBatchId,
             source.SourcePromptRecipeId,
             source.SourcePromptRecipeVersion,
+            source.SourceAnimationRecipeId,
+            source.SourceAnimationRecipeVersion,
             source.Prompt,
             new { ExtractedFrom = source.Id, Region = new { rectX, rectY, rectW, rectH } });
         await db.ArtAssets.AddAsync(asset, cancellationToken);
@@ -3729,6 +3779,24 @@ public sealed class ArtWorkflowService(
         if (recipe is null)
             return;
 
+        var assets = await db.ArtAssets
+            .Where(a => a.ProjectId == projectId && a.SourceAnimationRecipeId == recipeId)
+            .ToListAsync(cancellationToken);
+        foreach (var asset in assets)
+        {
+            asset.SourceAnimationRecipeId = null;
+            asset.SourceAnimationRecipeVersion = null;
+        }
+
+        var batches = await db.GenerationBatches
+            .Where(b => b.ProjectId == projectId && b.AnimationRecipeId == recipeId)
+            .ToListAsync(cancellationToken);
+        foreach (var batch in batches)
+        {
+            batch.AnimationRecipeId = null;
+            batch.AnimationRecipeVersion = null;
+        }
+
         db.AnimationRecipes.Remove(recipe);
         await db.SaveChangesAsync(cancellationToken);
     }
@@ -3867,6 +3935,8 @@ public sealed class ArtWorkflowService(
             sourceBatchId: null,
             promptRecipeId: null,
             promptRecipeVersion: null,
+            animationRecipeId: null,
+            animationRecipeVersion: null,
             promptScaffold,
             metadata);
         var diagnostic = CreateAsset(
@@ -3880,6 +3950,8 @@ public sealed class ArtWorkflowService(
             sourceBatchId: null,
             promptRecipeId: null,
             promptRecipeVersion: null,
+            animationRecipeId: null,
+            animationRecipeVersion: null,
             promptScaffold,
             metadata);
         await db.ArtAssets.AddRangeAsync([guide, diagnostic], cancellationToken);
@@ -5927,6 +5999,13 @@ public sealed class ArtWorkflowService(
             .Select(version => (int?)version.Version)
             .MaxAsync(cancellationToken);
 
+    private async Task<int?> GetCurrentAnimationRecipeVersionAsync(Guid recipeId, CancellationToken cancellationToken) =>
+        await db.AnimationRecipeVersions
+            .AsNoTracking()
+            .Where(version => version.AnimationRecipeId == recipeId)
+            .Select(version => (int?)version.Version)
+            .MaxAsync(cancellationToken);
+
     private async Task<List<ArtAsset>> MergeRecipeExampleReferenceAsync(
         Guid projectId,
         PromptRecipe? recipe,
@@ -5960,6 +6039,78 @@ public sealed class ArtWorkflowService(
         return references;
     }
 
+    private async Task<List<ArtAsset>> MergeGenerationReferencesAsync(
+        Guid projectId,
+        PromptRecipe? promptRecipe,
+        AnimationRecipe? animationRecipe,
+        IReadOnlyList<ArtAsset> explicitReferences,
+        Guid? excludedAssetId,
+        CancellationToken cancellationToken)
+    {
+        var maxReferences = Math.Max(0, imageOptions.Value.MaxReferenceImages);
+        var references = new List<ArtAsset>();
+        if (maxReferences == 0)
+            return references;
+
+        var guide = await LoadAnimationGuideReferenceAsync(projectId, animationRecipe, excludedAssetId, cancellationToken);
+        if (guide is not null)
+        {
+            AddReferenceIfRoom(references, guide, maxReferences, excludedAssetId);
+            foreach (var reference in explicitReferences)
+                AddReferenceIfRoom(references, reference, maxReferences, excludedAssetId);
+            await AddPromptRecipeExampleReferenceAsync(projectId, promptRecipe, references, maxReferences, excludedAssetId, cancellationToken);
+            return references;
+        }
+
+        await AddPromptRecipeExampleReferenceAsync(projectId, promptRecipe, references, maxReferences, excludedAssetId, cancellationToken);
+        foreach (var reference in explicitReferences)
+            AddReferenceIfRoom(references, reference, maxReferences, excludedAssetId);
+        return references;
+    }
+
+    private async Task<ArtAsset?> LoadAnimationGuideReferenceAsync(
+        Guid projectId,
+        AnimationRecipe? animationRecipe,
+        Guid? excludedAssetId,
+        CancellationToken cancellationToken)
+    {
+        if (animationRecipe?.GuideAssetId is not Guid guideAssetId || guideAssetId == excludedAssetId)
+            return null;
+
+        if (animationRecipe.GuideAsset is { Kind: ArtAssetKind.SpriteGuide } guideAsset)
+            return guideAsset;
+
+        return await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == guideAssetId && a.Kind == ArtAssetKind.SpriteGuide, cancellationToken);
+    }
+
+    private async Task AddPromptRecipeExampleReferenceAsync(
+        Guid projectId,
+        PromptRecipe? promptRecipe,
+        List<ArtAsset> references,
+        int maxReferences,
+        Guid? excludedAssetId,
+        CancellationToken cancellationToken)
+    {
+        if (promptRecipe?.ExampleAssetId is not Guid exampleAssetId || exampleAssetId == excludedAssetId)
+            return;
+
+        var example = await db.ArtAssets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == exampleAssetId, cancellationToken);
+        if (example is not null)
+            AddReferenceIfRoom(references, example, maxReferences, excludedAssetId);
+    }
+
+    private static void AddReferenceIfRoom(List<ArtAsset> references, ArtAsset reference, int maxReferences, Guid? excludedAssetId)
+    {
+        if (references.Count >= maxReferences || reference.Id == excludedAssetId || references.Any(existing => existing.Id == reference.Id))
+            return;
+
+        references.Add(reference);
+    }
+
     private async Task<RecipePromptGuidance?> LoadRecipePromptGuidanceForBatchAsync(
         Guid projectId,
         GenerationBatch batch,
@@ -5988,6 +6139,59 @@ public sealed class ArtWorkflowService(
 
     private static RecipePromptGuidance RecipeGuidance(PromptRecipeVersion version) =>
         new(version.PromptTemplate, version.StyleRulesJson, version.AvoidRulesJson);
+
+    private async Task<AnimationRecipePromptGuidance?> LoadAnimationRecipePromptGuidanceForBatchAsync(
+        Guid projectId,
+        GenerationBatch batch,
+        CancellationToken cancellationToken)
+    {
+        if (batch.AnimationRecipeId is not Guid animationRecipeId)
+            return null;
+
+        if (batch.AnimationRecipeVersion is int version)
+        {
+            var snapshot = await db.AnimationRecipeVersions
+                .AsNoTracking()
+                .FirstOrDefaultAsync(v => v.ProjectId == projectId && v.AnimationRecipeId == animationRecipeId && v.Version == version, cancellationToken);
+            if (snapshot is not null)
+                return AnimationRecipeGuidance(snapshot);
+        }
+
+        var recipe = await db.AnimationRecipes
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == animationRecipeId, cancellationToken);
+        return recipe is null ? null : AnimationRecipeGuidance(recipe);
+    }
+
+    private static AnimationRecipePromptGuidance AnimationRecipeGuidance(AnimationRecipe recipe) =>
+        new(
+            recipe.Name,
+            recipe.AnimationKind,
+            recipe.Facing,
+            recipe.FrameCount,
+            recipe.FrameOrderJson,
+            recipe.Fps,
+            recipe.Loop,
+            recipe.ExpectedFrameBoxesJson,
+            recipe.AnchorStrategy,
+            recipe.PromptScaffold,
+            recipe.ExportDefaultsJson,
+            recipe.Notes);
+
+    private static AnimationRecipePromptGuidance AnimationRecipeGuidance(AnimationRecipeVersion version) =>
+        new(
+            version.Name,
+            version.AnimationKind,
+            version.Facing,
+            version.FrameCount,
+            version.FrameOrderJson,
+            version.Fps,
+            version.Loop,
+            version.ExpectedFrameBoxesJson,
+            version.AnchorStrategy,
+            version.PromptScaffold,
+            version.ExportDefaultsJson,
+            version.Notes);
 
     private async Task<List<ArtAsset>> ResolveAssetsAsync(Guid projectId, IReadOnlyList<Guid> assetIds, CancellationToken cancellationToken)
     {
@@ -6208,6 +6412,8 @@ public sealed class ArtWorkflowService(
         Guid? sourceBatchId,
         Guid? promptRecipeId,
         int? promptRecipeVersion,
+        Guid? animationRecipeId,
+        int? animationRecipeVersion,
         string prompt,
         object metadata)
     {
@@ -6226,12 +6432,19 @@ public sealed class ArtWorkflowService(
             SourceBatchId = sourceBatchId,
             SourcePromptRecipeId = promptRecipeId,
             SourcePromptRecipeVersion = promptRecipeVersion,
+            SourceAnimationRecipeId = animationRecipeId,
+            SourceAnimationRecipeVersion = animationRecipeVersion,
             Prompt = prompt,
             SourceMetadataJson = JsonSerializer.Serialize(metadata, JsonOptions),
         };
     }
 
-    private static string BuildPrompt(string prompt, string negativePrompt, RecipePromptGuidance? recipe, string? background)
+    private static string BuildPrompt(
+        string prompt,
+        string negativePrompt,
+        RecipePromptGuidance? recipe,
+        AnimationRecipePromptGuidance? animationRecipe,
+        string? background)
     {
         var parts = new List<string>();
         if (recipe is not null)
@@ -6241,9 +6454,39 @@ public sealed class ArtWorkflowService(
                 parts.Add("Recipe prompt:\n" + recipe.PromptTemplate.Trim());
         }
 
+        if (animationRecipe is not null)
+        {
+            parts.Add("Animation recipe guidance: Use the following reusable motion, frame layout, and timing guide for this sprite-sheet request. Keep this guidance distinct from visual style.");
+            var motionDetails = new List<string>();
+            if (!string.IsNullOrWhiteSpace(animationRecipe.AnimationKind))
+                motionDetails.Add($"animation kind: {animationRecipe.AnimationKind.Trim()}");
+            if (!string.IsNullOrWhiteSpace(animationRecipe.Facing))
+                motionDetails.Add($"facing: {animationRecipe.Facing.Trim()}");
+            if (animationRecipe.FrameCount > 0)
+                motionDetails.Add($"frame count: {animationRecipe.FrameCount}");
+            var frameOrder = DeserializeFrameOrder(animationRecipe.FrameOrderJson, animationRecipe.FrameCount);
+            if (frameOrder.Count > 0)
+                motionDetails.Add("frame order: " + string.Join(", ", frameOrder));
+            if (animationRecipe.Fps > 0)
+                motionDetails.Add($"timing target: {animationRecipe.Fps} fps, {(animationRecipe.Loop ? "looping" : "non-looping")}");
+            if (!string.IsNullOrWhiteSpace(animationRecipe.AnchorStrategy))
+                motionDetails.Add($"anchor strategy: {animationRecipe.AnchorStrategy.Trim()}");
+            if (motionDetails.Count > 0)
+                parts.Add("Animation recipe details: " + string.Join("; ", motionDetails));
+
+            var expectedBoxes = DeserializeFrameBoxes(animationRecipe.ExpectedFrameBoxesJson);
+            if (expectedBoxes.Count > 0)
+                parts.Add("Expected frame boxes JSON:\n" + SerializeFrameBoxes(expectedBoxes));
+            if (!string.IsNullOrWhiteSpace(animationRecipe.PromptScaffold))
+                parts.Add("Animation prompt scaffold:\n" + animationRecipe.PromptScaffold.Trim());
+            if (!string.IsNullOrWhiteSpace(animationRecipe.Notes))
+                parts.Add("Animation recipe notes:\n" + animationRecipe.Notes.Trim());
+        }
+
         parts.Add(recipe is null
-            ? prompt.Trim()
-            : "Specific request:\n" + prompt.Trim());
+            && animationRecipe is null
+                ? prompt.Trim()
+                : "Specific request:\n" + prompt.Trim());
 
         if (recipe is not null)
         {
@@ -6567,6 +6810,8 @@ public sealed class ArtWorkflowService(
         batch.ParentBatchId,
         batch.PromptRecipeId,
         batch.PromptRecipeVersion,
+        batch.AnimationRecipeId,
+        batch.AnimationRecipeVersion,
         promptPreview = Preview(batch.Prompt, 360),
         negativePromptPreview = Preview(batch.NegativePrompt, 220),
         batch.Error,
@@ -6607,6 +6852,8 @@ public sealed class ArtWorkflowService(
         asset.IsFavorite,
         asset.SourcePromptRecipeId,
         asset.SourcePromptRecipeVersion,
+        asset.SourceAnimationRecipeId,
+        asset.SourceAnimationRecipeVersion,
         asset.Notes,
     };
 
@@ -6744,6 +6991,8 @@ public sealed class ArtWorkflowService(
             ReadBatchOutputIndex(asset),
             asset.SourcePromptRecipeId,
             asset.SourcePromptRecipeVersion,
+            asset.SourceAnimationRecipeId,
+            asset.SourceAnimationRecipeVersion,
             asset.IsFavorite,
             asset.Notes,
             asset.Prompt,
@@ -7069,6 +7318,8 @@ public sealed class ArtWorkflowService(
             batch.ParentBatchId,
             batch.PromptRecipeId,
             batch.PromptRecipeVersion,
+            batch.AnimationRecipeId,
+            batch.AnimationRecipeVersion,
             batch.Status,
             displayError,
             outputStates,
@@ -7520,6 +7771,8 @@ public sealed class ArtWorkflowService(
             asset.SourceBatchId,
             asset.SourcePromptRecipeId,
             asset.SourcePromptRecipeVersion,
+            asset.SourceAnimationRecipeId,
+            asset.SourceAnimationRecipeVersion,
             asset.IsFavorite,
             asset.Notes,
             asset.Prompt,
@@ -7544,6 +7797,8 @@ public sealed class ArtWorkflowService(
             batch.ParentBatchId,
             batch.PromptRecipeId,
             batch.PromptRecipeVersion,
+            batch.AnimationRecipeId,
+            batch.AnimationRecipeVersion,
             batch.Status,
             batch.Error,
             batch.OutputErrorsJson,
@@ -7858,6 +8113,8 @@ public sealed class ArtWorkflowService(
         Guid? SourceBatchId,
         Guid? SourcePromptRecipeId,
         int? SourcePromptRecipeVersion,
+        Guid? SourceAnimationRecipeId,
+        int? SourceAnimationRecipeVersion,
         bool IsFavorite,
         string Notes,
         string Prompt,
@@ -7881,6 +8138,8 @@ public sealed class ArtWorkflowService(
         Guid? ParentBatchId,
         Guid? PromptRecipeId,
         int? PromptRecipeVersion,
+        Guid? AnimationRecipeId,
+        int? AnimationRecipeVersion,
         GenerationBatchStatus Status,
         string Error,
         string OutputErrorsJson,

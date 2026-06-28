@@ -26,6 +26,9 @@ public class ArtAsset
     public Guid? SourcePromptRecipeId { get; set; }
     public PromptRecipe? SourcePromptRecipe { get; set; }
     public int? SourcePromptRecipeVersion { get; set; }
+    public Guid? SourceAnimationRecipeId { get; set; }
+    public AnimationRecipe? SourceAnimationRecipe { get; set; }
+    public int? SourceAnimationRecipeVersion { get; set; }
 
     public bool IsFavorite { get; set; }
     public string Notes { get; set; } = string.Empty;
