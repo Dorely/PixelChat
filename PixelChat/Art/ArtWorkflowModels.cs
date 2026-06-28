@@ -738,7 +738,37 @@ public sealed record GenerateAnimationGuideRequest(
     string? RootMotion = null,
     string? TargetCellSize = null,
     string? MotionClipId = null,
-    string? Label = null);
+    string? Label = null,
+    int? Rows = null,
+    int? Columns = null,
+    string? GuideCellSize = null,
+    double? GuideCameraYawDegrees = null,
+    bool? Loop = null,
+    double? SafeMarginPercent = null);
+
+public sealed record AnimationGuidePreviewView(
+    string Label,
+    string ImageDataUrl,
+    string AnimationKind,
+    string AssetType,
+    string StructureType,
+    string Facing,
+    string RootMotion,
+    int FrameCount,
+    int Fps,
+    bool Loop,
+    int Rows,
+    int Columns,
+    int CanvasWidth,
+    int CanvasHeight,
+    int GuideCellWidth,
+    int GuideCellHeight,
+    int TargetCellWidth,
+    int TargetCellHeight,
+    double? GuideCameraYawDegrees,
+    string Renderer,
+    string RenderStyle,
+    string? MotionClipId);
 
 public sealed record AnimationGuideRenderView(
     Guid GuideAssetId,
@@ -772,6 +802,22 @@ public sealed record AnimationGuideRenderView(
     string? MotionSourceLicense,
     string? MotionSourceUrl,
     string Message);
+
+public sealed record MotionClipView(
+    string MotionClipId,
+    string DisplayName,
+    string AnimationName,
+    IReadOnlyList<string> Aliases,
+    IReadOnlyList<string> SupportedAnimationKinds,
+    IReadOnlyList<string> SearchTags,
+    bool LoopRecommended,
+    string RecommendedRootMotion,
+    int DefaultFps,
+    IReadOnlyList<int> AllowedSampleCounts,
+    IReadOnlyList<string> SupportedAssetTypes,
+    string SourcePackage,
+    string SourceUrl,
+    string License);
 
 public sealed record AdjustSpriteSheetFrameBoxRequest(
     Guid SpriteSheetId,

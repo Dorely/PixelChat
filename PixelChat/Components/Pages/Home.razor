@@ -123,6 +123,7 @@ else
         </section>
 
         @RenderExportModal()
+        @RenderGuideBuilderModal()
         @RenderReviewPreviewModal()
     </div>
 }
@@ -236,6 +237,7 @@ else
     private Guid? _assetDeleteCandidateId;
     private bool _exportModalOpen;
     private Guid? _exportModalAssetId;
+    private bool _guideBuilderOpen;
     private ReviewPreviewState? _reviewPreview;
     private bool _reviewPreviewEscapeBound;
 
@@ -1396,10 +1398,16 @@ else
                     <h1>Assets</h1>
                     <span>@_workbench!.Assets.Count asset(s)</span>
                 </div>
-                <div class="asset-filters">
-                    <button type="button" class="@AssetOrganizationClass("latest")" @onclick='() => SetAssetOrganization("latest")'>Latest</button>
-                    <button type="button" class="@AssetOrganizationClass("recipe")" @onclick='() => SetAssetOrganization("recipe")'>Art Recipe</button>
-                    <button type="button" class="@AssetOrganizationClass("guides")" @onclick='() => SetAssetOrganization("guides")'>Guides</button>
+                <div class="panel-actions">
+                    <div class="asset-filters">
+                        <button type="button" class="@AssetOrganizationClass("latest")" @onclick='() => SetAssetOrganization("latest")'>Latest</button>
+                        <button type="button" class="@AssetOrganizationClass("recipe")" @onclick='() => SetAssetOrganization("recipe")'>Art Recipe</button>
+                        <button type="button" class="@AssetOrganizationClass("guides")" @onclick='() => SetAssetOrganization("guides")'>Guides</button>
+                    </div>
+                    @if (_assetOrganization == "guides")
+                    {
+                        <button type="button" class="btn btn-sm btn-primary" @onclick="OpenGuideBuilder">Create Guide</button>
+                    }
                 </div>
             </div>
 
@@ -1603,6 +1611,17 @@ else
             return;
 
         <ExportPanel ProjectId="_workbench.Project.Id" AssetId="assetId" OnClose="CloseExportModal" />
+    };
+
+    private RenderFragment RenderGuideBuilderModal() => __builder =>
+    {
+        if (!_guideBuilderOpen || _workbench is null)
+            return;
+
+        <AnimationGuideBuilderModal ProjectId="_workbench.Project.Id"
+                                    ProjectAssets="_workbench.Assets"
+                                    OnClose="CloseGuideBuilder"
+                                    OnSaved="OnGuideBuilderSavedAsync" />
     };
 
     private RenderFragment RenderReviewPreviewModal() => __builder =>
@@ -2515,6 +2534,21 @@ else
     {
         _exportModalOpen = false;
         _exportModalAssetId = null;
+    }
+
+    private void OpenGuideBuilder()
+    {
+        _assetOrganization = "guides";
+        _guideBuilderOpen = true;
+    }
+
+    private void CloseGuideBuilder() => _guideBuilderOpen = false;
+
+    private async Task OnGuideBuilderSavedAsync(AnimationGuideRenderView guide)
+    {
+        _guideBuilderOpen = false;
+        _assetOrganization = "guides";
+        await ReloadWorkbenchAsync();
     }
 
     private async Task MarkAssetAsync(Guid assetId, bool? favorite)

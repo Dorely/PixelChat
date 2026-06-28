@@ -39,6 +39,17 @@ public sealed class ArtWorkflowService(
         bool NeedsLargeCells,
         bool NeedsTallCells,
         bool NeedsLargePadding);
+    private sealed record AnimationGuideRenderDraft(
+        ArtAsset? Reference,
+        AnimationSpec Spec,
+        LayoutSpec Layout,
+        byte[] GuidePng,
+        byte[] DiagnosticPng,
+        MotionGuideRenderResult? MotionRender,
+        string Renderer,
+        string RenderStyle,
+        string Label,
+        string PromptScaffold);
 
     public async Task<ProjectView> EnsureDefaultProjectAsync(CancellationToken cancellationToken = default)
     {
@@ -596,6 +607,19 @@ public sealed class ArtWorkflowService(
         return JsonSerializer.Serialize(AnimationRecipeView(recipe), JsonOptions);
     }
 
+    public Task<IReadOnlyList<MotionClipView>> ListMotionClipsAsync(
+        string? query = null,
+        string? animationKind = null,
+        bool? loop = null,
+        int? limit = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var results = SelectMotionClips(query, animationKind, loop, limit);
+        return Task.FromResult<IReadOnlyList<MotionClipView>>(results.Select(MotionClipView).ToList());
+    }
+
     public Task<string> ListMotionClipsJsonAsync(
         string? query = null,
         string? animationKind = null,
@@ -605,29 +629,9 @@ public sealed class ArtWorkflowService(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var max = NormalizeToolLimit(limit, 50, 100);
         var catalog = MotionClipCatalog.Load(environment.ContentRootPath);
-        var clips = catalog.Clips.AsEnumerable();
-
-        if (loop is bool loopValue)
-            clips = clips.Where(clip => clip.Loop == loopValue);
-
-        if (!string.IsNullOrWhiteSpace(animationKind))
-        {
-            var normalizedKind = MotionClipCatalog.Normalize(animationKind);
-            clips = clips.Where(clip => MotionClipMatchesTerm(clip, normalizedKind));
-        }
-
-        if (!string.IsNullOrWhiteSpace(query))
-        {
-            var normalizedQuery = MotionClipCatalog.Normalize(query);
-            clips = clips.Where(clip => MotionClipMatchesTerm(clip, normalizedQuery));
-        }
-
-        var results = clips
-            .OrderBy(clip => clip.DisplayName)
-            .Take(max)
-            .ToList();
+        var max = NormalizeToolLimit(limit, 50, 100);
+        var results = SelectMotionClips(query, animationKind, loop, limit);
 
         return Task.FromResult(JsonSerializer.Serialize(new
         {
@@ -3899,10 +3903,10 @@ public sealed class ArtWorkflowService(
         await db.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<AnimationGuideRenderView> GenerateAnimationGuideAsync(
+    private async Task<AnimationGuideRenderDraft> BuildAnimationGuideRenderDraftAsync(
         Guid projectId,
         GenerateAnimationGuideRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         _ = await GetProjectAsync(projectId, cancellationToken);
         ArtAsset? reference = null;
@@ -3927,6 +3931,13 @@ public sealed class ArtWorkflowService(
             animationOptions.Value.DefaultFrameCellSize,
             fallbackWidth: 192,
             fallbackHeight: 192);
+        var requestedGuideCell = string.IsNullOrWhiteSpace(request.GuideCellSize)
+            ? ((int Width, int Height)?)null
+            : ParseCellSize(
+                request.GuideCellSize,
+                configured: string.Empty,
+                fallbackWidth: targetCellWidth,
+                fallbackHeight: targetCellHeight);
 
         var spec = SpriteMotionArchetypes.Build(
             assetType,
@@ -3943,9 +3954,20 @@ public sealed class ArtWorkflowService(
             request.MotionClipId,
             fpsWasRequested: request.Fps is not null,
             rootMotionWasRequested: !string.IsNullOrWhiteSpace(request.RootMotion));
+        if (request.GuideCameraYawDegrees is double yaw)
+            spec = spec with { GuideCameraYawDegrees = NormalizeYawDegrees(yaw) };
+        if (request.Loop is bool loop)
+            spec = spec with { Loop = loop };
 
         var layoutProfile = AnalyzeGuideLayoutProfile(reference);
-        var layout = BuildGuideLayout(spec, "#ff00ff", layoutProfile);
+        var layout = BuildGuideLayout(
+            spec,
+            "#ff00ff",
+            layoutProfile,
+            request.Rows,
+            request.Columns,
+            requestedGuideCell,
+            request.SafeMarginPercent);
         MotionGuideRenderResult? motionRender = null;
         if (MotionClipCatalog.IsExternalMotionSpec(spec))
         {
@@ -3978,83 +4000,134 @@ public sealed class ArtWorkflowService(
         var label = string.IsNullOrWhiteSpace(request.Label)
             ? $"{TitleCase(animationKind)} {spec.FrameCount}-frame guide"
             : request.Label.Trim();
-        var fileStem = CleanFileName(label.ToLowerInvariant().Replace(' ', '-'), "animation-guide");
-        var frameOrder = Enumerable.Range(1, spec.FrameCount).ToList();
-        var expectedBoxes = layout.Slots
+        var promptScaffold = BuildAnimationGuidePromptScaffold(reference, spec, layout);
+
+        return new AnimationGuideRenderDraft(
+            reference,
+            spec,
+            layout,
+            guidePng,
+            diagnosticPng,
+            motionRender,
+            renderer,
+            renderStyle,
+            label,
+            promptScaffold);
+    }
+
+    public async Task<AnimationGuidePreviewView> PreviewAnimationGuideAsync(
+        Guid projectId,
+        GenerateAnimationGuideRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var draft = await BuildAnimationGuideRenderDraftAsync(projectId, request, cancellationToken);
+        return new AnimationGuidePreviewView(
+            draft.Label,
+            DataUrl.ToDataUrl("image/png", draft.GuidePng),
+            draft.Spec.AnimationKind,
+            draft.Spec.AssetType,
+            draft.Spec.StructureType,
+            draft.Spec.Facing,
+            draft.Spec.RootMotion,
+            draft.Spec.FrameCount,
+            draft.Spec.Fps,
+            draft.Spec.Loop,
+            draft.Layout.Rows,
+            draft.Layout.Columns,
+            draft.Layout.CanvasWidth,
+            draft.Layout.CanvasHeight,
+            draft.Layout.GuideCellWidth,
+            draft.Layout.GuideCellHeight,
+            draft.Layout.TargetCellWidth,
+            draft.Layout.TargetCellHeight,
+            draft.Spec.GuideCameraYawDegrees,
+            draft.Renderer,
+            draft.RenderStyle,
+            draft.Spec.MotionClipId);
+    }
+
+    public async Task<AnimationGuideRenderView> GenerateAnimationGuideAsync(
+        Guid projectId,
+        GenerateAnimationGuideRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var draft = await BuildAnimationGuideRenderDraftAsync(projectId, request, cancellationToken);
+        var fileStem = CleanFileName(draft.Label.ToLowerInvariant().Replace(' ', '-'), "animation-guide");
+        var frameOrder = Enumerable.Range(1, draft.Spec.FrameCount).ToList();
+        var expectedBoxes = draft.Layout.Slots
             .OrderBy(slot => slot.FrameIndex)
             .Select(slot => slot.Rect)
             .ToList();
-        var promptScaffold = BuildAnimationGuidePromptScaffold(reference, spec, layout);
         var exportDefaultsJson = JsonSerializer.Serialize(new
         {
-            rows = layout.Rows,
-            columns = layout.Columns,
-            cellWidth = spec.TargetCellWidth,
-            cellHeight = spec.TargetCellHeight,
-            fps = spec.Fps,
-            loop = spec.Loop,
+            rows = draft.Layout.Rows,
+            columns = draft.Layout.Columns,
+            cellWidth = draft.Spec.TargetCellWidth,
+            cellHeight = draft.Spec.TargetCellHeight,
+            fps = draft.Spec.Fps,
+            loop = draft.Spec.Loop,
             frameOrder,
             anchorStrategy = "root-baseline",
-            background = layout.BackgroundColor,
+            background = draft.Layout.BackgroundColor,
         }, JsonOptions);
 
         var metadata = new
         {
             source = "generate_animation_guide",
-            renderer,
-            renderStyle,
-            spec.AnimationKind,
-            spec.AssetType,
-            spec.StructureType,
-            spec.Facing,
-            spec.RootMotion,
-            spec.FrameCount,
-            spec.Fps,
-            spec.Loop,
-            spec.MotionClipId,
-            spec.GuideCameraYawDegrees,
-            spec.GuideSourcePackage,
-            spec.GuideSourceLicense,
-            layout.Rows,
-            layout.Columns,
-            layout.CanvasWidth,
-            layout.CanvasHeight,
-            layout.GuideCellWidth,
-            layout.GuideCellHeight,
-            layout.TargetCellWidth,
-            layout.TargetCellHeight,
+            renderer = draft.Renderer,
+            renderStyle = draft.RenderStyle,
+            draft.Spec.AnimationKind,
+            draft.Spec.AssetType,
+            draft.Spec.StructureType,
+            draft.Spec.Facing,
+            draft.Spec.RootMotion,
+            draft.Spec.FrameCount,
+            draft.Spec.Fps,
+            draft.Spec.Loop,
+            draft.Spec.MotionClipId,
+            draft.Spec.GuideCameraYawDegrees,
+            draft.Spec.GuideSourcePackage,
+            draft.Spec.GuideSourceLicense,
+            draft.Layout.Rows,
+            draft.Layout.Columns,
+            draft.Layout.CanvasWidth,
+            draft.Layout.CanvasHeight,
+            draft.Layout.GuideCellWidth,
+            draft.Layout.GuideCellHeight,
+            draft.Layout.TargetCellWidth,
+            draft.Layout.TargetCellHeight,
             expectedFrameBoxes = expectedBoxes,
-            referenceAssetId = reference?.Id,
+            referenceAssetId = draft.Reference?.Id,
         };
         var guide = CreateAsset(
             projectId,
-            label,
+            draft.Label,
             $"{fileStem}.png",
             ArtAssetKind.SpriteGuide,
             "image/png",
-            guidePng,
-            reference?.Id,
+            draft.GuidePng,
+            draft.Reference?.Id,
             sourceBatchId: null,
             promptRecipeId: null,
             promptRecipeVersion: null,
             animationRecipeId: null,
             animationRecipeVersion: null,
-            promptScaffold,
+            draft.PromptScaffold,
             metadata);
         var diagnostic = CreateAsset(
             projectId,
-            $"{label} diagnostic",
+            $"{draft.Label} diagnostic",
             $"{fileStem}-diagnostic.png",
             ArtAssetKind.SpriteGuide,
             "image/png",
-            diagnosticPng,
+            draft.DiagnosticPng,
             guide.Id,
             sourceBatchId: null,
             promptRecipeId: null,
             promptRecipeVersion: null,
             animationRecipeId: null,
             animationRecipeVersion: null,
-            promptScaffold,
+            draft.PromptScaffold,
             metadata);
         await db.ArtAssets.AddRangeAsync([guide, diagnostic], cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
@@ -4063,33 +4136,33 @@ public sealed class ArtWorkflowService(
             guide.Id,
             diagnostic.Id,
             guide.Label,
-            spec.AnimationKind,
-            spec.AssetType,
-            spec.StructureType,
-            spec.Facing,
-            spec.RootMotion,
-            spec.FrameCount,
+            draft.Spec.AnimationKind,
+            draft.Spec.AssetType,
+            draft.Spec.StructureType,
+            draft.Spec.Facing,
+            draft.Spec.RootMotion,
+            draft.Spec.FrameCount,
             frameOrder,
-            spec.Fps,
-            spec.Loop,
-            layout.Rows,
-            layout.Columns,
-            layout.CanvasWidth,
-            layout.CanvasHeight,
-            layout.GuideCellWidth,
-            layout.GuideCellHeight,
-            layout.TargetCellWidth,
-            layout.TargetCellHeight,
+            draft.Spec.Fps,
+            draft.Spec.Loop,
+            draft.Layout.Rows,
+            draft.Layout.Columns,
+            draft.Layout.CanvasWidth,
+            draft.Layout.CanvasHeight,
+            draft.Layout.GuideCellWidth,
+            draft.Layout.GuideCellHeight,
+            draft.Layout.TargetCellWidth,
+            draft.Layout.TargetCellHeight,
             expectedBoxes,
             "root-baseline",
-            promptScaffold,
+            draft.PromptScaffold,
             exportDefaultsJson,
-            renderer,
-            renderStyle,
-            spec.MotionClipId,
-            motionRender?.Metadata.SourcePackage ?? spec.GuideSourcePackage,
-            motionRender?.Metadata.SourceLicense ?? spec.GuideSourceLicense,
-            motionRender?.Metadata.SourceUrl,
+            draft.Renderer,
+            draft.RenderStyle,
+            draft.Spec.MotionClipId,
+            draft.MotionRender?.Metadata.SourcePackage ?? draft.Spec.GuideSourcePackage,
+            draft.MotionRender?.Metadata.SourceLicense ?? draft.Spec.GuideSourceLicense,
+            draft.MotionRender?.Metadata.SourceUrl,
             "Animation guide assets saved as SpriteGuide. Use guideAssetId first in generate_sprite_sheet_candidates references.");
     }
 
@@ -5920,18 +5993,36 @@ public sealed class ArtWorkflowService(
             NeedsLargePadding: equippedOrWide || bulky);
     }
 
-    private static LayoutSpec BuildGuideLayout(AnimationSpec spec, string backgroundColor, LayoutProfile layoutProfile)
+    private static LayoutSpec BuildGuideLayout(
+        AnimationSpec spec,
+        string backgroundColor,
+        LayoutProfile layoutProfile,
+        int? requestedRows = null,
+        int? requestedColumns = null,
+        (int Width, int Height)? requestedGuideCell = null,
+        double? requestedSafeMarginPercent = null)
     {
-        var (columns, rows) = GuideGridForFrameCount(spec.FrameCount);
-        var (guideCellWidth, guideCellHeight) = GuideCellSize(spec.FrameCount, layoutProfile);
+        var (defaultColumns, defaultRows) = GuideGridForFrameCount(spec.FrameCount);
+        var columns = Math.Clamp(requestedColumns ?? defaultColumns, 1, 8);
+        var rows = Math.Clamp(requestedRows ?? defaultRows, 1, 8);
+        if (rows * columns < spec.FrameCount)
+            rows = Math.Clamp((int)Math.Ceiling(spec.FrameCount / (double)columns), 1, 8);
+        if (rows * columns < spec.FrameCount)
+            columns = Math.Clamp((int)Math.Ceiling(spec.FrameCount / (double)rows), 1, 8);
+
+        var (defaultCellWidth, defaultCellHeight) = GuideCellSize(spec.FrameCount, layoutProfile);
+        var guideCellWidth = Math.Clamp(requestedGuideCell?.Width ?? defaultCellWidth, 64, 2048);
+        var guideCellHeight = Math.Clamp(requestedGuideCell?.Height ?? defaultCellHeight, 64, 2048);
         var canvasWidth = checked(columns * guideCellWidth);
         var canvasHeight = checked(rows * guideCellHeight);
-        var safeMarginRatio = layoutProfile.NeedsLargePadding ? 0.14d : 0.11d;
+        var safeMarginRatio = requestedSafeMarginPercent is double safeMarginPercent
+            ? Math.Clamp(safeMarginPercent, 0d, 40d) / 100d
+            : layoutProfile.NeedsLargePadding ? 0.14d : 0.11d;
         var slots = Enumerable.Range(0, spec.FrameCount)
             .Select(index =>
             {
                 var rect = CellRectForGuideGrid(index, columns, rows, canvasWidth, canvasHeight);
-                var margin = Math.Max(24, (int)Math.Round(Math.Min(rect.Width, rect.Height) * safeMarginRatio));
+                var margin = Math.Max(0, (int)Math.Round(Math.Min(rect.Width, rect.Height) * safeMarginRatio));
                 var safe = new SpriteSheetRect(
                     rect.X + margin,
                     rect.Y + margin,
@@ -6031,6 +6122,19 @@ public sealed class ArtWorkflowService(
         if (TryParseCellSize(configured, out var configuredWidth, out var configuredHeight))
             return (configuredWidth, configuredHeight);
         return (fallbackWidth, fallbackHeight);
+    }
+
+    private static double NormalizeYawDegrees(double yaw)
+    {
+        if (double.IsNaN(yaw) || double.IsInfinity(yaw))
+            return 0d;
+
+        var normalized = yaw % 360d;
+        if (normalized > 180d)
+            normalized -= 360d;
+        if (normalized < -180d)
+            normalized += 360d;
+        return Math.Round(normalized, 2);
     }
 
     private static bool TryParseCellSize(string? value, out int width, out int height)
@@ -6723,6 +6827,49 @@ public sealed class ArtWorkflowService(
         asset.CreatedAt,
         asset.UpdatedAt,
     };
+
+    private IReadOnlyList<MotionClipDefinition> SelectMotionClips(string? query, string? animationKind, bool? loop, int? limit)
+    {
+        var max = NormalizeToolLimit(limit, 50, 100);
+        var catalog = MotionClipCatalog.Load(environment.ContentRootPath);
+        var clips = catalog.Clips.AsEnumerable();
+
+        if (loop is bool loopValue)
+            clips = clips.Where(clip => clip.Loop == loopValue);
+
+        if (!string.IsNullOrWhiteSpace(animationKind))
+        {
+            var normalizedKind = MotionClipCatalog.Normalize(animationKind);
+            clips = clips.Where(clip => MotionClipMatchesTerm(clip, normalizedKind));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var normalizedQuery = MotionClipCatalog.Normalize(query);
+            clips = clips.Where(clip => MotionClipMatchesTerm(clip, normalizedQuery));
+        }
+
+        return clips
+            .OrderBy(clip => clip.DisplayName)
+            .Take(max)
+            .ToList();
+    }
+
+    private static MotionClipView MotionClipView(MotionClipDefinition clip) => new(
+        clip.ClipId,
+        clip.DisplayName,
+        clip.AnimationName,
+        clip.Aliases,
+        clip.SupportedAnimationKinds,
+        clip.SearchTags,
+        clip.Loop,
+        clip.RootMotion,
+        clip.DefaultFps,
+        clip.AllowedSampleCounts,
+        clip.SupportedAssetTypes,
+        clip.SourcePackage,
+        clip.SourceUrl,
+        clip.License);
 
     private static object CompactMotionClip(MotionClipDefinition clip) => new
     {

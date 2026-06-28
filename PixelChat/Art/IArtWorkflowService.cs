@@ -19,6 +19,7 @@ public interface IArtWorkflowService
     Task<string> ReadPromptRecipeJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<string> ListAnimationRecipesJsonAsync(Guid projectId, string? query = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadAnimationRecipeJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<MotionClipView>> ListMotionClipsAsync(string? query = null, string? animationKind = null, bool? loop = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ListMotionClipsJsonAsync(string? query = null, string? animationKind = null, bool? loop = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ListGenerationBatchesJsonAsync(Guid projectId, string? status = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadGenerationBatchJsonAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
@@ -92,6 +93,7 @@ public interface IArtWorkflowService
     Task<string> ListAnimationRecipeVersionsJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<AnimationRecipeView> RevertAnimationRecipeAsync(Guid projectId, Guid recipeId, int version, string source, CancellationToken cancellationToken = default);
     Task DeleteAnimationRecipeAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<AnimationGuidePreviewView> PreviewAnimationGuideAsync(Guid projectId, GenerateAnimationGuideRequest request, CancellationToken cancellationToken = default);
     Task<AnimationGuideRenderView> GenerateAnimationGuideAsync(Guid projectId, GenerateAnimationGuideRequest request, CancellationToken cancellationToken = default);
     Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default);
     Task DeleteAssetAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
