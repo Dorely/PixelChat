@@ -10,7 +10,7 @@
 | File | Description |
 |------|-------------|
 | `VISION.md` | High-level product vision, durable product principles, and AI-assisted sprite-workbench goals. |
-| `README.md` | Project purpose, first-slice status, requirements, build/run commands, packaging notes, and local-data notes. |
+| `README.md` | Project purpose, first-slice status, motion-guide asset note, requirements, build/run commands, packaging notes, and local-data notes. |
 | `AGENTS.md` | Stable project guidance for agents and contributors. |
 | `FILEMAP.md` | This file - concise map of source files and project structure. |
 | `PixelChat.sln` | Solution file containing the `PixelChat` project. |
@@ -45,14 +45,14 @@
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact workspace records for Review, live sprite focus/agent status, asset, and recipe context used by assistant tools. |
 | `AssistantPromptBuilder.cs` | Builds the workbench assistant system prompt around the Source -> Frames -> Sheet -> Export workflow, deterministic sprite tools, art/animation recipes, explicit tool display titles, review, and export guidance. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records with explicit display titles, form draft payloads, animation frame mark payloads, and per-turn autonomous generation budget state. |
-| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, generation, sprite operations, Review sets, favorites, exports, and global `displayTitle` tool metadata schema. |
+| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, motion-clip catalog reads, generation, sprite operations, Review sets, favorites, exports, and global `displayTitle` tool metadata schema. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, explicit display title metadata, visual metadata, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads including chat visuals, assets, Review sets, guide generation, sprite sheets/reviews/working-frame stabilization/split/reassembly, greenfield region-to-standalone-asset extraction, exports, art/animation recipes, masks, import, crop, and edits. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Review sets, motion-clip discovery, guide generation, sprite work, exports, recipes, masks, import, crop, and edits. |
 | `ArtWorkflowModels.cs` | Request/result/view records for the workbench, lazy media URLs/binaries, animation-guide generation, sprite-sheet composition/provenance/stabilization/animation metadata, per-frame isolation/reassembly, standalone region extraction, art/animation recipe management, and assistant tools. |
 | `IFrameSetService.cs` / `FrameSetService.cs` | Greenfield deterministic Source -> Frames -> Sheet service over SpriteRegion/FrameSet/Frame/Anchor/SheetLayout/BuiltSheet: detect/save regions, create/edit/order/align frames, manage frame masks, and build opaque sheets with linked manifests. |
 | `ISpriteWorkspaceActionService.cs` / `SpriteWorkspaceActionService.cs` | Shared Sprites action layer used by UI clicks and assistant tools to wrap greenfield mutations, update persisted sprite focus, and keep the visible workspace synchronized. |
@@ -62,7 +62,7 @@
 | `SpriteFacing.cs` | Facing normalization, yaw conversion, left/right detection, and prompt phrasing helpers for animation guides. |
 | `SpriteMotionArchetypes.cs` | Procedural motion archetype builder for unit, tower, projectile, and VFX animation guide frame specs. |
 | `SpriteGuideRenderer.cs` | Procedural PNG renderer for lightweight animation guide sheets and diagnostic guide sheets. |
-| `MotionClipCatalog.cs` | Motion clip manifest loader and resolver for external GLTF-backed animation guides. |
+| `MotionClipCatalog.cs` | Motion clip manifest loader/resolver with shared defaults, discovery metadata, and GLTF-backed animation guide validation. |
 | `GltfMotionGuideRenderer.cs` | GLB sampler/renderer that produces mannequin motion guide sheets from cataloged Quaternius clips. |
 | `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, chat visual previews/full images, asset/frame masks, legacy sprite-frame previews, and greenfield frame-set frame content/previews. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
@@ -82,9 +82,9 @@
 
 | File | Description |
 |------|-------------|
-| `manifest.json` | Motion clip catalog manifest for guide renderer lookup and default humanoid walk resolution. |
-| `Quaternius/UAL2/UAL2_Standard.glb` | Restored CC0 Quaternius Universal Animation Library 2 GLB used for sampled walk-cycle guide rendering. |
-| `Quaternius/UAL2/README.md` / `License.txt` | Source attribution and license notes for the restored Quaternius motion clip asset. |
+| `manifest.json` | Motion clip catalog manifest exposing all 43 vendored Quaternius UAL2 animations with shared defaults and legacy walk aliasing. |
+| `Quaternius/UAL2/UAL2_Standard.glb` | Restored CC0 Quaternius Universal Animation Library 2 GLB used for sampled mannequin motion-guide rendering. |
+| `Quaternius/UAL2/README.md` / `License.txt` | Source attribution, coverage, and license notes for the restored Quaternius motion clip asset. |
 
 ### Components/
 

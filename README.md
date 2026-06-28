@@ -25,6 +25,10 @@ Not implemented yet:
 - .NET 10 SDK.
 - Node.js 22 or later for Electron.NET desktop builds.
 
+## Motion Guide Assets
+
+PixelChat vendors the CC0 Quaternius Universal Animation Library 2 Standard GLB for sampled mannequin animation guides. The catalog manifest exposes all 43 animations in that GLB for assistant guide generation, including the legacy walk-cycle alias used by the first proof of concept.
+
 ## Build
 
 ```bash

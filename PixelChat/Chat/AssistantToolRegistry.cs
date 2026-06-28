@@ -120,6 +120,12 @@ public sealed class AssistantToolRegistry(
             description: "Read one animation recipe's reusable motion prompt, private notes, current version, and example/guide attachments. Notes are never sent to image generation. This is read-only."),
 
         AIFunctionFactory.Create(
+            method: (string? query = null, string? animationKind = null, bool? loop = null, int? limit = null, CancellationToken cancellationToken = default) =>
+                workflow.ListMotionClipsJsonAsync(query, animationKind, loop, limit, cancellationToken),
+            name: "list_motion_clips",
+            description: "List available GLTF-backed humanoid motion guide clips. Use this before generate_animation_guide when the user asks for a 3D/mannequin-guided humanoid animation, then pass the selected motionClipId."),
+
+        AIFunctionFactory.Create(
             method: (Guid? recipeId,
                 string name,
                 string prompt,
@@ -192,7 +198,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 GenerateAnimationGuideToolAsync(projectId, referenceAssetId, animationKind, assetType, structureType, facing, frameCount, fps, rootMotion, targetCellSize, motionClipId, label, cancellationToken),
             name: "generate_animation_guide",
-            description: "Render and save a reusable animation guide as SpriteGuide assets. Use this before generate_sprite_sheet_candidates for animation work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
+            description: "Render and save a reusable animation guide as SpriteGuide assets. For GLTF-backed humanoid poses, call list_motion_clips first and pass the selected motionClipId. Use this before generate_sprite_sheet_candidates for animation work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
 
         AIFunctionFactory.Create(
             method: (string? status = null, int? limit = null) =>

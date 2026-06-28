@@ -52,6 +52,8 @@ public static class AssistantPromptBuilder
 
         Use read tools to inspect project state, assets, art recipes, animation recipes, batches, source regions, frame sets, and sprite sheets. List tools return metadata only; read_asset and sprite/frame review tools can provide model-only images.
 
+        For humanoid animation requests that should use sampled 3D/mannequin pose guidance, call list_motion_clips before generate_animation_guide. Pick a returned motionClipId that matches the requested action, loop/one-shot behavior, and root-motion expectation. Pass that motionClipId to generate_animation_guide; do not invent clip ids.
+
         Use generation tools for bounded experiments. Each generation round is expensive; state the hypothesis first, inspect results, then decide.
 
         Use Review tools when the user should judge images. Review items are visible to the user but are not model image context.

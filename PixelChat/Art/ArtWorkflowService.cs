@@ -596,6 +596,49 @@ public sealed class ArtWorkflowService(
         return JsonSerializer.Serialize(AnimationRecipeView(recipe), JsonOptions);
     }
 
+    public Task<string> ListMotionClipsJsonAsync(
+        string? query = null,
+        string? animationKind = null,
+        bool? loop = null,
+        int? limit = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var max = NormalizeToolLimit(limit, 50, 100);
+        var catalog = MotionClipCatalog.Load(environment.ContentRootPath);
+        var clips = catalog.Clips.AsEnumerable();
+
+        if (loop is bool loopValue)
+            clips = clips.Where(clip => clip.Loop == loopValue);
+
+        if (!string.IsNullOrWhiteSpace(animationKind))
+        {
+            var normalizedKind = MotionClipCatalog.Normalize(animationKind);
+            clips = clips.Where(clip => MotionClipMatchesTerm(clip, normalizedKind));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var normalizedQuery = MotionClipCatalog.Normalize(query);
+            clips = clips.Where(clip => MotionClipMatchesTerm(clip, normalizedQuery));
+        }
+
+        var results = clips
+            .OrderBy(clip => clip.DisplayName)
+            .Take(max)
+            .ToList();
+
+        return Task.FromResult(JsonSerializer.Serialize(new
+        {
+            motionClips = results.Select(CompactMotionClip),
+            returned = results.Count,
+            totalAvailable = catalog.Clips.Count,
+            limit = max,
+            note = "Pass a returned motionClipId to generate_animation_guide when a GLTF mannequin motion guide should control the sprite-sheet poses.",
+        }, JsonOptions));
+    }
+
     public async Task<string> ListGenerationBatchesJsonAsync(
         Guid projectId,
         string? status = null,
@@ -3895,7 +3938,11 @@ public sealed class ArtWorkflowService(
             fps,
             targetCellWidth,
             targetCellHeight);
-        spec = ResolveMotionClipSpec(spec, request.MotionClipId);
+        spec = ResolveMotionClipSpec(
+            spec,
+            request.MotionClipId,
+            fpsWasRequested: request.Fps is not null,
+            rootMotionWasRequested: !string.IsNullOrWhiteSpace(request.RootMotion));
 
         var layoutProfile = AnalyzeGuideLayoutProfile(reference);
         var layout = BuildGuideLayout(spec, "#ff00ff", layoutProfile);
@@ -5717,7 +5764,11 @@ public sealed class ArtWorkflowService(
         }
     }
 
-    private AnimationSpec ResolveMotionClipSpec(AnimationSpec spec, string? requestedMotionClipId)
+    private AnimationSpec ResolveMotionClipSpec(
+        AnimationSpec spec,
+        string? requestedMotionClipId,
+        bool fpsWasRequested,
+        bool rootMotionWasRequested)
     {
         var catalog = MotionClipCatalog.Load(environment.ContentRootPath);
         MotionClipDefinition? clip = null;
@@ -5725,8 +5776,8 @@ public sealed class ArtWorkflowService(
         {
             clip = catalog.Find(requestedMotionClipId)
                 ?? throw new InvalidOperationException($"Motion clip '{requestedMotionClipId}' was not found in the catalog.");
-            if (!clip.Supports(spec))
-                throw new InvalidOperationException($"Motion clip '{requestedMotionClipId}' does not support {spec.AssetType}/{spec.StructureType}/{spec.AnimationKind}.");
+            if (!clip.SupportsTarget(spec))
+                throw new InvalidOperationException($"Motion clip '{requestedMotionClipId}' does not support {spec.AssetType}/{spec.StructureType} targets.");
         }
         else if (IsHumanoidWalkSpec(spec))
         {
@@ -5736,23 +5787,31 @@ public sealed class ArtWorkflowService(
         if (clip is null)
             return spec;
 
+        var resolvedFps = !fpsWasRequested && clip.DefaultFps > 0
+            ? Math.Clamp(clip.DefaultFps, 1, 60)
+            : spec.Fps;
+        var resolvedRootMotion = !rootMotionWasRequested && !string.IsNullOrWhiteSpace(clip.RootMotion)
+            ? NormalizeGuideToken(clip.RootMotion, spec.RootMotion)
+            : spec.RootMotion;
         var sampleCount = clip.ResolveSampleCount(spec.FrameCount);
-        if (sampleCount != spec.FrameCount)
+        if (sampleCount != spec.FrameCount || resolvedFps != spec.Fps || !string.Equals(resolvedRootMotion, spec.RootMotion, StringComparison.Ordinal))
         {
             spec = SpriteMotionArchetypes.Build(
                 spec.AssetType,
                 spec.StructureType,
                 spec.AnimationKind,
                 spec.Facing,
-                spec.RootMotion,
+                resolvedRootMotion,
                 sampleCount,
-                spec.Fps,
+                resolvedFps,
                 spec.TargetCellWidth,
                 spec.TargetCellHeight);
         }
 
         return spec with
         {
+            RootMotion = resolvedRootMotion,
+            Fps = resolvedFps,
             GuideRenderer = MotionClipCatalog.RendererId,
             GuideRenderStyle = MotionClipCatalog.SkinnedMannequinRenderStyle,
             MotionClipId = clip.ClipId,
@@ -6664,6 +6723,48 @@ public sealed class ArtWorkflowService(
         asset.CreatedAt,
         asset.UpdatedAt,
     };
+
+    private static object CompactMotionClip(MotionClipDefinition clip) => new
+    {
+        motionClipId = clip.ClipId,
+        clip.DisplayName,
+        clip.AnimationName,
+        clip.Aliases,
+        supportedAnimationKinds = clip.SupportedAnimationKinds,
+        searchTags = clip.SearchTags,
+        loopRecommended = clip.Loop,
+        recommendedRootMotion = clip.RootMotion,
+        clip.DefaultFps,
+        clip.AllowedSampleCounts,
+        supportedAssetTypes = clip.SupportedAssetTypes,
+        clip.SourcePackage,
+        clip.SourceUrl,
+        clip.License,
+    };
+
+    private static bool MotionClipMatchesTerm(MotionClipDefinition clip, string normalizedTerm)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedTerm))
+            return true;
+
+        return MotionClipSearchValues(clip)
+            .Select(MotionClipCatalog.Normalize)
+            .Any(value => value.Contains(normalizedTerm, StringComparison.Ordinal));
+    }
+
+    private static IEnumerable<string> MotionClipSearchValues(MotionClipDefinition clip)
+    {
+        yield return clip.ClipId;
+        yield return clip.DisplayName;
+        yield return clip.AnimationName;
+        yield return clip.RootMotion;
+        foreach (var alias in clip.Aliases)
+            yield return alias;
+        foreach (var kind in clip.SupportedAnimationKinds)
+            yield return kind;
+        foreach (var tag in clip.SearchTags)
+            yield return tag;
+    }
 
     private static object CompactRecipe(PromptRecipe recipe, int currentVersion) => new
     {

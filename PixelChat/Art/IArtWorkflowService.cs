@@ -19,6 +19,7 @@ public interface IArtWorkflowService
     Task<string> ReadPromptRecipeJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
     Task<string> ListAnimationRecipesJsonAsync(Guid projectId, string? query = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadAnimationRecipeJsonAsync(Guid projectId, Guid recipeId, CancellationToken cancellationToken = default);
+    Task<string> ListMotionClipsJsonAsync(string? query = null, string? animationKind = null, bool? loop = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ListGenerationBatchesJsonAsync(Guid projectId, string? status = null, int? limit = null, CancellationToken cancellationToken = default);
     Task<string> ReadGenerationBatchJsonAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
     Task<string> ListSpriteSheetsJsonAsync(Guid projectId, int? limit = null, CancellationToken cancellationToken = default);

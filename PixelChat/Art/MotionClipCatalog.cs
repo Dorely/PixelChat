@@ -30,7 +30,7 @@ internal sealed class MotionClipCatalog
 
         var manifest = JsonSerializer.Deserialize<MotionClipManifest>(File.ReadAllText(manifestPath), JsonOptions)
             ?? new MotionClipManifest();
-        return new MotionClipCatalog(contentRootPath, manifest.Clips);
+        return new MotionClipCatalog(contentRootPath, manifest.Clips.Select(clip => clip.WithDefaults(manifest.Defaults)).ToList());
     }
 
     public MotionClipDefinition? Find(string? clipId)
@@ -60,8 +60,24 @@ internal sealed class MotionClipCatalog
 
     private sealed class MotionClipManifest
     {
+        public MotionClipDefaults Defaults { get; init; } = new();
         public List<MotionClipDefinition> Clips { get; init; } = [];
     }
+}
+
+internal sealed class MotionClipDefaults
+{
+    public string SourcePackage { get; init; } = string.Empty;
+    public string SourceUrl { get; init; } = string.Empty;
+    public string License { get; init; } = string.Empty;
+    public string AssetPath { get; init; } = string.Empty;
+    public string? MeshNodeName { get; init; }
+    public int? SkinIndex { get; init; }
+    public List<string> SupportedAssetTypes { get; init; } = [];
+    public int DefaultFps { get; init; } = 8;
+    public List<int> AllowedSampleCounts { get; init; } = [];
+    public string RootMotion { get; init; } = "in_place";
+    public Dictionary<string, string> BoneMap { get; init; } = [];
 }
 
 internal sealed class MotionClipDefinition
@@ -80,7 +96,32 @@ internal sealed class MotionClipDefinition
     public List<string> SupportedAssetTypes { get; init; } = [];
     public int DefaultFps { get; init; } = 8;
     public List<int> AllowedSampleCounts { get; init; } = [];
+    public List<string> SearchTags { get; init; } = [];
+    public bool Loop { get; init; }
+    public string RootMotion { get; init; } = "in_place";
     public Dictionary<string, string> BoneMap { get; init; } = [];
+
+    public MotionClipDefinition WithDefaults(MotionClipDefaults defaults) => new()
+    {
+        ClipId = ClipId,
+        Aliases = Aliases,
+        DisplayName = DisplayName,
+        SourcePackage = FirstNonBlank(SourcePackage, defaults.SourcePackage),
+        SourceUrl = FirstNonBlank(SourceUrl, defaults.SourceUrl),
+        License = FirstNonBlank(License, defaults.License),
+        AssetPath = FirstNonBlank(AssetPath, defaults.AssetPath),
+        AnimationName = AnimationName,
+        MeshNodeName = string.IsNullOrWhiteSpace(MeshNodeName) ? defaults.MeshNodeName : MeshNodeName,
+        SkinIndex = SkinIndex ?? defaults.SkinIndex,
+        SupportedAnimationKinds = SupportedAnimationKinds,
+        SupportedAssetTypes = SupportedAssetTypes.Count == 0 ? defaults.SupportedAssetTypes : SupportedAssetTypes,
+        DefaultFps = DefaultFps > 0 ? DefaultFps : defaults.DefaultFps,
+        AllowedSampleCounts = AllowedSampleCounts.Count == 0 ? defaults.AllowedSampleCounts : AllowedSampleCounts,
+        SearchTags = SearchTags,
+        Loop = Loop,
+        RootMotion = FirstNonBlank(RootMotion, defaults.RootMotion),
+        BoneMap = BoneMap.Count == 0 ? defaults.BoneMap : BoneMap,
+    };
 
     public bool MatchesId(string clipId)
     {
@@ -95,6 +136,11 @@ internal sealed class MotionClipDefinition
         if (SupportedAnimationKinds.Count > 0 && !SupportedAnimationKinds.Any(item => string.Equals(MotionClipCatalog.Normalize(item), kind, StringComparison.Ordinal)))
             return false;
 
+        return SupportsTarget(spec);
+    }
+
+    public bool SupportsTarget(AnimationSpec spec)
+    {
         var assetType = MotionClipCatalog.Normalize(spec.AssetType);
         var structure = MotionClipCatalog.Normalize(spec.StructureType);
         if (SupportedAssetTypes.Count == 0)
@@ -120,4 +166,7 @@ internal sealed class MotionClipDefinition
             .ThenBy(count => count)
             .FirstOrDefault(Math.Clamp(requested, 1, 16));
     }
+
+    private static string FirstNonBlank(string value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : value;
 }
