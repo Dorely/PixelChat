@@ -151,9 +151,8 @@
 
 .guide-grid-preview {
     display: grid;
-    width: min(100%, 880px);
-    width: min(100cqw, calc(100cqh * var(--guide-aspect-ratio)), 880px);
-    height: auto;
+    width: min(100cqw, calc(100cqh * var(--guide-aspect-ratio)));
+    height: min(100cqh, calc(100cqw / var(--guide-aspect-ratio)));
     box-sizing: border-box;
     max-width: 100%;
     max-height: 100%;

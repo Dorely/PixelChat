@@ -184,23 +184,22 @@ public sealed class AssistantToolRegistry(
 
         AIFunctionFactory.Create(
             method: (
-                string animationKind,
-                Guid? referenceAssetId = null,
-                string? assetType = null,
-                string? structureType = null,
-                string? facing = null,
+                string motionClipId,
                 int? frameCount = null,
                 int? fps = null,
-                string? rootMotion = null,
-                string? targetCellSize = null,
-                string? motionClipId = null,
+                int? rows = null,
+                int? columns = null,
+                string? guideCanvasSize = null,
+                string? guideCellSize = null,
                 string? label = null,
                 double? guideCameraYawDegrees = null,
                 double? guideCameraPitchDegrees = null,
+                bool? loop = null,
+                double? safeMarginPercent = null,
                 CancellationToken cancellationToken = default) =>
-                GenerateAnimationGuideToolAsync(projectId, referenceAssetId, animationKind, assetType, structureType, facing, frameCount, fps, rootMotion, targetCellSize, motionClipId, label, guideCameraYawDegrees, guideCameraPitchDegrees, cancellationToken),
+                GenerateAnimationGuideToolAsync(projectId, motionClipId, frameCount, fps, rows, columns, guideCanvasSize, guideCellSize, label, guideCameraYawDegrees, guideCameraPitchDegrees, loop, safeMarginPercent, cancellationToken),
             name: "generate_animation_guide",
-            description: "Render and save a reusable animation guide as SpriteGuide assets. For GLTF-backed humanoid poses, call list_motion_clips first and pass the selected motionClipId. Optional guideCameraYawDegrees controls facing rotation; optional guideCameraPitchDegrees controls camera elevation from -45 to 45, where positive looks down from above. Use this before generate_sprite_sheet_candidates for animation work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
+            description: "Render and save a reusable motion guide as SpriteGuide assets. First call list_motion_clips, then pass the chosen motionClipId plus explicit grid/layout controls. UI-equivalent defaults are frameCount 8, rows 2, columns 4, guideCanvasSize 1024x1024, guideCellSize 256x512, fps 8, loop true, and safeMarginPercent 12. guideCameraYawDegrees controls horizontal angle; guideCameraPitchDegrees controls camera elevation from -45 to 45. Use this before generate_sprite_sheet_candidates for animation work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
 
         AIFunctionFactory.Create(
             method: (string? status = null, int? limit = null) =>
@@ -954,35 +953,62 @@ public sealed class AssistantToolRegistry(
 
     private async Task<string> GenerateAnimationGuideToolAsync(
         Guid projectId,
-        Guid? referenceAssetId,
-        string animationKind,
-        string? assetType,
-        string? structureType,
-        string? facing,
+        string motionClipId,
         int? frameCount,
         int? fps,
-        string? rootMotion,
-        string? targetCellSize,
-        string? motionClipId,
+        int? rows,
+        int? columns,
+        string? guideCanvasSize,
+        string? guideCellSize,
         string? label,
         double? guideCameraYawDegrees,
         double? guideCameraPitchDegrees,
+        bool? loop,
+        double? safeMarginPercent,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(motionClipId))
+            throw new InvalidOperationException("motionClipId is required. Call list_motion_clips first and pass the selected clip.");
+
+        var effectiveFrameCount = Math.Clamp(frameCount ?? 8, 1, 16);
+        var effectiveRows = Math.Clamp(rows ?? 2, 1, 8);
+        var effectiveColumns = Math.Clamp(columns ?? 4, 1, 8);
+        if (effectiveRows * effectiveColumns < effectiveFrameCount)
+            effectiveRows = Math.Clamp((int)Math.Ceiling(effectiveFrameCount / (double)effectiveColumns), 1, 8);
+        if (effectiveRows * effectiveColumns < effectiveFrameCount)
+            effectiveColumns = Math.Clamp((int)Math.Ceiling(effectiveFrameCount / (double)effectiveRows), 1, 8);
+
+        var effectiveCanvasSize = string.IsNullOrWhiteSpace(guideCanvasSize) ? "1024x1024" : guideCanvasSize.Trim();
+        var effectiveCellSize = string.IsNullOrWhiteSpace(guideCellSize)
+            ? DerivedGuideCellSize(effectiveCanvasSize, effectiveColumns, effectiveRows)
+            : guideCellSize.Trim();
+        var clips = await workflow.ListMotionClipsAsync(limit: 100, cancellationToken: cancellationToken);
+        var clip = FindMotionClip(clips, motionClipId);
+        var animationKind = clip?.SupportedAnimationKinds.FirstOrDefault() ?? "walk";
+        var rootMotion = string.IsNullOrWhiteSpace(clip?.RecommendedRootMotion) ? "in_place" : clip!.RecommendedRootMotion;
+        var effectiveFps = fps ?? (clip?.DefaultFps > 0 ? clip.DefaultFps : 8);
+        var effectiveLoop = loop ?? clip?.LoopRecommended ?? true;
+
         var guide = await workflow.GenerateAnimationGuideAsync(projectId, new GenerateAnimationGuideRequest(
-            referenceAssetId,
-            animationKind,
-            assetType,
-            structureType,
-            facing,
-            frameCount,
-            fps,
-            rootMotion,
-            targetCellSize,
-            motionClipId,
-            label,
+            ReferenceAssetId: null,
+            AnimationKind: animationKind,
+            AssetType: "unit",
+            StructureType: "humanoid",
+            Facing: SpriteFacing.SideRight,
+            FrameCount: effectiveFrameCount,
+            Fps: effectiveFps,
+            RootMotion: rootMotion,
+            TargetCellSize: effectiveCellSize,
+            MotionClipId: motionClipId.Trim(),
+            Label: label,
+            Rows: effectiveRows,
+            Columns: effectiveColumns,
+            GuideCellSize: effectiveCellSize,
             GuideCameraYawDegrees: guideCameraYawDegrees,
-            GuideCameraPitchDegrees: guideCameraPitchDegrees), cancellationToken);
+            GuideCameraPitchDegrees: guideCameraPitchDegrees,
+            Loop: effectiveLoop,
+            SafeMarginPercent: safeMarginPercent ?? 12d,
+            GuideCanvasSize: effectiveCanvasSize), cancellationToken);
 
         return JsonSerializer.Serialize(new
         {
@@ -2674,6 +2700,37 @@ public sealed class AssistantToolRegistry(
 
     private static string NormalizeToken(string value) =>
         value.Trim().Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+
+    private static MotionClipView? FindMotionClip(IReadOnlyList<MotionClipView> clips, string motionClipId)
+    {
+        var normalized = MotionClipCatalog.Normalize(motionClipId);
+        return clips.FirstOrDefault(clip =>
+            string.Equals(MotionClipCatalog.Normalize(clip.MotionClipId), normalized, StringComparison.Ordinal)
+            || clip.Aliases.Any(alias => string.Equals(MotionClipCatalog.Normalize(alias), normalized, StringComparison.Ordinal)));
+    }
+
+    private static string DerivedGuideCellSize(string guideCanvasSize, int columns, int rows)
+    {
+        var (width, height) = TryParseGuideSize(guideCanvasSize) ?? (1024, 1024);
+        return $"{Math.Max(1, width / Math.Max(1, columns))}x{Math.Max(1, height / Math.Max(1, rows))}";
+    }
+
+    private static (int Width, int Height)? TryParseGuideSize(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var parts = value.Trim().Split('x', 'X');
+        if (parts.Length != 2)
+            return null;
+
+        return int.TryParse(parts[0], out var width)
+            && int.TryParse(parts[1], out var height)
+            && width > 0
+            && height > 0
+            ? (width, height)
+            : null;
+    }
 
     private int ClampGenerationRoundCount(int count)
     {

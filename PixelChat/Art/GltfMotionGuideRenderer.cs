@@ -105,7 +105,10 @@ internal static class GltfMotionGuideRenderer
         var samples = new List<MotionGuideFrameSample>();
         for (var frameIndex = 0; frameIndex < frameCount; frameIndex++)
         {
-            var time = duration * frameIndex / Math.Max(1, frameCount);
+            var sampleDenominator = clip.Loop ? frameCount : frameCount - 1;
+            var time = frameCount <= 1
+                ? 0f
+                : duration * frameIndex / Math.Max(1, sampleDenominator);
             var poses = basePoses.ToArray();
             foreach (var channel in animation.Channels)
             {

@@ -1,4 +1,5 @@
 @namespace PixelChat.Components.Shared
+@using System.Globalization
 @using PixelChat.Art
 @using PixelChat.Models
 @implements IAsyncDisposable
@@ -90,7 +91,7 @@
                         <input type="range" min="0" max="30" step="1" @bind="_safeMarginPercent" @bind:after="OnGridSettingsChanged" />
                     </label>
                     <label class="guide-checkbox">
-                        <input type="checkbox" @bind="_loop" @bind:after="InvalidateRenderedPreview" />
+                        <input type="checkbox" @bind="_loop" @bind:after="InvalidateLayoutPreview" />
                         <span>Loop</span>
                     </label>
                     @if (!_animationEditorOpen)
@@ -104,75 +105,21 @@
                 <section class="guide-control-section">
                     <div class="guide-control-title">Animation</div>
                     <label>
-                        <span>Source</span>
-                        <select class="form-select" value="@_sourceType" @onchange="OnSourceTypeChanged">
-                            <option value="motion">Motion clip</option>
-                            <option value="procedural">Procedural</option>
-                        </select>
-                    </label>
-
-                    @if (_sourceType == "motion")
-                    {
-                        <label>
-                            <span>Clip</span>
-                            <select class="form-select" value="@_motionClipId" @onchange="OnMotionClipChanged">
-                                <option value="">Select clip</option>
-                                @foreach (var clip in _motionClips)
-                                {
-                                    <option value="@clip.MotionClipId">@clip.DisplayName</option>
-                                }
-                            </select>
-                        </label>
-                    }
-
-                    <label>
-                        <span>Animation kind</span>
-                        <input class="form-control" value="@_animationKind" @onchange="OnAnimationKindChanged" />
-                    </label>
-                    <div class="guide-control-pair">
-                        <label>
-                            <span>Asset type</span>
-                            <select class="form-select" @bind="_assetType" @bind:after="InvalidateRenderedPreview">
-                                <option value="unit">Unit</option>
-                                <option value="tower">Tower</option>
-                                <option value="projectile">Projectile</option>
-                                <option value="vfx">VFX</option>
-                            </select>
-                        </label>
-                        <label>
-                            <span>Structure</span>
-                            <input class="form-control" value="@_structureType" @onchange="OnStructureTypeChanged" />
-                        </label>
-                    </div>
-                    <label>
-                        <span>Reference</span>
-                        <select class="form-select" @bind="_referenceAssetText" @bind:after="InvalidateRenderedPreview">
-                            <option value="">None</option>
-                            @foreach (var asset in ReferenceAssets)
+                        <span>Animation</span>
+                        <select class="form-select" value="@_motionClipId" @onchange="OnMotionClipChanged">
+                            <option value="">Select animation</option>
+                            @foreach (var clip in _motionClips)
                             {
-                                <option value="@asset.Id">@asset.Label</option>
+                                <option value="@clip.MotionClipId">@clip.DisplayName</option>
                             }
                         </select>
                     </label>
                     <label>
-                        <span>Facing</span>
-                        <select class="form-select" value="@_facing" @onchange="OnFacingChanged">
-                            <option value="front">Front</option>
-                            <option value="side_right">Side right</option>
-                            <option value="side_left">Side left</option>
-                            <option value="three_quarter_front_right">3/4 front right</option>
-                            <option value="three_quarter_front_left">3/4 front left</option>
-                            <option value="three_quarter_back_right">3/4 back right</option>
-                            <option value="three_quarter_back_left">3/4 back left</option>
-                            <option value="back">Back</option>
-                        </select>
-                    </label>
-                    <label>
-                        <span>Yaw @_yaw.ToString("0")°</span>
+                        <span>Yaw @_yaw.ToString("0", CultureInfo.InvariantCulture) deg</span>
                         <input type="range" min="-180" max="180" step="1" @bind="_yaw" @bind:after="OnYawChangedAsync" />
                     </label>
                     <label>
-                        <span>Pitch @_pitch.ToString("0")°</span>
+                        <span>Pitch @_pitch.ToString("0", CultureInfo.InvariantCulture) deg</span>
                         <input type="range" min="-45" max="45" step="1" @bind="_pitch" @bind:after="OnPitchChangedAsync" />
                     </label>
                     <div class="guide-viewer-actions">
@@ -257,14 +204,9 @@
     private int _fps = 8;
     private double _safeMarginPercent = 12d;
     private bool _loop = true;
-    private string _sourceType = "motion";
     private string _motionClipId = string.Empty;
     private string _animationKind = "walk";
-    private string _assetType = "unit";
-    private string _structureType = "biped";
     private string _rootMotion = "in_place";
-    private string _referenceAssetText = string.Empty;
-    private string _facing = "side_right";
     private double _yaw = 90d;
     private double _pitch;
     private bool _playing = true;
@@ -272,11 +214,6 @@
     private string _status = string.Empty;
     private string? _error;
     private string _renderedPreviewDataUrl = string.Empty;
-
-    private IEnumerable<ArtAssetView> ReferenceAssets =>
-        ProjectAssets
-            .Where(asset => asset.Kind != ArtAssetKind.SpriteGuide)
-            .OrderByDescending(asset => asset.CreatedAt);
 
     private int SlotWidth => Math.Max(1, SelectedImageSize().Width / Math.Max(1, _columns));
 
@@ -312,11 +249,11 @@
 
     private string StageMeta =>
         _stageMode == GuideStageMode.Viewer
-            ? $"{_animationKind} - yaw {_yaw:0}°, pitch {_pitch:0}°"
+            ? $"{_animationKind} - yaw {_yaw.ToString("0", CultureInfo.InvariantCulture)} deg, pitch {_pitch.ToString("0", CultureInfo.InvariantCulture)} deg"
             : $"{_guideCanvasSize} - {_columns} columns x {_rows} rows - {_cellWidth} x {_cellHeight}";
 
     private bool RenderDisabled =>
-        _busy || !_animationEditorOpen || (_sourceType == "motion" && string.IsNullOrWhiteSpace(_motionClipId));
+        _busy || !_animationEditorOpen || string.IsNullOrWhiteSpace(_motionClipId);
 
     private bool FinishDisabled =>
         _busy || string.IsNullOrWhiteSpace(_renderedPreviewDataUrl);
@@ -324,10 +261,11 @@
     protected override async Task OnInitializedAsync()
     {
         _motionClips = await Workflow.ListMotionClipsAsync(limit: 100);
-        var defaultClip = _motionClips.FirstOrDefault(clip => clip.MotionClipId == "quaternius.ual2.walk.carry.loop")
+        var defaultClip = _motionClips.FirstOrDefault(clip => clip.MotionClipId == "quaternius.ual1.walk.loop")
+            ?? _motionClips.FirstOrDefault(clip => clip.MotionClipId == "quaternius.ual2.walk.carry.loop")
             ?? _motionClips.FirstOrDefault();
         if (defaultClip is not null)
-            ApplyMotionClip(defaultClip, switchToViewer: false);
+            ApplyMotionClip(defaultClip, switchToViewer: false, applyDefaults: true);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -371,9 +309,9 @@
                 <div class="guide-grid-cell @(active ? "is-active" : "is-empty")" @key="index">
                     @if (active)
                     {
-                        <span>@(index + 1).ToString("00")</span>
+                        <span>@((index + 1).ToString("00", CultureInfo.InvariantCulture))</span>
                         <div class="guide-grid-box" style="@GridBoxStyle">
-                            <i style="@($"inset:{safeInset.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%;")"></i>
+                            <i style="@($"inset:{safeInset.ToString("0.##", CultureInfo.InvariantCulture)}%;")"></i>
                         </div>
                     }
                 </div>
@@ -432,7 +370,7 @@
         else
             ClampCellSize();
         TrackGridDimensions();
-        InvalidateRenderedPreview();
+        InvalidateLayoutPreview();
     }
 
     private void OnGridSettingsChanged()
@@ -440,7 +378,7 @@
         ClampGridValues();
         ClampCellSize();
         TrackGridDimensions();
-        InvalidateRenderedPreview();
+        InvalidateLayoutPreview();
     }
 
     private void ClampGridValues()
@@ -457,7 +395,7 @@
     private void OnCellSizeChanged()
     {
         ClampCellSize();
-        InvalidateRenderedPreview();
+        InvalidateLayoutPreview();
     }
 
     private void OnImageSizeChanged(ChangeEventArgs args)
@@ -467,7 +405,7 @@
             ? value!
             : ImageSizeOptions[0].Value;
         ResetCellSizeToSlot();
-        InvalidateRenderedPreview();
+        InvalidateLayoutPreview();
     }
 
     private void ResetCellSizeToSlot()
@@ -488,14 +426,20 @@
         _lastColumns = _columns;
     }
 
-    private void InvalidateRenderedPreview()
+    private void InvalidateLayoutPreview()
     {
         _renderedPreviewDataUrl = string.Empty;
         _status = string.Empty;
-        if (_stageMode == GuideStageMode.Rendered)
-            _stageMode = _animationEditorOpen && _sourceType == "motion" && !string.IsNullOrWhiteSpace(_motionClipId)
-                ? GuideStageMode.Viewer
-                : GuideStageMode.Grid;
+        _stageMode = GuideStageMode.Grid;
+    }
+
+    private void InvalidateAnimationPreview()
+    {
+        _renderedPreviewDataUrl = string.Empty;
+        _status = string.Empty;
+        _stageMode = _animationEditorOpen && !string.IsNullOrWhiteSpace(_motionClipId)
+            ? GuideStageMode.Viewer
+            : GuideStageMode.Grid;
     }
 
     private void AddAnimation()
@@ -503,10 +447,10 @@
         _animationEditorOpen = true;
         _status = string.Empty;
         _error = null;
-        if (_sourceType == "motion" && string.IsNullOrWhiteSpace(_motionClipId) && _motionClips.FirstOrDefault() is { } clip)
-            ApplyMotionClip(clip, switchToViewer: false);
+        if (string.IsNullOrWhiteSpace(_motionClipId) && _motionClips.FirstOrDefault() is { } clip)
+            ApplyMotionClip(clip, switchToViewer: false, applyDefaults: true);
 
-        _stageMode = _sourceType == "motion" && !string.IsNullOrWhiteSpace(_motionClipId)
+        _stageMode = !string.IsNullOrWhiteSpace(_motionClipId)
             ? GuideStageMode.Viewer
             : GuideStageMode.Grid;
         _viewerKey = string.Empty;
@@ -517,70 +461,47 @@
         _label = string.IsNullOrWhiteSpace(args.Value?.ToString())
             ? "Animation guide"
             : args.Value.ToString()!.Trim();
-        InvalidateRenderedPreview();
-    }
-
-    private void OnAnimationKindChanged(ChangeEventArgs args)
-    {
-        _animationKind = CleanToken(args.Value?.ToString(), "walk");
-        InvalidateRenderedPreview();
-    }
-
-    private void OnStructureTypeChanged(ChangeEventArgs args)
-    {
-        _structureType = CleanToken(args.Value?.ToString(), "biped");
-        InvalidateRenderedPreview();
-    }
-
-    private void OnSourceTypeChanged(ChangeEventArgs args)
-    {
-        _sourceType = args.Value?.ToString() == "procedural" ? "procedural" : "motion";
-        InvalidateRenderedPreview();
-        _stageMode = _animationEditorOpen && _sourceType == "motion" && !string.IsNullOrWhiteSpace(_motionClipId)
-            ? GuideStageMode.Viewer
-            : GuideStageMode.Grid;
-        _viewerKey = string.Empty;
+        InvalidateLayoutPreview();
     }
 
     private void OnMotionClipChanged(ChangeEventArgs args)
     {
         _motionClipId = args.Value?.ToString() ?? string.Empty;
         if (SelectedMotionClip() is { } clip)
-            ApplyMotionClip(clip, switchToViewer: _animationEditorOpen);
+        {
+            ApplyMotionClip(clip, switchToViewer: _animationEditorOpen, applyDefaults: false);
+        }
         else
+        {
+            _renderedPreviewDataUrl = string.Empty;
+            _status = string.Empty;
             _stageMode = GuideStageMode.Grid;
+            _viewerKey = string.Empty;
+        }
     }
 
-    private void ApplyMotionClip(MotionClipView clip, bool switchToViewer)
+    private void ApplyMotionClip(MotionClipView clip, bool switchToViewer, bool applyDefaults)
     {
         _motionClipId = clip.MotionClipId;
         _animationKind = clip.SupportedAnimationKinds.FirstOrDefault() ?? _animationKind;
         _rootMotion = string.IsNullOrWhiteSpace(clip.RecommendedRootMotion) ? "in_place" : clip.RecommendedRootMotion;
-        _fps = Math.Clamp(clip.DefaultFps > 0 ? clip.DefaultFps : _fps, 1, 60);
-        _loop = clip.LoopRecommended;
-        if (clip.AllowedSampleCounts.Count > 0)
-            _frameCount = clip.AllowedSampleCounts.OrderBy(count => Math.Abs(count - _frameCount)).ThenBy(count => count).First();
-        _columns = SuggestedColumns(_frameCount);
-        _rows = Math.Max(1, (int)Math.Ceiling(_frameCount / (double)_columns));
-        _label = $"{clip.DisplayName.Replace("Quaternius UAL2 ", string.Empty, StringComparison.Ordinal)} {_frameCount}-frame guide";
-        _stageMode = _animationEditorOpen && switchToViewer ? GuideStageMode.Viewer : GuideStageMode.Grid;
-        _viewerKey = string.Empty;
-        ResetCellSizeToSlot();
-        TrackGridDimensions();
-        InvalidateRenderedPreview();
-    }
+        if (applyDefaults)
+        {
+            _fps = Math.Clamp(clip.DefaultFps > 0 ? clip.DefaultFps : _fps, 1, 60);
+            _loop = clip.LoopRecommended;
+        }
 
-    private void OnFacingChanged(ChangeEventArgs args)
-    {
-        _facing = args.Value?.ToString() ?? "side_right";
-        _yaw = SpriteFacing.ToYawDegrees(_facing);
-        InvalidateRenderedPreview();
+        _viewerKey = string.Empty;
+        if (switchToViewer)
+            InvalidateAnimationPreview();
+        else
+            InvalidateLayoutPreview();
     }
 
     private async Task OnYawChangedAsync()
     {
         _yaw = NormalizeYaw(_yaw);
-        InvalidateRenderedPreview();
+        InvalidateAnimationPreview();
         if (_module is not null && _stageMode == GuideStageMode.Viewer)
             await _module.InvokeVoidAsync("setYaw", _viewerHost, _yaw);
     }
@@ -588,14 +509,14 @@
     private async Task OnPitchChangedAsync()
     {
         _pitch = NormalizePitch(_pitch);
-        InvalidateRenderedPreview();
+        InvalidateAnimationPreview();
         if (_module is not null && _stageMode == GuideStageMode.Viewer)
             await _module.InvokeVoidAsync("setPitch", _viewerHost, _pitch);
     }
 
     private async Task ResetYawAsync()
     {
-        _yaw = SpriteFacing.ToYawDegrees(_facing);
+        _yaw = SpriteFacing.ToYawDegrees(SpriteFacing.SideRight);
         await OnYawChangedAsync();
     }
 
@@ -664,16 +585,16 @@
 
     private GenerateAnimationGuideRequest BuildRequest() =>
         new(
-            ReferenceAssetId: ReferenceAssetId(),
+            ReferenceAssetId: null,
             AnimationKind: _animationKind,
-            AssetType: _assetType,
-            StructureType: _structureType,
-            Facing: _facing,
+            AssetType: "unit",
+            StructureType: "humanoid",
+            Facing: SpriteFacing.SideRight,
             FrameCount: _frameCount,
             Fps: _fps,
             RootMotion: _rootMotion,
             TargetCellSize: $"{_cellWidth}x{_cellHeight}",
-            MotionClipId: _sourceType == "motion" ? _motionClipId : null,
+            MotionClipId: _motionClipId,
             Label: _label,
             Rows: _rows,
             Columns: _columns,
@@ -684,9 +605,6 @@
             SafeMarginPercent: _safeMarginPercent,
             GuideCanvasSize: _guideCanvasSize);
 
-    private Guid? ReferenceAssetId() =>
-        Guid.TryParse(_referenceAssetText, out var id) && id != Guid.Empty ? id : null;
-
     private MotionClipView? SelectedMotionClip() =>
         string.IsNullOrWhiteSpace(_motionClipId)
             ? null
@@ -695,22 +613,6 @@
     private GuideImageSizeOption SelectedImageSize() =>
         ImageSizeOptions.FirstOrDefault(option => string.Equals(option.Value, _guideCanvasSize, StringComparison.Ordinal))
             ?? ImageSizeOptions[0];
-
-    private static int SuggestedColumns(int frameCount) =>
-        frameCount switch
-        {
-            <= 1 => 1,
-            2 => 2,
-            <= 4 => 2,
-            <= 6 => 3,
-            _ => 4,
-        };
-
-    private static string CleanToken(string? value, string fallback)
-    {
-        var text = value?.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
-        return string.IsNullOrWhiteSpace(text) ? fallback : text;
-    }
 
     private static double NormalizeYaw(double yaw)
     {

@@ -45,6 +45,1010 @@
   },
   "clips": [
     {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.a.tpose",
+      "aliases": [
+        "a_tpose",
+        "tpose",
+        "t_pose",
+        "reference_pose"
+      ],
+      "displayName": "Quaternius UAL1 A T-Pose",
+      "animationName": "A_TPose",
+      "supportedAnimationKinds": [
+        "tpose",
+        "t_pose",
+        "reference_pose",
+        "pose"
+      ],
+      "searchTags": [
+        "static",
+        "reference",
+        "humanoid",
+        "pose"
+      ],
+      "loop": false,
+      "rootMotion": "in_place",
+      "defaultFps": 1,
+      "allowedSampleCounts": [
+        1
+      ]
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.crouch.fwd.loop",
+      "aliases": [
+        "crouch_fwd_loop",
+        "crouch_walk",
+        "crouch"
+      ],
+      "displayName": "Quaternius UAL1 Crouch Forward Loop",
+      "animationName": "Crouch_Fwd_Loop",
+      "supportedAnimationKinds": [
+        "crouch",
+        "crouch_walk",
+        "walk"
+      ],
+      "searchTags": [
+        "movement",
+        "crouch",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.crouch.idle.loop",
+      "aliases": [
+        "crouch_idle_loop",
+        "crouch_idle"
+      ],
+      "displayName": "Quaternius UAL1 Crouch Idle Loop",
+      "animationName": "Crouch_Idle_Loop",
+      "supportedAnimationKinds": [
+        "crouch_idle",
+        "idle",
+        "crouch"
+      ],
+      "searchTags": [
+        "idle",
+        "crouch",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.dance.loop",
+      "aliases": [
+        "dance_loop",
+        "dance"
+      ],
+      "displayName": "Quaternius UAL1 Dance Loop",
+      "animationName": "Dance_Loop",
+      "supportedAnimationKinds": [
+        "dance"
+      ],
+      "searchTags": [
+        "emote",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.death.01",
+      "aliases": [
+        "death01",
+        "death",
+        "die"
+      ],
+      "displayName": "Quaternius UAL1 Death01",
+      "animationName": "Death01",
+      "supportedAnimationKinds": [
+        "death",
+        "die"
+      ],
+      "searchTags": [
+        "death",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.driving.loop",
+      "aliases": [
+        "driving_loop",
+        "driving",
+        "drive"
+      ],
+      "displayName": "Quaternius UAL1 Driving Loop",
+      "animationName": "Driving_Loop",
+      "supportedAnimationKinds": [
+        "driving",
+        "drive"
+      ],
+      "searchTags": [
+        "vehicle",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.fixing.kneeling",
+      "aliases": [
+        "fixing_kneeling",
+        "fix",
+        "repair"
+      ],
+      "displayName": "Quaternius UAL1 Fixing Kneeling",
+      "animationName": "Fixing_Kneeling",
+      "supportedAnimationKinds": [
+        "fix",
+        "repair",
+        "kneel"
+      ],
+      "searchTags": [
+        "work",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.hit.chest",
+      "aliases": [
+        "hit_chest",
+        "hurt_chest"
+      ],
+      "displayName": "Quaternius UAL1 Hit Chest",
+      "animationName": "Hit_Chest",
+      "supportedAnimationKinds": [
+        "hit",
+        "hurt",
+        "damage"
+      ],
+      "searchTags": [
+        "combat",
+        "damage",
+        "reaction",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.hit.head",
+      "aliases": [
+        "hit_head",
+        "hurt_head"
+      ],
+      "displayName": "Quaternius UAL1 Hit Head",
+      "animationName": "Hit_Head",
+      "supportedAnimationKinds": [
+        "hit",
+        "hurt",
+        "damage"
+      ],
+      "searchTags": [
+        "combat",
+        "damage",
+        "reaction",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.idle.loop",
+      "aliases": [
+        "idle_loop",
+        "idle"
+      ],
+      "displayName": "Quaternius UAL1 Idle Loop",
+      "animationName": "Idle_Loop",
+      "supportedAnimationKinds": [
+        "idle"
+      ],
+      "searchTags": [
+        "idle",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.idle.talking.loop",
+      "aliases": [
+        "idle_talking_loop",
+        "talking"
+      ],
+      "displayName": "Quaternius UAL1 Idle Talking Loop",
+      "animationName": "Idle_Talking_Loop",
+      "supportedAnimationKinds": [
+        "idle",
+        "talking"
+      ],
+      "searchTags": [
+        "idle",
+        "gesture",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.idle.torch.loop",
+      "aliases": [
+        "idle_torch_loop",
+        "torch_idle"
+      ],
+      "displayName": "Quaternius UAL1 Idle Torch Loop",
+      "animationName": "Idle_Torch_Loop",
+      "supportedAnimationKinds": [
+        "idle",
+        "torch"
+      ],
+      "searchTags": [
+        "idle",
+        "prop",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.interact",
+      "aliases": [
+        "interact",
+        "use"
+      ],
+      "displayName": "Quaternius UAL1 Interact",
+      "animationName": "Interact",
+      "supportedAnimationKinds": [
+        "interact",
+        "use"
+      ],
+      "searchTags": [
+        "interaction",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.jog.fwd.loop",
+      "aliases": [
+        "jog_fwd_loop",
+        "jog",
+        "run"
+      ],
+      "displayName": "Quaternius UAL1 Jog Forward Loop",
+      "animationName": "Jog_Fwd_Loop",
+      "supportedAnimationKinds": [
+        "jog",
+        "run"
+      ],
+      "searchTags": [
+        "movement",
+        "run",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.jump.land",
+      "aliases": [
+        "jump_land",
+        "landing"
+      ],
+      "displayName": "Quaternius UAL1 Jump Land",
+      "animationName": "Jump_Land",
+      "supportedAnimationKinds": [
+        "jump_land",
+        "land",
+        "landing"
+      ],
+      "searchTags": [
+        "jump",
+        "landing",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.jump.loop",
+      "aliases": [
+        "jump_loop",
+        "air_idle"
+      ],
+      "displayName": "Quaternius UAL1 Jump Loop",
+      "animationName": "Jump_Loop",
+      "supportedAnimationKinds": [
+        "jump",
+        "air_idle"
+      ],
+      "searchTags": [
+        "jump",
+        "airborne",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.jump.start",
+      "aliases": [
+        "jump_start",
+        "leap"
+      ],
+      "displayName": "Quaternius UAL1 Jump Start",
+      "animationName": "Jump_Start",
+      "supportedAnimationKinds": [
+        "jump",
+        "jump_start",
+        "leap"
+      ],
+      "searchTags": [
+        "jump",
+        "takeoff",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.pickup.table",
+      "aliases": [
+        "pickup_table",
+        "pick_up",
+        "pickup"
+      ],
+      "displayName": "Quaternius UAL1 Pickup Table",
+      "animationName": "PickUp_Table",
+      "supportedAnimationKinds": [
+        "pickup",
+        "pick_up"
+      ],
+      "searchTags": [
+        "interaction",
+        "item",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.pistol.aim.down",
+      "aliases": [
+        "pistol_aim_down",
+        "aim_down"
+      ],
+      "displayName": "Quaternius UAL1 Pistol Aim Down",
+      "animationName": "Pistol_Aim_Down",
+      "supportedAnimationKinds": [
+        "pistol_aim",
+        "aim"
+      ],
+      "searchTags": [
+        "combat",
+        "pistol",
+        "aim",
+        "pose"
+      ],
+      "loop": false,
+      "rootMotion": "in_place",
+      "defaultFps": 1
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.pistol.aim.neutral",
+      "aliases": [
+        "pistol_aim_neutral",
+        "aim_neutral"
+      ],
+      "displayName": "Quaternius UAL1 Pistol Aim Neutral",
+      "animationName": "Pistol_Aim_Neutral",
+      "supportedAnimationKinds": [
+        "pistol_aim",
+        "aim"
+      ],
+      "searchTags": [
+        "combat",
+        "pistol",
+        "aim",
+        "pose"
+      ],
+      "loop": false,
+      "rootMotion": "in_place",
+      "defaultFps": 1
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.pistol.aim.up",
+      "aliases": [
+        "pistol_aim_up",
+        "aim_up"
+      ],
+      "displayName": "Quaternius UAL1 Pistol Aim Up",
+      "animationName": "Pistol_Aim_Up",
+      "supportedAnimationKinds": [
+        "pistol_aim",
+        "aim"
+      ],
+      "searchTags": [
+        "combat",
+        "pistol",
+        "aim",
+        "pose"
+      ],
+      "loop": false,
+      "rootMotion": "in_place",
+      "defaultFps": 1
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.pistol.idle.loop",
+      "aliases": [
+        "pistol_idle_loop",
+        "pistol_idle"
+      ],
+      "displayName": "Quaternius UAL1 Pistol Idle Loop",
+      "animationName": "Pistol_Idle_Loop",
+      "supportedAnimationKinds": [
+        "pistol_idle",
+        "idle"
+      ],
+      "searchTags": [
+        "combat",
+        "pistol",
+        "idle",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.pistol.reload",
+      "aliases": [
+        "pistol_reload",
+        "reload"
+      ],
+      "displayName": "Quaternius UAL1 Pistol Reload",
+      "animationName": "Pistol_Reload",
+      "supportedAnimationKinds": [
+        "reload",
+        "pistol_reload"
+      ],
+      "searchTags": [
+        "combat",
+        "pistol",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.pistol.shoot",
+      "aliases": [
+        "pistol_shoot",
+        "shoot"
+      ],
+      "displayName": "Quaternius UAL1 Pistol Shoot",
+      "animationName": "Pistol_Shoot",
+      "supportedAnimationKinds": [
+        "shoot",
+        "pistol_shoot",
+        "attack"
+      ],
+      "searchTags": [
+        "combat",
+        "pistol",
+        "attack",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.punch.cross",
+      "aliases": [
+        "punch_cross",
+        "cross"
+      ],
+      "displayName": "Quaternius UAL1 Punch Cross",
+      "animationName": "Punch_Cross",
+      "supportedAnimationKinds": [
+        "punch",
+        "attack"
+      ],
+      "searchTags": [
+        "combat",
+        "unarmed",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.punch.enter",
+      "aliases": [
+        "punch_enter",
+        "boxing_enter"
+      ],
+      "displayName": "Quaternius UAL1 Punch Enter",
+      "animationName": "Punch_Enter",
+      "supportedAnimationKinds": [
+        "punch",
+        "ready"
+      ],
+      "searchTags": [
+        "combat",
+        "unarmed",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.punch.jab",
+      "aliases": [
+        "punch_jab",
+        "jab"
+      ],
+      "displayName": "Quaternius UAL1 Punch Jab",
+      "animationName": "Punch_Jab",
+      "supportedAnimationKinds": [
+        "punch",
+        "attack"
+      ],
+      "searchTags": [
+        "combat",
+        "unarmed",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.push.loop",
+      "aliases": [
+        "push_loop",
+        "push"
+      ],
+      "displayName": "Quaternius UAL1 Push Loop",
+      "animationName": "Push_Loop",
+      "supportedAnimationKinds": [
+        "push"
+      ],
+      "searchTags": [
+        "work",
+        "movement",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.roll",
+      "aliases": [
+        "roll",
+        "dodge_roll"
+      ],
+      "displayName": "Quaternius UAL1 Roll",
+      "animationName": "Roll",
+      "supportedAnimationKinds": [
+        "roll",
+        "dodge"
+      ],
+      "searchTags": [
+        "movement",
+        "dodge",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.roll.rm",
+      "aliases": [
+        "roll_rm",
+        "dodge_roll_rm"
+      ],
+      "displayName": "Quaternius UAL1 Roll Rm",
+      "animationName": "Roll_RM",
+      "supportedAnimationKinds": [
+        "roll",
+        "dodge"
+      ],
+      "searchTags": [
+        "movement",
+        "dodge",
+        "root_motion",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "root_motion"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.sitting.enter",
+      "aliases": [
+        "sitting_enter",
+        "sit_down"
+      ],
+      "displayName": "Quaternius UAL1 Sitting Enter",
+      "animationName": "Sitting_Enter",
+      "supportedAnimationKinds": [
+        "sit",
+        "sitting"
+      ],
+      "searchTags": [
+        "sitting",
+        "transition",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.sitting.exit",
+      "aliases": [
+        "sitting_exit",
+        "stand_up"
+      ],
+      "displayName": "Quaternius UAL1 Sitting Exit",
+      "animationName": "Sitting_Exit",
+      "supportedAnimationKinds": [
+        "stand",
+        "sitting"
+      ],
+      "searchTags": [
+        "sitting",
+        "transition",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.sitting.idle.loop",
+      "aliases": [
+        "sitting_idle_loop",
+        "sitting_idle"
+      ],
+      "displayName": "Quaternius UAL1 Sitting Idle Loop",
+      "animationName": "Sitting_Idle_Loop",
+      "supportedAnimationKinds": [
+        "sitting_idle",
+        "idle"
+      ],
+      "searchTags": [
+        "sitting",
+        "idle",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.sitting.talking.loop",
+      "aliases": [
+        "sitting_talking_loop",
+        "sitting_talking"
+      ],
+      "displayName": "Quaternius UAL1 Sitting Talking Loop",
+      "animationName": "Sitting_Talking_Loop",
+      "supportedAnimationKinds": [
+        "talking",
+        "sitting"
+      ],
+      "searchTags": [
+        "sitting",
+        "gesture",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.spell.simple.enter",
+      "aliases": [
+        "spell_simple_enter",
+        "spell_enter"
+      ],
+      "displayName": "Quaternius UAL1 Spell Simple Enter",
+      "animationName": "Spell_Simple_Enter",
+      "supportedAnimationKinds": [
+        "spell",
+        "cast"
+      ],
+      "searchTags": [
+        "magic",
+        "transition",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.spell.simple.exit",
+      "aliases": [
+        "spell_simple_exit",
+        "spell_exit"
+      ],
+      "displayName": "Quaternius UAL1 Spell Simple Exit",
+      "animationName": "Spell_Simple_Exit",
+      "supportedAnimationKinds": [
+        "spell",
+        "cast"
+      ],
+      "searchTags": [
+        "magic",
+        "transition",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.spell.simple.idle.loop",
+      "aliases": [
+        "spell_simple_idle_loop",
+        "spell_idle"
+      ],
+      "displayName": "Quaternius UAL1 Spell Simple Idle Loop",
+      "animationName": "Spell_Simple_Idle_Loop",
+      "supportedAnimationKinds": [
+        "spell_idle",
+        "cast",
+        "idle"
+      ],
+      "searchTags": [
+        "magic",
+        "idle",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.spell.simple.shoot",
+      "aliases": [
+        "spell_simple_shoot",
+        "spell_shoot"
+      ],
+      "displayName": "Quaternius UAL1 Spell Simple Shoot",
+      "animationName": "Spell_Simple_Shoot",
+      "supportedAnimationKinds": [
+        "spell",
+        "cast",
+        "shoot",
+        "attack"
+      ],
+      "searchTags": [
+        "magic",
+        "attack",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.sprint.loop",
+      "aliases": [
+        "sprint_loop",
+        "sprint",
+        "run_fast"
+      ],
+      "displayName": "Quaternius UAL1 Sprint Loop",
+      "animationName": "Sprint_Loop",
+      "supportedAnimationKinds": [
+        "sprint",
+        "run"
+      ],
+      "searchTags": [
+        "movement",
+        "run",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.swim.fwd.loop",
+      "aliases": [
+        "swim_fwd_loop",
+        "swim"
+      ],
+      "displayName": "Quaternius UAL1 Swim Forward Loop",
+      "animationName": "Swim_Fwd_Loop",
+      "supportedAnimationKinds": [
+        "swim"
+      ],
+      "searchTags": [
+        "movement",
+        "swim",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.swim.idle.loop",
+      "aliases": [
+        "swim_idle_loop",
+        "swim_idle"
+      ],
+      "displayName": "Quaternius UAL1 Swim Idle Loop",
+      "animationName": "Swim_Idle_Loop",
+      "supportedAnimationKinds": [
+        "swim_idle",
+        "idle",
+        "swim"
+      ],
+      "searchTags": [
+        "swim",
+        "idle",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.sword.attack",
+      "aliases": [
+        "sword_attack",
+        "slash"
+      ],
+      "displayName": "Quaternius UAL1 Sword Attack",
+      "animationName": "Sword_Attack",
+      "supportedAnimationKinds": [
+        "sword_attack",
+        "attack",
+        "slash"
+      ],
+      "searchTags": [
+        "combat",
+        "sword",
+        "attack",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.sword.attack.rm",
+      "aliases": [
+        "sword_attack_rm",
+        "slash_rm"
+      ],
+      "displayName": "Quaternius UAL1 Sword Attack Rm",
+      "animationName": "Sword_Attack_RM",
+      "supportedAnimationKinds": [
+        "sword_attack",
+        "attack",
+        "slash"
+      ],
+      "searchTags": [
+        "combat",
+        "sword",
+        "attack",
+        "root_motion",
+        "one_shot"
+      ],
+      "loop": false,
+      "rootMotion": "root_motion"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.sword.idle",
+      "aliases": [
+        "sword_idle",
+        "guard_idle"
+      ],
+      "displayName": "Quaternius UAL1 Sword Idle",
+      "animationName": "Sword_Idle",
+      "supportedAnimationKinds": [
+        "sword_idle",
+        "idle",
+        "guard"
+      ],
+      "searchTags": [
+        "combat",
+        "sword",
+        "idle"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.walk.formal.loop",
+      "aliases": [
+        "walk_formal_loop",
+        "formal_walk"
+      ],
+      "displayName": "Quaternius UAL1 Walk Formal Loop",
+      "animationName": "Walk_Formal_Loop",
+      "supportedAnimationKinds": [
+        "walk",
+        "formal_walk"
+      ],
+      "searchTags": [
+        "movement",
+        "walk",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
+      "defaultsKey": "ual1",
+      "clipId": "quaternius.ual1.walk.loop",
+      "aliases": [
+        "walk_loop",
+        "walk",
+        "walk_cycle",
+        "quaternius.ual.walk.forward.no_root"
+      ],
+      "displayName": "Quaternius UAL1 Walk Loop",
+      "animationName": "Walk_Loop",
+      "supportedAnimationKinds": [
+        "walk",
+        "walk_cycle",
+        "walk_loop"
+      ],
+      "searchTags": [
+        "movement",
+        "walk",
+        "loop"
+      ],
+      "loop": true,
+      "rootMotion": "in_place"
+    },
+    {
       "clipId": "quaternius.ual2.a.tpose",
       "aliases": [
         "a_tpose",
@@ -1049,5 +2053,91 @@
       "loop": true,
       "rootMotion": "root_motion"
     }
-  ]
+  ],
+  "defaultPacks": {
+    "ual1": {
+      "sourcePackage": "Quaternius Universal Animation Library [Standard]",
+      "sourceUrl": "https://opengameart.org/content/universal-animation-library",
+      "license": "CC0-1.0",
+      "assetPath": "Quaternius/UAL1/AnimationLibrary_Godot_Standard.glb",
+      "meshNodeName": "Mannequin",
+      "skinIndex": 0,
+      "supportedAssetTypes": [
+        "unit",
+        "character_unit",
+        "humanoid"
+      ],
+      "defaultFps": 8,
+      "allowedSampleCounts": [],
+      "rootMotion": "in_place",
+      "boneMap": {
+        "root": "root",
+        "hips": "DEF-hips",
+        "spine": "DEF-spine.001",
+        "chest": "DEF-spine.003",
+        "neck": "DEF-neck",
+        "head": "DEF-head",
+        "leftClavicle": "DEF-shoulder.L",
+        "leftUpperArm": "DEF-upper_arm.L",
+        "leftLowerArm": "DEF-forearm.L",
+        "leftHand": "DEF-hand.L",
+        "rightClavicle": "DEF-shoulder.R",
+        "rightUpperArm": "DEF-upper_arm.R",
+        "rightLowerArm": "DEF-forearm.R",
+        "rightHand": "DEF-hand.R",
+        "leftUpperLeg": "DEF-thigh.L",
+        "leftLowerLeg": "DEF-shin.L",
+        "leftFoot": "DEF-foot.L",
+        "leftToe": "DEF-toe.L",
+        "rightUpperLeg": "DEF-thigh.R",
+        "rightLowerLeg": "DEF-shin.R",
+        "rightFoot": "DEF-foot.R",
+        "rightToe": "DEF-toe.R"
+      }
+    },
+    "ual2": {
+      "sourcePackage": "Quaternius Universal Animation Library 2 [Standard]",
+      "sourceUrl": "https://opengameart.org/content/universal-animation-library-2",
+      "license": "CC0-1.0",
+      "assetPath": "Quaternius/UAL2/UAL2_Standard.glb",
+      "meshNodeName": "Mannequin",
+      "skinIndex": 0,
+      "supportedAssetTypes": [
+        "unit",
+        "character_unit",
+        "humanoid"
+      ],
+      "defaultFps": 8,
+      "allowedSampleCounts": [
+        4,
+        6,
+        8
+      ],
+      "rootMotion": "in_place",
+      "boneMap": {
+        "root": "root",
+        "hips": "pelvis",
+        "spine": "spine_01",
+        "chest": "spine_03",
+        "neck": "neck_01",
+        "head": "Head",
+        "leftClavicle": "clavicle_l",
+        "leftUpperArm": "upperarm_l",
+        "leftLowerArm": "lowerarm_l",
+        "leftHand": "hand_l",
+        "rightClavicle": "clavicle_r",
+        "rightUpperArm": "upperarm_r",
+        "rightLowerArm": "lowerarm_r",
+        "rightHand": "hand_r",
+        "leftUpperLeg": "thigh_l",
+        "leftLowerLeg": "calf_l",
+        "leftFoot": "foot_l",
+        "leftToe": "ball_l",
+        "rightUpperLeg": "thigh_r",
+        "rightLowerLeg": "calf_r",
+        "rightFoot": "foot_r",
+        "rightToe": "ball_r"
+      }
+    }
+  }
 }

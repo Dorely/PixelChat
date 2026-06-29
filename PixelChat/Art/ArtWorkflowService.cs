@@ -5881,8 +5881,7 @@ public sealed class ArtWorkflowService(
         var resolvedRootMotion = !rootMotionWasRequested && !string.IsNullOrWhiteSpace(clip.RootMotion)
             ? NormalizeGuideToken(clip.RootMotion, spec.RootMotion)
             : spec.RootMotion;
-        var sampleCount = clip.ResolveSampleCount(spec.FrameCount);
-        if (sampleCount != spec.FrameCount || resolvedFps != spec.Fps || !string.Equals(resolvedRootMotion, spec.RootMotion, StringComparison.Ordinal))
+        if (resolvedFps != spec.Fps || !string.Equals(resolvedRootMotion, spec.RootMotion, StringComparison.Ordinal))
         {
             spec = SpriteMotionArchetypes.Build(
                 spec.AssetType,
@@ -5890,7 +5889,7 @@ public sealed class ArtWorkflowService(
                 spec.AnimationKind,
                 spec.Facing,
                 resolvedRootMotion,
-                sampleCount,
+                spec.FrameCount,
                 resolvedFps,
                 spec.TargetCellWidth,
                 spec.TargetCellHeight);

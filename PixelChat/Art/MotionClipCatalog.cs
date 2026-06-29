@@ -4,7 +4,7 @@ namespace PixelChat.Art;
 
 internal sealed class MotionClipCatalog
 {
-    public const string DefaultHumanoidWalkClipId = "quaternius.ual2.walk.carry.loop";
+    public const string DefaultHumanoidWalkClipId = "quaternius.ual1.walk.loop";
     public const string RendererId = "quaternius_gltf";
     public const string SkinnedMannequinRenderStyle = "skinned_mannequin";
 
@@ -30,7 +30,7 @@ internal sealed class MotionClipCatalog
 
         var manifest = JsonSerializer.Deserialize<MotionClipManifest>(File.ReadAllText(manifestPath), JsonOptions)
             ?? new MotionClipManifest();
-        return new MotionClipCatalog(contentRootPath, manifest.Clips.Select(clip => clip.WithDefaults(manifest.Defaults)).ToList());
+        return new MotionClipCatalog(contentRootPath, manifest.Clips.Select(clip => clip.WithDefaults(ResolveDefaults(manifest, clip))).ToList());
     }
 
     public MotionClipDefinition? Find(string? clipId)
@@ -58,9 +58,21 @@ internal sealed class MotionClipCatalog
             ? string.Empty
             : value.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
 
+    private static MotionClipDefaults ResolveDefaults(MotionClipManifest manifest, MotionClipDefinition clip)
+    {
+        if (!string.IsNullOrWhiteSpace(clip.DefaultsKey)
+            && manifest.DefaultPacks.TryGetValue(clip.DefaultsKey, out var defaults))
+        {
+            return defaults;
+        }
+
+        return manifest.Defaults;
+    }
+
     private sealed class MotionClipManifest
     {
         public MotionClipDefaults Defaults { get; init; } = new();
+        public Dictionary<string, MotionClipDefaults> DefaultPacks { get; init; } = new(StringComparer.OrdinalIgnoreCase);
         public List<MotionClipDefinition> Clips { get; init; } = [];
     }
 }
@@ -82,6 +94,7 @@ internal sealed class MotionClipDefaults
 
 internal sealed class MotionClipDefinition
 {
+    public string DefaultsKey { get; init; } = string.Empty;
     public string ClipId { get; init; } = string.Empty;
     public List<string> Aliases { get; init; } = [];
     public string DisplayName { get; init; } = string.Empty;
@@ -103,6 +116,7 @@ internal sealed class MotionClipDefinition
 
     public MotionClipDefinition WithDefaults(MotionClipDefaults defaults) => new()
     {
+        DefaultsKey = DefaultsKey,
         ClipId = ClipId,
         Aliases = Aliases,
         DisplayName = DisplayName,

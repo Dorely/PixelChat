@@ -82,7 +82,9 @@
 
 | File | Description |
 |------|-------------|
-| `manifest.json` | Motion clip catalog manifest exposing all 43 vendored Quaternius UAL2 animations with shared defaults and legacy walk aliasing. |
+| `manifest.json` | Motion clip catalog manifest exposing vendored Quaternius UAL1/UAL2 animations with shared and per-pack defaults plus legacy walk aliasing. |
+| `Quaternius/UAL1/AnimationLibrary_Godot_Standard.glb` | CC0 Quaternius Universal Animation Library Standard GLB used for default sampled mannequin motion-guide rendering. |
+| `Quaternius/UAL1/README.md` / `License.txt` | Source attribution, coverage, checksum, and license notes for the vendored UAL1 motion clip asset. |
 | `Quaternius/UAL2/UAL2_Standard.glb` | Restored CC0 Quaternius Universal Animation Library 2 GLB used for sampled mannequin motion-guide rendering. |
 | `Quaternius/UAL2/README.md` / `License.txt` | Source attribution, coverage, and license notes for the restored Quaternius motion clip asset. |
 
