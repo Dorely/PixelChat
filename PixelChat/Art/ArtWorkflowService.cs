@@ -3945,6 +3945,7 @@ public sealed class ArtWorkflowService(
                 configured: string.Empty,
                 fallbackWidth: targetCellWidth,
                 fallbackHeight: targetCellHeight);
+        var layoutOnly = request.LayoutOnly == true;
 
         var spec = SpriteMotionArchetypes.Build(
             assetType,
@@ -3956,14 +3957,32 @@ public sealed class ArtWorkflowService(
             fps,
             targetCellWidth,
             targetCellHeight);
-        spec = ResolveMotionClipSpec(
-            spec,
-            request.MotionClipId,
-            fpsWasRequested: request.Fps is not null,
-            rootMotionWasRequested: !string.IsNullOrWhiteSpace(request.RootMotion));
-        if (request.GuideCameraYawDegrees is double yaw)
+        if (layoutOnly)
+        {
+            spec = spec with
+            {
+                GuideRenderer = "layout_box_guide",
+                GuideRenderStyle = "labeled_bounded_boxes",
+                MotionClipId = null,
+                GuideCameraYawDegrees = null,
+                GuideCameraPitchDegrees = null,
+                MotionValidationProfile = null,
+                GuideSourcePackage = null,
+                GuideSourceLicense = null,
+            };
+        }
+        else
+        {
+            spec = ResolveMotionClipSpec(
+                spec,
+                request.MotionClipId,
+                fpsWasRequested: request.Fps is not null,
+                rootMotionWasRequested: !string.IsNullOrWhiteSpace(request.RootMotion));
+        }
+
+        if (!layoutOnly && request.GuideCameraYawDegrees is double yaw)
             spec = spec with { GuideCameraYawDegrees = NormalizeYawDegrees(yaw) };
-        if (request.GuideCameraPitchDegrees is double pitch)
+        if (!layoutOnly && request.GuideCameraPitchDegrees is double pitch)
             spec = spec with { GuideCameraPitchDegrees = NormalizePitchDegrees(pitch) };
         if (request.Loop is bool loop)
             spec = spec with { Loop = loop };
@@ -3979,7 +3998,7 @@ public sealed class ArtWorkflowService(
             requestedCanvasSize: requestedGuideCanvas,
             requestedSafeMarginPercent: request.SafeMarginPercent);
         MotionGuideRenderResult? motionRender = null;
-        if (MotionClipCatalog.IsExternalMotionSpec(spec))
+        if (!layoutOnly && MotionClipCatalog.IsExternalMotionSpec(spec))
         {
             try
             {
@@ -4004,14 +4023,20 @@ public sealed class ArtWorkflowService(
             }
         }
 
-        var guidePng = motionRender?.GuidePng ?? SpriteGuideRenderer.Render(layout, spec, diagnostic: false);
-        var diagnosticPng = motionRender?.DiagnosticPng ?? SpriteGuideRenderer.Render(layout, spec, diagnostic: true);
-        var renderer = motionRender?.Metadata.Renderer ?? "procedural_sprite_guide";
-        var renderStyle = motionRender?.Metadata.RenderStyle ?? "procedural_shape_guide";
+        var guidePng = layoutOnly
+            ? SpriteGuideRenderer.RenderLayoutOnly(layout, diagnostic: false)
+            : motionRender?.GuidePng ?? SpriteGuideRenderer.Render(layout, spec, diagnostic: false);
+        var diagnosticPng = layoutOnly
+            ? SpriteGuideRenderer.RenderLayoutOnly(layout, diagnostic: true)
+            : motionRender?.DiagnosticPng ?? SpriteGuideRenderer.Render(layout, spec, diagnostic: true);
+        var renderer = layoutOnly ? "layout_box_guide" : motionRender?.Metadata.Renderer ?? "procedural_sprite_guide";
+        var renderStyle = layoutOnly ? "labeled_bounded_boxes" : motionRender?.Metadata.RenderStyle ?? "procedural_shape_guide";
         var label = string.IsNullOrWhiteSpace(request.Label)
             ? $"{TitleCase(animationKind)} {spec.FrameCount}-frame guide"
             : request.Label.Trim();
-        var promptScaffold = BuildAnimationGuidePromptScaffold(reference, spec, layout);
+        var promptScaffold = layoutOnly
+            ? BuildLayoutOnlyGuidePromptScaffold(reference, spec, layout)
+            : BuildAnimationGuidePromptScaffold(reference, spec, layout);
 
         return new AnimationGuideRenderDraft(
             reference,
@@ -4070,6 +4095,7 @@ public sealed class ArtWorkflowService(
             .OrderBy(slot => slot.FrameIndex)
             .Select(slot => slot.Rect)
             .ToList();
+        var anchorStrategy = draft.Renderer == "layout_box_guide" ? "centered-boxes" : "root-baseline";
         var exportDefaultsJson = JsonSerializer.Serialize(new
         {
             rows = draft.Layout.Rows,
@@ -4079,7 +4105,7 @@ public sealed class ArtWorkflowService(
             fps = draft.Spec.Fps,
             loop = draft.Spec.Loop,
             frameOrder,
-            anchorStrategy = "root-baseline",
+            anchorStrategy,
             background = draft.Layout.BackgroundColor,
         }, JsonOptions);
 
@@ -4088,6 +4114,7 @@ public sealed class ArtWorkflowService(
             source = "generate_animation_guide",
             renderer = draft.Renderer,
             renderStyle = draft.RenderStyle,
+            layoutOnly = draft.Renderer == "layout_box_guide",
             draft.Spec.AnimationKind,
             draft.Spec.AssetType,
             draft.Spec.StructureType,
@@ -4167,7 +4194,7 @@ public sealed class ArtWorkflowService(
             draft.Layout.TargetCellWidth,
             draft.Layout.TargetCellHeight,
             expectedBoxes,
-            "root-baseline",
+            anchorStrategy,
             draft.PromptScaffold,
             exportDefaultsJson,
             draft.Renderer,
@@ -4178,7 +4205,9 @@ public sealed class ArtWorkflowService(
             draft.MotionRender?.Metadata.SourcePackage ?? draft.Spec.GuideSourcePackage,
             draft.MotionRender?.Metadata.SourceLicense ?? draft.Spec.GuideSourceLicense,
             draft.MotionRender?.Metadata.SourceUrl,
-            "Animation guide assets saved as SpriteGuide. Use guideAssetId first in generate_sprite_sheet_candidates references.");
+            draft.Renderer == "layout_box_guide"
+                ? "Layout guide assets saved as SpriteGuide. Use guideAssetId first in generate_sprite_sheet_candidates references."
+                : "Animation guide assets saved as SpriteGuide. Use guideAssetId first in generate_sprite_sheet_candidates references.");
     }
 
     public async Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default)
@@ -6125,6 +6154,35 @@ public sealed class ArtWorkflowService(
             slot.Y + ((slot.Height - rectHeight) / 2),
             rectWidth,
             rectHeight);
+    }
+
+    private static string BuildLayoutOnlyGuidePromptScaffold(ArtAsset? reference, AnimationSpec spec, LayoutSpec layout)
+    {
+        var referenceRole = reference is null
+            ? "Image 2, when supplied, controls the subject identity, silhouette, palette, materials, outfit, equipment, and rendering style."
+            : $"Image 2 is the canonical subject reference '{reference.Label}'. It controls identity, silhouette, palette, materials, outfit, equipment, and rendering style.";
+
+        return $"""
+        GOAL
+        Render a {spec.FrameCount}-frame sprite-sheet grid as a {layout.Columns} column by {layout.Rows} row layout.
+
+        INPUT ROLES
+        Image 1 is a labeled layout guide. It controls exact frame order, slot positions, frame boxes, safe margins, and per-frame boundaries. It does not define a specific pose, action, or motion cycle.
+        {referenceRole}
+        Optional later references may control art style, but the layout guide remains the only frame placement guide.
+
+        LAYOUT CONTRACT
+        Read frame order left-to-right across each row, then lower rows. Put exactly one complete sprite frame inside each numbered frame box. Keep each subject fully inside that frame's safe region and keep apparent scale, camera, and style stable across frames.
+
+        OUTPUT CONTRACT
+        Exactly {spec.FrameCount} complete frames, one subject per cell, no text, no labels, no borders, no extra poses, no overlap between cells, no cropping.
+
+        CLEANUP CONTRACT
+        Do not reproduce guide lines, frame boxes, safe boxes, root marks, numbers, labels, or construction marks.
+
+        BACKGROUND
+        Use one flat opaque chroma color: {layout.BackgroundColor}. No shadows, floors, scenery, gradients, transparent checkerboards, or detached effects outside the guided subject.
+        """;
     }
 
     private static string BuildAnimationGuidePromptScaffold(ArtAsset? reference, AnimationSpec spec, LayoutSpec layout)

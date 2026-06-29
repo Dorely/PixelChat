@@ -192,7 +192,7 @@
     private GuideStageMode _stageMode = GuideStageMode.Grid;
     private bool _animationEditorOpen;
     private bool _viewerModuleLoadFailed;
-    private string _label = "Walk 8-frame guide";
+    private string _label = "8-frame layout guide";
     private int _frameCount = 8;
     private int _rows = 2;
     private int _columns = 4;
@@ -252,11 +252,14 @@
             ? $"{_animationKind} - yaw {_yaw.ToString("0", CultureInfo.InvariantCulture)} deg, pitch {_pitch.ToString("0", CultureInfo.InvariantCulture)} deg"
             : $"{_guideCanvasSize} - {_columns} columns x {_rows} rows - {_cellWidth} x {_cellHeight}";
 
+    private bool HasActiveMotionGuide =>
+        _animationEditorOpen && !string.IsNullOrWhiteSpace(_motionClipId);
+
     private bool RenderDisabled =>
-        _busy || !_animationEditorOpen || string.IsNullOrWhiteSpace(_motionClipId);
+        _busy || !HasActiveMotionGuide;
 
     private bool FinishDisabled =>
-        _busy || string.IsNullOrWhiteSpace(_renderedPreviewDataUrl);
+        _busy;
 
     protected override async Task OnInitializedAsync()
     {
@@ -584,6 +587,11 @@
     }
 
     private GenerateAnimationGuideRequest BuildRequest() =>
+        HasActiveMotionGuide
+            ? BuildMotionGuideRequest()
+            : BuildLayoutOnlyRequest();
+
+    private GenerateAnimationGuideRequest BuildMotionGuideRequest() =>
         new(
             ReferenceAssetId: null,
             AnimationKind: _animationKind,
@@ -603,7 +611,31 @@
             GuideCameraPitchDegrees: _pitch,
             Loop: _loop,
             SafeMarginPercent: _safeMarginPercent,
-            GuideCanvasSize: _guideCanvasSize);
+            GuideCanvasSize: _guideCanvasSize,
+            LayoutOnly: false);
+
+    private GenerateAnimationGuideRequest BuildLayoutOnlyRequest() =>
+        new(
+            ReferenceAssetId: null,
+            AnimationKind: "layout",
+            AssetType: "unit",
+            StructureType: "humanoid",
+            Facing: SpriteFacing.SideRight,
+            FrameCount: _frameCount,
+            Fps: _fps,
+            RootMotion: "in_place",
+            TargetCellSize: $"{_cellWidth}x{_cellHeight}",
+            MotionClipId: null,
+            Label: _label,
+            Rows: _rows,
+            Columns: _columns,
+            GuideCellSize: $"{_cellWidth}x{_cellHeight}",
+            GuideCameraYawDegrees: null,
+            GuideCameraPitchDegrees: null,
+            Loop: _loop,
+            SafeMarginPercent: _safeMarginPercent,
+            GuideCanvasSize: _guideCanvasSize,
+            LayoutOnly: true);
 
     private MotionClipView? SelectedMotionClip() =>
         string.IsNullOrWhiteSpace(_motionClipId)

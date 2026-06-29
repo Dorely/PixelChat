@@ -21,6 +21,27 @@ internal static class SpriteGuideRenderer
         return SpriteSheetPngCodec.EncodeRgba(layout.CanvasWidth, layout.CanvasHeight, rgba);
     }
 
+    public static byte[] RenderLayoutOnly(LayoutSpec layout, bool diagnostic = false)
+    {
+        var background = ParseHexColor(layout.BackgroundColor) ?? (R: (byte)255, G: (byte)0, B: (byte)255);
+        var rgba = NewCanvas(layout.CanvasWidth, layout.CanvasHeight, background.R, background.G, background.B, 255);
+        var activeSlots = layout.Slots.ToDictionary(slot => slot.FrameIndex);
+        var slotCount = Math.Max(layout.Rows * layout.Columns, activeSlots.Count);
+        for (var index = 0; index < slotCount; index++)
+        {
+            var gridSlot = CellRectForGuideGrid(index, layout.Columns, layout.Rows, layout.CanvasWidth, layout.CanvasHeight);
+            DrawRect(rgba, layout.CanvasWidth, layout.CanvasHeight, gridSlot, 42, 64, 88, diagnostic ? (byte)235 : (byte)185, 2);
+            if (!activeSlots.TryGetValue(index, out var slot))
+                continue;
+
+            DrawRect(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Rect, 255, 255, 255, diagnostic ? (byte)255 : (byte)235, 2);
+            DrawRect(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.SafeRect, 255, 255, 255, diagnostic ? (byte)235 : (byte)185, 1);
+            DrawLabel(rgba, layout.CanvasWidth, layout.CanvasHeight, gridSlot.X + 10, gridSlot.Y + 10, index + 1, gridSlot.Width, diagnostic);
+        }
+
+        return SpriteSheetPngCodec.EncodeRgba(layout.CanvasWidth, layout.CanvasHeight, rgba);
+    }
+
     private static void DrawGuideShape(byte[] rgba, int width, int height, SlotSpec slot, FrameSpec frame, AnimationSpec animation, bool diagnostic)
     {
         var alpha = diagnostic ? (byte)210 : (byte)95;
@@ -98,6 +119,86 @@ internal static class SpriteGuideRenderer
 
         return rgba;
     }
+
+    private static SpriteSheetRect CellRectForGuideGrid(int index, int columns, int rows, int canvasWidth, int canvasHeight)
+    {
+        columns = Math.Max(1, columns);
+        rows = Math.Max(1, rows);
+        var row = Math.Clamp(index / columns, 0, rows - 1);
+        var col = Math.Clamp(index % columns, 0, columns - 1);
+        var x0 = col * canvasWidth / columns;
+        var x1 = (col + 1) * canvasWidth / columns;
+        var y0 = row * canvasHeight / rows;
+        var y1 = (row + 1) * canvasHeight / rows;
+        return new SpriteSheetRect(x0, y0, Math.Max(1, x1 - x0), Math.Max(1, y1 - y0));
+    }
+
+    private static (byte R, byte G, byte B)? ParseHexColor(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var text = value.Trim();
+        if (text.StartsWith('#'))
+            text = text[1..];
+        if (text.Length != 6)
+            return null;
+
+        return byte.TryParse(text[..2], System.Globalization.NumberStyles.HexNumber, null, out var r)
+            && byte.TryParse(text[2..4], System.Globalization.NumberStyles.HexNumber, null, out var g)
+            && byte.TryParse(text[4..6], System.Globalization.NumberStyles.HexNumber, null, out var b)
+            ? (r, g, b)
+            : null;
+    }
+
+    private static void DrawLabel(byte[] rgba, int width, int height, int x, int y, int frameNumber, int slotWidth, bool diagnostic)
+    {
+        var scale = Math.Clamp(slotWidth / 90, 2, 5);
+        var text = frameNumber.ToString("00", System.Globalization.CultureInfo.InvariantCulture);
+        DrawText(rgba, width, height, x + scale, y + scale, text, scale, 42, 24, 60, diagnostic ? (byte)210 : (byte)165);
+        DrawText(rgba, width, height, x, y, text, scale, 255, 255, 255, 255);
+    }
+
+    private static void DrawText(byte[] rgba, int width, int height, int x, int y, string text, int scale, byte r, byte g, byte b, byte a)
+    {
+        var cursor = x;
+        foreach (var ch in text)
+        {
+            var glyph = DigitGlyph(ch);
+            for (var gy = 0; gy < glyph.Length; gy++)
+            {
+                for (var gx = 0; gx < glyph[gy].Length; gx++)
+                {
+                    if (glyph[gy][gx] != '#')
+                        continue;
+
+                    for (var py = 0; py < scale; py++)
+                    {
+                        for (var px = 0; px < scale; px++)
+                            Blend(rgba, width, height, cursor + (gx * scale) + px, y + (gy * scale) + py, r, g, b, a);
+                    }
+                }
+            }
+
+            cursor += (glyph[0].Length + 1) * scale;
+        }
+    }
+
+    private static string[] DigitGlyph(char ch) =>
+        ch switch
+        {
+            '0' => ["###", "# #", "# #", "# #", "###"],
+            '1' => [" # ", "## ", " # ", " # ", "###"],
+            '2' => ["###", "  #", "###", "#  ", "###"],
+            '3' => ["###", "  #", " ##", "  #", "###"],
+            '4' => ["# #", "# #", "###", "  #", "  #"],
+            '5' => ["###", "#  ", "###", "  #", "###"],
+            '6' => ["###", "#  ", "###", "# #", "###"],
+            '7' => ["###", "  #", " # ", " # ", " # "],
+            '8' => ["###", "# #", "###", "# #", "###"],
+            '9' => ["###", "# #", "###", "  #", "###"],
+            _ => ["   ", "   ", "   ", "   ", "   "],
+        };
 
     private static void DrawRect(byte[] rgba, int width, int height, SpriteSheetRect rect, byte r, byte g, byte b, byte a, int thickness)
     {

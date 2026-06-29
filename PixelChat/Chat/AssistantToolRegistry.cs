@@ -123,7 +123,7 @@ public sealed class AssistantToolRegistry(
             method: (string? query = null, string? animationKind = null, bool? loop = null, int? limit = null, CancellationToken cancellationToken = default) =>
                 workflow.ListMotionClipsJsonAsync(query, animationKind, loop, limit, cancellationToken),
             name: "list_motion_clips",
-            description: "List available GLTF-backed humanoid motion guide clips. Use this before generate_animation_guide when the user asks for a 3D/mannequin-guided humanoid animation, then pass the selected motionClipId."),
+            description: "List available GLTF-backed humanoid motion guide clips. Use this before generate_animation_guide when the user asks for a 3D/mannequin-guided humanoid animation, then pass the selected motionClipId. Omit motionClipId for a layout-only labeled box guide."),
 
         AIFunctionFactory.Create(
             method: (Guid? recipeId,
@@ -184,7 +184,7 @@ public sealed class AssistantToolRegistry(
 
         AIFunctionFactory.Create(
             method: (
-                string motionClipId,
+                string? motionClipId = null,
                 int? frameCount = null,
                 int? fps = null,
                 int? rows = null,
@@ -199,7 +199,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 GenerateAnimationGuideToolAsync(projectId, motionClipId, frameCount, fps, rows, columns, guideCanvasSize, guideCellSize, label, guideCameraYawDegrees, guideCameraPitchDegrees, loop, safeMarginPercent, cancellationToken),
             name: "generate_animation_guide",
-            description: "Render and save a reusable motion guide as SpriteGuide assets. First call list_motion_clips, then pass the chosen motionClipId plus explicit grid/layout controls. UI-equivalent defaults are frameCount 8, rows 2, columns 4, guideCanvasSize 1024x1024, guideCellSize 256x512, fps 8, loop true, and safeMarginPercent 12. guideCameraYawDegrees controls horizontal angle; guideCameraPitchDegrees controls camera elevation from -45 to 45. Use this before generate_sprite_sheet_candidates for animation work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
+            description: "Render and save a reusable guide as SpriteGuide assets. Omit motionClipId to create a layout-only labeled box guide. For GLTF-backed humanoid motion, first call list_motion_clips, then pass the chosen motionClipId plus explicit grid/layout controls. UI-equivalent defaults are frameCount 8, rows 2, columns 4, guideCanvasSize 1024x1024, guideCellSize 256x512, fps 8, loop true, and safeMarginPercent 12. guideCameraYawDegrees controls horizontal angle and guideCameraPitchDegrees controls camera elevation only when motionClipId is supplied. Use this before generate_sprite_sheet_candidates for guide-driven sprite-sheet work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
 
         AIFunctionFactory.Create(
             method: (string? status = null, int? limit = null) =>
@@ -241,7 +241,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 RunGenerationRoundAsync(projectId, budget, prompt, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, animationRecipeId: animationRecipeId, cancellationToken: cancellationToken),
             name: "generate_sprite_sheet_candidates",
-            description: "Generate sprite-sheet candidates from a concise prompt plus ordered references. Pass animationRecipeId to use a saved animation recipe; its guide attachments are prepended automatically. For new guide-driven animation, first call generate_animation_guide and attach the returned guide asset to an animation recipe, or put it first manually in referenceAssetIds. Starter/reference sprite and optional art recipe/style references should follow. The prompt should define frame count/order, boundaries, no overlap, preservation, and guide-mark cleanup. Returns model-only candidate images; add promising batches/assets to Review for the user."),
+            description: "Generate sprite-sheet candidates from a concise prompt plus ordered references. Pass animationRecipeId to use a saved animation recipe; its guide attachments are prepended automatically. For new guide-driven sprite sheets, first call generate_animation_guide with or without a motionClipId, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Starter/reference sprite and optional art recipe/style references should follow. The prompt should define frame count/order, boundaries, no overlap, preservation, and guide-mark cleanup. Returns model-only candidate images; add promising batches/assets to Review for the user."),
 
         AIFunctionFactory.Create(
             method: (int? limit = null) => workflow.ListSpriteSheetsJsonAsync(projectId, limit),
@@ -953,7 +953,7 @@ public sealed class AssistantToolRegistry(
 
     private async Task<string> GenerateAnimationGuideToolAsync(
         Guid projectId,
-        string motionClipId,
+        string? motionClipId,
         int? frameCount,
         int? fps,
         int? rows,
@@ -967,9 +967,7 @@ public sealed class AssistantToolRegistry(
         double? safeMarginPercent,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(motionClipId))
-            throw new InvalidOperationException("motionClipId is required. Call list_motion_clips first and pass the selected clip.");
-
+        var layoutOnly = string.IsNullOrWhiteSpace(motionClipId);
         var effectiveFrameCount = Math.Clamp(frameCount ?? 8, 1, 16);
         var effectiveRows = Math.Clamp(rows ?? 2, 1, 8);
         var effectiveColumns = Math.Clamp(columns ?? 4, 1, 8);
@@ -982,10 +980,15 @@ public sealed class AssistantToolRegistry(
         var effectiveCellSize = string.IsNullOrWhiteSpace(guideCellSize)
             ? DerivedGuideCellSize(effectiveCanvasSize, effectiveColumns, effectiveRows)
             : guideCellSize.Trim();
-        var clips = await workflow.ListMotionClipsAsync(limit: 100, cancellationToken: cancellationToken);
-        var clip = FindMotionClip(clips, motionClipId);
-        var animationKind = clip?.SupportedAnimationKinds.FirstOrDefault() ?? "walk";
-        var rootMotion = string.IsNullOrWhiteSpace(clip?.RecommendedRootMotion) ? "in_place" : clip!.RecommendedRootMotion;
+        MotionClipView? clip = null;
+        if (!layoutOnly)
+        {
+            var clips = await workflow.ListMotionClipsAsync(limit: 100, cancellationToken: cancellationToken);
+            clip = FindMotionClip(clips, motionClipId!);
+        }
+
+        var animationKind = layoutOnly ? "layout" : clip?.SupportedAnimationKinds.FirstOrDefault() ?? "walk";
+        var rootMotion = layoutOnly || string.IsNullOrWhiteSpace(clip?.RecommendedRootMotion) ? "in_place" : clip!.RecommendedRootMotion;
         var effectiveFps = fps ?? (clip?.DefaultFps > 0 ? clip.DefaultFps : 8);
         var effectiveLoop = loop ?? clip?.LoopRecommended ?? true;
 
@@ -999,19 +1002,21 @@ public sealed class AssistantToolRegistry(
             Fps: effectiveFps,
             RootMotion: rootMotion,
             TargetCellSize: effectiveCellSize,
-            MotionClipId: motionClipId.Trim(),
+            MotionClipId: layoutOnly ? null : motionClipId!.Trim(),
             Label: label,
             Rows: effectiveRows,
             Columns: effectiveColumns,
             GuideCellSize: effectiveCellSize,
-            GuideCameraYawDegrees: guideCameraYawDegrees,
-            GuideCameraPitchDegrees: guideCameraPitchDegrees,
+            GuideCameraYawDegrees: layoutOnly ? null : guideCameraYawDegrees,
+            GuideCameraPitchDegrees: layoutOnly ? null : guideCameraPitchDegrees,
             Loop: effectiveLoop,
             SafeMarginPercent: safeMarginPercent ?? 12d,
-            GuideCanvasSize: effectiveCanvasSize), cancellationToken);
+            GuideCanvasSize: effectiveCanvasSize,
+            LayoutOnly: layoutOnly), cancellationToken);
 
         return JsonSerializer.Serialize(new
         {
+            layoutOnly,
             guide.GuideAssetId,
             guide.DiagnosticGuideAssetId,
             guide.Label,
