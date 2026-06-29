@@ -745,7 +745,8 @@ public sealed record GenerateAnimationGuideRequest(
     double? GuideCameraYawDegrees = null,
     double? GuideCameraPitchDegrees = null,
     bool? Loop = null,
-    double? SafeMarginPercent = null);
+    double? SafeMarginPercent = null,
+    string? GuideCanvasSize = null);
 
 public sealed record AnimationGuidePreviewView(
     string Label,

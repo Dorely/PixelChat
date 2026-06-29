@@ -49,36 +49,45 @@
                     <div class="guide-control-pair">
                         <label>
                             <span>Frames</span>
-                            <input class="form-control" type="number" min="1" max="16" @bind="_frameCount" @bind:after="OnGridChanged" />
+                            <input class="form-control" type="number" min="1" max="16" @bind="_frameCount" @bind:after="OnGridDimensionsChanged" />
                         </label>
                         <label>
                             <span>FPS</span>
-                            <input class="form-control" type="number" min="1" max="60" @bind="_fps" @bind:after="OnGridChanged" />
+                            <input class="form-control" type="number" min="1" max="60" @bind="_fps" @bind:after="OnGridSettingsChanged" />
                         </label>
                     </div>
                     <div class="guide-control-pair">
                         <label>
                             <span>Rows</span>
-                            <input class="form-control" type="number" min="1" max="8" @bind="_rows" @bind:after="OnGridChanged" />
+                            <input class="form-control" type="number" min="1" max="8" @bind="_rows" @bind:after="OnGridDimensionsChanged" />
                         </label>
                         <label>
                             <span>Columns</span>
-                            <input class="form-control" type="number" min="1" max="8" @bind="_columns" @bind:after="OnGridChanged" />
+                            <input class="form-control" type="number" min="1" max="8" @bind="_columns" @bind:after="OnGridDimensionsChanged" />
                         </label>
                     </div>
+                    <label>
+                        <span>Image size</span>
+                        <select class="form-select" value="@_guideCanvasSize" @onchange="OnImageSizeChanged">
+                            @foreach (var option in ImageSizeOptions)
+                            {
+                                <option value="@option.Value">@option.Label</option>
+                            }
+                        </select>
+                    </label>
                     <div class="guide-control-pair">
                         <label>
                             <span>Cell width</span>
-                            <input class="form-control" type="number" min="64" max="2048" step="16" @bind="_cellWidth" @bind:after="OnGridChanged" />
+                            <input class="form-control" type="number" min="1" max="@SlotWidth" step="16" @bind="_cellWidth" @bind:after="OnCellSizeChanged" />
                         </label>
                         <label>
                             <span>Cell height</span>
-                            <input class="form-control" type="number" min="64" max="2048" step="16" @bind="_cellHeight" @bind:after="OnGridChanged" />
+                            <input class="form-control" type="number" min="1" max="@SlotHeight" step="16" @bind="_cellHeight" @bind:after="OnCellSizeChanged" />
                         </label>
                     </div>
                     <label>
                         <span>Safe margin @_safeMarginPercent.ToString("0")%</span>
-                        <input type="range" min="0" max="30" step="1" @bind="_safeMarginPercent" @bind:after="OnGridChanged" />
+                        <input type="range" min="0" max="30" step="1" @bind="_safeMarginPercent" @bind:after="OnGridSettingsChanged" />
                     </label>
                     <label class="guide-checkbox">
                         <input type="checkbox" @bind="_loop" @bind:after="InvalidateRenderedPreview" />
@@ -201,6 +210,21 @@
         Rendered,
     }
 
+    private sealed record GuideImageSizeOption(string Value, string Label, int Width, int Height);
+
+    private static readonly GuideImageSizeOption[] ImageSizeOptions =
+    [
+        new("1024x1024", "1024 x 1024", 1024, 1024),
+        new("1536x1024", "1536 x 1024", 1536, 1024),
+        new("1024x1536", "1024 x 1536", 1024, 1536),
+        new("1536x864", "1536 x 864", 1536, 864),
+        new("864x1536", "864 x 1536", 864, 1536),
+        new("2048x1152", "2048 x 1152", 2048, 1152),
+        new("1152x2048", "1152 x 2048", 1152, 2048),
+        new("1344x1008", "1344 x 1008", 1344, 1008),
+        new("1008x1344", "1008 x 1344", 1008, 1344),
+    ];
+
     [Parameter, EditorRequired]
     public Guid ProjectId { get; set; }
 
@@ -225,8 +249,11 @@
     private int _frameCount = 8;
     private int _rows = 2;
     private int _columns = 4;
-    private int _cellWidth = 192;
-    private int _cellHeight = 192;
+    private int _lastRows = 2;
+    private int _lastColumns = 4;
+    private string _guideCanvasSize = "1024x1024";
+    private int _cellWidth = 256;
+    private int _cellHeight = 512;
     private int _fps = 8;
     private double _safeMarginPercent = 12d;
     private bool _loop = true;
@@ -251,6 +278,22 @@
             .Where(asset => asset.Kind != ArtAssetKind.SpriteGuide)
             .OrderByDescending(asset => asset.CreatedAt);
 
+    private int SlotWidth => Math.Max(1, SelectedImageSize().Width / Math.Max(1, _columns));
+
+    private int SlotHeight => Math.Max(1, SelectedImageSize().Height / Math.Max(1, _rows));
+
+    private string GridBoxStyle
+    {
+        get
+        {
+            var widthPercent = Math.Clamp(_cellWidth / (double)SlotWidth * 100d, 1d, 100d);
+            var heightPercent = Math.Clamp(_cellHeight / (double)SlotHeight * 100d, 1d, 100d);
+            return string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"width:{widthPercent:0.###}%;height:{heightPercent:0.###}%;");
+        }
+    }
+
     private string GuideSubtitle =>
         _stageMode switch
         {
@@ -270,7 +313,7 @@
     private string StageMeta =>
         _stageMode == GuideStageMode.Viewer
             ? $"{_animationKind} - yaw {_yaw:0}°, pitch {_pitch:0}°"
-            : $"{_columns} columns x {_rows} rows - {_cellWidth} x {_cellHeight}";
+            : $"{_guideCanvasSize} - {_columns} columns x {_rows} rows - {_cellWidth} x {_cellHeight}";
 
     private bool RenderDisabled =>
         _busy || !_animationEditorOpen || (_sourceType == "motion" && string.IsNullOrWhiteSpace(_motionClipId));
@@ -329,7 +372,9 @@
                     @if (active)
                     {
                         <span>@(index + 1).ToString("00")</span>
-                        <i style="@($"inset:{safeInset.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%;")"></i>
+                        <div class="guide-grid-box" style="@GridBoxStyle">
+                            <i style="@($"inset:{safeInset.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%;")"></i>
+                        </div>
                     }
                 </div>
             }
@@ -337,7 +382,9 @@
     };
 
     private string GridPreviewStyle =>
-        $"grid-template-columns:repeat({_columns}, minmax(0, 1fr)); aspect-ratio:{Math.Max(1, _columns)} / {Math.Max(1, _rows)};";
+        string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"--guide-aspect-ratio:{SelectedImageSize().Width / (double)SelectedImageSize().Height:0.########};grid-template-columns:repeat({_columns}, minmax(0, 1fr)); grid-template-rows:repeat({_rows}, minmax(0, 1fr)); aspect-ratio:{SelectedImageSize().Width} / {SelectedImageSize().Height};");
 
     private async Task RenderViewerIfNeededAsync()
     {
@@ -377,18 +424,68 @@
         }, dotNetRef);
     }
 
-    private void OnGridChanged()
+    private void OnGridDimensionsChanged()
+    {
+        ClampGridValues();
+        if (_rows != _lastRows || _columns != _lastColumns)
+            ResetCellSizeToSlot();
+        else
+            ClampCellSize();
+        TrackGridDimensions();
+        InvalidateRenderedPreview();
+    }
+
+    private void OnGridSettingsChanged()
+    {
+        ClampGridValues();
+        ClampCellSize();
+        TrackGridDimensions();
+        InvalidateRenderedPreview();
+    }
+
+    private void ClampGridValues()
     {
         _frameCount = Math.Clamp(_frameCount, 1, 16);
         _columns = Math.Clamp(_columns, 1, 8);
         _rows = Math.Clamp(_rows, 1, 8);
         if (_rows * _columns < _frameCount)
             _rows = Math.Clamp((int)Math.Ceiling(_frameCount / (double)_columns), 1, 8);
-        _cellWidth = Math.Clamp(_cellWidth, 64, 2048);
-        _cellHeight = Math.Clamp(_cellHeight, 64, 2048);
         _fps = Math.Clamp(_fps, 1, 60);
         _safeMarginPercent = Math.Clamp(_safeMarginPercent, 0d, 30d);
+    }
+
+    private void OnCellSizeChanged()
+    {
+        ClampCellSize();
         InvalidateRenderedPreview();
+    }
+
+    private void OnImageSizeChanged(ChangeEventArgs args)
+    {
+        var value = args.Value?.ToString();
+        _guideCanvasSize = ImageSizeOptions.Any(option => string.Equals(option.Value, value, StringComparison.Ordinal))
+            ? value!
+            : ImageSizeOptions[0].Value;
+        ResetCellSizeToSlot();
+        InvalidateRenderedPreview();
+    }
+
+    private void ResetCellSizeToSlot()
+    {
+        _cellWidth = SlotWidth;
+        _cellHeight = SlotHeight;
+    }
+
+    private void ClampCellSize()
+    {
+        _cellWidth = Math.Clamp(_cellWidth, 1, SlotWidth);
+        _cellHeight = Math.Clamp(_cellHeight, 1, SlotHeight);
+    }
+
+    private void TrackGridDimensions()
+    {
+        _lastRows = _rows;
+        _lastColumns = _columns;
     }
 
     private void InvalidateRenderedPreview()
@@ -468,6 +565,8 @@
         _label = $"{clip.DisplayName.Replace("Quaternius UAL2 ", string.Empty, StringComparison.Ordinal)} {_frameCount}-frame guide";
         _stageMode = _animationEditorOpen && switchToViewer ? GuideStageMode.Viewer : GuideStageMode.Grid;
         _viewerKey = string.Empty;
+        ResetCellSizeToSlot();
+        TrackGridDimensions();
         InvalidateRenderedPreview();
     }
 
@@ -565,24 +664,25 @@
 
     private GenerateAnimationGuideRequest BuildRequest() =>
         new(
-            ReferenceAssetId(),
-            _animationKind,
-            _assetType,
-            _structureType,
-            _facing,
-            _frameCount,
-            _fps,
-            _rootMotion,
-            $"{_cellWidth}x{_cellHeight}",
-            _sourceType == "motion" ? _motionClipId : null,
-            _label,
-            _rows,
-            _columns,
-            $"{_cellWidth}x{_cellHeight}",
-            _yaw,
-            _pitch,
-            _loop,
-            _safeMarginPercent);
+            ReferenceAssetId: ReferenceAssetId(),
+            AnimationKind: _animationKind,
+            AssetType: _assetType,
+            StructureType: _structureType,
+            Facing: _facing,
+            FrameCount: _frameCount,
+            Fps: _fps,
+            RootMotion: _rootMotion,
+            TargetCellSize: $"{_cellWidth}x{_cellHeight}",
+            MotionClipId: _sourceType == "motion" ? _motionClipId : null,
+            Label: _label,
+            Rows: _rows,
+            Columns: _columns,
+            GuideCellSize: $"{_cellWidth}x{_cellHeight}",
+            GuideCameraYawDegrees: _yaw,
+            GuideCameraPitchDegrees: _pitch,
+            Loop: _loop,
+            SafeMarginPercent: _safeMarginPercent,
+            GuideCanvasSize: _guideCanvasSize);
 
     private Guid? ReferenceAssetId() =>
         Guid.TryParse(_referenceAssetText, out var id) && id != Guid.Empty ? id : null;
@@ -591,6 +691,10 @@
         string.IsNullOrWhiteSpace(_motionClipId)
             ? null
             : _motionClips.FirstOrDefault(clip => string.Equals(clip.MotionClipId, _motionClipId, StringComparison.OrdinalIgnoreCase));
+
+    private GuideImageSizeOption SelectedImageSize() =>
+        ImageSizeOptions.FirstOrDefault(option => string.Equals(option.Value, _guideCanvasSize, StringComparison.Ordinal))
+            ?? ImageSizeOptions[0];
 
     private static int SuggestedColumns(int frameCount) =>
         frameCount switch

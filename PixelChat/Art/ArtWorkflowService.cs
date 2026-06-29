@@ -3938,6 +3938,13 @@ public sealed class ArtWorkflowService(
                 configured: string.Empty,
                 fallbackWidth: targetCellWidth,
                 fallbackHeight: targetCellHeight);
+        var requestedGuideCanvas = string.IsNullOrWhiteSpace(request.GuideCanvasSize)
+            ? ((int Width, int Height)?)null
+            : ParseCellSize(
+                request.GuideCanvasSize,
+                configured: string.Empty,
+                fallbackWidth: targetCellWidth,
+                fallbackHeight: targetCellHeight);
 
         var spec = SpriteMotionArchetypes.Build(
             assetType,
@@ -3966,10 +3973,11 @@ public sealed class ArtWorkflowService(
             spec,
             "#ff00ff",
             layoutProfile,
-            request.Rows,
-            request.Columns,
-            requestedGuideCell,
-            request.SafeMarginPercent);
+            requestedRows: request.Rows,
+            requestedColumns: request.Columns,
+            requestedGuideCell: requestedGuideCell,
+            requestedCanvasSize: requestedGuideCanvas,
+            requestedSafeMarginPercent: request.SafeMarginPercent);
         MotionGuideRenderResult? motionRender = null;
         if (MotionClipCatalog.IsExternalMotionSpec(spec))
         {
@@ -6008,6 +6016,7 @@ public sealed class ArtWorkflowService(
         int? requestedRows = null,
         int? requestedColumns = null,
         (int Width, int Height)? requestedGuideCell = null,
+        (int Width, int Height)? requestedCanvasSize = null,
         double? requestedSafeMarginPercent = null)
     {
         var (defaultColumns, defaultRows) = GuideGridForFrameCount(spec.FrameCount);
@@ -6019,17 +6028,34 @@ public sealed class ArtWorkflowService(
             columns = Math.Clamp((int)Math.Ceiling(spec.FrameCount / (double)rows), 1, 8);
 
         var (defaultCellWidth, defaultCellHeight) = GuideCellSize(spec.FrameCount, layoutProfile);
-        var guideCellWidth = Math.Clamp(requestedGuideCell?.Width ?? defaultCellWidth, 64, 2048);
-        var guideCellHeight = Math.Clamp(requestedGuideCell?.Height ?? defaultCellHeight, 64, 2048);
-        var canvasWidth = checked(columns * guideCellWidth);
-        var canvasHeight = checked(rows * guideCellHeight);
+        int guideCellWidth;
+        int guideCellHeight;
+        int canvasWidth;
+        int canvasHeight;
+        if (requestedCanvasSize is { } canvasSize)
+        {
+            canvasWidth = Math.Clamp(canvasSize.Width, 256, 4096);
+            canvasHeight = Math.Clamp(canvasSize.Height, 256, 4096);
+            var slotWidth = Math.Max(1, canvasWidth / columns);
+            var slotHeight = Math.Max(1, canvasHeight / rows);
+            guideCellWidth = Math.Clamp(requestedGuideCell?.Width ?? slotWidth, 1, slotWidth);
+            guideCellHeight = Math.Clamp(requestedGuideCell?.Height ?? slotHeight, 1, slotHeight);
+        }
+        else
+        {
+            guideCellWidth = Math.Clamp(requestedGuideCell?.Width ?? defaultCellWidth, 64, 2048);
+            guideCellHeight = Math.Clamp(requestedGuideCell?.Height ?? defaultCellHeight, 64, 2048);
+            canvasWidth = checked(columns * guideCellWidth);
+            canvasHeight = checked(rows * guideCellHeight);
+        }
         var safeMarginRatio = requestedSafeMarginPercent is double safeMarginPercent
             ? Math.Clamp(safeMarginPercent, 0d, 40d) / 100d
             : layoutProfile.NeedsLargePadding ? 0.14d : 0.11d;
         var slots = Enumerable.Range(0, spec.FrameCount)
             .Select(index =>
             {
-                var rect = CellRectForGuideGrid(index, columns, rows, canvasWidth, canvasHeight);
+                var gridSlot = CellRectForGuideGrid(index, columns, rows, canvasWidth, canvasHeight);
+                var rect = CenterRectInSlot(gridSlot, guideCellWidth, guideCellHeight);
                 var margin = Math.Max(0, (int)Math.Round(Math.Min(rect.Width, rect.Height) * safeMarginRatio));
                 var safe = new SpriteSheetRect(
                     rect.X + margin,
@@ -6089,6 +6115,17 @@ public sealed class ArtWorkflowService(
         var y0 = row * canvasHeight / rows;
         var y1 = (row + 1) * canvasHeight / rows;
         return new SpriteSheetRect(x0, y0, Math.Max(1, x1 - x0), Math.Max(1, y1 - y0));
+    }
+
+    private static SpriteSheetRect CenterRectInSlot(SpriteSheetRect slot, int width, int height)
+    {
+        var rectWidth = Math.Clamp(width, 1, slot.Width);
+        var rectHeight = Math.Clamp(height, 1, slot.Height);
+        return new SpriteSheetRect(
+            slot.X + ((slot.Width - rectWidth) / 2),
+            slot.Y + ((slot.Height - rectHeight) / 2),
+            rectWidth,
+            rectHeight);
     }
 
     private static string BuildAnimationGuidePromptScaffold(ArtAsset? reference, AnimationSpec spec, LayoutSpec layout)
