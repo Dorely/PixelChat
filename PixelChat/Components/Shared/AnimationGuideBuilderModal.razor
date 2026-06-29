@@ -162,9 +162,14 @@
                         <span>Yaw @_yaw.ToString("0")°</span>
                         <input type="range" min="-180" max="180" step="1" @bind="_yaw" @bind:after="OnYawChangedAsync" />
                     </label>
+                    <label>
+                        <span>Pitch @_pitch.ToString("0")°</span>
+                        <input type="range" min="-45" max="45" step="1" @bind="_pitch" @bind:after="OnPitchChangedAsync" />
+                    </label>
                     <div class="guide-viewer-actions">
                         <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_stageMode != GuideStageMode.Viewer)" @onclick="TogglePlaybackAsync">@(_playing ? "Pause" : "Play")</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ResetYawAsync">Reset Yaw</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ResetPitchAsync">Reset Pitch</button>
                     </div>
                     <button type="button" class="btn btn-outline-primary" disabled="@RenderDisabled" @onclick="RenderFramesAsync">Render Frames</button>
                 </section>
@@ -234,6 +239,7 @@
     private string _referenceAssetText = string.Empty;
     private string _facing = "side_right";
     private double _yaw = 90d;
+    private double _pitch;
     private bool _playing = true;
     private bool _busy;
     private string _status = string.Empty;
@@ -263,7 +269,7 @@
 
     private string StageMeta =>
         _stageMode == GuideStageMode.Viewer
-            ? $"{_animationKind} - yaw {_yaw:0}°"
+            ? $"{_animationKind} - yaw {_yaw:0}°, pitch {_pitch:0}°"
             : $"{_columns} columns x {_rows} rows - {_cellWidth} x {_cellHeight}";
 
     private bool RenderDisabled =>
@@ -295,7 +301,7 @@
 
         try
         {
-            var modulePath = "./js/animation-guide-builder.js?v=2";
+            var modulePath = "./js/animation-guide-builder.js?v=3";
             _module = await JS.InvokeAsync<IJSObjectReference>("import", modulePath);
             _dotNetRef = DotNetObjectReference.Create(this);
             return true;
@@ -354,6 +360,7 @@
         if (string.Equals(key, _viewerKey, StringComparison.Ordinal))
         {
             await module.InvokeVoidAsync("setYaw", _viewerHost, _yaw);
+            await module.InvokeVoidAsync("setPitch", _viewerHost, _pitch);
             await module.InvokeVoidAsync("setPlaying", _viewerHost, _playing);
             return;
         }
@@ -365,6 +372,7 @@
             assetUrl,
             clip.AnimationName,
             yaw = _yaw,
+            pitch = _pitch,
             playing = _playing,
         }, dotNetRef);
     }
@@ -478,10 +486,24 @@
             await _module.InvokeVoidAsync("setYaw", _viewerHost, _yaw);
     }
 
+    private async Task OnPitchChangedAsync()
+    {
+        _pitch = NormalizePitch(_pitch);
+        InvalidateRenderedPreview();
+        if (_module is not null && _stageMode == GuideStageMode.Viewer)
+            await _module.InvokeVoidAsync("setPitch", _viewerHost, _pitch);
+    }
+
     private async Task ResetYawAsync()
     {
         _yaw = SpriteFacing.ToYawDegrees(_facing);
         await OnYawChangedAsync();
+    }
+
+    private async Task ResetPitchAsync()
+    {
+        _pitch = 0d;
+        await OnPitchChangedAsync();
     }
 
     private async Task TogglePlaybackAsync()
@@ -558,6 +580,7 @@
             _columns,
             $"{_cellWidth}x{_cellHeight}",
             _yaw,
+            _pitch,
             _loop,
             _safeMarginPercent);
 
@@ -595,10 +618,23 @@
         return Math.Round(normalized, 2);
     }
 
+    private static double NormalizePitch(double pitch) =>
+        Math.Round(Math.Clamp(pitch, -45d, 45d), 2);
+
     [JSInvokable]
     public Task OnAnimationGuideYawChanged(double yaw)
     {
         _yaw = NormalizeYaw(yaw);
+        _renderedPreviewDataUrl = string.Empty;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task OnAnimationGuideCameraChanged(double yaw, double pitch)
+    {
+        _yaw = NormalizeYaw(yaw);
+        _pitch = NormalizePitch(pitch);
         _renderedPreviewDataUrl = string.Empty;
         StateHasChanged();
         return Task.CompletedTask;

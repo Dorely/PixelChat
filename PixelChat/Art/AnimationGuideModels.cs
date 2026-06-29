@@ -16,6 +16,7 @@ public sealed record AnimationSpec(
     string? GuideRenderStyle = null,
     string? MotionClipId = null,
     double? GuideCameraYawDegrees = null,
+    double? GuideCameraPitchDegrees = null,
     string? MotionValidationProfile = null,
     string? GuideSourcePackage = null,
     string? GuideSourceLicense = null);

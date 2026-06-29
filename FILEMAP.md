@@ -63,7 +63,7 @@
 | `SpriteMotionArchetypes.cs` | Procedural motion archetype builder for unit, tower, projectile, and VFX animation guide frame specs. |
 | `SpriteGuideRenderer.cs` | Procedural PNG renderer for lightweight animation guide sheets and diagnostic guide sheets. |
 | `MotionClipCatalog.cs` | Motion clip manifest loader/resolver with shared defaults, discovery metadata, and GLTF-backed animation guide validation. |
-| `GltfMotionGuideRenderer.cs` | GLB sampler/renderer that produces mannequin motion guide sheets from cataloged Quaternius clips. |
+| `GltfMotionGuideRenderer.cs` | GLB sampler/renderer that produces yaw/pitch-adjustable mannequin motion guide sheets from cataloged Quaternius clips. |
 | `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, chat visual previews/full images, asset/frame masks, motion-clip GLB assets, legacy sprite-frame previews, and greenfield frame-set frame content/previews. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
@@ -99,7 +99,7 @@
 | File | Description |
 |------|-------------|
 | `ExportPanel.razor` / `.razor.css` | Shared export workflow panel used inline by Sprites and as the Assets export modal, including cleanup steps, local AI removal, preview backgrounds, reset, and PNG/JSON downloads. |
-| `AnimationGuideBuilderModal.razor` / `.razor.css` | Shared Assets > Guides modal for configuring guide grids, previewing GLB motion clips in 3D with yaw drag, rendering guide previews, and saving SpriteGuide assets. |
+| `AnimationGuideBuilderModal.razor` / `.razor.css` | Shared Assets > Guides modal for configuring guide grids, previewing GLB motion clips in 3D with yaw/pitch drag, rendering guide previews, and saving SpriteGuide assets. |
 | `LazyImage.razor` / `.razor.css` / `.razor.js` | IntersectionObserver-backed image component that reserves thumbnail space and assigns `src` only when near the viewport. |
 | `SpriteAnimationPreview.razor` / `.razor.js` | Reusable canvas animation preview component that plays saved sprite-frame preview images without storing a GIF artifact. |
 
@@ -262,6 +262,6 @@
 |------|-------------|
 | `app.css` | App-wide CSS from the Blazor template with PixelChat layout adjustments. |
 | `favicon.png` | Site/app icon from the Blazor template. |
-| `js/animation-guide-builder.js` | Stable static ES module for the animation guide builder's Three.js GLB viewer and yaw-drag interaction. |
+| `js/animation-guide-builder.js` | Stable static ES module for the animation guide builder's Three.js GLB viewer and yaw/pitch drag interaction. |
 | `lib/bootstrap/` | Vendored Bootstrap distribution used by first-slice UI. |
-| `lib/three/` | Vendored Three.js runtime modules used by the animation guide builder's local GLB viewer. |
+| `lib/three/` | Vendored Three.js runtime modules, including split `three.module.js`/`three.core.js`, used by the animation guide builder's local GLB viewer. |

@@ -195,10 +195,12 @@ public sealed class AssistantToolRegistry(
                 string? targetCellSize = null,
                 string? motionClipId = null,
                 string? label = null,
+                double? guideCameraYawDegrees = null,
+                double? guideCameraPitchDegrees = null,
                 CancellationToken cancellationToken = default) =>
-                GenerateAnimationGuideToolAsync(projectId, referenceAssetId, animationKind, assetType, structureType, facing, frameCount, fps, rootMotion, targetCellSize, motionClipId, label, cancellationToken),
+                GenerateAnimationGuideToolAsync(projectId, referenceAssetId, animationKind, assetType, structureType, facing, frameCount, fps, rootMotion, targetCellSize, motionClipId, label, guideCameraYawDegrees, guideCameraPitchDegrees, cancellationToken),
             name: "generate_animation_guide",
-            description: "Render and save a reusable animation guide as SpriteGuide assets. For GLTF-backed humanoid poses, call list_motion_clips first and pass the selected motionClipId. Use this before generate_sprite_sheet_candidates for animation work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
+            description: "Render and save a reusable animation guide as SpriteGuide assets. For GLTF-backed humanoid poses, call list_motion_clips first and pass the selected motionClipId. Optional guideCameraYawDegrees controls facing rotation; optional guideCameraPitchDegrees controls camera elevation from -45 to 45, where positive looks down from above. Use this before generate_sprite_sheet_candidates for animation work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
 
         AIFunctionFactory.Create(
             method: (string? status = null, int? limit = null) =>
@@ -963,6 +965,8 @@ public sealed class AssistantToolRegistry(
         string? targetCellSize,
         string? motionClipId,
         string? label,
+        double? guideCameraYawDegrees,
+        double? guideCameraPitchDegrees,
         CancellationToken cancellationToken)
     {
         var guide = await workflow.GenerateAnimationGuideAsync(projectId, new GenerateAnimationGuideRequest(
@@ -976,7 +980,9 @@ public sealed class AssistantToolRegistry(
             rootMotion,
             targetCellSize,
             motionClipId,
-            label), cancellationToken);
+            label,
+            GuideCameraYawDegrees: guideCameraYawDegrees,
+            GuideCameraPitchDegrees: guideCameraPitchDegrees), cancellationToken);
 
         return JsonSerializer.Serialize(new
         {
@@ -1007,6 +1013,8 @@ public sealed class AssistantToolRegistry(
             guide.Renderer,
             guide.RenderStyle,
             guide.MotionClipId,
+            guide.GuideCameraYawDegrees,
+            guide.GuideCameraPitchDegrees,
             guide.MotionSourcePackage,
             guide.MotionSourceLicense,
             guide.MotionSourceUrl,

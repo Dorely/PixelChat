@@ -3956,6 +3956,8 @@ public sealed class ArtWorkflowService(
             rootMotionWasRequested: !string.IsNullOrWhiteSpace(request.RootMotion));
         if (request.GuideCameraYawDegrees is double yaw)
             spec = spec with { GuideCameraYawDegrees = NormalizeYawDegrees(yaw) };
+        if (request.GuideCameraPitchDegrees is double pitch)
+            spec = spec with { GuideCameraPitchDegrees = NormalizePitchDegrees(pitch) };
         if (request.Loop is bool loop)
             spec = spec with { Loop = loop };
 
@@ -3986,6 +3988,7 @@ public sealed class ArtWorkflowService(
                     GuideRenderStyle = null,
                     MotionClipId = null,
                     GuideCameraYawDegrees = null,
+                    GuideCameraPitchDegrees = null,
                     MotionValidationProfile = null,
                     GuideSourcePackage = null,
                     GuideSourceLicense = null,
@@ -4041,6 +4044,7 @@ public sealed class ArtWorkflowService(
             draft.Layout.TargetCellWidth,
             draft.Layout.TargetCellHeight,
             draft.Spec.GuideCameraYawDegrees,
+            draft.Spec.GuideCameraPitchDegrees,
             draft.Renderer,
             draft.RenderStyle,
             draft.Spec.MotionClipId);
@@ -4086,6 +4090,7 @@ public sealed class ArtWorkflowService(
             draft.Spec.Loop,
             draft.Spec.MotionClipId,
             draft.Spec.GuideCameraYawDegrees,
+            draft.Spec.GuideCameraPitchDegrees,
             draft.Spec.GuideSourcePackage,
             draft.Spec.GuideSourceLicense,
             draft.Layout.Rows,
@@ -4160,6 +4165,8 @@ public sealed class ArtWorkflowService(
             draft.Renderer,
             draft.RenderStyle,
             draft.Spec.MotionClipId,
+            draft.Spec.GuideCameraYawDegrees,
+            draft.Spec.GuideCameraPitchDegrees,
             draft.MotionRender?.Metadata.SourcePackage ?? draft.Spec.GuideSourcePackage,
             draft.MotionRender?.Metadata.SourceLicense ?? draft.Spec.GuideSourceLicense,
             draft.MotionRender?.Metadata.SourceUrl,
@@ -5889,6 +5896,7 @@ public sealed class ArtWorkflowService(
             GuideRenderStyle = MotionClipCatalog.SkinnedMannequinRenderStyle,
             MotionClipId = clip.ClipId,
             GuideCameraYawDegrees = GltfMotionGuideRenderer.FacingToYawDegrees(spec.Facing),
+            GuideCameraPitchDegrees = 0d,
             MotionValidationProfile = "humanoid_walk",
             GuideSourcePackage = clip.SourcePackage,
             GuideSourceLicense = clip.License,
@@ -6086,7 +6094,7 @@ public sealed class ArtWorkflowService(
     private static string BuildAnimationGuidePromptScaffold(ArtAsset? reference, AnimationSpec spec, LayoutSpec layout)
     {
         var guideRole = MotionClipCatalog.IsExternalMotionSpec(spec)
-            ? $"Image 1 is a sampled mannequin motion guide from clip {spec.MotionClipId}; it controls exact slot positions, frame order, root/pivot anchors, safe margins, body pose, foot contacts, and camera yaw. Do not reproduce guide marks."
+            ? $"Image 1 is a sampled mannequin motion guide from clip {spec.MotionClipId}; it controls exact slot positions, frame order, root/pivot anchors, safe margins, body pose, foot contacts, camera yaw, and camera pitch/elevation. Do not reproduce guide marks."
             : "Image 1 is a structure guide; it controls exact slot positions, frame order, root/pivot anchors, safe margins, and motion layout. Do not reproduce guide marks.";
         var referenceRole = reference is null
             ? "Image 2, when supplied, controls the subject identity, silhouette, palette, materials, outfit, equipment, and rendering style."
@@ -6135,6 +6143,14 @@ public sealed class ArtWorkflowService(
         if (normalized < -180d)
             normalized += 360d;
         return Math.Round(normalized, 2);
+    }
+
+    private static double NormalizePitchDegrees(double pitch)
+    {
+        if (double.IsNaN(pitch) || double.IsInfinity(pitch))
+            return 0d;
+
+        return Math.Round(Math.Clamp(pitch, -45d, 45d), 2);
     }
 
     private static bool TryParseCellSize(string? value, out int width, out int height)

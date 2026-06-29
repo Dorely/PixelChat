@@ -47,6 +47,7 @@ internal static class GltfMotionGuideRenderer
         var gltf = GltfBinary.Load(assetPath);
         var samples = Sample(gltf, clip, spec.FrameCount);
         var yaw = spec.GuideCameraYawDegrees ?? FacingToYawDegrees(spec.Facing);
+        var pitch = spec.GuideCameraPitchDegrees ?? 0d;
         var metadata = new MotionGuideRenderMetadata(
             MotionClipCatalog.RendererId,
             MotionClipCatalog.SkinnedMannequinRenderStyle,
@@ -57,12 +58,13 @@ internal static class GltfMotionGuideRenderer
             clip.License,
             spec.Facing,
             yaw,
+            pitch,
             spec.FrameCount,
             clip.AssetPath);
 
         return new MotionGuideRenderResult(
-            RenderGuide(layout, clip, samples, yaw, diagnostic: false),
-            RenderGuide(layout, clip, samples, yaw, diagnostic: true),
+            RenderGuide(layout, clip, samples, yaw, pitch, diagnostic: false),
+            RenderGuide(layout, clip, samples, yaw, pitch, diagnostic: true),
             metadata,
             samples);
     }
@@ -200,11 +202,12 @@ internal static class GltfMotionGuideRenderer
         MotionClipDefinition clip,
         IReadOnlyList<MotionGuideFrameSample> samples,
         double yawDegrees,
+        double pitchDegrees,
         bool diagnostic)
     {
         var rgba = NewCanvas(layout.CanvasWidth, layout.CanvasHeight, 248, 250, 252, 255);
         var zBuffer = Enumerable.Repeat(double.NegativeInfinity, checked(layout.CanvasWidth * layout.CanvasHeight)).ToArray();
-        var projected = samples.Select(sample => Project(sample, yawDegrees)).ToList();
+        var projected = samples.Select(sample => Project(sample, yawDegrees, pitchDegrees)).ToList();
         var allPoints = projected
             .SelectMany(frame => frame.Points.Values.Concat(frame.Meshes.SelectMany(mesh => mesh.Vertices).Select(vertex => vertex.Point)))
             .ToList();
@@ -268,7 +271,7 @@ internal static class GltfMotionGuideRenderer
 
             if (diagnostic)
             {
-                var label = $"F{frame.Index + 1} {frame.TimeSeconds:0.00}S {ContactLabel(frame.Contacts)} YAW{yawDegrees:0}";
+                var label = $"F{frame.Index + 1} {frame.TimeSeconds:0.00}S {ContactLabel(frame.Contacts)} YAW{yawDegrees:0} PITCH{pitchDegrees:0}";
                 DrawText(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Rect.X + 10, slot.Rect.Y + 10, label.ToUpperInvariant(), 2, 42, 64, 88, 230);
             }
         }
@@ -279,11 +282,14 @@ internal static class GltfMotionGuideRenderer
         return SpriteSheetPngCodec.EncodeRgba(layout.CanvasWidth, layout.CanvasHeight, rgba);
     }
 
-    private static ProjectedFrame Project(MotionGuideFrameSample sample, double yawDegrees)
+    private static ProjectedFrame Project(MotionGuideFrameSample sample, double yawDegrees, double pitchDegrees)
     {
         var yaw = yawDegrees * Math.PI / 180d;
-        var cos = Math.Cos(yaw);
-        var sin = Math.Sin(yaw);
+        var yawCos = Math.Cos(yaw);
+        var yawSin = Math.Sin(yaw);
+        var pitch = pitchDegrees * Math.PI / 180d;
+        var pitchCos = Math.Cos(pitch);
+        var pitchSin = Math.Sin(pitch);
         return new ProjectedFrame(
             sample.FrameIndex,
             sample.TimeSeconds,
@@ -292,7 +298,9 @@ internal static class GltfMotionGuideRenderer
                 item =>
                 {
                     var point = item.Value;
-                    return new ProjectedPoint((point.X * cos) + (point.Z * sin), point.Y);
+                    var yawX = (point.X * yawCos) + (point.Z * yawSin);
+                    var yawDepth = (point.Z * yawCos) - (point.X * yawSin);
+                    return new ProjectedPoint(yawX, (point.Y * pitchCos) - (yawDepth * pitchSin));
                 },
                 StringComparer.OrdinalIgnoreCase),
             sample.Meshes.Select(mesh => new ProjectedMeshPrimitive(
@@ -300,11 +308,15 @@ internal static class GltfMotionGuideRenderer
                 {
                     var point = vertex.Position;
                     var normal = vertex.Normal;
+                    var yawX = (point.X * yawCos) + (point.Z * yawSin);
+                    var yawDepth = (point.Z * yawCos) - (point.X * yawSin);
+                    var normalYawDepth = (normal.Z * yawCos) - (normal.X * yawSin);
+                    var normalPitchY = (normal.Y * pitchCos) - (normalYawDepth * pitchSin);
                     return new ProjectedMeshVertex(
-                        new ProjectedPoint((point.X * cos) + (point.Z * sin), point.Y),
-                        (point.Z * cos) - (point.X * sin),
-                        (normal.Z * cos) - (normal.X * sin),
-                        normal.Y);
+                        new ProjectedPoint(yawX, (point.Y * pitchCos) - (yawDepth * pitchSin)),
+                        (yawDepth * pitchCos) + (point.Y * pitchSin),
+                        (normalYawDepth * pitchCos) + (normal.Y * pitchSin),
+                        normalPitchY);
                 }).ToArray(),
                 mesh.Indices,
                 mesh.MaterialIndex)).ToArray(),
@@ -1259,6 +1271,7 @@ internal sealed record MotionGuideRenderMetadata(
     string SourceLicense,
     string Facing,
     double CameraYawDegrees,
+    double CameraPitchDegrees,
     int SampleCount,
     string AssetPath);
 

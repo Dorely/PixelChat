@@ -1,5 +1,5 @@
-import * as THREE from "/lib/three/build/three.module.js?v=2";
-import { GLTFLoader } from "/lib/three/examples/jsm/loaders/GLTFLoader.js?v=2";
+import * as THREE from "/lib/three/build/three.module.js?v=3";
+import { GLTFLoader } from "/lib/three/examples/jsm/loaders/GLTFLoader.js?v=3";
 
 const viewers = new WeakMap();
 
@@ -42,9 +42,11 @@ export async function startViewer(host, options, dotNetRef) {
         resizeObserver: null,
         lastTime: performance.now(),
         yaw: normalizeYaw(Number(options?.yaw ?? 90)),
+        pitch: normalizePitch(Number(options?.pitch ?? 0)),
         playing: Boolean(options?.playing ?? true),
         dragging: false,
         lastX: 0,
+        lastY: 0,
         dotNetRef,
         disposed: false,
     };
@@ -65,6 +67,7 @@ export async function startViewer(host, options, dotNetRef) {
     }
 
     setYaw(host, state.yaw);
+    setPitch(host, state.pitch);
     animate(state);
 }
 
@@ -76,6 +79,16 @@ export function setYaw(host, yaw) {
 
     state.yaw = normalizeYaw(Number(yaw) || 0);
     state.pivot.rotation.y = THREE.MathUtils.degToRad(state.yaw);
+}
+
+export function setPitch(host, pitch) {
+    const state = viewers.get(host);
+    if (!state) {
+        return;
+    }
+
+    state.pitch = normalizePitch(Number(pitch) || 0);
+    updateCameraPitch(state);
 }
 
 export function setPlaying(host, playing) {
@@ -216,6 +229,7 @@ function bindPointer(state) {
     canvas.addEventListener("pointerdown", event => {
         state.dragging = true;
         state.lastX = event.clientX;
+        state.lastY = event.clientY;
         canvas.setPointerCapture?.(event.pointerId);
     });
     canvas.addEventListener("pointermove", event => {
@@ -224,10 +238,14 @@ function bindPointer(state) {
         }
 
         const delta = event.clientX - state.lastX;
+        const deltaY = event.clientY - state.lastY;
         state.lastX = event.clientX;
+        state.lastY = event.clientY;
         state.yaw = normalizeYaw(state.yaw + delta * 0.35);
+        state.pitch = normalizePitch(state.pitch - deltaY * 0.25);
         state.pivot.rotation.y = THREE.MathUtils.degToRad(state.yaw);
-        state.dotNetRef?.invokeMethodAsync("OnAnimationGuideYawChanged", state.yaw);
+        updateCameraPitch(state);
+        state.dotNetRef?.invokeMethodAsync("OnAnimationGuideCameraChanged", state.yaw, state.pitch);
     });
     const end = event => {
         if (!state.dragging) {
@@ -236,7 +254,7 @@ function bindPointer(state) {
 
         state.dragging = false;
         canvas.releasePointerCapture?.(event.pointerId);
-        state.dotNetRef?.invokeMethodAsync("OnAnimationGuideYawChanged", state.yaw);
+        state.dotNetRef?.invokeMethodAsync("OnAnimationGuideCameraChanged", state.yaw, state.pitch);
     };
     canvas.addEventListener("pointerup", end);
     canvas.addEventListener("pointercancel", end);
@@ -251,6 +269,23 @@ function normalizeYaw(yaw) {
         normalized += 360;
     }
     return Math.round(normalized * 100) / 100;
+}
+
+function normalizePitch(pitch) {
+    return Math.round(Math.max(-45, Math.min(45, pitch)) * 100) / 100;
+}
+
+function updateCameraPitch(state) {
+    const targetY = 0.9;
+    const baseHeight = 0.45;
+    const baseDistance = 4.2;
+    const pitch = THREE.MathUtils.degToRad(state.pitch);
+    state.camera.position.set(
+        0,
+        targetY + baseHeight + Math.sin(pitch) * 2.35,
+        Math.max(1.35, baseDistance * Math.cos(pitch)));
+    state.camera.lookAt(0, targetY, 0);
+    state.camera.updateProjectionMatrix();
 }
 
 function disposeObject(object) {

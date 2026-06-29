@@ -743,6 +743,7 @@ public sealed record GenerateAnimationGuideRequest(
     int? Columns = null,
     string? GuideCellSize = null,
     double? GuideCameraYawDegrees = null,
+    double? GuideCameraPitchDegrees = null,
     bool? Loop = null,
     double? SafeMarginPercent = null);
 
@@ -766,6 +767,7 @@ public sealed record AnimationGuidePreviewView(
     int TargetCellWidth,
     int TargetCellHeight,
     double? GuideCameraYawDegrees,
+    double? GuideCameraPitchDegrees,
     string Renderer,
     string RenderStyle,
     string? MotionClipId);
@@ -798,6 +800,8 @@ public sealed record AnimationGuideRenderView(
     string Renderer,
     string RenderStyle,
     string? MotionClipId,
+    double? GuideCameraYawDegrees,
+    double? GuideCameraPitchDegrees,
     string? MotionSourcePackage,
     string? MotionSourceLicense,
     string? MotionSourceUrl,
