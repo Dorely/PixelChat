@@ -84,8 +84,14 @@
                         <input type="checkbox" @bind="_loop" @bind:after="InvalidateRenderedPreview" />
                         <span>Loop</span>
                     </label>
+                    @if (!_animationEditorOpen)
+                    {
+                        <button type="button" class="btn btn-primary guide-add-animation-button" @onclick="AddAnimation">Add Animation</button>
+                    }
                 </section>
 
+                @if (_animationEditorOpen)
+                {
                 <section class="guide-control-section">
                     <div class="guide-control-title">Animation</div>
                     <label>
@@ -162,6 +168,7 @@
                     </div>
                     <button type="button" class="btn btn-outline-primary" disabled="@RenderDisabled" @onclick="RenderFramesAsync">Render Frames</button>
                 </section>
+                }
 
                 @if (!string.IsNullOrWhiteSpace(_status))
                 {
@@ -207,6 +214,8 @@
     private IReadOnlyList<MotionClipView> _motionClips = [];
     private string _viewerKey = string.Empty;
     private GuideStageMode _stageMode = GuideStageMode.Grid;
+    private bool _animationEditorOpen;
+    private bool _viewerModuleLoadFailed;
     private string _label = "Walk 8-frame guide";
     private int _frameCount = 8;
     private int _rows = 2;
@@ -258,7 +267,7 @@
             : $"{_columns} columns x {_rows} rows - {_cellWidth} x {_cellHeight}";
 
     private bool RenderDisabled =>
-        _busy || (_sourceType == "motion" && string.IsNullOrWhiteSpace(_motionClipId));
+        _busy || !_animationEditorOpen || (_sourceType == "motion" && string.IsNullOrWhiteSpace(_motionClipId));
 
     private bool FinishDisabled =>
         _busy || string.IsNullOrWhiteSpace(_renderedPreviewDataUrl);
@@ -274,14 +283,33 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        await RenderViewerIfNeededAsync();
+    }
+
+    private async Task<bool> EnsureViewerModuleAsync()
+    {
+        if (_module is not null && _dotNetRef is not null)
+            return true;
+        if (_viewerModuleLoadFailed)
+            return false;
+
+        try
         {
-            var modulePath = "/js/" + "animation-guide-builder.js";
+            var modulePath = "./js/animation-guide-builder.js?v=2";
             _module = await JS.InvokeAsync<IJSObjectReference>("import", modulePath);
             _dotNetRef = DotNetObjectReference.Create(this);
+            return true;
         }
-
-        await RenderViewerIfNeededAsync();
+        catch (JSException ex)
+        {
+            _module = null;
+            _dotNetRef?.Dispose();
+            _dotNetRef = null;
+            _viewerModuleLoadFailed = true;
+            _error = $"The 3D viewer module could not load: {ex.Message}";
+            await InvokeAsync(StateHasChanged);
+            return false;
+        }
     }
 
     private RenderFragment RenderGridPreview() => __builder =>
@@ -307,30 +335,38 @@
 
     private async Task RenderViewerIfNeededAsync()
     {
-        if (_module is null || _dotNetRef is null || _stageMode != GuideStageMode.Viewer)
+        if (_stageMode != GuideStageMode.Viewer)
             return;
 
         var clip = SelectedMotionClip();
         if (clip is null)
             return;
 
+        if (!await EnsureViewerModuleAsync())
+            return;
+
+        var module = _module;
+        var dotNetRef = _dotNetRef;
+        if (module is null || dotNetRef is null)
+            return;
+
         var key = $"{clip.MotionClipId}|{clip.AnimationName}";
         if (string.Equals(key, _viewerKey, StringComparison.Ordinal))
         {
-            await _module.InvokeVoidAsync("setYaw", _viewerHost, _yaw);
-            await _module.InvokeVoidAsync("setPlaying", _viewerHost, _playing);
+            await module.InvokeVoidAsync("setYaw", _viewerHost, _yaw);
+            await module.InvokeVoidAsync("setPlaying", _viewerHost, _playing);
             return;
         }
 
         _viewerKey = key;
         var assetUrl = $"/media/motion-clips/{Uri.EscapeDataString(clip.MotionClipId)}/asset";
-        await _module.InvokeVoidAsync("startViewer", _viewerHost, new
+        await module.InvokeVoidAsync("startViewer", _viewerHost, new
         {
             assetUrl,
             clip.AnimationName,
             yaw = _yaw,
             playing = _playing,
-        }, _dotNetRef);
+        }, dotNetRef);
     }
 
     private void OnGridChanged()
@@ -352,7 +388,23 @@
         _renderedPreviewDataUrl = string.Empty;
         _status = string.Empty;
         if (_stageMode == GuideStageMode.Rendered)
-            _stageMode = _sourceType == "motion" && !string.IsNullOrWhiteSpace(_motionClipId) ? GuideStageMode.Viewer : GuideStageMode.Grid;
+            _stageMode = _animationEditorOpen && _sourceType == "motion" && !string.IsNullOrWhiteSpace(_motionClipId)
+                ? GuideStageMode.Viewer
+                : GuideStageMode.Grid;
+    }
+
+    private void AddAnimation()
+    {
+        _animationEditorOpen = true;
+        _status = string.Empty;
+        _error = null;
+        if (_sourceType == "motion" && string.IsNullOrWhiteSpace(_motionClipId) && _motionClips.FirstOrDefault() is { } clip)
+            ApplyMotionClip(clip, switchToViewer: false);
+
+        _stageMode = _sourceType == "motion" && !string.IsNullOrWhiteSpace(_motionClipId)
+            ? GuideStageMode.Viewer
+            : GuideStageMode.Grid;
+        _viewerKey = string.Empty;
     }
 
     private void OnLabelChanged(ChangeEventArgs args)
@@ -379,7 +431,9 @@
     {
         _sourceType = args.Value?.ToString() == "procedural" ? "procedural" : "motion";
         InvalidateRenderedPreview();
-        _stageMode = _sourceType == "motion" && !string.IsNullOrWhiteSpace(_motionClipId) ? GuideStageMode.Viewer : GuideStageMode.Grid;
+        _stageMode = _animationEditorOpen && _sourceType == "motion" && !string.IsNullOrWhiteSpace(_motionClipId)
+            ? GuideStageMode.Viewer
+            : GuideStageMode.Grid;
         _viewerKey = string.Empty;
     }
 
@@ -387,7 +441,7 @@
     {
         _motionClipId = args.Value?.ToString() ?? string.Empty;
         if (SelectedMotionClip() is { } clip)
-            ApplyMotionClip(clip, switchToViewer: true);
+            ApplyMotionClip(clip, switchToViewer: _animationEditorOpen);
         else
             _stageMode = GuideStageMode.Grid;
     }
@@ -404,7 +458,7 @@
         _columns = SuggestedColumns(_frameCount);
         _rows = Math.Max(1, (int)Math.Ceiling(_frameCount / (double)_columns));
         _label = $"{clip.DisplayName.Replace("Quaternius UAL2 ", string.Empty, StringComparison.Ordinal)} {_frameCount}-frame guide";
-        _stageMode = switchToViewer ? GuideStageMode.Viewer : GuideStageMode.Grid;
+        _stageMode = _animationEditorOpen && switchToViewer ? GuideStageMode.Viewer : GuideStageMode.Grid;
         _viewerKey = string.Empty;
         InvalidateRenderedPreview();
     }

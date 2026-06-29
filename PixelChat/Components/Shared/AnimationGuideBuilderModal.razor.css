@@ -247,6 +247,10 @@
     height: 1rem;
 }
 
+.guide-add-animation-button {
+    width: 100%;
+}
+
 .guide-viewer-actions {
     display: flex;
     flex-wrap: wrap;

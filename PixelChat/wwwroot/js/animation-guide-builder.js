@@ -1,5 +1,5 @@
-import * as THREE from "/lib/three/build/three.module.js";
-import { GLTFLoader } from "/lib/three/examples/jsm/loaders/GLTFLoader.js";
+import * as THREE from "/lib/three/build/three.module.js?v=2";
+import { GLTFLoader } from "/lib/three/examples/jsm/loaders/GLTFLoader.js?v=2";
 
 const viewers = new WeakMap();
 
