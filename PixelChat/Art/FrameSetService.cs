@@ -1,13 +1,17 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using PixelChat.Models;
 using PixelChat.Persistence;
 
 namespace PixelChat.Art;
 
 /// <inheritdoc />
-public sealed class FrameSetService(AppDbContext db) : IFrameSetService
+public sealed class FrameSetService(
+    AppDbContext db,
+    IImageProvider imageProvider,
+    IOptions<ImageGenerationOptions> imageOptions) : IFrameSetService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -520,6 +524,270 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
         await TouchProjectAsync(projectId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+    }
+
+    public async Task<FrameSetView> EditFrameAsync(
+        Guid projectId,
+        EditFrameRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var prompt = (request.Prompt ?? string.Empty).Trim();
+        if (prompt.Length == 0)
+            throw new InvalidOperationException("Frame edit prompt is required.");
+
+        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
+        var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == request.FrameId, cancellationToken)
+            ?? throw new InvalidOperationException("Frame was not found.");
+        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
+        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
+        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
+        var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
+        var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+        var cellPng = SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, cellRgba);
+
+        var options = imageOptions.Value;
+        var backgroundMode = NormalizeBackgroundMode(request.Background);
+        var providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
+            prompt,
+            NormalizeSize(options.DefaultSize),
+            1,
+            options.DefaultMainlineModel,
+            options.DefaultImageModel,
+            new ImageProviderReference($"frame-{frame.Index + 1}.png", "image/png", cellPng),
+            Mask: null,
+            ReferenceImages: [],
+            OutputFormat: "png",
+            Quality: options.DefaultQuality,
+            Background: backgroundMode), cancellationToken);
+        var image = providerResult.Images.FirstOrDefault()
+            ?? throw new InvalidOperationException("Image provider completed without returning a frame image.");
+        if (!SpriteSheetPngCodec.TryReadRgba(image.Data, out var editedWidth, out var editedHeight, out var editedRgba))
+            throw new InvalidOperationException("Image provider returned a non-PNG frame image.");
+
+        var now = DateTime.UtcNow;
+        StoreEditedCellWorkingImage(frame, editedRgba, editedWidth, editedHeight, cellWidth, cellHeight, now);
+        frameSet.UpdatedAt = now;
+        await TouchProjectAsync(projectId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+    }
+
+    public async Task<FrameSetView> EraseFrameRegionsAsync(
+        Guid projectId,
+        EraseFrameRegionsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
+        var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == request.FrameId, cancellationToken)
+            ?? throw new InvalidOperationException("Frame was not found.");
+        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
+        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
+        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
+        var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
+        var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+
+        var result = SpriteSheetServerRenderer.EraseRegions(
+            cellRgba,
+            cellWidth,
+            cellHeight,
+            background,
+            request.Rects ?? [],
+            request.Polygons,
+            request.KeepSelection);
+        if (!SpriteSheetPngCodec.TryReadRgba(result.PngData, out var erasedWidth, out var erasedHeight, out var erasedRgba))
+            throw new InvalidOperationException("Frame erase produced an unreadable image.");
+
+        var now = DateTime.UtcNow;
+        StoreEditedCellWorkingImage(frame, erasedRgba, erasedWidth, erasedHeight, cellWidth, cellHeight, now);
+        frameSet.UpdatedAt = now;
+        await TouchProjectAsync(projectId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+    }
+
+    public async Task<FrameSetView> ComposeFrameSetFromAssetsAsync(
+        Guid projectId,
+        ComposeFrameSetFromAssetsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = (request.AssetIds ?? [])
+            .Where(id => id != Guid.Empty)
+            .ToList();
+        if (ids.Count == 0)
+            throw new InvalidOperationException("Provide at least one image asset to compose into a frame set.");
+
+        var assets = await db.ArtAssets
+            .Where(a => a.ProjectId == projectId && ids.Contains(a.Id))
+            .ToListAsync(cancellationToken);
+        var ordered = ids
+            .Select(id => assets.FirstOrDefault(a => a.Id == id))
+            .Where(a => a is not null)
+            .Cast<ArtAsset>()
+            .ToList();
+        if (ordered.Count == 0)
+            throw new InvalidOperationException("None of the requested assets were found.");
+
+        var decoded = new List<(ArtAsset Asset, int Width, int Height, byte[] Rgba)>();
+        foreach (var asset in ordered)
+        {
+            if (!ImageRgbaDecoder.TryReadRgba(asset, out var width, out var height, out var rgba))
+                throw new InvalidOperationException($"Asset '{asset.Label}' is not a readable image.");
+            decoded.Add((asset, width, height, rgba));
+        }
+
+        var cellWidth = decoded.Max(item => Math.Max(1, item.Width));
+        var cellHeight = decoded.Max(item => Math.Max(1, item.Height));
+        var columns = decoded.Count;
+        var sheetWidth = checked(columns * cellWidth);
+        var sheetHeight = cellHeight;
+        ValidateCanvasSize(sheetWidth, sheetHeight, "Composed sprite sheet is too large.");
+
+        var background = SpriteSheetImageAnalyzer.ResolveBackground(decoded[0].Rgba, decoded[0].Width, decoded[0].Height);
+        var sheetRgba = BuildOpaqueCell(sheetWidth, sheetHeight, background);
+        for (var index = 0; index < decoded.Count; index++)
+        {
+            var item = decoded[index];
+            var offsetX = (index * cellWidth) + Math.Max(0, (cellWidth - item.Width) / 2);
+            var offsetY = Math.Max(0, cellHeight - item.Height);
+            BlitInto(sheetRgba, sheetWidth, sheetHeight, item.Rgba, item.Width, item.Height, offsetX, offsetY);
+        }
+
+        var now = DateTime.UtcNow;
+        var name = string.IsNullOrWhiteSpace(request.Name) ? "Composed sprite sheet" : request.Name.Trim();
+        var sheetAsset = new ArtAsset
+        {
+            ProjectId = projectId,
+            Label = name,
+            FileName = $"composed-{now:yyyyMMddHHmmss}.png",
+            Kind = ArtAssetKind.SpriteSheet,
+            ContentType = "image/png",
+            Data = SpriteSheetPngCodec.EncodeRgba(sheetWidth, sheetHeight, sheetRgba),
+            Width = sheetWidth,
+            Height = sheetHeight,
+            SourceMetadataJson = "{}",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        await db.ArtAssets.AddAsync(sheetAsset, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        var regionRequests = new List<SourceRegionEditRequest>();
+        for (var index = 0; index < decoded.Count; index++)
+        {
+            regionRequests.Add(new SourceRegionEditRequest(
+                Id: null,
+                Name: decoded[index].Asset.Label,
+                X: index * cellWidth,
+                Y: 0,
+                Width: cellWidth,
+                Height: cellHeight,
+                ShapePaths: null,
+                RegionType: "frame",
+                Order: index));
+        }
+
+        var regions = await SaveSourceRegionsAsync(projectId, new SaveSourceRegionsRequest(sheetAsset.Id, regionRequests), cancellationToken);
+        return await CreateFrameSetFromRegionsAsync(
+            projectId,
+            new CreateFrameSetFromRegionsRequest(sheetAsset.Id, regions.Select(region => region.Id).ToList(), name),
+            cancellationToken);
+    }
+
+    public async Task<FrameSetAnimationReviewView> BuildAnimationReviewAsync(
+        Guid projectId,
+        Guid frameSetId,
+        int maxFrames = 12,
+        CancellationToken cancellationToken = default)
+    {
+        var frameSet = await LoadFrameSetAsync(projectId, frameSetId, cancellationToken);
+        var frames = OrderFrames(frameSet, await LoadFramesAsync(projectId, frameSet.Id, cancellationToken)).ToList();
+        if (frames.Count == 0)
+            throw new InvalidOperationException("The frame set has no frames to review.");
+
+        var frameLimit = Math.Clamp(maxFrames <= 0 ? 12 : maxFrames, 1, 24);
+        var limited = frames.Take(frameLimit).ToList();
+        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
+        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
+        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+
+        var cellWidth = Math.Max(1, limited.Max(frame => frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth));
+        var cellHeight = Math.Max(1, limited.Max(frame => frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight));
+        var columns = limited.Count;
+        var sheetWidth = checked(columns * cellWidth);
+        var sheetHeight = cellHeight;
+        ValidateCanvasSize(sheetWidth, sheetHeight, "Animation review sheet is too large.");
+
+        var sheetRgba = BuildOpaqueCell(sheetWidth, sheetHeight, background);
+        var updates = new List<SpriteSheetFrameUpdateView>();
+        for (var index = 0; index < limited.Count; index++)
+        {
+            var frame = limited[index];
+            var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+            BlitInto(sheetRgba, sheetWidth, sheetHeight, cellRgba, cellWidth, cellHeight, index * cellWidth, 0);
+            updates.Add(new SpriteSheetFrameUpdateView(
+                index,
+                frame.Name,
+                new SpriteSheetRect(index * cellWidth, 0, cellWidth, cellHeight),
+                [],
+                null,
+                null));
+        }
+
+        const bool loop = true;
+        var reviewRender = SpriteSheetServerRenderer.BuildAnimationReview(
+            sheetRgba,
+            sheetWidth,
+            sheetHeight,
+            1,
+            columns,
+            cellWidth,
+            cellHeight,
+            0,
+            0,
+            "center",
+            "bottom",
+            background,
+            updates,
+            loop,
+            frameLimit);
+        var metrics = SpriteSheetImageAnalyzer.ComputeMotionMetrics(reviewRender.MetricFrames, background, loop);
+        var images = reviewRender.Images
+            .Select(image => new SpriteAnimationReviewImageView(
+                image.Label,
+                image.FileName,
+                "image/png",
+                DataUrl.ToDataUrl("image/png", image.PngData),
+                image.Kind,
+                image.FrameIndex,
+                image.FromFrame,
+                image.ToFrame))
+            .ToList();
+
+        for (var index = 0; index < limited.Count; index++)
+        {
+            var frame = limited[index];
+            if (frame.WorkingData.Length == 0)
+                continue;
+
+            var sourceCell = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight, ignoreWorking: true);
+            var workingCell = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+            var overlay = SpriteSheetServerRenderer.RenderRemovedPixelsOverlay(sourceCell, background, workingCell, background, cellWidth, cellHeight);
+            images.Add(new SpriteAnimationReviewImageView(
+                $"Frame {index + 1} removed pixels vs source (red = erased from source foreground)",
+                $"frame-{index + 1}-removed-vs-source.png",
+                "image/png",
+                DataUrl.ToDataUrl("image/png", overlay.PngData),
+                "sourceDiff",
+                index,
+                null,
+                null));
+        }
+
+        var averageDuration = limited.Average(frame => Math.Max(1, frame.DurationMs));
+        var fps = Math.Clamp((int)Math.Round(1000d / averageDuration, MidpointRounding.AwayFromZero), 1, 60);
+        return new FrameSetAnimationReviewView(frameSet.Id, limited.Count, 1, columns, fps, loop, metrics, images);
     }
 
     public async Task<FrameSetView> AlignFramesAsync(
@@ -1347,9 +1615,11 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
         Frame frame,
         byte[] sourceRgba,
         int sourceWidth,
-        int sourceHeight)
+        int sourceHeight,
+        bool ignoreWorking = false)
     {
-        if (frame.WorkingData.Length > 0
+        if (!ignoreWorking
+            && frame.WorkingData.Length > 0
             && SpriteSheetPngCodec.TryReadRgba(frame.WorkingData, out var workingW, out var workingH, out var workingRgba))
         {
             return (workingRgba, workingW, workingH);
@@ -1366,13 +1636,14 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
         int sourceHeight,
         SpriteSheetBackground background,
         int? forcedWidth = null,
-        int? forcedHeight = null)
+        int? forcedHeight = null,
+        bool ignoreWorking = false)
     {
         var cellWidth = Math.Max(1, forcedWidth ?? (frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth));
         var cellHeight = Math.Max(1, forcedHeight ?? (frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight));
         var cell = BuildOpaqueCell(cellWidth, cellHeight, background);
-        var (contentRgba, contentWidth, contentHeight) = FrameContentPixels(frame, sourceRgba, sourceWidth, sourceHeight);
-        var copyWholeCell = frame.WorkingData.Length > 0 && contentWidth == cellWidth && contentHeight == cellHeight;
+        var (contentRgba, contentWidth, contentHeight) = FrameContentPixels(frame, sourceRgba, sourceWidth, sourceHeight, ignoreWorking);
+        var copyWholeCell = !ignoreWorking && frame.WorkingData.Length > 0 && contentWidth == cellWidth && contentHeight == cellHeight;
         BlitInto(
             cell,
             cellWidth,
@@ -1384,6 +1655,41 @@ public sealed class FrameSetService(AppDbContext db) : IFrameSetService
             copyWholeCell ? 0 : frame.ContentOffsetY);
         return cell;
     }
+
+    private static void StoreEditedCellWorkingImage(
+        Frame frame,
+        byte[] rgba,
+        int width,
+        int height,
+        int cellWidth,
+        int cellHeight,
+        DateTime now)
+    {
+        var cell = (width == cellWidth && height == cellHeight)
+            ? rgba
+            : ResizeNearest(rgba, width, height, cellWidth, cellHeight);
+        frame.WorkingData = SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, cell);
+        frame.WorkingContentType = "image/png";
+        frame.WorkingWidth = cellWidth;
+        frame.WorkingHeight = cellHeight;
+        frame.WorkingMargin = 0;
+        frame.WorkingState = "edited";
+        frame.WorkingUpdatedAt = now;
+        frame.ContentOffsetX = 0;
+        frame.ContentOffsetY = 0;
+        frame.UpdatedAt = now;
+    }
+
+    private static string NormalizeBackgroundMode(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "removable" or "removablecolor" or "removable-color" or "transparent" or "chroma" or "chromakey" or "chroma-key" => "removable",
+            "auto" => "auto",
+            _ => "opaque",
+        };
+
+    private static string NormalizeSize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "auto" : value.Trim();
 
     private static (int Row, int Column) SheetSlot(int ordinal, int rows, int columns, string ordering) =>
         ordering == "columnMajor"

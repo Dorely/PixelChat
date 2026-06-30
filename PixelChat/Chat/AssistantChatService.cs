@@ -18,6 +18,7 @@ public sealed class AssistantChatService(
     IChatClientFactory chatClientFactory,
     AssistantToolRegistry toolRegistry,
     IArtWorkflowService workflow,
+    IFrameSetService frameSets,
     IChatTokenEstimator tokenEstimator,
     IOptions<AgentOptions> agentOptions,
     ILogger<AssistantChatService> logger) : IAssistantChatService
@@ -923,6 +924,13 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "generate_animation_guide", StringComparison.Ordinal))
                 return await BuildAnimationGuideModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
+            if (string.Equals(pendingCall.Name, "review_frame_set_animation", StringComparison.Ordinal))
+                return await BuildFrameSetAnimationReviewModelOnlyContentsAsync(pendingCall, projectId, cancellationToken);
+
+            if (string.Equals(pendingCall.Name, "edit_frame", StringComparison.Ordinal)
+                || string.Equals(pendingCall.Name, "erase_frame_regions", StringComparison.Ordinal))
+                return await BuildEditedFrameModelOnlyContentsAsync(pendingCall, projectId, cancellationToken);
+
             if (IsSpriteFrameWorkingImageTool(pendingCall.Name))
                 return await BuildSpriteFrameWorkingModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
@@ -1078,6 +1086,62 @@ public sealed class AssistantChatService(
         }
 
         return contents;
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildFrameSetAnimationReviewModelOnlyContentsAsync(
+        PendingToolCall pendingCall,
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        Guid resolved;
+        if (ReadGuidArgument(pendingCall, "frameSetId") is Guid frameSetId && frameSetId != Guid.Empty)
+        {
+            resolved = frameSetId;
+        }
+        else
+        {
+            var active = await frameSets.GetActiveFrameSetAsync(projectId, cancellationToken);
+            if (active is null)
+                return Array.Empty<AIContent>();
+            resolved = active.Id;
+        }
+
+        var review = await frameSets.BuildAnimationReviewAsync(projectId, resolved, ReadIntArgument(pendingCall, "maxFrames") ?? 12, cancellationToken);
+        var contents = new List<AIContent>
+        {
+            new TextContent($"Model-only images: animation-quality review for FrameSet {resolved}. Filenames identify the sheet view, ordered frames, pairwise diffs, onion-skin, filmstrip, and removed-vs-source overlays for edited/erased frames (red marks pixels erased from the source foreground - check them for clipped owned silhouette before declaring the animation clean). These images are not attached to visible chat context."),
+        };
+        foreach (var image in review.Images)
+        {
+            contents.Add(new DataContent(image.DataUrl, image.ContentType)
+            {
+                Name = image.FileName,
+            });
+        }
+
+        return contents;
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildEditedFrameModelOnlyContentsAsync(
+        PendingToolCall pendingCall,
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        if (ReadGuidArgument(pendingCall, "frameId") is not Guid frameId || frameId == Guid.Empty)
+            return Array.Empty<AIContent>();
+
+        var image = await frameSets.GetFrameContentImageAsync(projectId, frameId, cancellationToken);
+        if (image is null)
+            return Array.Empty<AIContent>();
+
+        return
+        [
+            new TextContent($"Model-only image: working pixels for frame {frameId} after the edit. This image is not attached to visible chat context."),
+            new DataContent(DataUrl.ToDataUrl(image.Value.ContentType, image.Value.Data), image.Value.ContentType)
+            {
+                Name = $"frame-{frameId:N}-working.png",
+            },
+        ];
     }
 
     private async Task<IReadOnlyList<AIContent>> BuildAnimationGuideModelOnlyContentsAsync(

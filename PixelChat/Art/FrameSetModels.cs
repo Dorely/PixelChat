@@ -206,6 +206,35 @@ public sealed record BuildSheetResult(
     string ManifestJson,
     IReadOnlyList<string> Warnings);
 
+public sealed record EraseFrameRegionsRequest(
+    Guid FrameSetId,
+    Guid FrameId,
+    IReadOnlyList<SpriteSheetRect> Rects,
+    IReadOnlyList<SpriteSheetShapePath>? Polygons = null,
+    bool KeepSelection = false);
+
+public sealed record EditFrameRequest(
+    Guid FrameSetId,
+    Guid FrameId,
+    string Prompt,
+    string? Background = null);
+
+public sealed record ComposeFrameSetFromAssetsRequest(
+    IReadOnlyList<Guid> AssetIds,
+    string? Name = null);
+
+// Greenfield animation-quality review over a FrameSet's built one-row sheet. Reuses the
+// shared SpriteAnimationMetricsView/SpriteAnimationReviewImageView review records.
+public sealed record FrameSetAnimationReviewView(
+    Guid FrameSetId,
+    int FrameCount,
+    int Rows,
+    int Columns,
+    int Fps,
+    bool Loop,
+    SpriteAnimationMetricsView Metrics,
+    IReadOnlyList<SpriteAnimationReviewImageView> Images);
+
 public sealed record SpriteEditSessionCrop(
     int EditSourceWidth,
     int EditSourceHeight,

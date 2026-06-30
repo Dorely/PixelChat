@@ -162,6 +162,27 @@ public sealed class SpriteWorkspaceActionService(
         return view;
     }
 
+    public async Task<FrameSetView> EditFrameAsync(Guid projectId, EditFrameRequest request, CancellationToken cancellationToken = default)
+    {
+        var view = await frameSets.EditFrameAsync(projectId, request, cancellationToken);
+        await FocusFrameSetAsync(projectId, view, request.FrameId, cancellationToken);
+        return view;
+    }
+
+    public async Task<FrameSetView> EraseFrameRegionsAsync(Guid projectId, EraseFrameRegionsRequest request, CancellationToken cancellationToken = default)
+    {
+        var view = await frameSets.EraseFrameRegionsAsync(projectId, request, cancellationToken);
+        await FocusFrameSetAsync(projectId, view, request.FrameId, cancellationToken);
+        return view;
+    }
+
+    public async Task<FrameSetView> ComposeFrameSetFromAssetsAsync(Guid projectId, ComposeFrameSetFromAssetsRequest request, CancellationToken cancellationToken = default)
+    {
+        var view = await frameSets.ComposeFrameSetFromAssetsAsync(projectId, request, cancellationToken);
+        await FocusFrameSetAsync(projectId, view, SelectedFrameId(view), cancellationToken);
+        return view;
+    }
+
     public async Task<FrameSetView> ReorderFrameAsync(Guid projectId, Guid frameSetId, Guid frameId, int targetIndex, CancellationToken cancellationToken = default)
     {
         var view = await frameSets.ReorderFrameAsync(projectId, frameSetId, frameId, targetIndex, cancellationToken);
