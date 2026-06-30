@@ -4154,27 +4154,35 @@ public sealed class ArtWorkflowService(
             animationRecipeVersion: null,
             draft.PromptScaffold,
             metadata);
-        var diagnostic = CreateAsset(
-            projectId,
-            $"{draft.Label} diagnostic",
-            $"{fileStem}-diagnostic.png",
-            ArtAssetKind.SpriteGuide,
-            "image/png",
-            draft.DiagnosticPng,
-            guide.Id,
-            sourceBatchId: null,
-            promptRecipeId: null,
-            promptRecipeVersion: null,
-            animationRecipeId: null,
-            animationRecipeVersion: null,
-            draft.PromptScaffold,
-            metadata);
-        await db.ArtAssets.AddRangeAsync([guide, diagnostic], cancellationToken);
+        ArtAsset? diagnostic = null;
+        if (draft.Renderer != "layout_box_guide")
+        {
+            diagnostic = CreateAsset(
+                projectId,
+                $"{draft.Label} diagnostic",
+                $"{fileStem}-diagnostic.png",
+                ArtAssetKind.SpriteGuide,
+                "image/png",
+                draft.DiagnosticPng,
+                guide.Id,
+                sourceBatchId: null,
+                promptRecipeId: null,
+                promptRecipeVersion: null,
+                animationRecipeId: null,
+                animationRecipeVersion: null,
+                draft.PromptScaffold,
+                metadata);
+        }
+
+        if (diagnostic is null)
+            await db.ArtAssets.AddAsync(guide, cancellationToken);
+        else
+            await db.ArtAssets.AddRangeAsync([guide, diagnostic], cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
 
         return new AnimationGuideRenderView(
             guide.Id,
-            diagnostic.Id,
+            diagnostic?.Id ?? guide.Id,
             guide.Label,
             draft.Spec.AnimationKind,
             draft.Spec.AssetType,
@@ -6167,12 +6175,12 @@ public sealed class ArtWorkflowService(
         Render a {spec.FrameCount}-frame sprite-sheet grid as a {layout.Columns} column by {layout.Rows} row layout.
 
         INPUT ROLES
-        Image 1 is a labeled layout guide. It controls exact frame order, slot positions, frame boxes, safe margins, and per-frame boundaries. It does not define a specific pose, action, or motion cycle.
+        Image 1 is a labeled wireframe layout guide. Its dark outer rectangles and numbered tabs identify the exact render box for each frame; its dashed inner rectangles identify the safe region. It controls exact frame order, slot positions, frame boxes, safe margins, and per-frame boundaries. It does not define a specific pose, action, or motion cycle.
         {referenceRole}
         Optional later references may control art style, but the layout guide remains the only frame placement guide.
 
         LAYOUT CONTRACT
-        Read frame order left-to-right across each row, then lower rows. Put exactly one complete sprite frame inside each numbered frame box. Keep each subject fully inside that frame's safe region and keep apparent scale, camera, and style stable across frames.
+        Read frame order left-to-right across each row, then lower rows. Put exactly one complete sprite frame inside each numbered dark-bordered render box, not merely anywhere in the larger grid slot. Keep each subject fully inside that frame's dashed safe region and keep apparent scale, camera, and style stable across frames.
 
         OUTPUT CONTRACT
         Exactly {spec.FrameCount} complete frames, one subject per cell, no text, no labels, no borders, no extra poses, no overlap between cells, no cropping.

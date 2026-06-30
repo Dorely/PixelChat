@@ -23,20 +23,21 @@ internal static class SpriteGuideRenderer
 
     public static byte[] RenderLayoutOnly(LayoutSpec layout, bool diagnostic = false)
     {
-        var background = ParseHexColor(layout.BackgroundColor) ?? (R: (byte)255, G: (byte)0, B: (byte)255);
-        var rgba = NewCanvas(layout.CanvasWidth, layout.CanvasHeight, background.R, background.G, background.B, 255);
+        var rgba = NewCanvas(layout.CanvasWidth, layout.CanvasHeight, 248, 250, 252, 255);
         var activeSlots = layout.Slots.ToDictionary(slot => slot.FrameIndex);
         var slotCount = Math.Max(layout.Rows * layout.Columns, activeSlots.Count);
         for (var index = 0; index < slotCount; index++)
         {
             var gridSlot = CellRectForGuideGrid(index, layout.Columns, layout.Rows, layout.CanvasWidth, layout.CanvasHeight);
-            DrawRect(rgba, layout.CanvasWidth, layout.CanvasHeight, gridSlot, 42, 64, 88, diagnostic ? (byte)235 : (byte)185, 2);
+            FillRect(rgba, layout.CanvasWidth, layout.CanvasHeight, gridSlot, 255, 255, 255, 45);
+            DrawRect(rgba, layout.CanvasWidth, layout.CanvasHeight, gridSlot, 17, 24, 39, diagnostic ? (byte)235 : (byte)185, 2);
             if (!activeSlots.TryGetValue(index, out var slot))
                 continue;
 
-            DrawRect(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Rect, 255, 255, 255, diagnostic ? (byte)255 : (byte)235, 2);
-            DrawRect(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.SafeRect, 255, 255, 255, diagnostic ? (byte)235 : (byte)185, 1);
-            DrawLabel(rgba, layout.CanvasWidth, layout.CanvasHeight, gridSlot.X + 10, gridSlot.Y + 10, index + 1, gridSlot.Width, diagnostic);
+            FillRect(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Rect, 226, 232, 240, diagnostic ? (byte)70 : (byte)42);
+            DrawRect(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Rect, 15, 23, 42, diagnostic ? (byte)255 : (byte)235, 3);
+            DrawDashedRect(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.SafeRect, 71, 85, 105, diagnostic ? (byte)230 : (byte)190, 2, 12, 8);
+            DrawLabelBadge(rgba, layout.CanvasWidth, layout.CanvasHeight, slot.Rect, index + 1, diagnostic);
         }
 
         return SpriteSheetPngCodec.EncodeRgba(layout.CanvasWidth, layout.CanvasHeight, rgba);
@@ -133,30 +134,86 @@ internal static class SpriteGuideRenderer
         return new SpriteSheetRect(x0, y0, Math.Max(1, x1 - x0), Math.Max(1, y1 - y0));
     }
 
-    private static (byte R, byte G, byte B)? ParseHexColor(string? value)
+    private static void FillRect(byte[] rgba, int width, int height, SpriteSheetRect rect, byte r, byte g, byte b, byte a)
     {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        var text = value.Trim();
-        if (text.StartsWith('#'))
-            text = text[1..];
-        if (text.Length != 6)
-            return null;
-
-        return byte.TryParse(text[..2], System.Globalization.NumberStyles.HexNumber, null, out var r)
-            && byte.TryParse(text[2..4], System.Globalization.NumberStyles.HexNumber, null, out var g)
-            && byte.TryParse(text[4..6], System.Globalization.NumberStyles.HexNumber, null, out var b)
-            ? (r, g, b)
-            : null;
+        var x0 = Math.Clamp(rect.X, 0, width);
+        var y0 = Math.Clamp(rect.Y, 0, height);
+        var x1 = Math.Clamp(rect.X + rect.Width, 0, width);
+        var y1 = Math.Clamp(rect.Y + rect.Height, 0, height);
+        for (var y = y0; y < y1; y++)
+        {
+            for (var x = x0; x < x1; x++)
+                Blend(rgba, width, height, x, y, r, g, b, a);
+        }
     }
 
-    private static void DrawLabel(byte[] rgba, int width, int height, int x, int y, int frameNumber, int slotWidth, bool diagnostic)
+    private static void DrawDashedRect(
+        byte[] rgba,
+        int width,
+        int height,
+        SpriteSheetRect rect,
+        byte r,
+        byte g,
+        byte b,
+        byte a,
+        int thickness,
+        int dash,
+        int gap)
     {
-        var scale = Math.Clamp(slotWidth / 90, 2, 5);
+        DrawDashedLine(rgba, width, height, rect.X, rect.Y, rect.X + rect.Width - 1, rect.Y, r, g, b, a, thickness, dash, gap);
+        DrawDashedLine(rgba, width, height, rect.X, rect.Y + rect.Height - 1, rect.X + rect.Width - 1, rect.Y + rect.Height - 1, r, g, b, a, thickness, dash, gap);
+        DrawDashedLine(rgba, width, height, rect.X, rect.Y, rect.X, rect.Y + rect.Height - 1, r, g, b, a, thickness, dash, gap);
+        DrawDashedLine(rgba, width, height, rect.X + rect.Width - 1, rect.Y, rect.X + rect.Width - 1, rect.Y + rect.Height - 1, r, g, b, a, thickness, dash, gap);
+    }
+
+    private static void DrawDashedLine(
+        byte[] rgba,
+        int width,
+        int height,
+        int x1,
+        int y1,
+        int x2,
+        int y2,
+        byte r,
+        byte g,
+        byte b,
+        byte a,
+        int thickness,
+        int dash,
+        int gap)
+    {
+        var dx = x2 - x1;
+        var dy = y2 - y1;
+        var steps = Math.Max(Math.Abs(dx), Math.Abs(dy));
+        if (steps <= 0)
+            return;
+
+        var period = Math.Max(1, dash + gap);
+        for (var step = 0; step <= steps; step++)
+        {
+            if (step % period >= dash)
+                continue;
+
+            var x = x1 + (int)Math.Round(dx * (step / (double)steps));
+            var y = y1 + (int)Math.Round(dy * (step / (double)steps));
+            DrawCircle(rgba, width, height, x, y, Math.Max(1, thickness), r, g, b, a);
+        }
+    }
+
+    private static void DrawLabelBadge(byte[] rgba, int width, int height, SpriteSheetRect frameRect, int frameNumber, bool diagnostic)
+    {
+        var scale = Math.Clamp(frameRect.Width / 92, 3, 7);
         var text = frameNumber.ToString("00", System.Globalization.CultureInfo.InvariantCulture);
-        DrawText(rgba, width, height, x + scale, y + scale, text, scale, 42, 24, 60, diagnostic ? (byte)210 : (byte)165);
-        DrawText(rgba, width, height, x, y, text, scale, 255, 255, 255, 255);
+        var glyphWidth = (3 * 2 + 1) * scale;
+        var glyphHeight = 5 * scale;
+        var paddingX = 4 * scale;
+        var paddingY = 3 * scale;
+        var badgeWidth = Math.Min(frameRect.Width, glyphWidth + (paddingX * 2));
+        var badgeHeight = Math.Min(frameRect.Height, glyphHeight + (paddingY * 2));
+        var badge = new SpriteSheetRect(frameRect.X, frameRect.Y, badgeWidth, badgeHeight);
+        FillRect(rgba, width, height, badge, 15, 23, 42, diagnostic ? (byte)245 : (byte)230);
+        DrawRect(rgba, width, height, badge, 255, 255, 255, diagnostic ? (byte)245 : (byte)220, 1);
+        DrawText(rgba, width, height, badge.X + paddingX, badge.Y + paddingY, text, scale, 255, 255, 255, 255);
     }
 
     private static void DrawText(byte[] rgba, int width, int height, int x, int y, string text, int scale, byte r, byte g, byte b, byte a)

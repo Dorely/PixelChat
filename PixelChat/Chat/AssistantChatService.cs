@@ -1092,13 +1092,17 @@ public sealed class AssistantChatService(
 
         var contents = new List<AIContent>();
         var guide = await workflow.GetAssetForExportAsync(projectId, guideAssetId, cancellationToken);
-        contents.Add(new TextContent($"Model-only images returned by generate_animation_guide for SpriteGuide asset '{guide.Label}' ({guide.Id}). Use the guide asset first in sprite-sheet generation references; the diagnostic guide is for inspection only."));
+        var hasSeparateDiagnostic = TryReadGuidProperty(root, "diagnosticGuideAssetId", out var diagnosticGuideAssetId)
+            && diagnosticGuideAssetId != guideAssetId;
+        contents.Add(new TextContent(hasSeparateDiagnostic
+            ? $"Model-only images returned by generate_animation_guide for SpriteGuide asset '{guide.Label}' ({guide.Id}). Use the guide asset first in sprite-sheet generation references; the diagnostic guide is for inspection only."
+            : $"Model-only image returned by generate_animation_guide for SpriteGuide asset '{guide.Label}' ({guide.Id}). Use the guide asset first in sprite-sheet generation references."));
         contents.Add(new DataContent(guide.DataUrl, guide.ContentType)
         {
             Name = guide.FileName,
         });
 
-        if (TryReadGuidProperty(root, "diagnosticGuideAssetId", out var diagnosticGuideAssetId))
+        if (hasSeparateDiagnostic)
         {
             var diagnostic = await workflow.GetAssetForExportAsync(projectId, diagnosticGuideAssetId, cancellationToken);
             contents.Add(new DataContent(diagnostic.DataUrl, diagnostic.ContentType)
@@ -1623,6 +1627,7 @@ public sealed class AssistantChatService(
                 }
 
                 if (TryReadGuidProperty(root, "diagnosticGuideAssetId", out var diagnosticGuideAssetId)
+                    && diagnosticGuideAssetId != guideAssetId
                     && await TryCreateAssetVisualDraftAsync(
                         projectId,
                         diagnosticGuideAssetId,
