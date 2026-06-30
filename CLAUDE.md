@@ -7,10 +7,6 @@
 - Do not assume everything in `VISION.md` is implemented or currently part of the implementation plan. Use the codebase to confirm current behavior.
 - Keep this file (`AGENTS.md`) stable and high level. Do not add notes here that are likely to become stale during normal development.
 
-## Agent Behavior
-- Do not plan work in multiple "Phases"; all work from all plans should be expected to be completed autonomously without further user interaction and should be planned that way from the beginning.
-- When planning, always explain the decisions you made for why the plan is the way that it is.
-
 ## File Map Maintenance
 - After adding, deleting, or renaming any source file, update `FILEMAP.md` to reflect the change.
 - When refactoring moves code between files or changes a file's responsibility, update the description in `FILEMAP.md`.
@@ -52,4 +48,5 @@ dotnet run --project PixelChat -- --electron
 - When you need to understand current wiring, start with `FILEMAP.md`, then the relevant feature area.
 - Trace each requested change through its full impact area before considering the work complete. Changes to models, contracts, or core concepts should include all affected layers such as persistence, services, UI, and documentation.
 - Remove superseded code and concepts when replacing them. Do not leave deprecated pages, components, handlers, prompts, queries, or other logic in place just because the new path works; clean out obsolete implementations and reduce unnecessary complexity.
+- Before any work you must ALWAYS look to see how this code should be properly incorporated into the existing codebase to avoid code or concept duplication. Always think about how your maintainable and editable your implementation will be and aim for code that does not need to be refactored later.
 - This is a local development project. When a requested change replaces a concept, remove the superseded implementation outright; do not add or retain compatibility shims, legacy handlers/fallbacks, deprecated tool aliases, or dual paths unless the user explicitly asks for a transition path.
