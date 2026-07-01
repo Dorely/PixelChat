@@ -151,12 +151,6 @@ public sealed record SetCommonCellSizeRequest(
     int Width = 0,
     int Height = 0);
 
-public sealed record AlignFramesRequest(
-    Guid FrameSetId,
-    string Anchor = "feet",
-    bool AxisX = true,
-    bool AxisY = true);
-
 public sealed record AlignFramesByAnchorRectRequest(
     Guid FrameSetId,
     Guid ReferenceFrameId,

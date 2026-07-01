@@ -790,61 +790,6 @@ public sealed class FrameSetService(
         return new FrameSetAnimationReviewView(frameSet.Id, limited.Count, 1, columns, fps, loop, metrics, images);
     }
 
-    public async Task<FrameSetView> AlignFramesAsync(
-        Guid projectId,
-        AlignFramesRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
-        var frames = await LoadFramesAsync(projectId, frameSet.Id, cancellationToken);
-        if (frames.Count == 0)
-            throw new InvalidOperationException("The frame set has no frames to align.");
-
-        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var anchorName = NormalizeAnchor(request.Anchor);
-        var frameIds = frames.Select(f => f.Id).ToList();
-        var existingAnchors = await db.Anchors
-            .Where(a => a.ProjectId == projectId && a.Name == anchorName && frameIds.Contains(a.FrameId))
-            .ToListAsync(cancellationToken);
-        db.Anchors.RemoveRange(existingAnchors);
-
-        var now = DateTime.UtcNow;
-        foreach (var frame in frames)
-        {
-            var (contentRgba, contentWidth, contentHeight) = FrameContentPixels(frame, sourceRgba, sourceWidth, sourceHeight);
-            var background = SpriteSheetImageAnalyzer.ResolveBackground(contentRgba, contentWidth, contentHeight);
-            var bounds = SpriteSheetImageAnalyzer.ForegroundBounds(contentRgba, contentWidth, contentHeight, background)
-                ?? new SpriteSheetRect(0, 0, contentWidth, contentHeight);
-            var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
-            var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
-            var (anchorX, anchorY) = ComputeAnchorPoint(anchorName, bounds);
-            var (targetX, targetY) = ComputeAnchorTarget(anchorName, cellWidth, cellHeight);
-
-            frame.ContentOffsetX = request.AxisX ? targetX - anchorX : frame.ContentOffsetX;
-            frame.ContentOffsetY = request.AxisY ? targetY - anchorY : frame.ContentOffsetY;
-            frame.UpdatedAt = now;
-
-            await db.Anchors.AddAsync(new Anchor
-            {
-                ProjectId = projectId,
-                FrameId = frame.Id,
-                Name = anchorName,
-                X = frame.ContentOffsetX + anchorX,
-                Y = frame.ContentOffsetY + anchorY,
-                Confidence = 1d,
-                Source = "detected",
-                CreatedAt = now,
-                UpdatedAt = now,
-            }, cancellationToken);
-        }
-
-        frameSet.UpdatedAt = now;
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
-    }
-
     public async Task<AnchorAlignmentResult> AlignFramesByAnchorRectAsync(
         Guid projectId,
         AlignFramesByAnchorRectRequest request,
@@ -1751,37 +1696,6 @@ public sealed class FrameSetService(
 
     private static string NormalizeOrdering(string? value) =>
         string.Equals(value?.Trim(), "columnMajor", StringComparison.OrdinalIgnoreCase) ? "columnMajor" : "rowMajor";
-
-    private static string NormalizeAnchor(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
-        {
-            "root" or "bottom" => "bottom",
-            "center" or "centre" => "center",
-            "top" => "top",
-            "left" => "left",
-            "right" => "right",
-            _ => "feet",
-        };
-
-    private static (int X, int Y) ComputeAnchorPoint(string anchor, SpriteSheetRect bounds) =>
-        anchor switch
-        {
-            "center" => (bounds.X + (bounds.Width / 2), bounds.Y + (bounds.Height / 2)),
-            "top" => (bounds.X + (bounds.Width / 2), bounds.Y),
-            "left" => (bounds.X, bounds.Y + (bounds.Height / 2)),
-            "right" => (bounds.X + bounds.Width, bounds.Y + (bounds.Height / 2)),
-            _ => (bounds.X + (bounds.Width / 2), bounds.Y + bounds.Height),
-        };
-
-    private static (int X, int Y) ComputeAnchorTarget(string anchor, int cellWidth, int cellHeight) =>
-        anchor switch
-        {
-            "center" => (cellWidth / 2, cellHeight / 2),
-            "top" => (cellWidth / 2, 0),
-            "left" => (0, cellHeight / 2),
-            "right" => (cellWidth, cellHeight / 2),
-            _ => (cellWidth / 2, cellHeight),
-        };
 
     private static byte[] BuildOpaqueCell(int width, int height, SpriteSheetBackground background)
     {

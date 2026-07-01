@@ -47,7 +47,6 @@ public interface ISpriteWorkspaceActionService
     Task<FrameSetView> DeleteFrameAsync(Guid projectId, Guid frameSetId, Guid frameId, CancellationToken cancellationToken = default);
     Task<FrameSetView> SetFrameDurationAsync(Guid projectId, Guid frameSetId, Guid frameId, int durationMs, CancellationToken cancellationToken = default);
     Task<FrameSetView> SetFrameOnionSkinVisibilityAsync(Guid projectId, Guid frameSetId, Guid frameId, bool hideFromOnionSkin, CancellationToken cancellationToken = default);
-    Task<FrameSetView> AlignFramesAsync(Guid projectId, AlignFramesRequest request, CancellationToken cancellationToken = default);
     Task<AnchorAlignmentResult> AlignFramesByAnchorRectAsync(Guid projectId, AlignFramesByAnchorRectRequest request, CancellationToken cancellationToken = default);
     Task<ImageMaskView> UpsertFrameMaskAsync(Guid projectId, UpsertFrameMaskRequest request, CancellationToken cancellationToken = default);
     Task ClearFrameMaskAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);

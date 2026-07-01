@@ -59,7 +59,7 @@ public sealed class AssistantToolRegistry(
         "reorder_frame",
         "delete_frame",
         "set_frame_duration",
-        "align_frames",
+        "auto_anchor_align_frames",
         "upsert_frame_mask",
         "clear_frame_mask",
         "erase_frame_regions",
@@ -376,7 +376,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 TranslateFrameContentAsync(projectId, frameSetId, frameId, contentOffsetX, contentOffsetY, cancellationToken),
             name: "translate_frame_content",
-            description: "Greenfield Frames pipeline: set one frame's artwork offset inside its logical cell and update the visible Sprites workspace. Use this for alignment nudges; it does not change source bounds."),
+            description: "Greenfield Frames pipeline: manually nudge one frame by setting its artwork offset inside the logical cell, then update the visible Sprites workspace. Use this after auto-anchor review when one or a few frames still drift; it does not change source bounds."),
 
         AIFunctionFactory.Create(
             method: (Guid frameSetId, CancellationToken cancellationToken = default) =>
@@ -423,23 +423,27 @@ public sealed class AssistantToolRegistry(
                 int outerMargin = 0,
                 string ordering = "rowMajor",
                 string horizontalAnchor = "center",
-                string verticalAnchor = "bottom",
+                string verticalAnchor = "middle",
                 string? name = null,
                 CancellationToken cancellationToken = default) =>
                 BuildSheetAsync(projectId, frameSetId, rows, columns, padding, gutter, outerMargin, ordering, horizontalAnchor, verticalAnchor, name, cancellationToken),
             name: "build_sheet",
-            description: "Greenfield Sheet pipeline: reassemble a FrameSet into a deterministic, opaque sprite-sheet project asset with equal cells, persist a linked per-frame placement manifest (BuiltSheet), and update the visible Sprites workspace to Sheet. Pass columns 0 to auto-fit. The sheet stays opaque; transparency is Export-only. Returns the output asset id, grid, cell size, and manifest."),
+            description: "Greenfield Sheet pipeline: reassemble a FrameSet into a deterministic, opaque sprite-sheet project asset with equal cells, persist a linked per-frame placement manifest (BuiltSheet), and update the visible Sprites workspace to Sheet. Pass columns 0 to auto-fit. Default placement is center/middle; use bottom only when the animation clearly needs grounded or base alignment. The sheet stays opaque; transparency is Export-only. Returns the output asset id, grid, cell size, and manifest."),
 
         AIFunctionFactory.Create(
             method: (
                 Guid frameSetId,
-                string anchor = "feet",
+                Guid referenceFrameId,
+                SpriteSheetRect anchorRect,
+                int searchPadding = 24,
+                double minScore = 0.68d,
                 bool axisX = true,
                 bool axisY = true,
+                bool apply = true,
                 CancellationToken cancellationToken = default) =>
-                AlignFramesAsync(projectId, frameSetId, anchor, axisX, axisY, cancellationToken),
-            name: "align_frames",
-            description: "Greenfield Frames pipeline: deterministically align every frame inside its equal logical cell by a detected content anchor (feet | bottom | center | top | left | right), then update the visible Sprites workspace. Detects each frame's visible-content bounds, sets the anchor, and renders aligned opaque cell images. Use axisX/axisY to preserve intentional motion on one axis. Run build_sheet afterward. Prefer this over generation for jitter/alignment."),
+                AutoAnchorAlignFramesAsync(projectId, frameSetId, referenceFrameId, anchorRect, searchPadding, minScore, axisX, axisY, apply, cancellationToken),
+            name: "auto_anchor_align_frames",
+            description: "Greenfield Frames pipeline: align frames by template-matching a small, distinctive anchor detail chosen from a reference frame. anchorRect is required and is in the reference frame's local content-pixel coordinates, not source-sheet or logical-cell coordinates. Pick a detail repeated across every frame, favor stable center-mass details when possible, avoid broad bounding boxes/generic content centers, and inspect the returned scores/deltas before trusting the result. Use axisX/axisY to preserve intentional motion on one axis. If only a few frames still drift after review, use translate_frame_content for manual nudges. Run build_sheet afterward."),
 
         AIFunctionFactory.Create(
             method: (
@@ -1294,16 +1298,49 @@ public sealed class AssistantToolRegistry(
         return SerializeFrameSet(view, "Frame duration updated.");
     }
 
-    private async Task<string> AlignFramesAsync(
+    private async Task<string> AutoAnchorAlignFramesAsync(
         Guid projectId,
         Guid frameSetId,
-        string anchor,
+        Guid referenceFrameId,
+        SpriteSheetRect anchorRect,
+        int searchPadding,
+        double minScore,
         bool axisX,
         bool axisY,
+        bool apply,
         CancellationToken cancellationToken)
     {
-        var view = await spriteActions.AlignFramesAsync(projectId, new AlignFramesRequest(frameSetId, anchor, axisX, axisY), cancellationToken);
-        return SerializeFrameSet(view, $"Frames aligned by {anchor}.");
+        var result = await spriteActions.AlignFramesByAnchorRectAsync(projectId, new AlignFramesByAnchorRectRequest(
+            frameSetId,
+            referenceFrameId,
+            anchorRect,
+            searchPadding,
+            minScore,
+            axisX,
+            axisY,
+            apply), cancellationToken);
+
+        using var frameSetDocument = JsonDocument.Parse(SerializeFrameSet(result.FrameSet, null));
+        var frameSet = frameSetDocument.RootElement.Clone();
+        var lowConfidenceCount = result.Matches.Count(match => match.LowConfidence);
+        return JsonSerializer.Serialize(new
+        {
+            frameSet,
+            result.ReferenceFrameId,
+            result.AnchorRect,
+            result.SearchPadding,
+            result.MinScore,
+            AxisX = axisX,
+            AxisY = axisY,
+            result.Applied,
+            MatchCount = result.Matches.Count,
+            LowConfidenceCount = lowConfidenceCount,
+            result.Matches,
+            result.Warnings,
+            message = result.Applied
+                ? "Auto-anchor alignment applied. Review the animation and nudge any drifting frames."
+                : "Auto-anchor alignment previewed. Review diagnostics before applying or choosing a better anchor.",
+        }, JsonOptions);
     }
 
     private async Task<string> UpsertFrameMaskAsync(
@@ -1792,7 +1829,8 @@ public sealed class AssistantToolRegistry(
         {
             "top" => "top",
             "middle" or "center" => "middle",
-            _ => "bottom",
+            "bottom" => "bottom",
+            _ => "middle",
         };
 
     private static string? NormalizeBackground(string? value) =>

@@ -216,13 +216,6 @@ public sealed class SpriteWorkspaceActionService(
         return view;
     }
 
-    public async Task<FrameSetView> AlignFramesAsync(Guid projectId, AlignFramesRequest request, CancellationToken cancellationToken = default)
-    {
-        var view = await frameSets.AlignFramesAsync(projectId, request, cancellationToken);
-        await FocusFrameSetAsync(projectId, view, SelectedFrameId(view), cancellationToken);
-        return view;
-    }
-
     public async Task<AnchorAlignmentResult> AlignFramesByAnchorRectAsync(Guid projectId, AlignFramesByAnchorRectRequest request, CancellationToken cancellationToken = default)
     {
         var result = await frameSets.AlignFramesByAnchorRectAsync(projectId, request, cancellationToken);

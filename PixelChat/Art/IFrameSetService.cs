@@ -23,7 +23,6 @@ public interface IFrameSetService
     Task<FrameSetView> EraseFrameRegionsAsync(Guid projectId, EraseFrameRegionsRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> ComposeFrameSetFromAssetsAsync(Guid projectId, ComposeFrameSetFromAssetsRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetAnimationReviewView> BuildAnimationReviewAsync(Guid projectId, Guid frameSetId, int maxFrames = 12, CancellationToken cancellationToken = default);
-    Task<FrameSetView> AlignFramesAsync(Guid projectId, AlignFramesRequest request, CancellationToken cancellationToken = default);
     Task<AnchorAlignmentResult> AlignFramesByAnchorRectAsync(Guid projectId, AlignFramesByAnchorRectRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> GetFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken = default);
     Task<BuildSheetResult> BuildSheetAsync(Guid projectId, BuildSheetRequest request, CancellationToken cancellationToken = default);
