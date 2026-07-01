@@ -4,6 +4,13 @@ namespace PixelChat.Art;
 // FrameSet/Frame/SheetLayout/BuiltSheet entities and reuse the existing pixel engines
 // (SpriteSheetImageAnalyzer / SpriteSheetServerRenderer / SpriteSheetPngCodec).
 
+// Neutral per-frame input for the canvas animation preview component. Decoupled from any
+// sprite-sheet/frame-set entity so the preview can play any ordered image sequence.
+public sealed record AnimationPreviewFrame(
+    string Url,
+    string Label,
+    int DurationMs);
+
 public sealed record FrameView(
     Guid Id,
     Guid? SourceRegionId,

@@ -6,7 +6,6 @@ public class Project
     public required string Name { get; set; }
     public WorkspaceMode ActiveWorkspaceMode { get; set; } = WorkspaceMode.Generate;
     public Guid? ActiveBatchId { get; set; }
-    public Guid? ActiveSpriteSheetId { get; set; }
     public Guid? ActiveFrameSetId { get; set; }
     public string ActiveSpriteMode { get; set; } = "source";
     public Guid? ActiveSpriteSourceAssetId { get; set; }
@@ -22,8 +21,6 @@ public class Project
     public ICollection<AnimationRecipe> AnimationRecipes { get; set; } = [];
     public ICollection<AnimationRecipeVersion> AnimationRecipeVersions { get; set; } = [];
     public ICollection<RecipeAssetAttachment> RecipeAssetAttachments { get; set; } = [];
-    public ICollection<SpriteSheetDefinition> SpriteSheets { get; set; } = [];
-    public ICollection<SpriteSheetFrameRecord> SpriteSheetFrameRecords { get; set; } = [];
     public ICollection<SpriteRegion> SpriteRegions { get; set; } = [];
     public ICollection<StandaloneAsset> StandaloneAssets { get; set; } = [];
     public ICollection<FrameSet> FrameSets { get; set; } = [];
@@ -42,9 +39,10 @@ public class Project
 public enum WorkspaceMode
 {
     Generate,
-    Compare,
+    Review,
     Edit,
     Sprites,
     Recipes,
-    Assets
+    Assets,
+    Batches
 }

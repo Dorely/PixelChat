@@ -103,7 +103,7 @@
 | `ExportPanel.razor` / `.razor.css` | Shared export workflow panel used inline by Sprites and as the Assets export modal, including cleanup steps, local AI removal, preview backgrounds, reset, and PNG/JSON downloads. |
 | `AnimationGuideBuilderModal.razor` / `.razor.css` | Shared Assets > Guides modal for configuring guide grids, previewing GLB motion clips in 3D with yaw/pitch drag, rendering guide previews, and saving SpriteGuide assets. |
 | `LazyImage.razor` / `.razor.css` / `.razor.js` | IntersectionObserver-backed image component that reserves thumbnail space and assigns `src` only when near the viewport. |
-| `SpriteAnimationPreview.razor` / `.razor.js` | Reusable canvas animation preview component that plays saved sprite-frame preview images without storing a GIF artifact. |
+| `SpriteAnimationPreview.razor` / `.razor.js` | Reusable canvas animation preview component that plays any ordered image sequence from a neutral `AnimationPreviewFrame` list (url/label/durationMs) plus fps/loop, with no GIF artifact. |
 
 ### Components/Chat/
 
@@ -125,7 +125,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, chat attachments/inline visuals, Review UI, recipe-aware Generate/Edit, Sprites, art/animation recipe editors, guide-aware Assets tabs, canvas helpers, and exports. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, chat attachments/inline visuals, Generate (with inline latest-batch outputs), a Batches history tab, a greenfield Review tab (curated asset/recipe/frame/FrameSet-animation items the agent shows the user), Edit, Sprites, art/animation recipe editors, guide-aware Assets tabs, canvas helpers, and exports. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, thinking modes, defaults, API-key updates, and child model rows. |
@@ -175,8 +175,6 @@
 | `PromptRecipe.cs` | EF entity backing reusable art recipe prompts with private notes, version history, and ordered example/guide attachments. |
 | `PromptRecipeVersion.cs` | EF entity for append-only art recipe name/prompt/notes snapshots used by user/assistant saves and restore. |
 | `RecipeAssetAttachment.cs` | EF entity for ordered art/animation recipe asset attachments with example or guide roles. |
-| `SpriteSheetDefinition.cs` | EF entity for row-based sprite-sheet definitions linking immutable source assets to mutable working sprite-sheet assets plus layout, background fill, stabilization metadata, FPS, and loop defaults. |
-| `SpriteSheetFrameRecord.cs` | EF entity for durable sprite frame records, source/output rectangles, per-frame source-image provenance, pivots/timing/root offsets, previews, hidden working-frame PNGs, labels, dimensions, and timestamps. (Legacy sprite model; being replaced by the greenfield FrameSet/Frame entities.) |
 | `SpriteRegion.cs` | Greenfield EF entity for a source-image region (rect/polygon, type, order) that stays linked to source pixels and can be extracted as an asset or turned into frames. |
 | `StandaloneAsset.cs` | Greenfield EF entity linking an extracted region to its output `ArtAsset` (kind `Extracted`) with logical size, content offset, source link, and a deferred bitmap-revision pointer. |
 | `FrameSet.cs` | Greenfield EF entity (replaces `SpriteSheetDefinition` as the frame owner) holding ordered frames, default cell size, playback/alignment settings, and child sheet layouts. |
@@ -188,7 +186,7 @@
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets or greenfield frames, including owner and coordinate-space metadata. |
 | `SpriteEditSession.cs` | EF entity for one pending project-scoped Sprites edit modal session, including target, batch/candidate ownership, prompt/count, crop transform, and overlay selection state. |
 | `ChatContextAttachment.cs` | EF entity for persistent visible chat attachments referencing assets, masks, crops, recipes, or batches. |
-| `CompareReviewSet.cs` | EF entities backing the project-scoped Review set and ordered review items referencing assets, batches, sprite sheets, animations, or frames. |
+| `CompareReviewSet.cs` | EF entities backing the project-scoped Review set and ordered greenfield review items referencing assets, art/animation recipes, greenfield frames, or FrameSet animations. |
 | `AssistantConversation.cs` | EF entity for project-scoped persistent assistant conversations. |
 | `AssistantMessage.cs` | EF entity and enums for transcript messages, tool roles, tool-call manifests, visual attachments, roles, statuses, and errors. |
 | `AssistantMessageVisual.cs` | EF entity for transcript-linked user/tool visuals with source references, optional image bytes/thumbnails, metadata, and ordering. |
@@ -241,6 +239,7 @@
 | `20260626234709_ChatMessageVisualsRemoveActivity.cs` / `.Designer.cs` | EF migration adding assistant message visuals, dropping Activity tables, and normalizing old `Runs` workspace mode values. |
 | `20260627061347_AnimationRecipeGenerationUsage.cs` / `.Designer.cs` | EF migration adding nullable animation recipe/version provenance to generation batches and generated/derived assets. |
 | `20260628063511_SimplifyRecipesAndAttachments.cs` / `.Designer.cs` | EF migration simplifying art/animation recipes to named prompts and notes, adding typed recipe asset attachments, and backfilling old example/guide references. |
+| `20260701072209_SpriteSheetLegacyRemovalAndReviewRework.cs` / `.Designer.cs` | EF migration dropping the legacy `SpriteSheetDefinitions`/`SpriteSheetFrameRecords` tables and `Projects.ActiveSpriteSheetId`, renaming the persisted `Compare` workspace mode to `Review`, and deleting review items of removed kinds. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

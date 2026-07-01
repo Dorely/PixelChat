@@ -32,9 +32,9 @@ public class CompareReviewSetItem
 
 public enum CompareReviewItemKind
 {
-    Asset,
-    GenerationBatch,
-    SpriteSheet,
-    SpriteAnimation,
-    SpriteFrame
+    Asset = 0,
+    ArtRecipe = 5,
+    AnimationRecipe = 6,
+    Frame = 7,
+    Animation = 8,
 }

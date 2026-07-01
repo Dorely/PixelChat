@@ -42,7 +42,8 @@ public sealed record WorkspaceVisibleStateSnapshot(
     IReadOnlyList<ChatContextAttachmentView> ChatAttachments,
     WorkspaceGenerateVisibleState? Generate,
     WorkspaceEditVisibleState? Edit,
-    WorkspaceCompareVisibleState? Compare,
+    WorkspaceReviewVisibleState? Review,
+    WorkspaceBatchesVisibleState? Batches,
     WorkspaceSpritesVisibleState? Sprites,
     WorkspaceRecipeVisibleState? Recipes,
     WorkspaceAssetsVisibleState? Assets,
@@ -73,13 +74,14 @@ public sealed record WorkspaceEditVisibleState(
     string EditorTool,
     int BrushSize);
 
-public sealed record WorkspaceCompareVisibleState(
-    WorkspaceBatchSummary? ActiveBatch,
-    IReadOnlyList<WorkspaceBatchSummary> VisibleRecentBatches,
+public sealed record WorkspaceReviewVisibleState(
     WorkspaceCompareReviewSetSummary? ReviewSet);
 
+public sealed record WorkspaceBatchesVisibleState(
+    WorkspaceBatchSummary? ActiveBatch,
+    IReadOnlyList<WorkspaceBatchSummary> VisibleRecentBatches);
+
 public sealed record WorkspaceSpritesVisibleState(
-    WorkspaceSpriteSheetSummary? ActiveSpriteSheet = null,
     WorkspaceFrameSetSummary? ActiveFrameSet = null,
     WorkspaceAssetSummary? SourceAsset = null,
     IReadOnlyList<WorkspaceSpriteRegionSummary>? SelectedRegions = null,
@@ -203,25 +205,6 @@ public sealed record WorkspaceCompareReviewItemSummary(
     string Label,
     string Notes,
     int SortOrder);
-
-public sealed record WorkspaceSpriteSheetSummary(
-    Guid Id,
-    Guid SourceAssetId,
-    Guid? WorkingAssetId,
-    string Label,
-    int Rows,
-    int Columns,
-    int CellWidth,
-    int CellHeight,
-    int Padding,
-    int Gutter,
-    int Fps,
-    bool Loop,
-    string HorizontalAnchor,
-    string VerticalAnchor,
-    SpriteSheetBackground Background,
-    int FrameCount,
-    DateTime UpdatedAt);
 
 public sealed record WorkspaceFrameSetSummary(
     Guid Id,

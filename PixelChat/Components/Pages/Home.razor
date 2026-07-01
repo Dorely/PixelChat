@@ -12,6 +12,7 @@
 @implements IAsyncDisposable
 @inject IArtWorkflowService Workflow
 @inject ISpriteWorkspaceActionService SpriteActions
+@inject IFrameSetService FrameSets
 @inject IAssistantChatService ChatService
 @inject IWorkspaceChatRuntime ChatRuntime
 @inject IWorkspaceVisibleStateStore VisibleState
@@ -51,7 +52,8 @@ else
 
             <nav class="mode-tabs" aria-label="Workspace mode">
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Generate)" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">Generate</button>
-                <button type="button" class="@ModeButtonClass(WorkspaceMode.Compare)" @onclick="() => SetModeAsync(WorkspaceMode.Compare)">Review</button>
+                <button type="button" class="@ModeButtonClass(WorkspaceMode.Batches)" @onclick="() => SetModeAsync(WorkspaceMode.Batches)">Batches</button>
+                <button type="button" class="@ModeButtonClass(WorkspaceMode.Review)" @onclick="() => SetModeAsync(WorkspaceMode.Review)">Review</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Edit)" @onclick="() => SetModeAsync(WorkspaceMode.Edit)">Edit</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Sprites)" @onclick="() => SetModeAsync(WorkspaceMode.Sprites)">Sprites</button>
                 <button type="button" class="@ModeButtonClass(WorkspaceMode.Recipes)" @onclick="() => SetModeAsync(WorkspaceMode.Recipes)">Recipes</button>
@@ -103,8 +105,11 @@ else
                     case WorkspaceMode.Generate:
                         @RenderGenerateWorkspace()
                         break;
-                    case WorkspaceMode.Compare:
-                        @RenderCompareWorkspace()
+                    case WorkspaceMode.Batches:
+                        @RenderBatchesWorkspace()
+                        break;
+                    case WorkspaceMode.Review:
+                        @RenderReviewWorkspace()
                         break;
                     case WorkspaceMode.Edit:
                         @RenderEditWorkspace()
@@ -329,7 +334,46 @@ else
         _recipeAttachments.RemoveAll(attachment => !_workbench.Assets.Any(asset => asset.Id == attachment.AssetId));
         _animationRecipeAttachments.RemoveAll(attachment => !_workbench.Assets.Any(asset => asset.Id == attachment.AssetId));
         await RefreshRecipeEditorAfterWorkbenchReloadAsync();
+        await LoadReviewFrameSetsAsync();
         PublishVisibleState();
+    }
+
+    private readonly Dictionary<Guid, FrameSetView> _reviewFrameSets = [];
+
+    private async Task LoadReviewFrameSetsAsync()
+    {
+        _reviewFrameSets.Clear();
+        var animationIds = _workbench?.CompareReviewSet?.Items
+            .Where(item => item.Kind == CompareReviewItemKind.Animation)
+            .Select(item => item.RefId)
+            .Distinct()
+            .ToList() ?? [];
+        foreach (var frameSetId in animationIds)
+        {
+            try
+            {
+                _reviewFrameSets[frameSetId] = await FrameSets.GetFrameSetAsync(_workbench!.Project.Id, frameSetId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not load review FrameSet {FrameSetId}.", frameSetId);
+            }
+        }
+    }
+
+    private IReadOnlyList<AnimationPreviewFrame> FrameSetPreviewFrames(FrameSetView set) =>
+        set.Frames
+            .OrderBy(frame => frame.Index)
+            .Select(frame => new AnimationPreviewFrame(
+                $"/media/projects/{_workbench!.Project.Id:D}/frame-set-frames/{frame.Id:D}/preview",
+                frame.Name,
+                frame.DurationMs))
+            .ToList();
+
+    private static int FrameSetFps(FrameSetView set)
+    {
+        var average = set.Frames.Count == 0 ? 125 : set.Frames.Average(frame => Math.Max(1, frame.DurationMs));
+        return Math.Clamp((int)Math.Round(1000d / average, MidpointRounding.AwayFromZero), 1, 60);
     }
 
     private async Task ReloadChatAsync()
@@ -551,68 +595,31 @@ else
                     </div>
                 }
             </div>
+
+            @if (_workbench.ActiveBatch is not null)
+            {
+                <div class="section-title">Latest batch</div>
+                @RenderBatchOutputs(_workbench.ActiveBatch)
+            }
         </div>
     };
 
-    private RenderFragment RenderCompareWorkspace() => __builder =>
+    private RenderFragment RenderBatchesWorkspace() => __builder =>
     {
         var activeBatch = _workbench!.ActiveBatch;
-        var outputAssetsByIndex = new Dictionary<int, ArtAssetView>();
-        var outputErrorsByIndex = new Dictionary<int, GenerationOutputErrorView>();
-        var outputStatesByIndex = new Dictionary<int, GenerationOutputStateView>();
-        var runtimeOutputsByIndex = new Dictionary<int, ImageGenerationOutputRuntimeView>();
-
-        if (activeBatch is not null)
-        {
-            outputAssetsByIndex = activeBatch.OutputAssetIds
-                .Select(assetId => _workbench.Assets.FirstOrDefault(asset => asset.Id == assetId))
-                .OfType<ArtAssetView>()
-                .Select((asset, fallbackIndex) => new
-                {
-                    Asset = asset,
-                    OutputIndex = asset.BatchOutputIndex ?? fallbackIndex,
-                })
-                .Where(item => item.OutputIndex >= 0 && item.OutputIndex < activeBatch.Count)
-                .GroupBy(item => item.OutputIndex)
-                .ToDictionary(
-                    group => group.Key,
-                    group => group
-                        .OrderByDescending(item => item.Asset.CreatedAt)
-                        .First()
-                        .Asset);
-            outputErrorsByIndex = activeBatch.OutputErrors
-                .Where(error => error.OutputIndex >= 0 && error.OutputIndex < activeBatch.Count)
-                .GroupBy(error => error.OutputIndex)
-                .ToDictionary(group => group.Key, group => group.Last());
-            outputStatesByIndex = activeBatch.OutputStates
-                .Where(state => state.OutputIndex >= 0 && state.OutputIndex < activeBatch.Count)
-                .GroupBy(state => state.OutputIndex)
-                .ToDictionary(group => group.Key, group => group.Last());
-            runtimeOutputsByIndex = _generationRuntimeSnapshot.Batches
-                .FirstOrDefault(batch => batch.BatchId == activeBatch.Id)
-                ?.Outputs
-                .Where(output => output.OutputIndex >= 0 && output.OutputIndex < activeBatch.Count)
-                .GroupBy(output => output.OutputIndex)
-                .ToDictionary(group => group.Key, group => group.Last())
-                ?? [];
-        }
-
         <div class="workspace-panel compare-panel">
             <div class="panel-head">
                 <div>
-                    <h1>Review</h1>
+                    <h1>Batches</h1>
                     <span>@(activeBatch?.Label ?? "No active batch")</span>
                 </div>
                 @if (activeBatch is not null)
                 {
                     <div class="panel-actions">
-                        <button type="button" class="btn btn-outline-secondary" @onclick="() => AddBatchToReviewAsync(activeBatch)">Add to Review</button>
                         <button type="button" class="btn btn-outline-secondary" @onclick="() => SetModeAsync(WorkspaceMode.Generate)">New Batch</button>
                     </div>
                 }
             </div>
-
-            @RenderCompareReviewSet()
 
             @if (activeBatch is null)
             {
@@ -620,57 +627,12 @@ else
             }
             else
             {
-                <div class="batch-summary">
-                    <span>@activeBatch.Status</span>
-                    <span>@activeBatch.ImageModel</span>
-                    <span>@activeBatch.Size</span>
-                    <span>@BackgroundLabel(activeBatch.Background)</span>
-                    <span>@activeBatch.Count image(s)</span>
-                </div>
-                <p class="batch-prompt">@activeBatch.Prompt</p>
-                @if (!string.IsNullOrWhiteSpace(activeBatch.Error))
-                {
-                    <div class="provider-warning">@activeBatch.Error</div>
-                }
-
-                <div class="compare-grid">
-                    @for (var index = 0; index < activeBatch.Count; index++)
-                    {
-                        @if (outputAssetsByIndex.TryGetValue(index, out var asset))
-                        {
-                            @RenderAssetCard(asset, compact: false)
-                        }
-                        else if (outputErrorsByIndex.TryGetValue(index, out var outputError))
-                        {
-                            @RenderGenerationErrorCard(outputError)
-                        }
-                        else
-                        {
-                            var outputState = ResolveOutputState(index, outputStatesByIndex, runtimeOutputsByIndex);
-                            if (IsFailedOutputStatus(outputState.Status))
-                            {
-                                @RenderGenerationErrorCard(OutputErrorFromState(outputState, runtimeOutputsByIndex.GetValueOrDefault(index)))
-                            }
-                            else if (outputErrorsByIndex.TryGetValue(index, out var persistedOutputError))
-                            {
-                                @RenderGenerationErrorCard(persistedOutputError)
-                            }
-                            else if (IsTerminalGenerationStatus(activeBatch.Status))
-                            {
-                                @RenderGenerationErrorCard(new GenerationOutputErrorView(index, MissingOutputError(activeBatch.Status)))
-                            }
-                            else
-                            {
-                                @RenderGenerationPlaceholderCard(outputState, runtimeOutputsByIndex.GetValueOrDefault(index))
-                            }
-                        }
-                    }
-                </div>
+                @RenderBatchOutputs(activeBatch)
             }
 
             <div class="section-title">Recent Batches</div>
             <div class="batch-list">
-                @foreach (var batch in _workbench.Batches.Take(8))
+                @foreach (var batch in _workbench.Batches.Take(20))
                 {
                     <button type="button" class="batch-row @(batch.Id == _workbench.Project.ActiveBatchId ? "is-active" : "")"
                             @onclick="() => SelectBatchAsync(batch.Id)">
@@ -679,6 +641,95 @@ else
                     </button>
                 }
             </div>
+        </div>
+    };
+
+    private RenderFragment RenderReviewWorkspace() => __builder =>
+    {
+        <div class="workspace-panel compare-panel">
+            @RenderCompareReviewSet()
+        </div>
+    };
+
+    private RenderFragment RenderBatchOutputs(GenerationBatchView activeBatch) => __builder =>
+    {
+        var outputAssetsByIndex = activeBatch.OutputAssetIds
+            .Select(assetId => _workbench!.Assets.FirstOrDefault(asset => asset.Id == assetId))
+            .OfType<ArtAssetView>()
+            .Select((asset, fallbackIndex) => new
+            {
+                Asset = asset,
+                OutputIndex = asset.BatchOutputIndex ?? fallbackIndex,
+            })
+            .Where(item => item.OutputIndex >= 0 && item.OutputIndex < activeBatch.Count)
+            .GroupBy(item => item.OutputIndex)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderByDescending(item => item.Asset.CreatedAt)
+                    .First()
+                    .Asset);
+        var outputErrorsByIndex = activeBatch.OutputErrors
+            .Where(error => error.OutputIndex >= 0 && error.OutputIndex < activeBatch.Count)
+            .GroupBy(error => error.OutputIndex)
+            .ToDictionary(group => group.Key, group => group.Last());
+        var outputStatesByIndex = activeBatch.OutputStates
+            .Where(state => state.OutputIndex >= 0 && state.OutputIndex < activeBatch.Count)
+            .GroupBy(state => state.OutputIndex)
+            .ToDictionary(group => group.Key, group => group.Last());
+        var runtimeOutputsByIndex = _generationRuntimeSnapshot.Batches
+            .FirstOrDefault(batch => batch.BatchId == activeBatch.Id)
+            ?.Outputs
+            .Where(output => output.OutputIndex >= 0 && output.OutputIndex < activeBatch.Count)
+            .GroupBy(output => output.OutputIndex)
+            .ToDictionary(group => group.Key, group => group.Last())
+            ?? [];
+
+        <div class="batch-summary">
+            <span>@activeBatch.Status</span>
+            <span>@activeBatch.ImageModel</span>
+            <span>@activeBatch.Size</span>
+            <span>@BackgroundLabel(activeBatch.Background)</span>
+            <span>@activeBatch.Count image(s)</span>
+        </div>
+        <p class="batch-prompt">@activeBatch.Prompt</p>
+        @if (!string.IsNullOrWhiteSpace(activeBatch.Error))
+        {
+            <div class="provider-warning">@activeBatch.Error</div>
+        }
+
+        <div class="compare-grid">
+            @for (var index = 0; index < activeBatch.Count; index++)
+            {
+                @if (outputAssetsByIndex.TryGetValue(index, out var asset))
+                {
+                    @RenderAssetCard(asset, compact: false)
+                }
+                else if (outputErrorsByIndex.TryGetValue(index, out var outputError))
+                {
+                    @RenderGenerationErrorCard(outputError)
+                }
+                else
+                {
+                    var outputState = ResolveOutputState(index, outputStatesByIndex, runtimeOutputsByIndex);
+                    if (IsFailedOutputStatus(outputState.Status))
+                    {
+                        @RenderGenerationErrorCard(OutputErrorFromState(outputState, runtimeOutputsByIndex.GetValueOrDefault(index)))
+                    }
+                    else if (outputErrorsByIndex.TryGetValue(index, out var persistedOutputError))
+                    {
+                        @RenderGenerationErrorCard(persistedOutputError)
+                    }
+                    else if (IsTerminalGenerationStatus(activeBatch.Status))
+                    {
+                        @RenderGenerationErrorCard(new GenerationOutputErrorView(index, MissingOutputError(activeBatch.Status)))
+                    }
+                    else
+                    {
+                        @RenderGenerationPlaceholderCard(outputState, runtimeOutputsByIndex.GetValueOrDefault(index))
+                    }
+                }
+            }
         </div>
     };
 
@@ -729,46 +780,34 @@ else
                 FormatDimensions(asset),
                 () => OpenImageReviewPreview(asset.Label, asset.FullImageUrl, FormatDimensions(asset)))
         }
-        else if (item.Kind == CompareReviewItemKind.SpriteFrame && ReviewSpriteFrame(item) is { } frame)
+        else if (item.Kind == CompareReviewItemKind.Frame)
         {
+            var frameUrl = $"/media/projects/{_workbench!.Project.Id:D}/frame-set-frames/{item.RefId:D}/preview";
             @RenderReviewImageCard(
                 item,
                 "Frame",
-                frame.PreviewImageUrl,
-                frame.Label,
-                $"{frame.PreviewWidth} x {frame.PreviewHeight}",
-                () => OpenImageReviewPreview(frame.Label, frame.PreviewImageUrl, $"{frame.PreviewWidth} x {frame.PreviewHeight}"))
+                frameUrl,
+                item.Label,
+                string.Empty,
+                () => OpenImageReviewPreview(item.Label, frameUrl, string.Empty))
         }
-        else if (item.Kind == CompareReviewItemKind.SpriteSheet && ReviewSpriteSheet(item) is { } sheet)
+        else if ((item.Kind == CompareReviewItemKind.ArtRecipe || item.Kind == CompareReviewItemKind.AnimationRecipe)
+            && ReviewRecipe(item) is { } recipe)
         {
-            var sheetAsset = ReviewSpriteSheetAsset(sheet);
-            if (sheetAsset is not null)
-            {
-                @RenderReviewImageCard(
-                    item,
-                    "Sprite Sheet",
-                    sheetAsset.PreviewImageUrl,
-                    sheet.Label,
-                    $"{sheet.Frames.Count} frame(s) - {sheet.Fps} FPS",
-                    () => OpenImageReviewPreview(sheet.Label, sheetAsset.FullImageUrl, FormatDimensions(sheetAsset)))
-            }
-            else
-            {
-                @RenderReviewMissingCard(item)
-            }
+            @RenderReviewRecipeCard(item, recipe)
         }
-        else if (item.Kind == CompareReviewItemKind.SpriteAnimation && ReviewSpriteSheet(item) is { } animationSheet)
+        else if (item.Kind == CompareReviewItemKind.Animation && _reviewFrameSets.TryGetValue(item.RefId, out var frameSet) && frameSet.FrameCount > 0)
         {
             <article class="review-card" @key="item.Id">
-                <button type="button" class="review-thumb review-animation-thumb" @onclick="() => OpenAnimationReviewPreview(animationSheet)">
-                    <SpriteAnimationPreview Sheet="@animationSheet" CssClass="review-animation-canvas" Title="@item.Label" />
+                <button type="button" class="review-thumb review-animation-thumb" @onclick="() => OpenAnimationReviewPreview(item.RefId)">
+                    <SpriteAnimationPreview Frames="@FrameSetPreviewFrames(frameSet)" Fps="@FrameSetFps(frameSet)" Loop="true" PreviewKey="@($"{frameSet.Id:N}:{frameSet.FrameCount}")" CssClass="review-animation-canvas" Title="@item.Label" />
                 </button>
                 <div class="review-card-body">
                     <div class="asset-title-row">
                         <strong>@item.Label</strong>
                         <span>Animation</span>
                     </div>
-                    <p>@($"{animationSheet.Frames.Count} frame(s) - {animationSheet.Fps} FPS")</p>
+                    <p>@($"{frameSet.FrameCount} frame(s) - {FrameSetFps(frameSet)} FPS")</p>
                     @if (!string.IsNullOrWhiteSpace(item.Notes))
                     {
                         <p>@item.Notes</p>
@@ -777,14 +816,45 @@ else
                 </div>
             </article>
         }
-        else if (item.Kind == CompareReviewItemKind.GenerationBatch && ReviewBatch(item) is { } batch)
-        {
-            @RenderReviewBatchCard(item, batch)
-        }
         else
         {
             @RenderReviewMissingCard(item)
         }
+    };
+
+    private (string Name, string Prompt, bool IsAnimation)? ReviewRecipe(CompareReviewSetItemView item)
+    {
+        if (item.Kind == CompareReviewItemKind.ArtRecipe
+            && _workbench!.Recipes.FirstOrDefault(recipe => recipe.Id == item.RefId) is { } artRecipe)
+        {
+            return (artRecipe.Name, artRecipe.Prompt, false);
+        }
+
+        if (item.Kind == CompareReviewItemKind.AnimationRecipe
+            && _workbench!.AnimationRecipes.FirstOrDefault(recipe => recipe.Id == item.RefId) is { } animationRecipe)
+        {
+            return (animationRecipe.Name, animationRecipe.Prompt, true);
+        }
+
+        return null;
+    }
+
+    private RenderFragment RenderReviewRecipeCard(CompareReviewSetItemView item, (string Name, string Prompt, bool IsAnimation) recipe) => __builder =>
+    {
+        <article class="review-card review-recipe-card" @key="item.Id">
+            <div class="review-card-body">
+                <div class="asset-title-row">
+                    <strong>@recipe.Name</strong>
+                    <span>@(recipe.IsAnimation ? "Animation recipe" : "Art recipe")</span>
+                </div>
+                <p class="review-recipe-prompt">@recipe.Prompt</p>
+                @if (!string.IsNullOrWhiteSpace(item.Notes))
+                {
+                    <p>@item.Notes</p>
+                }
+                <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveReviewItemAsync(item.Id)">Remove</button>
+            </div>
+        </article>
     };
 
     private RenderFragment RenderReviewImageCard(
@@ -1345,7 +1415,6 @@ else
                 {
                     var asset = AttachmentAsset(attachment);
                     var mask = AttachmentMask(attachment);
-                    var spriteFrame = AttachmentSpriteFrame(attachment);
                     <span class="chat-attachment-chip">
                         @if (asset is not null)
                         {
@@ -1365,16 +1434,6 @@ else
                                     aria-label="@($"Preview {mask.Label}")"
                                     @onclick="() => OpenMaskReviewPreview(mask)">
                                 <LazyImage Src="@mask.PreviewImageUrl" Alt="@mask.Label" Width="44" Height="44" />
-                            </button>
-                        }
-                        else if (spriteFrame is not null)
-                        {
-                            <button type="button"
-                                    class="chat-attachment-thumb"
-                                    title="@($"Preview {spriteFrame.Label}")"
-                                    aria-label="@($"Preview {spriteFrame.Label}")"
-                                    @onclick="() => OpenSpriteFrameReviewPreview(spriteFrame)">
-                                <LazyImage Src="@spriteFrame.PreviewImageUrl" Alt="@spriteFrame.Label" Width="44" Height="44" />
                             </button>
                         }
                         <span>
@@ -1646,9 +1705,11 @@ else
                     {
                         <img src="@preview.ImageUrl" alt="@preview.Title" />
                     }
-                    else if (preview.AnimationSheet is not null)
+                    else if (preview.AnimationFrameSetId is Guid animationFrameSetId
+                        && _reviewFrameSets.TryGetValue(animationFrameSetId, out var previewFrameSet)
+                        && previewFrameSet.FrameCount > 0)
                     {
-                        <SpriteAnimationPreview Sheet="@preview.AnimationSheet" CssClass="review-modal-animation" Title="@preview.Title" />
+                        <SpriteAnimationPreview Frames="@FrameSetPreviewFrames(previewFrameSet)" Fps="@FrameSetFps(previewFrameSet)" Loop="true" PreviewKey="@($"{previewFrameSet.Id:N}:{previewFrameSet.FrameCount}:modal")" CssClass="review-modal-animation" Title="@preview.Title" />
                     }
                 </div>
             </div>
@@ -1988,41 +2049,6 @@ else
                 asset.Label)]));
     }
 
-    private async Task AddBatchToReviewAsync(GenerationBatchView batch)
-    {
-        if (_workbench is null)
-            return;
-
-        await RunWorkflowAsync("Adding batch to review...", () =>
-            AddCompareReviewItemsAsync([new CompareReviewSetItemRequest(
-                CompareReviewItemKind.GenerationBatch,
-                batch.Id,
-                batch.Label)]));
-    }
-
-    private async Task AddSpriteSheetToReviewAsync(SpriteSheetDefinitionView sheet)
-    {
-        if (_workbench is null)
-            return;
-
-        await RunWorkflowAsync("Adding sprite sheet to review...", () =>
-            AddCompareReviewItemsAsync([new CompareReviewSetItemRequest(
-                CompareReviewItemKind.SpriteSheet,
-                sheet.Id,
-                sheet.Label)]));
-    }
-
-    private async Task AddSpriteAnimationToReviewAsync(SpriteSheetDefinitionView sheet)
-    {
-        if (_workbench is null)
-            return;
-
-        await RunWorkflowAsync("Adding animation to review...", () =>
-            AddCompareReviewItemsAsync([new CompareReviewSetItemRequest(
-                CompareReviewItemKind.SpriteAnimation,
-                sheet.Id,
-                $"{sheet.Label} animation")]));
-    }
 
     private Task AddCompareReviewItemsAsync(IReadOnlyList<CompareReviewSetItemRequest> items)
     {
@@ -2070,24 +2096,16 @@ else
     private void OpenMaskReviewPreview(ImageMaskView mask) =>
         OpenImageReviewPreview(mask.Label, mask.PreviewImageUrl, $"{mask.Width} x {mask.Height}");
 
-    private void OpenSpriteFrameReviewPreview(SpriteSheetFrameRecordView frame) =>
-        OpenImageReviewPreview(frame.Label, frame.PreviewImageUrl, $"{frame.PreviewWidth} x {frame.PreviewHeight}");
-
-    private void OpenSpriteSheetReviewPreview(SpriteSheetDefinitionView sheet)
+    private void OpenAnimationReviewPreview(Guid frameSetId)
     {
-        if (ReviewSpriteSheetAsset(sheet) is not { } asset)
+        if (!_reviewFrameSets.TryGetValue(frameSetId, out var frameSet) || frameSet.FrameCount == 0)
             return;
 
-        OpenImageReviewPreview(sheet.Label, asset.FullImageUrl, FormatDimensions(asset));
-    }
-
-    private void OpenAnimationReviewPreview(SpriteSheetDefinitionView sheet)
-    {
         _reviewPreview = new ReviewPreviewState(
-            $"{sheet.Label} animation",
-            $"{sheet.Frames.Count} frame(s) - {sheet.Fps} FPS",
+            $"{frameSet.Name} animation",
+            $"{frameSet.FrameCount} frame(s) - {FrameSetFps(frameSet)} FPS",
             null,
-            sheet);
+            frameSetId);
         StateHasChanged();
     }
 
@@ -2497,10 +2515,9 @@ else
             return;
 
         await FlushMaskAutosaveAsync();
-        await Workflow.ComposeSpriteSheetFromImagesAsync(_workbench.Project.Id, new ComposeSpriteSheetFromImagesRequest(
+        await SpriteActions.ComposeFrameSetFromAssetsAsync(_workbench.Project.Id, new ComposeFrameSetFromAssetsRequest(
             [asset.Id],
-            _workbench.Project.ActiveSpriteSheetId,
-            Label: $"{asset.Label} sheet"));
+            $"{asset.Label} sheet"));
         await ReloadWorkbenchAsync();
     }
 
@@ -3117,7 +3134,8 @@ else
             _workbench.Attachments,
             BuildGenerateVisibleState(),
             BuildEditVisibleState(),
-            BuildCompareVisibleState(),
+            BuildReviewVisibleState(),
+            BuildBatchesVisibleState(),
             BuildSpritesVisibleState(),
             BuildRecipeVisibleState(),
             BuildAssetsVisibleState(),
@@ -3159,16 +3177,18 @@ else
             _brushSize);
     }
 
-    private WorkspaceCompareVisibleState BuildCompareVisibleState() =>
+    private WorkspaceReviewVisibleState BuildReviewVisibleState() =>
+        new(_workbench?.CompareReviewSet is null ? null : CompareReviewSetSummary(_workbench.CompareReviewSet));
+
+    private WorkspaceBatchesVisibleState BuildBatchesVisibleState() =>
         new(
             _workbench?.ActiveBatch is null ? null : BatchSummary(_workbench.ActiveBatch),
-            _workbench?.Batches.Take(8).Select(BatchSummary).ToList() ?? [],
-            _workbench?.CompareReviewSet is null ? null : CompareReviewSetSummary(_workbench.CompareReviewSet));
+            _workbench?.Batches.Take(20).Select(BatchSummary).ToList() ?? []);
 
     private WorkspaceSpritesVisibleState BuildSpritesVisibleState()
     {
         var selectedRegionIds = ReadGuidList(_workbench?.Project.ActiveSpriteRegionIdsJson);
-        var state = _spritesVisibleState ?? new(_workbench?.ActiveSpriteSheet is null ? null : SpriteSheetSummary(_workbench.ActiveSpriteSheet));
+        var state = _spritesVisibleState ?? new();
         return state with
         {
             AgentStatus = CurrentSpriteAgentStatus(),
@@ -3340,26 +3360,6 @@ else
             item.Notes,
             item.SortOrder);
 
-    private static WorkspaceSpriteSheetSummary SpriteSheetSummary(SpriteSheetDefinitionView spriteSheet) =>
-        new(
-            spriteSheet.Id,
-            spriteSheet.SourceAssetId,
-            spriteSheet.WorkingAssetId,
-            spriteSheet.Label,
-            spriteSheet.Rows,
-            spriteSheet.Columns,
-            spriteSheet.CellWidth,
-            spriteSheet.CellHeight,
-            spriteSheet.Padding,
-            spriteSheet.Gutter,
-            spriteSheet.Fps,
-            spriteSheet.Loop,
-            spriteSheet.HorizontalAnchor,
-            spriteSheet.VerticalAnchor,
-            spriteSheet.Background,
-            spriteSheet.Frames.Count,
-            spriteSheet.UpdatedAt);
-
     private IReadOnlyList<Guid> CurrentReferenceAssetIds() =>
         _draftReferenceAssetIds
             .Take(Math.Max(1, ImageOptions.Value.MaxReferenceImages))
@@ -3447,26 +3447,6 @@ else
             ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == item.RefId)
             : null;
 
-    private GenerationBatchView? ReviewBatch(CompareReviewSetItemView item) =>
-        item.Kind == CompareReviewItemKind.GenerationBatch
-            ? _workbench?.Batches.FirstOrDefault(batch => batch.Id == item.RefId)
-            : null;
-
-    private SpriteSheetDefinitionView? ReviewSpriteSheet(CompareReviewSetItemView item) =>
-        item.Kind is CompareReviewItemKind.SpriteSheet or CompareReviewItemKind.SpriteAnimation
-            ? _workbench?.SpriteSheets.FirstOrDefault(sheet => sheet.Id == item.RefId)
-            : null;
-
-    private SpriteSheetFrameRecordView? ReviewSpriteFrame(CompareReviewSetItemView item) =>
-        item.Kind == CompareReviewItemKind.SpriteFrame
-            ? _workbench?.SpriteSheets.SelectMany(sheet => sheet.Frames).FirstOrDefault(frame => frame.Id == item.RefId)
-            : null;
-
-    private ArtAssetView? ReviewSpriteSheetAsset(SpriteSheetDefinitionView sheet) =>
-        sheet.WorkingAssetId is Guid workingAssetId
-            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == workingAssetId)
-            : _workbench?.Assets.FirstOrDefault(asset => asset.Id == sheet.SourceAssetId);
-
     private ArtAssetView? AttachmentAsset(ChatContextAttachmentView attachment) =>
         attachment.Type is ChatContextAttachmentType.Asset or ChatContextAttachmentType.Crop
             ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == attachment.RefId)
@@ -3475,11 +3455,6 @@ else
     private ImageMaskView? AttachmentMask(ChatContextAttachmentView attachment) =>
         attachment.Type == ChatContextAttachmentType.Mask
             ? _workbench?.Masks.FirstOrDefault(mask => mask.Id == attachment.RefId)
-            : null;
-
-    private SpriteSheetFrameRecordView? AttachmentSpriteFrame(ChatContextAttachmentView attachment) =>
-        attachment.Type == ChatContextAttachmentType.SpriteFrame
-            ? _workbench?.SpriteSheets.SelectMany(sheet => sheet.Frames).FirstOrDefault(frame => frame.Id == attachment.RefId)
             : null;
 
     private static string AttachmentKindLabel(ChatContextAttachmentView attachment) => attachment.Type switch
@@ -3990,7 +3965,7 @@ else
         string Title,
         string Subtitle,
         string? ImageUrl,
-        SpriteSheetDefinitionView? AnimationSheet);
+        Guid? AnimationFrameSetId);
 
     public async ValueTask DisposeAsync()
     {

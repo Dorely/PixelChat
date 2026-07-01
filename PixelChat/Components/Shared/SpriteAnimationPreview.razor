@@ -7,7 +7,17 @@
 
 @code {
     [Parameter, EditorRequired]
-    public SpriteSheetDefinitionView Sheet { get; set; } = null!;
+    public IReadOnlyList<AnimationPreviewFrame> Frames { get; set; } = [];
+
+    [Parameter]
+    public int Fps { get; set; } = 8;
+
+    [Parameter]
+    public bool Loop { get; set; } = true;
+
+    // Stable identity so the preview only restarts when the underlying frames change.
+    [Parameter]
+    public string PreviewKey { get; set; } = string.Empty;
 
     [Parameter]
     public string CssClass { get; set; } = "sprite-animation-preview";
@@ -32,25 +42,24 @@
 
     private async Task RenderPreviewIfNeededAsync()
     {
-        if (_module is null || Sheet is null)
+        if (_module is null)
             return;
 
-        var frames = Sheet.Frames
-            .OrderBy(frame => frame.Index)
-            .Where(frame => !string.IsNullOrWhiteSpace(frame.PreviewImageUrl))
+        var frames = Frames
+            .Where(frame => !string.IsNullOrWhiteSpace(frame.Url))
             .Select(frame => new
             {
-                frame.PreviewImageUrl,
+                previewImageUrl = frame.Url,
                 frame.Label,
-                frame.Duration,
+                duration = frame.DurationMs / 1000d,
             })
             .ToList();
-        var key = $"{Sheet.Id:N}:{Sheet.UpdatedAt:O}:{frames.Count}:{string.Join('|', frames.Select(frame => frame.PreviewImageUrl))}";
+        var key = $"{PreviewKey}:{Fps}:{Loop}:{frames.Count}:{string.Join('|', frames.Select(frame => frame.previewImageUrl))}";
         if (string.Equals(key, _renderedKey, StringComparison.Ordinal))
             return;
 
         _renderedKey = key;
-        await _module.InvokeVoidAsync("start", _canvas, frames, Sheet.Fps, Sheet.Loop);
+        await _module.InvokeVoidAsync("start", _canvas, frames, Fps, Loop);
     }
 
     public async ValueTask DisposeAsync()

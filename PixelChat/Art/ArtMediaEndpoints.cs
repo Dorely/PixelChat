@@ -58,16 +58,6 @@ public static class ArtMediaEndpoints
             return ImageResult(image);
         });
 
-        group.MapGet("/sprite-frames/{frameId:guid}/preview", async (
-            Guid projectId,
-            Guid frameId,
-            IArtWorkflowService workflow,
-            CancellationToken cancellationToken) =>
-        {
-            var image = await workflow.GetSpriteFramePreviewImageAsync(projectId, frameId, cancellationToken);
-            return ImageResult(image);
-        });
-
         group.MapGet("/chat-visuals/{visualId:guid}/preview", async (
             Guid projectId,
             Guid visualId,

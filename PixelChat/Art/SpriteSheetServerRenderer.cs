@@ -642,65 +642,6 @@ internal static class SpriteSheetServerRenderer
             outputHeight);
     }
 
-    internal static SpriteSheetReviewImage BuildStabilizationAnnotatedSheetView(
-        SpriteSheetBackground background,
-        SpriteSheetStabilizationView stabilization,
-        IReadOnlyList<SpriteSheetFrameImageInput> inputFrames)
-    {
-        var matches = stabilization.Matches.OrderBy(match => match.Index).ToList();
-        if (matches.Count == 0)
-            throw new InvalidOperationException("At least one stabilization match is required.");
-
-        var cellWidth = Math.Max(1, stabilization.NormalizedWidth);
-        var cellHeight = Math.Max(1, stabilization.NormalizedHeight);
-        var columns = Math.Clamp(Math.Min(4, matches.Count), 1, 4);
-        var rows = (int)Math.Ceiling(matches.Count / (double)columns);
-        var gutter = 1;
-        var outputWidth = checked((columns * cellWidth) + (Math.Max(0, columns - 1) * gutter));
-        var outputHeight = checked((rows * cellHeight) + (Math.Max(0, rows - 1) * gutter));
-        ValidateCanvasSize(outputWidth, outputHeight, "Stabilization diagnostic image is too large.");
-
-        var output = NewFilledCanvas(outputWidth, outputHeight, background);
-        var inputByIndex = inputFrames.ToDictionary(frame => frame.Index);
-        for (var position = 0; position < matches.Count; position++)
-        {
-            var match = matches[position];
-            if (!inputByIndex.TryGetValue(match.Index, out var input))
-                continue;
-
-            var column = position % columns;
-            var row = position / columns;
-            var cellX = column * (cellWidth + gutter);
-            var cellY = row * (cellHeight + gutter);
-            var placement = stabilization.Applied && string.Equals(input.WorkingState, "stabilized", StringComparison.OrdinalIgnoreCase)
-                ? new SpriteSheetRect(0, 0, input.Width, input.Height)
-                : match.PlacementRect;
-
-            CopyImage(input.Rgba, input.Width, input.Height, output, outputWidth, outputHeight, cellX + placement.X, cellY + placement.Y);
-            DrawRectangle(output, outputWidth, outputHeight, new SpriteSheetRect(cellX + placement.X, cellY + placement.Y, placement.Width, placement.Height), 32, 210, 115, 220, 1);
-
-            var anchorColor = match.LowConfidence ? (R: (byte)239, G: (byte)68, B: (byte)68) : (R: (byte)245, G: (byte)159, B: (byte)0);
-            var finalAnchor = new SpriteSheetRect(
-                cellX + match.MatchedAnchorRect.X + match.PlacementRect.X,
-                cellY + match.MatchedAnchorRect.Y + match.PlacementRect.Y,
-                match.MatchedAnchorRect.Width,
-                match.MatchedAnchorRect.Height);
-            DrawRectangle(output, outputWidth, outputHeight, finalAnchor, anchorColor.R, anchorColor.G, anchorColor.B, 240, 2);
-            if (match.Index == stabilization.ReferenceFrameIndex)
-                DrawRectangle(output, outputWidth, outputHeight, finalAnchor, 236, 72, 153, 255, 3);
-            DrawIndexLabel(output, outputWidth, outputHeight, match.Index, cellX, cellY);
-        }
-
-        return new SpriteSheetReviewImage(
-            "Sprite stabilization diagnostic (green placement, yellow/red matched anchors, magenta reference anchor)",
-            "sprite-sheet-stabilization-diagnostic.png",
-            "stabilization",
-            null,
-            null,
-            null,
-            SpriteSheetPngCodec.EncodeRgba(outputWidth, outputHeight, output));
-    }
-
     private static SpriteSheetReviewImage BuildAnnotatedSheetView(
         byte[] sourceRgba,
         int sourceWidth,

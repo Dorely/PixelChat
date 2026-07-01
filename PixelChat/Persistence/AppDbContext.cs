@@ -21,8 +21,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<AnimationRecipe> AnimationRecipes => Set<AnimationRecipe>();
     public DbSet<AnimationRecipeVersion> AnimationRecipeVersions => Set<AnimationRecipeVersion>();
     public DbSet<RecipeAssetAttachment> RecipeAssetAttachments => Set<RecipeAssetAttachment>();
-    public DbSet<SpriteSheetDefinition> SpriteSheetDefinitions => Set<SpriteSheetDefinition>();
-    public DbSet<SpriteSheetFrameRecord> SpriteSheetFrameRecords => Set<SpriteSheetFrameRecord>();
     public DbSet<SpriteRegion> SpriteRegions => Set<SpriteRegion>();
     public DbSet<StandaloneAsset> StandaloneAssets => Set<StandaloneAsset>();
     public DbSet<FrameSet> FrameSets => Set<FrameSet>();
@@ -113,7 +111,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
         modelBuilder.Entity<Project>(entity =>
         {
             entity.HasIndex(e => e.Name);
-            entity.HasIndex(e => e.ActiveSpriteSheetId);
             entity.Property(e => e.ActiveWorkspaceMode).HasConversion<string>();
             entity.Property(e => e.ActiveSpriteMode).HasDefaultValue("source");
             entity.Property(e => e.ActiveSpriteRegionIdsJson).HasDefaultValue("[]");
@@ -295,59 +292,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .WithMany()
                 .HasForeignKey(e => e.AssetId)
                 .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        modelBuilder.Entity<SpriteSheetDefinition>(entity =>
-        {
-            entity.HasIndex(e => new { e.ProjectId, e.UpdatedAt });
-            entity.HasIndex(e => e.SourceAssetId);
-            entity.HasIndex(e => e.OutputAssetId);
-            entity.Property(e => e.HorizontalAnchor).HasDefaultValue("center");
-            entity.Property(e => e.VerticalAnchor).HasDefaultValue("bottom");
-            entity.Property(e => e.StabilizationJson).HasDefaultValue("{}");
-
-            entity.HasOne(e => e.Project)
-                .WithMany(p => p.SpriteSheets)
-                .HasForeignKey(e => e.ProjectId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            entity.HasOne(e => e.SourceAsset)
-                .WithMany()
-                .HasForeignKey(e => e.SourceAssetId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            entity.HasOne(e => e.OutputAsset)
-                .WithMany()
-                .HasForeignKey(e => e.OutputAssetId)
-                .OnDelete(DeleteBehavior.SetNull);
-        });
-
-        modelBuilder.Entity<SpriteSheetFrameRecord>(entity =>
-        {
-            entity.HasIndex(e => new { e.ProjectId, e.SpriteSheetDefinitionId, e.Index }).IsUnique();
-            entity.HasIndex(e => e.SpriteSheetDefinitionId);
-            entity.HasIndex(e => e.SourceImageAssetId);
-            entity.Property(e => e.ShapeJson).HasDefaultValue("[]");
-            entity.Property(e => e.WorkingState).HasDefaultValue("none");
-            entity.Property(e => e.WorkingContentType).HasDefaultValue("image/png");
-            entity.Property(e => e.FootContactsJson).HasDefaultValue("[]");
-            entity.Property(e => e.AppliedScale).HasDefaultValue(1d);
-            entity.Property(e => e.RepairHistoryJson).HasDefaultValue("[]");
-
-            entity.HasOne(e => e.Project)
-                .WithMany(p => p.SpriteSheetFrameRecords)
-                .HasForeignKey(e => e.ProjectId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            entity.HasOne(e => e.SpriteSheetDefinition)
-                .WithMany(s => s.FrameRecords)
-                .HasForeignKey(e => e.SpriteSheetDefinitionId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            entity.HasOne(e => e.SourceImageAsset)
-                .WithMany()
-                .HasForeignKey(e => e.SourceImageAssetId)
-                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<SpriteRegion>(entity =>

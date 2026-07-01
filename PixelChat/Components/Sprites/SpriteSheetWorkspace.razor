@@ -2009,7 +2009,6 @@
         if (!OnVisibleStateChanged.HasDelegate)
             return;
         await OnVisibleStateChanged.InvokeAsync(new WorkspaceSpritesVisibleState(
-            ActiveSpriteSheet: null,
             ActiveFrameSet: _frameSet is null ? null : new WorkspaceFrameSetSummary(_frameSet.Id, _frameSet.Name, _frameSet.SourceAssetId, _frameSet.DefaultCellWidth, _frameSet.DefaultCellHeight, _frameSet.FrameCount),
             SourceAsset: SelectedSourceAsset(),
             SelectedRegions: _regions.Where(region => _selectedRegionIds.Contains(region.Id)).Select(region => new WorkspaceSpriteRegionSummary(region.Id, region.Name, region.X, region.Y, region.Width, region.Height, region.RegionType, region.Order)).ToList(),

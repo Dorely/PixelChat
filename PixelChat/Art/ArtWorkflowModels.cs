@@ -9,12 +9,10 @@ public sealed record WorkbenchView(
     IReadOnlyList<GenerationBatchView> Batches,
     IReadOnlyList<PromptRecipeView> Recipes,
     IReadOnlyList<AnimationRecipeView> AnimationRecipes,
-    IReadOnlyList<SpriteSheetDefinitionView> SpriteSheets,
     IReadOnlyList<ImageMaskView> Masks,
     IReadOnlyList<ChatContextAttachmentView> Attachments,
     CompareReviewSetView? CompareReviewSet,
     GenerationBatchView? ActiveBatch,
-    SpriteSheetDefinitionView? ActiveSpriteSheet,
     ProviderStatusView ImageProviderStatus);
 
 public sealed record ProjectView(
@@ -22,7 +20,6 @@ public sealed record ProjectView(
     string Name,
     WorkspaceMode ActiveWorkspaceMode,
     Guid? ActiveBatchId,
-    Guid? ActiveSpriteSheetId,
     Guid? ActiveFrameSetId,
     string ActiveSpriteMode,
     Guid? ActiveSpriteSourceAssetId,
@@ -62,180 +59,12 @@ public sealed record ArtAssetExportView(
     int? Width,
     int? Height);
 
-public sealed record SpriteSheetDefinitionView(
-    Guid Id,
-    Guid SourceAssetId,
-    Guid? WorkingAssetId,
-    string Label,
-    int Rows,
-    int Columns,
-    int CellWidth,
-    int CellHeight,
-    int Padding,
-    int Gutter,
-    int Fps,
-    bool Loop,
-    string HorizontalAnchor,
-    string VerticalAnchor,
-    SpriteSheetBackground Background,
-    IReadOnlyList<SpriteSheetFrameRecordView> Frames,
-    SpriteSheetStabilizationView? Stabilization,
-    DateTime CreatedAt,
-    DateTime UpdatedAt);
-
 public sealed record SpriteSheetBackground(
     string Mode,
     byte R,
     byte G,
     byte B,
     byte A);
-
-public sealed record SpriteSheetFrameRecordView(
-    Guid Id,
-    Guid SpriteSheetId,
-    int Index,
-    string Label,
-    SpriteSheetRect SourceRect,
-    IReadOnlyList<SpriteSheetShapePath> ShapePaths,
-    SpriteSheetRect CellRect,
-    SpriteSheetRect SpriteRect,
-    string PreviewImageUrl,
-    int PreviewWidth,
-    int PreviewHeight,
-    string WorkingState,
-    int WorkingWidth,
-    int WorkingHeight,
-    int WorkingMargin,
-    DateTime? WorkingUpdatedAt,
-    double Duration,
-    Guid? SourceImageAssetId = null,
-    SpriteSheetRect? SourceImageRect = null,
-    string PoseName = "",
-    double Phase = 0,
-    int RootOffsetX = 0,
-    int RootOffsetY = 0,
-    int DurationMs = 0,
-    IReadOnlyList<string>? FootContacts = null,
-    bool IsKeyframe = false,
-    int PivotX = 0,
-    int PivotY = 0,
-    double AppliedScale = 1,
-    int TranslationX = 0,
-    int TranslationY = 0,
-    string QaStatus = "",
-    IReadOnlyList<string>? RepairHistory = null);
-
-public sealed record SpriteSheetStabilizationView(
-    int ReferenceFrameNumber,
-    int ReferenceFrameIndex,
-    SpriteSheetRect AnchorRect,
-    SpriteSheetRect ReferenceWorkingAnchorRect,
-    SpriteSheetPoint ReferenceAnchorCenter,
-    int NormalizedWidth,
-    int NormalizedHeight,
-    int SearchPadding,
-    double MinScore,
-    bool Applied,
-    bool RequiresReassembly,
-    DateTime UpdatedAt,
-    IReadOnlyList<SpriteSheetStabilizationMatchView> Matches,
-    IReadOnlyList<string> Warnings);
-
-public sealed record SpriteSheetStabilizationMatchView(
-    int FrameNumber,
-    int Index,
-    SpriteSheetRect SourceRect,
-    SpriteSheetRect InputFrameRect,
-    SpriteSheetRect MatchedAnchorRect,
-    SpriteSheetRect PlacementRect,
-    int DeltaX,
-    int DeltaY,
-    double Score,
-    bool LowConfidence,
-    bool Clipped,
-    IReadOnlyList<string> Warnings);
-
-public sealed record SpriteSheetStabilizationFrameView(
-    int FrameNumber,
-    int Index,
-    string Label,
-    int InputWidth,
-    int InputHeight,
-    int OutputWidth,
-    int OutputHeight,
-    bool UsedExistingWorkingImage,
-    bool Applied,
-    string WorkingState);
-
-public sealed record StabilizeSpriteSheetFramesRequest(
-    Guid SpriteSheetId,
-    int ReferenceFrameNumber,
-    SpriteSheetRect AnchorRect,
-    int? SearchPadding,
-    double? MinScore,
-    IReadOnlyList<int>? TargetFrameNumbers,
-    bool Apply);
-
-public sealed record StabilizeSpriteSheetFramesResult(
-    Guid SpriteSheetId,
-    Guid SourceAssetId,
-    Guid? WorkingAssetId,
-    bool Applied,
-    int ImageWidth,
-    int ImageHeight,
-    SpriteSheetStabilizationView Stabilization,
-    IReadOnlyList<SpriteSheetStabilizationFrameView> Frames,
-    IReadOnlyList<string> Warnings,
-    SpriteAnimationReviewImageView DiagnosticImage,
-    SpriteSheetDefinitionView? SavedSheet);
-
-public sealed record SpriteFrameWorkingView(
-    Guid FrameId,
-    Guid SpriteSheetId,
-    int Index,
-    string Label,
-    string State,
-    string WorkingPngDataUrl,
-    int WorkingWidth,
-    int WorkingHeight,
-    int WorkingMargin,
-    DateTime? WorkingUpdatedAt);
-
-public sealed record EditSpriteFrameRequest(
-    Guid SpriteSheetId,
-    int FrameIndex,
-    string Prompt,
-    string? Background);
-
-public sealed record EraseSpriteFrameRegionsRequest(
-    Guid SpriteSheetId,
-    int FrameIndex,
-    IReadOnlyList<SpriteSheetRect> Rects,
-    IReadOnlyList<SpriteSheetShapePath>? Polygons,
-    string? Mode = null);
-
-public sealed record ReassembleSpriteSheetResult(
-    SpriteSheetDefinitionView Sheet,
-    IReadOnlyList<SpriteFrameReassemblyView> Frames,
-    IReadOnlyList<string> Warnings);
-
-public sealed record SpriteFrameReassemblyView(
-    int Index,
-    string Label,
-    bool UsedWorkingImage,
-    SpriteSheetRect DetectedRect,
-    SpriteSheetRect PlacedRect,
-    IReadOnlyList<string> Warnings);
-
-public sealed record SpriteAnimationReviewView(
-    Guid SpriteSheetId,
-    int FrameCount,
-    int Rows,
-    int Columns,
-    int Fps,
-    bool Loop,
-    SpriteAnimationMetricsView Metrics,
-    IReadOnlyList<SpriteAnimationReviewImageView> Images);
 
 public sealed record SpriteAnimationMetricsView(
     IReadOnlyList<SpriteAnimationFramePairMetricsView> FramePairs,
@@ -289,12 +118,6 @@ public sealed record SpriteSheetPoint(
 public sealed record SpriteSheetShapePath(
     IReadOnlyList<SpriteSheetPoint> Points);
 
-public sealed record SpriteSheetDetectionRequest(
-    Guid SourceAssetId,
-    int? ExpectedFrames,
-    string? LayoutHint,
-    string? BackgroundMode);
-
 public sealed record SpriteSheetDetectionResult(
     Guid SourceAssetId,
     int ImageWidth,
@@ -326,79 +149,6 @@ public sealed record SpriteSheetFrameQualityView(
     int ForegroundPixelCount,
     double ForegroundCoveragePercent,
     IReadOnlyList<string> Warnings);
-
-public sealed record RepairSpriteSheetFramesRequest(
-    Guid SpriteSheetId,
-    int ExpectedFrames,
-    string? LayoutHint,
-    IReadOnlyList<int>? TargetFrameNumbers,
-    bool Apply);
-
-public sealed record RepairSpriteSheetFramesResult(
-    Guid SpriteSheetId,
-    Guid SourceAssetId,
-    Guid? WorkingAssetId,
-    bool Applied,
-    int ImageWidth,
-    int ImageHeight,
-    int Rows,
-    int Columns,
-    int CellWidth,
-    int CellHeight,
-    int Padding,
-    int Gutter,
-    int Fps,
-    bool Loop,
-    string HorizontalAnchor,
-    string VerticalAnchor,
-    SpriteSheetBackground Background,
-    IReadOnlyList<SpriteSheetFrameUpdateView> Frames,
-    IReadOnlyList<string> Warnings,
-    IReadOnlyList<SpriteSheetRejectedSegmentView> RejectedSegments,
-    IReadOnlyList<SpriteSheetFrameQualityView> FrameQuality,
-    SpriteSheetDefinitionView? SavedSheet);
-
-public sealed record AutosaveSpriteSheetLayoutRequest(
-    Guid SpriteSheetId,
-    int Rows,
-    int Columns,
-    int CellWidth,
-    int CellHeight,
-    int Padding,
-    int Gutter,
-    int Fps,
-    bool Loop,
-    string HorizontalAnchor,
-    string VerticalAnchor,
-    IReadOnlyList<SpriteSheetFrameUpdateView> Frames);
-
-public sealed record UpdateSpriteSheetFramesRequest(
-    Guid SpriteSheetId,
-    int Rows,
-    int Columns,
-    int CellWidth,
-    int CellHeight,
-    int Padding,
-    int Gutter,
-    int Fps,
-    bool Loop,
-    string HorizontalAnchor,
-    string VerticalAnchor,
-    IReadOnlyList<SpriteSheetFrameUpdateView> Frames);
-
-public sealed record ComposeSpriteSheetFromImagesRequest(
-    IReadOnlyList<Guid> AssetIds,
-    Guid? SpriteSheetId = null,
-    int? InsertAt = null,
-    string? Label = null,
-    int? Rows = null,
-    int? Columns = null,
-    int? Padding = null,
-    int? Gutter = null,
-    int? Fps = null,
-    bool? Loop = null,
-    string? HorizontalAnchor = null,
-    string? VerticalAnchor = null);
 
 public sealed record SpriteSheetFrameUpdateView(
     int Index,
@@ -824,14 +574,6 @@ public sealed record MotionClipView(
     string SourcePackage,
     string SourceUrl,
     string License);
-
-public sealed record AdjustSpriteSheetFrameBoxRequest(
-    Guid SpriteSheetId,
-    int FrameIndex,
-    SpriteSheetRect SourceRect,
-    SpriteSheetRect? SourceImageRect = null,
-    string? Label = null,
-    bool FitCells = true);
 
 public sealed record PromptRecipeVersionView(
     Guid Id,

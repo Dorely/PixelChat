@@ -317,11 +317,7 @@ else if (_open)
             _exportCurrentImageSha256 = Sha256DataUrl(exportAsset.DataUrl);
             _exportCurrentWidth = exportAsset.Width;
             _exportCurrentHeight = exportAsset.Height;
-            _exportSpriteManifestAvailable = await Workflow.BuildSpriteSheetManifestJsonAsync(
-                ProjectId,
-                exportAsset.Id,
-                _exportFileName,
-                operationCts.Token) is not null;
+            _exportSpriteManifestAvailable = false;
             _exportStatus = "Loading applied export steps...";
             if (version != _exportRequestVersion)
                 return;
@@ -750,23 +746,7 @@ else if (_open)
             var fileName = CleanExportFileName(string.IsNullOrWhiteSpace(_exportFileName)
                 ? DefaultExportFileName(asset.FileName, asset.Label)
                 : _exportFileName);
-            var spriteManifestJson = _exportSpriteManifestAvailable
-                ? await Workflow.BuildSpriteSheetManifestJsonAsync(ProjectId, asset.Id, fileName, operationCts.Token)
-                : null;
-            if (string.IsNullOrWhiteSpace(spriteManifestJson))
-            {
-                await module.InvokeVoidAsync("downloadExportPng", operationCts.Token, _exportPreviewDataUrl, fileName);
-            }
-            else
-            {
-                await module.InvokeVoidAsync(
-                    "downloadExportBundle",
-                    operationCts.Token,
-                    _exportPreviewDataUrl,
-                    fileName,
-                    spriteManifestJson,
-                    SpriteManifestFileName(fileName));
-            }
+            await module.InvokeVoidAsync("downloadExportPng", operationCts.Token, _exportPreviewDataUrl, fileName);
 
             if (version == _exportRequestVersion)
                 _exportStatus = "Download prepared.";
