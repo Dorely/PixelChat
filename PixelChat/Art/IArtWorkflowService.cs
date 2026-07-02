@@ -62,6 +62,7 @@ public interface IArtWorkflowService
     Task<AnimationGuidePreviewView> PreviewAnimationGuideAsync(Guid projectId, GenerateAnimationGuideRequest request, CancellationToken cancellationToken = default);
     Task<AnimationGuideRenderView> GenerateAnimationGuideAsync(Guid projectId, GenerateAnimationGuideRequest request, CancellationToken cancellationToken = default);
     Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default);
+    Task<ArtAssetView> RenameAssetAsync(Guid projectId, Guid assetId, string label, CancellationToken cancellationToken = default);
     Task DeleteAssetAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<ChatContextAttachmentView> AttachContextAsync(Guid projectId, ChatContextAttachmentType type, Guid refId, string? label = null, CancellationToken cancellationToken = default);
     Task RemoveContextAsync(Guid projectId, Guid attachmentId, CancellationToken cancellationToken = default);

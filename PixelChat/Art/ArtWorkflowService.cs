@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -869,10 +870,13 @@ public sealed class ArtWorkflowService(
 
         var references = await MergeGenerationReferencesAsync(projectId, recipe, animationRecipe, explicitReferences, excludedAssetId: null, cancellationToken);
 
+        var outputLabel = Clean(request.OutputLabel);
         var batch = new GenerationBatch
         {
             ProjectId = projectId,
-            Label = $"Batch {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}",
+            Label = string.IsNullOrWhiteSpace(outputLabel)
+                ? $"Batch {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}"
+                : outputLabel,
             Provider = OpenAIAccountProvider.Name,
             MainlineModel = imageOptions.Value.DefaultMainlineModel,
             ImageModel = string.IsNullOrWhiteSpace(request.ImageModel)
@@ -973,9 +977,10 @@ public sealed class ArtWorkflowService(
 
         var image = providerResult.Images.FirstOrDefault()
             ?? throw new InvalidOperationException("Image provider completed without returning an image.");
+        var fallbackLabel = $"Image {LabelForIndex(outputIndex)}";
         var asset = CreateAsset(
             projectId,
-            $"Image {LabelForIndex(outputIndex)}",
+            OutputAssetLabel(batch.Label, outputIndex, batch.Count, fallbackLabel),
             $"generated-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(image.ContentType)}",
             ArtAssetKind.Generated,
             image.ContentType,
@@ -1311,11 +1316,14 @@ public sealed class ArtWorkflowService(
             ValidateEditImageAndMask(sourceImage, storedMask);
         }
 
+        var outputLabel = Clean(request.OutputLabel);
         var batch = new GenerationBatch
         {
             Id = batchId,
             ProjectId = projectId,
-            Label = $"Edit {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}",
+            Label = string.IsNullOrWhiteSpace(outputLabel)
+                ? $"Edit {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}"
+                : outputLabel,
             Provider = OpenAIAccountProvider.Name,
             MainlineModel = imageOptions.Value.DefaultMainlineModel,
             ImageModel = imageOptions.Value.DefaultImageModel,
@@ -1441,9 +1449,10 @@ public sealed class ArtWorkflowService(
 
         var image = providerResult.Images.FirstOrDefault()
             ?? throw new InvalidOperationException("Image provider completed without returning an image.");
+        var fallbackLabel = $"{sourceAsset.Label} edit {LabelForIndex(outputIndex)}";
         var asset = CreateAsset(
             projectId,
-            $"{sourceAsset.Label} edit {LabelForIndex(outputIndex)}",
+            OutputAssetLabel(batch.Label, outputIndex, batch.Count, fallbackLabel),
             $"edited-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(image.ContentType)}",
             ArtAssetKind.Edited,
             image.ContentType,
@@ -2366,6 +2375,16 @@ public sealed class ArtWorkflowService(
             asset.Notes = notes.Trim();
         asset.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<ArtAssetView> RenameAssetAsync(Guid projectId, Guid assetId, string label, CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+        asset.Label = CleanRequired(label, "Asset name is required.");
+        asset.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+        return AssetView(asset);
     }
 
     public async Task DeleteAssetAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default)
@@ -4746,6 +4765,29 @@ public sealed class ArtWorkflowService(
         thumbnailData = SpriteSheetPngCodec.EncodeRgba(targetWidth, targetHeight, target);
         return thumbnailData.Length > 0;
     }
+
+    private static string OutputAssetLabel(string batchLabel, int outputIndex, int outputCount, string fallback)
+    {
+        var label = Clean(batchLabel);
+        if (string.IsNullOrWhiteSpace(label) || IsDefaultBatchLabel(label))
+            return fallback;
+
+        return outputCount > 1
+            ? $"{label} {LabelForIndex(outputIndex)}"
+            : label;
+    }
+
+    private static bool IsDefaultBatchLabel(string label) =>
+        IsTimestampLabel(label, "Batch ") || IsTimestampLabel(label, "Edit ");
+
+    private static bool IsTimestampLabel(string label, string prefix) =>
+        label.StartsWith(prefix, StringComparison.Ordinal)
+        && DateTime.TryParseExact(
+            label[prefix.Length..],
+            "yyyy-MM-dd HH:mm:ss",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out _);
 
     private static string LabelForIndex(int index)
     {

@@ -208,6 +208,7 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (
                 string specificRequest,
+                [Description("Required readable name for the asset(s) this round will save. Use a short production name, not Image A or a generic batch label.")] string assetName,
                 [Description("Hard prohibitions only, phrased as no X; phrase wanted states positively in the main prompt.")] string? negativePrompt = null,
                 string? size = null,
                 string? background = null,
@@ -217,13 +218,14 @@ public sealed class AssistantToolRegistry(
                 Guid? recipeId = null,
                 Guid? animationRecipeId = null,
                 CancellationToken cancellationToken = default) =>
-                RunGenerationRoundAsync(projectId, budget, specificRequest, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId, recipeId, animationRecipeId, cancellationToken),
+                RunGenerationRoundAsync(projectId, budget, specificRequest, assetName, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId, recipeId, animationRecipeId, cancellationToken),
             name: "run_generation_round",
-            description: "Run one generic autonomous generation or edit round and wait for completion. Use for starter assets, art recipe tests, focused variations, and non-sheet image edits. For recipe tests, first save the art recipe revision and pass recipeId. For generation, pass animationRecipeId when a saved motion/layout recipe should guide a sprite-sheet request; edits ignore animationRecipeId. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
+            description: "Run one generic autonomous generation or edit round and wait for completion. Requires assetName, a readable saved asset base name. Use for starter assets, art recipe tests, focused variations, and non-sheet image edits. For recipe tests, first save the art recipe revision and pass recipeId. For generation, pass animationRecipeId when a saved motion/layout recipe should guide a sprite-sheet request; edits ignore animationRecipeId. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
 
         AIFunctionFactory.Create(
             method: (
                 string prompt,
+                [Description("Required readable base name for the saved sprite-sheet candidate asset(s). Use a short production name, not Image A or a generic batch label.")] string assetName,
                 Guid[]? referenceAssetIds = null,
                 Guid? artRecipeId = null,
                 Guid? animationRecipeId = null,
@@ -232,9 +234,9 @@ public sealed class AssistantToolRegistry(
                 string? background = null,
                 int count = 2,
                 CancellationToken cancellationToken = default) =>
-                RunGenerationRoundAsync(projectId, budget, prompt, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, animationRecipeId: animationRecipeId, cancellationToken: cancellationToken),
+                RunGenerationRoundAsync(projectId, budget, prompt, assetName, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, animationRecipeId: animationRecipeId, cancellationToken: cancellationToken),
             name: "generate_sprite_sheet_candidates",
-            description: "Generate sprite-sheet candidates from a concise labeled-slot prompt plus ordered references whose roles are indexed in the prompt. Pass animationRecipeId to use a saved animation recipe; its guide attachments are prepended automatically. For new guide-driven sprite sheets, first call generate_animation_guide with or without a motionClipId, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Starter/reference sprite and optional art recipe/style references should follow. Put hard prohibitions in negativePrompt. Returns model-only candidate images; add promising batches/assets to Review for the user."),
+            description: "Generate sprite-sheet candidates from a concise labeled-slot prompt plus ordered references whose roles are indexed in the prompt. Requires assetName, a readable saved asset base name. Pass animationRecipeId to use a saved animation recipe; its guide attachments are prepended automatically. For new guide-driven sprite sheets, first call generate_animation_guide with or without a motionClipId, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Starter/reference sprite and optional art recipe/style references should follow. Put hard prohibitions in negativePrompt. Returns model-only candidate images; add promising batches/assets to Review for the user."),
 
         AIFunctionFactory.Create(
             method: (
@@ -967,6 +969,7 @@ public sealed class AssistantToolRegistry(
         Guid projectId,
         AssistantTurnGenerationBudget budget,
         string specificRequest,
+        string assetName,
         string? negativePrompt,
         string? size,
         string? background,
@@ -977,6 +980,18 @@ public sealed class AssistantToolRegistry(
         Guid? animationRecipeId,
         CancellationToken cancellationToken)
     {
+        var outputLabel = CleanAssetName(assetName);
+        if (outputLabel is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "assetName is required for assistant-created assets. Provide a short readable saved asset name before starting generation.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            }, JsonOptions);
+        }
+
         if (budget.IsExhausted)
         {
             return JsonSerializer.Serialize(new
@@ -1029,7 +1044,8 @@ public sealed class AssistantToolRegistry(
                 recipeId,
                 null,
                 null,
-                references), cancellationToken);
+                references,
+                OutputLabel: outputLabel), cancellationToken);
         }
         else
         {
@@ -1042,7 +1058,8 @@ public sealed class AssistantToolRegistry(
                 recipeId,
                 animationRecipeId,
                 references,
-                ParentBatchId: null), cancellationToken);
+                ParentBatchId: null,
+                OutputLabel: outputLabel), cancellationToken);
         }
 
         var timeoutSeconds = agentOptions.Value.GenerationRoundWaitTimeoutSeconds <= 0
@@ -1956,6 +1973,12 @@ public sealed class AssistantToolRegistry(
             : agentOptions.Value.MaxImagesPerGenerationRound;
         var max = Math.Clamp(configuredMax, 1, Math.Max(1, imageOptions.Value.MaxOutputs));
         return Math.Clamp(count <= 0 ? max : count, 1, max);
+    }
+
+    private static string? CleanAssetName(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
 
     private static int ClampCount(int count) => Math.Clamp(count <= 0 ? 1 : count, 1, 4);

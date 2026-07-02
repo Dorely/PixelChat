@@ -955,8 +955,8 @@
 }
 
 .asset-card-compact {
-    grid-template-rows: 82px minmax(0, 1fr);
-    height: 100%;
+    grid-template-rows: 82px auto;
+    height: auto;
     min-height: 0;
 }
 
@@ -1039,7 +1039,7 @@
 .asset-card-compact .asset-card-body {
     gap: 0.35rem;
     padding: 0.45rem;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .asset-card-compact .asset-actions {
@@ -1050,7 +1050,7 @@
 
 .asset-title-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 0.55rem;
     min-width: 0;
@@ -1058,9 +1058,35 @@
 
 .asset-title-row strong {
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.25;
+}
+
+.asset-title-row span,
+.asset-kind-label {
+    flex: 0 0 auto;
     white-space: nowrap;
+}
+
+.asset-kind-label {
+    color: #667085;
+    font-size: 0.8rem;
+}
+
+.asset-rename-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 0.35rem;
+    align-items: start;
+    min-width: 0;
+}
+
+.asset-rename-input {
+    min-width: 0;
 }
 
 .asset-card p {

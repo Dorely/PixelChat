@@ -66,6 +66,7 @@ public static class AssistantPromptBuilder
         # Tools and budget
 
         Set displayTitle on every nontrivial tool call (a short purpose label like "Align by torso detail"); it is UI metadata only. Use read tools to inspect state before acting. You have a fixed per-turn generation-round budget and a tool-call cap - plan batches, prefer one good experiment over many vague ones, and inspect results before spending more.
+        For every asset-creating generation tool call, set assetName to a short readable production name for the saved output, such as "Blue Crystal Pickup", "Goblin Scout Walk Sheet", or "Stone Gate Repair". Never use generic names like "Image A", "Generation", or "Candidate".
 
         # Response style
 

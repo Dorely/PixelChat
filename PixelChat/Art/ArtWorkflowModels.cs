@@ -382,7 +382,8 @@ public sealed record GenerateImagesRequest(
     Guid? AnimationRecipeId,
     IReadOnlyList<Guid> ReferenceAssetIds,
     Guid? ParentBatchId,
-    string? ImageModel = null);
+    string? ImageModel = null,
+    string? OutputLabel = null);
 
 public sealed record EditImageRequest(
     Guid SourceAssetId,
@@ -394,7 +395,8 @@ public sealed record EditImageRequest(
     string? SourcePngDataUrl,
     string? MaskPngDataUrl,
     IReadOnlyList<Guid> ReferenceAssetIds,
-    bool SwitchToCompare = true);
+    bool SwitchToCompare = true,
+    string? OutputLabel = null);
 
 public sealed record CompareReviewSetItemRequest(
     CompareReviewItemKind Kind,

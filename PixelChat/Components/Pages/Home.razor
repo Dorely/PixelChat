@@ -241,6 +241,8 @@ else
     private bool _assetDeleteMode;
     private Guid? _editAssetId;
     private Guid? _assetDeleteCandidateId;
+    private Guid? _renamingAssetId;
+    private string _assetRenameDraft = string.Empty;
     private bool _exportModalOpen;
     private Guid? _exportModalAssetId;
     private bool _guideBuilderOpen;
@@ -333,6 +335,8 @@ else
         }
         if (_exportModalAssetId is Guid exportModalAssetId && !_workbench.Assets.Any(asset => asset.Id == exportModalAssetId))
             ResetExportModal();
+        if (_renamingAssetId is Guid renamingAssetId && !_workbench.Assets.Any(asset => asset.Id == renamingAssetId))
+            CancelRenameAsset();
         _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
         _recipeAttachments.RemoveAll(attachment => !_workbench.Assets.Any(asset => asset.Id == attachment.AssetId));
         _animationRecipeAttachments.RemoveAll(attachment => !_workbench.Assets.Any(asset => asset.Id == attachment.AssetId));
@@ -1563,10 +1567,30 @@ else
                 <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" />
             </button>
             <div class="asset-card-body">
-                <div class="asset-title-row">
-                    <strong>@asset.Label</strong>
-                    <span>@asset.Kind</span>
-                </div>
+                @if (_renamingAssetId == asset.Id)
+                {
+                    <div class="asset-rename-row">
+                        <input class="form-control form-control-sm asset-rename-input"
+                               aria-label="Asset name"
+                               value="@_assetRenameDraft"
+                               @oninput="args => _assetRenameDraft = args.Value?.ToString() ?? string.Empty" />
+                        <button type="button"
+                                class="btn btn-sm btn-primary"
+                                disabled="@string.IsNullOrWhiteSpace(_assetRenameDraft)"
+                                @onclick="() => SaveRenameAssetAsync(asset.Id)">
+                            Save
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelRenameAsset">Cancel</button>
+                    </div>
+                    <span class="asset-kind-label">@asset.Kind</span>
+                }
+                else
+                {
+                    <div class="asset-title-row">
+                        <strong>@asset.Label</strong>
+                        <span>@asset.Kind</span>
+                    </div>
+                }
                 @if (!compact)
                 {
                     <p>@(string.IsNullOrWhiteSpace(asset.Prompt) ? FormatDimensions(asset) : asset.Prompt)</p>
@@ -1574,6 +1598,7 @@ else
                 <div class="asset-actions">
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AttachAssetAsync(asset)">Attach</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddAssetToReviewAsync(asset)">Add to Review</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => BeginRenameAsset(asset)">Rename</button>
                     @if (!guideCard)
                     {
                         <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
@@ -2591,6 +2616,38 @@ else
         await ReloadWorkbenchAsync();
     }
 
+    private void BeginRenameAsset(ArtAssetView asset)
+    {
+        _renamingAssetId = asset.Id;
+        _assetRenameDraft = asset.Label;
+    }
+
+    private void CancelRenameAsset()
+    {
+        _renamingAssetId = null;
+        _assetRenameDraft = string.Empty;
+    }
+
+    private async Task SaveRenameAssetAsync(Guid assetId)
+    {
+        if (_workbench is null)
+            return;
+
+        var label = _assetRenameDraft.Trim();
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            _error = "Asset name is required.";
+            return;
+        }
+
+        await RunWorkflowAsync("Renaming asset...", async () =>
+        {
+            await Workflow.RenameAssetAsync(_workbench.Project.Id, assetId, label);
+            if (_renamingAssetId == assetId)
+                CancelRenameAsset();
+        });
+    }
+
     private void ToggleAssetDeleteMode()
     {
         _assetDeleteMode = !_assetDeleteMode;
@@ -2644,6 +2701,8 @@ else
         _animationRecipeAttachments.RemoveAll(attachment => attachment.AssetId == assetId);
         if (_editAssetId == assetId)
             _editAssetId = null;
+        if (_renamingAssetId == assetId)
+            CancelRenameAsset();
         _assetDeleteCandidateId = null;
     }
 
