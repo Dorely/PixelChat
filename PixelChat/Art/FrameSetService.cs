@@ -14,7 +14,8 @@ namespace PixelChat.Art;
 public sealed class FrameSetService(
     AppDbContext db,
     IImageProvider imageProvider,
-    IOptions<ImageGenerationOptions> imageOptions) : IFrameSetService
+    IOptions<ImageGenerationOptions> imageOptions,
+    ILogger<FrameSetService> logger) : IFrameSetService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -562,7 +563,7 @@ public sealed class FrameSetService(
             cancellationToken);
         var editPrompt = BuildEditFramePrompt(prompt, referenceRoleLines);
         var mask = request.UseFrameMask
-            ? await ResolveFrameEditMaskReferenceAsync(projectId, frame, cancellationToken)
+            ? await ResolveFrameEditMaskReferenceAsync(projectId, frame, cellWidth, cellHeight, cancellationToken)
             : null;
 
         var options = imageOptions.Value;
@@ -1843,6 +1844,8 @@ public sealed class FrameSetService(
     private async Task<ImageProviderReference?> ResolveFrameEditMaskReferenceAsync(
         Guid projectId,
         Frame frame,
+        int cellWidth,
+        int cellHeight,
         CancellationToken cancellationToken)
     {
         var mask = await db.ImageMasks
@@ -1851,6 +1854,18 @@ public sealed class FrameSetService(
             .FirstOrDefaultAsync(cancellationToken);
         if (mask is null)
             return null;
+        if (mask.Width != cellWidth || mask.Height != cellHeight)
+        {
+            logger.LogWarning(
+                "Skipping stale frame mask {MaskId} for frame {FrameId}: mask is {MaskWidth}x{MaskHeight} but the logical cell is {CellWidth}x{CellHeight}.",
+                mask.Id,
+                frame.Id,
+                mask.Width,
+                mask.Height,
+                cellWidth,
+                cellHeight);
+            return null;
+        }
 
         var fileName = string.IsNullOrWhiteSpace(mask.Label)
             ? $"frame-{frame.Index + 1}-mask.png"
@@ -1864,12 +1879,14 @@ public sealed class FrameSetService(
         if (referenceRoleLines.Count == 0)
             return prompt;
 
-        var lines = new List<string>(referenceRoleLines)
+        var lines = new List<string>
         {
-            "Edit only what the instruction changes.",
-            string.Empty,
-            prompt,
+            "The first image is the frame cell to edit.",
         };
+        lines.AddRange(referenceRoleLines);
+        lines.Add("Edit only what the instruction changes.");
+        lines.Add(string.Empty);
+        lines.Add(prompt);
         return string.Join("\n", lines);
     }
 

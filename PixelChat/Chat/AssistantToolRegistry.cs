@@ -1752,9 +1752,10 @@ public sealed class AssistantToolRegistry(
             .Where(frame => frame.ForegroundHeight > 0)
             .Select(frame => frame.ForegroundHeight)
             .ToList());
-        var maxHeightDeviationPercent = frameMetrics.Count == 0
+        var scalableFrames = frameMetrics.Where(frame => frame.ForegroundHeight > 0).ToList();
+        var maxHeightDeviationPercent = scalableFrames.Count == 0
             ? 0
-            : frameMetrics.Max(frame => frame.HeightDeviationFromMedianPercent);
+            : scalableFrames.Max(frame => frame.HeightDeviationFromMedianPercent);
         var needsScaleNormalization = maxHeightDeviationPercent > 6d;
         var majorOutliers = pairs
             .Where(pair =>
