@@ -238,6 +238,7 @@ else
     private int _brushSize = 36;
     private string _editorTool = "mask";
     private string _assetOrganization = "latest";
+    private bool _assetDeleteMode;
     private Guid? _editAssetId;
     private Guid? _assetDeleteCandidateId;
     private bool _exportModalOpen;
@@ -317,6 +318,8 @@ else
         {
             _activeWorkspaceMode = _workbench.Project.ActiveWorkspaceMode;
         }
+        if (_activeWorkspaceMode != WorkspaceMode.Assets)
+            ResetAssetDeleteMode();
 
         _loadedEditorAssetId = _activeWorkspaceMode == WorkspaceMode.Edit ? _loadedEditorAssetId : null;
         if (_editAssetId is Guid editAssetId && !_workbench.Assets.Any(asset => asset.Id == editAssetId))
@@ -485,6 +488,9 @@ else
             : null;
 
         _activeWorkspaceMode = mode;
+        if (mode != WorkspaceMode.Assets)
+            ResetAssetDeleteMode();
+
         PublishVisibleState();
         StateHasChanged();
 
@@ -1463,6 +1469,14 @@ else
                         <button type="button" class="@AssetOrganizationClass("recipe")" @onclick='() => SetAssetOrganization("recipe")'>Art Recipe</button>
                         <button type="button" class="@AssetOrganizationClass("guides")" @onclick='() => SetAssetOrganization("guides")'>Guides</button>
                     </div>
+                    <button type="button"
+                            class="@AssetDeleteModeClass()"
+                            aria-pressed="@(_assetDeleteMode ? "true" : "false")"
+                            title="Delete buttons skip confirmation while this is on."
+                            @onclick="ToggleAssetDeleteMode">
+                        <span class="asset-delete-mode-switch" aria-hidden="true"></span>
+                        <span>Delete Mode</span>
+                    </button>
                     @if (_assetOrganization == "guides")
                     {
                         <button type="button" class="btn btn-sm btn-primary" @onclick="OpenGuideBuilder">Create Guide</button>
@@ -1567,7 +1581,7 @@ else
                         <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenSpriteSheetAsync(asset)">Sprite Sheet</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!CanComposeSpriteFrame(asset))" @onclick="() => AddAssetToSpriteSheetAsync(asset)">Add Frame</button>
                     }
-                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => AskDeleteAsset(asset.Id)">Delete</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RequestDeleteAssetAsync(asset.Id)">Delete</button>
                     @if (!guideCard)
                     {
                         <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => OpenExportAsync(asset)">Export</button>
@@ -2577,7 +2591,29 @@ else
         await ReloadWorkbenchAsync();
     }
 
-    private void AskDeleteAsset(Guid assetId) => _assetDeleteCandidateId = assetId;
+    private void ToggleAssetDeleteMode()
+    {
+        _assetDeleteMode = !_assetDeleteMode;
+        if (_assetDeleteMode)
+            _assetDeleteCandidateId = null;
+    }
+
+    private void ResetAssetDeleteMode()
+    {
+        _assetDeleteMode = false;
+        _assetDeleteCandidateId = null;
+    }
+
+    private async Task RequestDeleteAssetAsync(Guid assetId)
+    {
+        if (_assetDeleteMode && _activeWorkspaceMode == WorkspaceMode.Assets)
+        {
+            await DeleteAssetAsync(assetId);
+            return;
+        }
+
+        _assetDeleteCandidateId = assetId;
+    }
 
     private void CancelDeleteAsset() => _assetDeleteCandidateId = null;
 
@@ -2586,16 +2622,29 @@ else
         if (_workbench is null || _assetDeleteCandidateId is not Guid assetId)
             return;
 
+        await DeleteAssetAsync(assetId);
+    }
+
+    private async Task DeleteAssetAsync(Guid assetId)
+    {
+        if (_workbench is null)
+            return;
+
         await RunWorkflowAsync("Deleting asset...", async () =>
         {
             await Workflow.DeleteAssetAsync(_workbench.Project.Id, assetId);
-            _draftReferenceAssetIds.Remove(assetId);
-            _recipeAttachments.RemoveAll(attachment => attachment.AssetId == assetId);
-            _animationRecipeAttachments.RemoveAll(attachment => attachment.AssetId == assetId);
-            if (_editAssetId == assetId)
-                _editAssetId = null;
-            _assetDeleteCandidateId = null;
+            ClearDeletedAssetState(assetId);
         });
+    }
+
+    private void ClearDeletedAssetState(Guid assetId)
+    {
+        _draftReferenceAssetIds.Remove(assetId);
+        _recipeAttachments.RemoveAll(attachment => attachment.AssetId == assetId);
+        _animationRecipeAttachments.RemoveAll(attachment => attachment.AssetId == assetId);
+        if (_editAssetId == assetId)
+            _editAssetId = null;
+        _assetDeleteCandidateId = null;
     }
 
     private async Task RunWorkflowAsync(string busyText, Func<Task> action)
@@ -3824,6 +3873,9 @@ else
 
     private string AssetOrganizationClass(string organization) =>
         _assetOrganization == organization ? "filter-button is-active" : "filter-button";
+
+    private string AssetDeleteModeClass() =>
+        _assetDeleteMode ? "asset-delete-mode-toggle is-active" : "asset-delete-mode-toggle";
 
     private string AnimationRecipeRowClass(Guid recipeId) =>
         _recipeEditorKind == "animation" && _editingAnimationRecipeId == recipeId
