@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.ComponentModel;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 using PixelChat.Art;
@@ -15,7 +16,8 @@ public sealed class AssistantToolRegistry(
     ISpriteWorkspaceActionService spriteActions,
     IWorkspaceVisibleStateStore visibleState,
     IImageGenerationRuntime imageRuntime,
-    IOptions<AgentOptions> agentOptions)
+    IOptions<AgentOptions> agentOptions,
+    IOptions<PixelChat.Art.ImageGenerationOptions> imageOptions)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -60,6 +62,7 @@ public sealed class AssistantToolRegistry(
         "delete_frame",
         "set_frame_duration",
         "auto_anchor_align_frames",
+        "normalize_frame_scale",
         "upsert_frame_mask",
         "clear_frame_mask",
         "erase_frame_regions",
@@ -189,7 +192,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 GenerateAnimationGuideToolAsync(projectId, motionClipId, frameCount, fps, rows, columns, guideCanvasSize, guideCellSize, label, guideCameraYawDegrees, guideCameraPitchDegrees, loop, safeMarginPercent, cancellationToken),
             name: "generate_animation_guide",
-            description: "Render and save a reusable guide as SpriteGuide assets. Omit motionClipId to create a layout-only labeled box guide. For GLTF-backed humanoid motion, first call list_motion_clips, then pass the chosen motionClipId plus explicit grid/layout controls. UI-equivalent defaults are frameCount 8, rows 2, columns 4, guideCanvasSize 1024x1024, guideCellSize 256x512, fps 8, loop true, and safeMarginPercent 12. guideCameraYawDegrees controls horizontal angle and guideCameraPitchDegrees controls camera elevation only when motionClipId is supplied. Use this before generate_sprite_sheet_candidates for guide-driven sprite-sheet work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
+            description: "Render and save a reusable guide as SpriteGuide assets. Omit motionClipId to create a layout-only labeled box guide; use mannequin vs layout-only as an iteration lever when one over-constrains or underspecifies motion. For GLTF-backed humanoid motion, first call list_motion_clips, then pass the chosen motionClipId plus explicit grid/layout controls. UI-equivalent defaults are frameCount 8, rows 2, columns 4, guideCanvasSize 1024x1024, guideCellSize 256x512, fps 8, loop true, and safeMarginPercent 12. guideCameraYawDegrees controls horizontal angle and guideCameraPitchDegrees controls camera elevation only when motionClipId is supplied. Use this before generate_sprite_sheet_candidates for guide-driven sprite-sheet work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
 
         AIFunctionFactory.Create(
             method: (string? status = null, int? limit = null) =>
@@ -205,7 +208,7 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (
                 string specificRequest,
-                string? negativePrompt = null,
+                [Description("Hard prohibitions only, phrased as no X; phrase wanted states positively in the main prompt.")] string? negativePrompt = null,
                 string? size = null,
                 string? background = null,
                 int count = 2,
@@ -224,14 +227,14 @@ public sealed class AssistantToolRegistry(
                 Guid[]? referenceAssetIds = null,
                 Guid? artRecipeId = null,
                 Guid? animationRecipeId = null,
-                string? negativePrompt = null,
+                [Description("Hard prohibitions only, phrased as no X; phrase wanted states positively in the main prompt.")] string? negativePrompt = null,
                 string? size = null,
                 string? background = null,
                 int count = 2,
                 CancellationToken cancellationToken = default) =>
                 RunGenerationRoundAsync(projectId, budget, prompt, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, animationRecipeId: animationRecipeId, cancellationToken: cancellationToken),
             name: "generate_sprite_sheet_candidates",
-            description: "Generate sprite-sheet candidates from a concise prompt plus ordered references. Pass animationRecipeId to use a saved animation recipe; its guide attachments are prepended automatically. For new guide-driven sprite sheets, first call generate_animation_guide with or without a motionClipId, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Starter/reference sprite and optional art recipe/style references should follow. The prompt should define frame count/order, boundaries, no overlap, preservation, and guide-mark cleanup. Returns model-only candidate images; add promising batches/assets to Review for the user."),
+            description: "Generate sprite-sheet candidates from a concise labeled-slot prompt plus ordered references whose roles are indexed in the prompt. Pass animationRecipeId to use a saved animation recipe; its guide attachments are prepended automatically. For new guide-driven sprite sheets, first call generate_animation_guide with or without a motionClipId, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Starter/reference sprite and optional art recipe/style references should follow. Put hard prohibitions in negativePrompt. Returns model-only candidate images; add promising batches/assets to Review for the user."),
 
         AIFunctionFactory.Create(
             method: (
@@ -379,6 +382,16 @@ public sealed class AssistantToolRegistry(
             description: "Greenfield Frames pipeline: manually nudge one frame by setting its artwork offset inside the logical cell, then update the visible Sprites workspace. Use this after auto-anchor review when one or a few frames still drift; it does not change source bounds."),
 
         AIFunctionFactory.Create(
+            method: (
+                Guid frameId,
+                SpriteSheetRect? rect = null,
+                int scale = 4,
+                CancellationToken cancellationToken = default) =>
+                InspectFrameAsync(projectId, frameId, rect, scale, cancellationToken),
+            name: "inspect_frame",
+            description: "Zoom into one frame or a sub-region at N times scale for close visual QC of hands, feet, face, or weapon grip. Coordinates are in the logical cell; out-of-range rect values are clamped. Returns a model-only image. Use before passing anatomy/facing checks, especially on back-facing sprites. Read-only and does not consume generation budget."),
+
+        AIFunctionFactory.Create(
             method: (Guid frameSetId, CancellationToken cancellationToken = default) =>
                 ReadFrameSetAsync(projectId, frameSetId, cancellationToken),
             name: "read_frame_set",
@@ -447,6 +460,17 @@ public sealed class AssistantToolRegistry(
 
         AIFunctionFactory.Create(
             method: (
+                Guid frameSetId,
+                int targetHeight = 0,
+                double tolerancePercent = 2.0d,
+                string anchor = "bottom",
+                CancellationToken cancellationToken = default) =>
+                NormalizeFrameScaleAsync(projectId, frameSetId, targetHeight, tolerancePercent, anchor, cancellationToken),
+            name: "normalize_frame_scale",
+            description: "Greenfield Frames pipeline: deterministic cross-frame character scale normalization. Run before alignment when review reports scale deviation. targetHeight 0 uses the median foreground height; anchor is bottom or center. Does not consume generation budget. Follow with review_frame_set_animation."),
+
+        AIFunctionFactory.Create(
+            method: (
                 Guid frameId,
                 string maskDataUrl,
                 string? label = null,
@@ -477,7 +501,7 @@ public sealed class AssistantToolRegistry(
             method: (Guid? frameSetId = null, int maxFrames = 12, CancellationToken cancellationToken = default) =>
                 ReviewFrameSetAnimationAsync(projectId, frameSetId, maxFrames, cancellationToken),
             name: "review_frame_set_animation",
-            description: "Greenfield animation-quality review for a FrameSet. Renders the frames into a one-row strip and returns motion metrics in JSON plus labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content. For frames with edited/erased working images it also returns removed-vs-source overlays where red marks pixels erased from the source foreground; inspect these for clipped owned silhouette before declaring an animation clean. Omit frameSetId to use the active FrameSet. This is read-only."),
+            description: "Greenfield animation-quality review for a FrameSet. Renders the frames into a one-row strip and returns motion metrics, scaleStability, and visualChecklist in JSON plus labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content. Answer every visualChecklist item individually before declaring the animation clean. For frames with edited/erased working images it also returns removed-vs-source overlays where red marks pixels erased from the source foreground; inspect these for clipped owned silhouette before declaring an animation clean. Omit frameSetId to use the active FrameSet. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (string mode) => SwitchWorkspaceModeAsync(projectId, mode),
@@ -557,10 +581,13 @@ public sealed class AssistantToolRegistry(
                 Guid frameId,
                 string prompt,
                 string? background = null,
+                Guid[]? referenceAssetIds = null,
+                bool includeAdjacentFrames = true,
+                bool useFrameMask = true,
                 CancellationToken cancellationToken = default) =>
-                EditFrameAsync(projectId, budget, frameSetId, frameId, prompt, background, cancellationToken),
+                EditFrameAsync(projectId, budget, frameSetId, frameId, prompt, background, referenceAssetIds, includeAdjacentFrames, useFrameMask, cancellationToken),
             name: "edit_frame",
-            description: "Greenfield Frames pipeline: AI-edit one frame's logical cell with a short prompt, store the result as the frame's working image, and update the visible Sprites workspace. Consumes one autonomous generation round budget. Use only when deterministic crop/cell/offset/align/erase cannot fix the frame. background defaults to opaque so the frame stays opaque."),
+            description: "Greenfield Frames pipeline: AI-edit one frame's logical cell with a Change/Preserve/Constraints prompt, store the result as the frame's working image, and update the visible Sprites workspace. Consumes one autonomous generation round budget. Use only when deterministic crop/cell/offset/align/erase cannot fix the frame. Pass the identity anchor asset in referenceAssetIds when fixing anatomy or identity; previous/next frame references are included by default for continuity. Use upsert_frame_mask first for surgical edits and keep useFrameMask true. background defaults to opaque so the frame stays opaque."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId, bool? favorite = null, string? notes = null) =>
@@ -1260,6 +1287,36 @@ public sealed class AssistantToolRegistry(
         return SerializeFrameSet(view, "Frame content offset updated.");
     }
 
+    private async Task<string> InspectFrameAsync(
+        Guid projectId,
+        Guid frameId,
+        SpriteSheetRect? rect,
+        int scale,
+        CancellationToken cancellationToken)
+    {
+        var image = await frameSets.InspectFrameAsync(projectId, frameId, rect, scale, cancellationToken);
+        if (image is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "Frame was not found or could not be rendered for inspection.",
+                frameId,
+            }, JsonOptions);
+        }
+
+        var (width, height) = ImageMetadataReader.TryReadSize(image.Value.Data, image.Value.ContentType);
+        return JsonSerializer.Serialize(new
+        {
+            frameId,
+            rect,
+            requestedScale = scale,
+            width,
+            height,
+            modelOnlyImage = true,
+            message = "Frame inspection image returned as model-only content.",
+        }, JsonOptions);
+    }
+
     private async Task<string> ReadFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken)
     {
         var view = await frameSets.GetFrameSetAsync(projectId, frameSetId, cancellationToken);
@@ -1340,6 +1397,32 @@ public sealed class AssistantToolRegistry(
             message = result.Applied
                 ? "Auto-anchor alignment applied. Review the animation and nudge any drifting frames."
                 : "Auto-anchor alignment previewed. Review diagnostics before applying or choosing a better anchor.",
+        }, JsonOptions);
+    }
+
+    private async Task<string> NormalizeFrameScaleAsync(
+        Guid projectId,
+        Guid frameSetId,
+        int targetHeight,
+        double tolerancePercent,
+        string anchor,
+        CancellationToken cancellationToken)
+    {
+        var result = await spriteActions.NormalizeFrameScaleAsync(projectId, new NormalizeFrameScaleRequest(
+            frameSetId,
+            targetHeight,
+            tolerancePercent,
+            anchor), cancellationToken);
+        using var frameSetDocument = JsonDocument.Parse(SerializeFrameSet(result.FrameSet, "Frame scale normalization applied."));
+        return JsonSerializer.Serialize(new
+        {
+            frameSet = frameSetDocument.RootElement.Clone(),
+            result.TargetHeight,
+            result.TolerancePercent,
+            result.Anchor,
+            result.Frames,
+            result.Warnings,
+            message = "Run review_frame_set_animation next to verify scale stability before final alignment/build.",
         }, JsonOptions);
     }
 
@@ -1551,6 +1634,9 @@ public sealed class AssistantToolRegistry(
         Guid frameId,
         string prompt,
         string? background,
+        Guid[]? referenceAssetIds,
+        bool includeAdjacentFrames,
+        bool useFrameMask,
         CancellationToken cancellationToken)
     {
         if (budget.IsExhausted)
@@ -1576,7 +1662,14 @@ public sealed class AssistantToolRegistry(
         }
 
         var round = budget.Consume();
-        var view = await spriteActions.EditFrameAsync(projectId, new EditFrameRequest(frameSetId, frameId, prompt, background), cancellationToken);
+        var view = await spriteActions.EditFrameAsync(projectId, new EditFrameRequest(
+            frameSetId,
+            frameId,
+            prompt,
+            background,
+            referenceAssetIds?.Where(id => id != Guid.Empty).Distinct().ToList(),
+            includeAdjacentFrames,
+            useFrameMask), cancellationToken);
         using var document = JsonDocument.Parse(SerializeFrameSet(view, "Frame AI edit completed."));
         return JsonSerializer.Serialize(new
         {
@@ -1644,6 +1737,25 @@ public sealed class AssistantToolRegistry(
     private static object BuildAnimationQualityGate(SpriteAnimationMetricsView metrics)
     {
         var pairs = metrics.FramePairs.ToList();
+        var frameMetrics = metrics.Frames.ToList();
+        var foregroundHeights = frameMetrics
+            .Select(frame => new
+            {
+                frame.FrameIndex,
+                frame.ForegroundHeight,
+                frame.ForegroundWidth,
+                frame.HeightDeviationFromMedianPercent,
+                frame.ForegroundBounds,
+            })
+            .ToList();
+        var medianForegroundHeight = Median(frameMetrics
+            .Where(frame => frame.ForegroundHeight > 0)
+            .Select(frame => frame.ForegroundHeight)
+            .ToList());
+        var maxHeightDeviationPercent = frameMetrics.Count == 0
+            ? 0
+            : frameMetrics.Max(frame => frame.HeightDeviationFromMedianPercent);
+        var needsScaleNormalization = maxHeightDeviationPercent > 6d;
         var majorOutliers = pairs
             .Where(pair =>
                 pair.CentroidDistance > Math.Max(32d, metrics.MeanCentroidDrift * 2.25d)
@@ -1672,14 +1784,20 @@ public sealed class AssistantToolRegistry(
             warnings.Add("Major motion, scale, silhouette, or foreground-diff outliers detected.");
         if (repeatedPosePairs.Count > 0)
             warnings.Add("Adjacent frames may repeat the same pose.");
+        if (needsScaleNormalization)
+            warnings.Add("Cross-frame foreground height deviation is high; normalize frame scale before alignment or rebuild.");
         if (metrics.AreaVariancePercent > 30d)
             warnings.Add("Frame silhouette area variance is high; check for distortions, crop errors, or wrong boxes.");
         warnings.Add("Wrong pose order and action semantics require visual review against the requested animation/guide.");
 
-        var status = majorOutliers.Count > 0 || repeatedPosePairs.Count > 0 || metrics.AreaVariancePercent > 30d
+        var status = needsScaleNormalization
+            ? "needs_scale_normalization"
+            : majorOutliers.Count > 0 || repeatedPosePairs.Count > 0 || metrics.AreaVariancePercent > 30d
             ? "needs_motion_or_pose_review"
             : "pass_with_visual_review";
-        var recommendedAction = majorOutliers.Count > 0 || repeatedPosePairs.Count > 0
+        var recommendedAction = needsScaleNormalization
+            ? "normalize_frame_scale"
+            : majorOutliers.Count > 0 || repeatedPosePairs.Count > 0
             ? "regenerate_or_full_strip_edit_bad_pose_sequence_before_cleanup"
             : metrics.AreaVariancePercent > 30d
                 ? "check_boxes_then_regenerate_or_edit_distorted_frames"
@@ -1692,8 +1810,42 @@ public sealed class AssistantToolRegistry(
             warnings,
             majorOutliers,
             repeatedPosePairs,
+            scaleStability = new
+            {
+                foregroundHeights,
+                medianForegroundHeight,
+                maxDeviationPercent = Math.Round(maxHeightDeviationPercent, 3, MidpointRounding.AwayFromZero),
+                needsScaleNormalization,
+                recommendedAction = needsScaleNormalization ? "normalize_frame_scale" : "none",
+            },
+            visualChecklist = BuildVisualChecklist(),
             cleanupRule = "Use deterministic erase/keep only for guide marks, edge bleed, or background artifacts after boxes and poses are acceptable.",
         };
+    }
+
+    private static object[] BuildVisualChecklist() =>
+    [
+        new { name = "facingConsistent", question = "Does every frame face the requested direction without accidental flips?", lookAt = "frame images; call inspect_frame for ambiguous head/torso direction" },
+        new { name = "limbCountCorrect", question = "Does each frame have the correct number of arms, legs, hands, feet, weapons, or held objects?", lookAt = "frame images and inspect_frame zooms on hands/feet" },
+        new { name = "anatomyOrientation", question = "Are hands and feet oriented correctly for the facing, especially back-facing sprites?", lookAt = "inspect_frame before passing this check" },
+        new { name = "characterScaleStable", question = "Does the character maintain stable height and proportions across frames?", lookAt = "scaleStability plus frame images and onion skin" },
+        new { name = "feetGrounded", question = "Do grounded frames share the intended baseline or contact point?", lookAt = "frame images and onion skin" },
+        new { name = "guideMarksGone", question = "Are guide lines, labels, boxes, numbers, mannequins, and construction marks absent?", lookAt = "frame images and removed-vs-source overlays" },
+        new { name = "silhouetteClean", question = "Is the owned silhouette clean without clipped limbs, neighbor bleed, or accidental erasures?", lookAt = "frame images and removed-vs-source overlays" },
+        new { name = "motionArcMatchesRequest", question = "Does the pose sequence match the requested action and timing?", lookAt = "filmstrip, onion skin, and pairwise diffs" },
+        new { name = "identityConsistent", question = "Does every frame preserve the same palette, outfit, proportions, and head-to-body ratio?", lookAt = "frame images; call inspect_frame for small-scale identity details" },
+    ];
+
+    private static double Median(IReadOnlyList<int> values)
+    {
+        if (values.Count == 0)
+            return 0;
+
+        var sorted = values.OrderBy(value => value).ToList();
+        var middle = sorted.Count / 2;
+        return sorted.Count % 2 == 1
+            ? sorted[middle]
+            : (sorted[middle - 1] + sorted[middle]) / 2d;
     }
 
     private static bool HasShapePaths(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
@@ -1799,9 +1951,9 @@ public sealed class AssistantToolRegistry(
     private int ClampGenerationRoundCount(int count)
     {
         var configuredMax = agentOptions.Value.MaxImagesPerGenerationRound <= 0
-            ? 2
+            ? imageOptions.Value.MaxOutputs
             : agentOptions.Value.MaxImagesPerGenerationRound;
-        var max = Math.Clamp(configuredMax, 1, 2);
+        var max = Math.Clamp(configuredMax, 1, Math.Max(1, imageOptions.Value.MaxOutputs));
         return Math.Clamp(count <= 0 ? max : count, 1, max);
     }
 

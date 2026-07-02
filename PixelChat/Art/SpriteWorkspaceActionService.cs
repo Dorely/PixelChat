@@ -183,6 +183,13 @@ public sealed class SpriteWorkspaceActionService(
         return view;
     }
 
+    public async Task<NormalizeFrameScaleResult> NormalizeFrameScaleAsync(Guid projectId, NormalizeFrameScaleRequest request, CancellationToken cancellationToken = default)
+    {
+        var result = await frameSets.NormalizeFrameScaleAsync(projectId, request, cancellationToken);
+        await FocusFrameSetAsync(projectId, result.FrameSet, SelectedFrameId(result.FrameSet), cancellationToken);
+        return result;
+    }
+
     public async Task<FrameSetView> ReorderFrameAsync(Guid projectId, Guid frameSetId, Guid frameId, int targetIndex, CancellationToken cancellationToken = default)
     {
         var view = await frameSets.ReorderFrameAsync(projectId, frameSetId, frameId, targetIndex, cancellationToken);

@@ -22,6 +22,7 @@ public interface IFrameSetService
     Task<FrameSetView> EditFrameAsync(Guid projectId, EditFrameRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> EraseFrameRegionsAsync(Guid projectId, EraseFrameRegionsRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> ComposeFrameSetFromAssetsAsync(Guid projectId, ComposeFrameSetFromAssetsRequest request, CancellationToken cancellationToken = default);
+    Task<NormalizeFrameScaleResult> NormalizeFrameScaleAsync(Guid projectId, NormalizeFrameScaleRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetAnimationReviewView> BuildAnimationReviewAsync(Guid projectId, Guid frameSetId, int maxFrames = 12, CancellationToken cancellationToken = default);
     Task<AnchorAlignmentResult> AlignFramesByAnchorRectAsync(Guid projectId, AlignFramesByAnchorRectRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> GetFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken = default);
@@ -41,4 +42,5 @@ public interface IFrameSetService
     Task<(byte[] Data, string ContentType)?> GetFrameMaskImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
     Task<(byte[] Data, string ContentType)?> GetFrameContentImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
     Task<(byte[] Data, string ContentType)?> GetFramePreviewImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default);
+    Task<(byte[] Data, string ContentType)?> InspectFrameAsync(Guid projectId, Guid frameId, SpriteSheetRect? rect, int scale, CancellationToken cancellationToken = default);
 }

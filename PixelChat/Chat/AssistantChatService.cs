@@ -21,6 +21,7 @@ public sealed class AssistantChatService(
     IFrameSetService frameSets,
     IChatTokenEstimator tokenEstimator,
     IOptions<AgentOptions> agentOptions,
+    IOptions<PixelChat.Art.ImageGenerationOptions> imageOptions,
     ILogger<AssistantChatService> logger) : IAssistantChatService
 {
     private const string InitialAssistantGreeting =
@@ -914,6 +915,15 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "review_frame_set_animation", StringComparison.Ordinal))
                 return await BuildFrameSetAnimationReviewModelOnlyContentsAsync(pendingCall, projectId, cancellationToken);
 
+            if (string.Equals(pendingCall.Name, "build_sheet", StringComparison.Ordinal))
+                return await BuildBuiltSheetModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
+
+            if (string.Equals(pendingCall.Name, "translate_frame_content", StringComparison.Ordinal))
+                return await BuildFrameCellModelOnlyContentsAsync(pendingCall, projectId, "rendered logical cell after translation", cancellationToken);
+
+            if (string.Equals(pendingCall.Name, "inspect_frame", StringComparison.Ordinal))
+                return await BuildInspectFrameModelOnlyContentsAsync(pendingCall, projectId, cancellationToken);
+
             if (string.Equals(pendingCall.Name, "edit_frame", StringComparison.Ordinal)
                 || string.Equals(pendingCall.Name, "erase_frame_regions", StringComparison.Ordinal))
                 return await BuildEditedFrameModelOnlyContentsAsync(pendingCall, projectId, cancellationToken);
@@ -940,7 +950,7 @@ public sealed class AssistantChatService(
             return Array.Empty<AIContent>();
         }
 
-        var maxImages = Math.Clamp(agentOptions.Value.MaxImagesPerGenerationRound <= 0 ? 2 : agentOptions.Value.MaxImagesPerGenerationRound, 1, 2);
+        var maxImages = MaxGenerationRoundImages();
         var batchId = batch.TryGetProperty("id", out var batchIdElement) ? batchIdElement.GetString() : null;
         var round = root.TryGetProperty("round", out var roundElement) && roundElement.TryGetInt32(out var roundValue)
             ? roundValue
@@ -998,7 +1008,58 @@ public sealed class AssistantChatService(
         return contents;
     }
 
+    private async Task<IReadOnlyList<AIContent>> BuildBuiltSheetModelOnlyContentsAsync(
+        Guid projectId,
+        string toolResult,
+        CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(toolResult);
+        if (!TryReadGuidProperty(document.RootElement, "outputAssetId", out var outputAssetId))
+            return Array.Empty<AIContent>();
+
+        var asset = await workflow.GetAssetForExportAsync(projectId, outputAssetId, cancellationToken);
+        return
+        [
+            new TextContent($"Model-only image: rebuilt sheet '{asset.Label}' ({asset.Id}) - verify one row, equal cells, and no guide marks. This image is not attached to visible chat context."),
+            new DataContent(asset.DataUrl, asset.ContentType)
+            {
+                Name = asset.FileName,
+            },
+        ];
+    }
+
     private async Task<IReadOnlyList<AIContent>> BuildEditedFrameModelOnlyContentsAsync(
+        PendingToolCall pendingCall,
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        return await BuildFrameCellModelOnlyContentsAsync(pendingCall, projectId, "working pixels after the edit", cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildFrameCellModelOnlyContentsAsync(
+        PendingToolCall pendingCall,
+        Guid projectId,
+        string label,
+        CancellationToken cancellationToken)
+    {
+        if (ReadGuidArgument(pendingCall, "frameId") is not Guid frameId || frameId == Guid.Empty)
+            return Array.Empty<AIContent>();
+
+        var image = await frameSets.GetFramePreviewImageAsync(projectId, frameId, cancellationToken);
+        if (image is null)
+            return Array.Empty<AIContent>();
+
+        return
+        [
+            new TextContent($"Model-only image: {label} for frame {frameId}. This image is not attached to visible chat context."),
+            new DataContent(DataUrl.ToDataUrl(image.Value.ContentType, image.Value.Data), image.Value.ContentType)
+            {
+                Name = $"frame-{frameId:N}-cell.png",
+            },
+        ];
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildInspectFrameModelOnlyContentsAsync(
         PendingToolCall pendingCall,
         Guid projectId,
         CancellationToken cancellationToken)
@@ -1006,16 +1067,21 @@ public sealed class AssistantChatService(
         if (ReadGuidArgument(pendingCall, "frameId") is not Guid frameId || frameId == Guid.Empty)
             return Array.Empty<AIContent>();
 
-        var image = await frameSets.GetFrameContentImageAsync(projectId, frameId, cancellationToken);
+        var image = await frameSets.InspectFrameAsync(
+            projectId,
+            frameId,
+            ReadRectArgument(pendingCall, "rect"),
+            ReadIntArgument(pendingCall, "scale") ?? 4,
+            cancellationToken);
         if (image is null)
             return Array.Empty<AIContent>();
 
         return
         [
-            new TextContent($"Model-only image: working pixels for frame {frameId} after the edit. This image is not attached to visible chat context."),
+            new TextContent($"Model-only image: zoomed inspection for frame {frameId}. This image is not attached to visible chat context."),
             new DataContent(DataUrl.ToDataUrl(image.Value.ContentType, image.Value.Data), image.Value.ContentType)
             {
-                Name = $"frame-{frameId:N}-working.png",
+                Name = $"frame-{frameId:N}-inspect.png",
             },
         ];
     }
@@ -1214,20 +1280,20 @@ public sealed class AssistantChatService(
                 && batch.TryGetProperty("outputAssetIds", out var outputAssetIds)
                 && outputAssetIds.ValueKind == JsonValueKind.Array)
             {
-                var maxImages = Math.Clamp(agentOptions.Value.MaxImagesPerGenerationRound <= 0 ? 2 : agentOptions.Value.MaxImagesPerGenerationRound, 1, 2);
+                var maxImages = MaxGenerationRoundImages();
                 var outputIndex = 1;
                 foreach (var item in outputAssetIds.EnumerateArray().Take(maxImages))
                 {
                     if (item.ValueKind != JsonValueKind.String
-                        || !Guid.TryParse(item.GetString(), out var outputAssetId)
-                        || !seenAssetIds.Add(outputAssetId))
+                        || !Guid.TryParse(item.GetString(), out var generatedOutputAssetId)
+                        || !seenAssetIds.Add(generatedOutputAssetId))
                     {
                         continue;
                     }
 
                     if (await TryCreateAssetVisualDraftAsync(
                             projectId,
-                            outputAssetId,
+                            generatedOutputAssetId,
                             pendingCall.ExplicitDisplayTitle ?? "Generate candidates",
                             $"Generated output {outputIndex}.",
                             cancellationToken) is { } draft)
@@ -1265,6 +1331,19 @@ public sealed class AssistantChatService(
                     drafts.Add(diagnosticDraft);
                 }
 
+                return drafts;
+            }
+
+            if (string.Equals(pendingCall.Name, "build_sheet", StringComparison.Ordinal)
+                && TryReadGuidProperty(root, "outputAssetId", out var outputAssetId)
+                && await TryCreateAssetVisualDraftAsync(
+                    projectId,
+                    outputAssetId,
+                    pendingCall.ExplicitDisplayTitle ?? "Build sprite sheet",
+                    "Rebuilt sprite sheet asset.",
+                    cancellationToken) is { } builtSheetDraft)
+            {
+                drafts.Add(builtSheetDraft);
                 return drafts;
             }
         }
@@ -1516,6 +1595,39 @@ public sealed class AssistantChatService(
             JsonElement { ValueKind: JsonValueKind.String } element when int.TryParse(element.GetString(), out var intValue) => intValue,
             _ => null,
         };
+    }
+
+    private static SpriteSheetRect? ReadRectArgument(PendingToolCall pendingCall, string name)
+    {
+        var arguments = ToolCallArguments.ParseObjectOrNull(pendingCall.ArgumentsJson) ?? pendingCall.Content.Arguments;
+        if (arguments is null || !arguments.TryGetValue(name, out var value))
+            return null;
+
+        if (value is SpriteSheetRect rect)
+            return rect;
+
+        if (value is JsonElement { ValueKind: JsonValueKind.Object } element)
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<SpriteSheetRect>(element.GetRawText(), JsonOptions);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private int MaxGenerationRoundImages()
+    {
+        var configuredMax = agentOptions.Value.MaxImagesPerGenerationRound <= 0
+            ? imageOptions.Value.MaxOutputs
+            : agentOptions.Value.MaxImagesPerGenerationRound;
+        var imageMax = Math.Max(1, imageOptions.Value.MaxOutputs);
+        return Math.Clamp(configuredMax, 1, imageMax);
     }
 
     private async Task<int> PersistInterruptedToolResultsAsync(

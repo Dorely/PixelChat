@@ -8,10 +8,22 @@ internal static class SpriteSheetImageAnalyzer
         bool loop)
     {
         var ordered = frames.OrderBy(frame => frame.Index).ToList();
-        if (ordered.Count < 2)
-            return new SpriteAnimationMetricsView([], 0, 0, 0);
+        if (ordered.Count == 0)
+            return new SpriteAnimationMetricsView([], [], 0, 0, 0);
 
         var stats = ordered.Select(frame => BuildFrameStats(frame, background)).ToList();
+        var medianHeight = Median(stats.Select(stat => stat.Bounds.Height).Where(height => height > 0).ToList());
+        var frameMetrics = stats
+            .Select(stat => new SpriteAnimationFrameMetricView(
+                stat.Index,
+                stat.Area,
+                stat.Bounds,
+                stat.Bounds.Width,
+                stat.Bounds.Height,
+                medianHeight <= 0
+                    ? 0
+                    : RoundMetric(Math.Abs(stat.Bounds.Height - medianHeight) / medianHeight * 100d)))
+            .ToList();
         var pairs = new List<SpriteAnimationFramePairMetricsView>();
         for (var index = 0; index < stats.Count - 1; index++)
             pairs.Add(BuildPairMetrics(stats[index], stats[index + 1], loopSeam: false));
@@ -27,6 +39,7 @@ internal static class SpriteSheetImageAnalyzer
             : Math.Sqrt(stats.Average(stat => Math.Pow(stat.Area - meanArea, 2))) / meanArea * 100d;
 
         return new SpriteAnimationMetricsView(
+            frameMetrics,
             pairs,
             RoundMetric(meanCentroidDrift),
             RoundMetric(maxCentroidDrift),
@@ -351,6 +364,18 @@ internal static class SpriteSheetImageAnalyzer
 
     private static double RoundMetric(double value) =>
         Math.Round(value, 3, MidpointRounding.AwayFromZero);
+
+    private static double Median(IReadOnlyList<int> values)
+    {
+        if (values.Count == 0)
+            return 0;
+
+        var sorted = values.Order().ToList();
+        var middle = sorted.Count / 2;
+        return sorted.Count % 2 == 1
+            ? sorted[middle]
+            : (sorted[middle - 1] + sorted[middle]) / 2d;
+    }
 
     private static bool ShouldPreferExpectedFrameRepair(
         IReadOnlyList<SpriteSheetFrameDetectionView> frames,

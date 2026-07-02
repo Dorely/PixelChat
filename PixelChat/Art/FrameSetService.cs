@@ -4,6 +4,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PixelChat.Models;
 using PixelChat.Persistence;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 
 namespace PixelChat.Art;
 
@@ -536,7 +539,8 @@ public sealed class FrameSetService(
             throw new InvalidOperationException("Frame edit prompt is required.");
 
         var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
-        var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == request.FrameId, cancellationToken)
+        var frames = OrderFrames(frameSet, await LoadFramesAsync(projectId, frameSet.Id, cancellationToken)).ToList();
+        var frame = frames.FirstOrDefault(f => f.Id == request.FrameId)
             ?? throw new InvalidOperationException("Frame was not found.");
         var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
         var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
@@ -545,18 +549,33 @@ public sealed class FrameSetService(
         var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
         var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
         var cellPng = SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, cellRgba);
+        var (references, referenceRoleLines) = await BuildEditFrameReferenceImagesAsync(
+            projectId,
+            request,
+            frames,
+            frame,
+            frameSet,
+            sourceRgba,
+            sourceWidth,
+            sourceHeight,
+            background,
+            cancellationToken);
+        var editPrompt = BuildEditFramePrompt(prompt, referenceRoleLines);
+        var mask = request.UseFrameMask
+            ? await ResolveFrameEditMaskReferenceAsync(projectId, frame, cancellationToken)
+            : null;
 
         var options = imageOptions.Value;
         var backgroundMode = NormalizeBackgroundMode(request.Background);
         var providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
-            prompt,
+            editPrompt,
             NormalizeSize(options.DefaultSize),
             1,
             options.DefaultMainlineModel,
             options.DefaultImageModel,
             new ImageProviderReference($"frame-{frame.Index + 1}.png", "image/png", cellPng),
-            Mask: null,
-            ReferenceImages: [],
+            mask,
+            references,
             OutputFormat: "png",
             Quality: options.DefaultQuality,
             Background: backgroundMode), cancellationToken);
@@ -693,6 +712,151 @@ public sealed class FrameSetService(
             projectId,
             new CreateFrameSetFromRegionsRequest(sheetAsset.Id, regions.Select(region => region.Id).ToList(), name),
             cancellationToken);
+    }
+
+    public async Task<NormalizeFrameScaleResult> NormalizeFrameScaleAsync(
+        Guid projectId,
+        NormalizeFrameScaleRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
+        var frames = OrderFrames(frameSet, await LoadFramesAsync(projectId, frameSet.Id, cancellationToken)).ToList();
+        if (frames.Count == 0)
+            throw new InvalidOperationException("The frame set has no frames to normalize.");
+
+        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
+        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
+        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var measurements = frames
+            .Select(frame =>
+            {
+                var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
+                var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
+                var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+                var bounds = SpriteSheetImageAnalyzer.ForegroundBounds(cellRgba, cellWidth, cellHeight, background);
+                (double X, double Y)? centroid = bounds is null
+                    ? null
+                    : ForegroundCentroid(cellRgba, cellWidth, cellHeight, background, bounds);
+                return new FrameScaleMeasurement(frame, cellRgba, cellWidth, cellHeight, bounds, centroid);
+            })
+            .ToList();
+
+        var targetHeight = request.TargetHeight > 0
+            ? Math.Clamp(request.TargetHeight, 1, 8192)
+            : (int)Math.Round(Median(measurements
+                .Where(measurement => measurement.Bounds is not null && measurement.Bounds.Height > 0)
+                .Select(measurement => measurement.Bounds!.Height)
+                .ToList()), MidpointRounding.AwayFromZero);
+        var tolerancePercent = Math.Clamp(double.IsFinite(request.TolerancePercent) ? request.TolerancePercent : 2.0d, 0d, 100d);
+        var anchor = NormalizeScaleAnchor(request.Anchor);
+        var warnings = new List<string>();
+        var results = new List<NormalizeFrameScaleFrameResult>();
+
+        if (targetHeight <= 0)
+        {
+            warnings.Add("No foreground was detected in the frame set; scale normalization was skipped.");
+            var unchanged = await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+            return new NormalizeFrameScaleResult(unchanged, targetHeight, tolerancePercent, anchor, results, warnings);
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var measurement in measurements)
+        {
+            var frame = measurement.Frame;
+            var oldOffsetX = frame.ContentOffsetX;
+            var oldOffsetY = frame.ContentOffsetY;
+            if (measurement.Bounds is not { } bounds || bounds.Height <= 0)
+            {
+                results.Add(new NormalizeFrameScaleFrameResult(
+                    frame.Id,
+                    frame.Index,
+                    frame.Name,
+                    null,
+                    null,
+                    1d,
+                    Applied: false,
+                    oldOffsetX,
+                    oldOffsetY,
+                    oldOffsetX,
+                    oldOffsetY,
+                    "Skipped because no foreground was detected."));
+                continue;
+            }
+
+            var scaleFactor = targetHeight / (double)bounds.Height;
+            var deviation = Math.Abs(bounds.Height - targetHeight) / (double)Math.Max(1, targetHeight) * 100d;
+            if (deviation <= tolerancePercent)
+            {
+                results.Add(new NormalizeFrameScaleFrameResult(
+                    frame.Id,
+                    frame.Index,
+                    frame.Name,
+                    bounds,
+                    bounds,
+                    RoundMetric(scaleFactor),
+                    Applied: false,
+                    oldOffsetX,
+                    oldOffsetY,
+                    oldOffsetX,
+                    oldOffsetY,
+                    "Skipped because foreground height was within tolerance."));
+                continue;
+            }
+
+            var (contentRgba, contentWidth, contentHeight) = CropToRgba(
+                measurement.CellRgba,
+                measurement.CellWidth,
+                measurement.CellHeight,
+                bounds.X,
+                bounds.Y,
+                bounds.Width,
+                bounds.Height);
+            var scaledWidth = Math.Clamp((int)Math.Round(contentWidth * scaleFactor, MidpointRounding.AwayFromZero), 1, 8192);
+            var scaledHeight = Math.Clamp((int)Math.Round(contentHeight * scaleFactor, MidpointRounding.AwayFromZero), 1, 8192);
+            ValidateCanvasSize(scaledWidth, scaledHeight, "Scaled frame content is too large.");
+            var scaledRgba = ResizeSmoothRgba(contentRgba, contentWidth, contentHeight, scaledWidth, scaledHeight);
+            var (newOffsetX, newOffsetY) = ScalePlacementOffset(bounds, measurement.Centroid, scaledWidth, scaledHeight, anchor);
+            newOffsetX = Math.Clamp(newOffsetX, -8192, 8192);
+            newOffsetY = Math.Clamp(newOffsetY, -8192, 8192);
+
+            var previewCell = BuildOpaqueCell(measurement.CellWidth, measurement.CellHeight, background);
+            BlitInto(previewCell, measurement.CellWidth, measurement.CellHeight, scaledRgba, scaledWidth, scaledHeight, newOffsetX, newOffsetY);
+            var newBounds = SpriteSheetImageAnalyzer.ForegroundBounds(previewCell, measurement.CellWidth, measurement.CellHeight, background);
+
+            frame.WorkingData = SpriteSheetPngCodec.EncodeRgba(scaledWidth, scaledHeight, scaledRgba);
+            frame.WorkingContentType = "image/png";
+            frame.WorkingWidth = scaledWidth;
+            frame.WorkingHeight = scaledHeight;
+            frame.WorkingMargin = 0;
+            frame.WorkingState = "scaled";
+            frame.WorkingUpdatedAt = now;
+            frame.ContentOffsetX = newOffsetX;
+            frame.ContentOffsetY = newOffsetY;
+            frame.UpdatedAt = now;
+
+            results.Add(new NormalizeFrameScaleFrameResult(
+                frame.Id,
+                frame.Index,
+                frame.Name,
+                bounds,
+                newBounds,
+                RoundMetric(scaleFactor),
+                Applied: true,
+                oldOffsetX,
+                oldOffsetY,
+                newOffsetX,
+                newOffsetY,
+                "Scaled foreground height toward the target."));
+        }
+
+        if (!results.Any(result => result.Applied))
+            warnings.Add("All frames were already within the requested scale tolerance.");
+
+        frameSet.UpdatedAt = now;
+        await TouchProjectAsync(projectId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        var view = await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        return new NormalizeFrameScaleResult(view, targetHeight, tolerancePercent, anchor, results, warnings);
     }
 
     public async Task<FrameSetAnimationReviewView> BuildAnimationReviewAsync(
@@ -1357,6 +1521,49 @@ public sealed class FrameSetService(
         return (SpriteSheetPngCodec.EncodeRgba(width, height, rgba), "image/png");
     }
 
+    public async Task<(byte[] Data, string ContentType)?> InspectFrameAsync(
+        Guid projectId,
+        Guid frameId,
+        SpriteSheetRect? rect,
+        int scale,
+        CancellationToken cancellationToken = default)
+    {
+        var frame = await db.Frames.Include(f => f.FrameSet).FirstOrDefaultAsync(f => f.ProjectId == projectId && f.Id == frameId, cancellationToken);
+        if (frame is null)
+            return null;
+        var source = frame.FrameSet.SourceAssetId is Guid sourceId
+            ? await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == sourceId, cancellationToken)
+            : null;
+        if (source is null)
+            return null;
+
+        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
+        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var cellWidth = Math.Max(1, frame.LogicalWidth > 0 ? frame.LogicalWidth : frame.FrameSet.DefaultCellWidth);
+        var cellHeight = Math.Max(1, frame.LogicalHeight > 0 ? frame.LogicalHeight : frame.FrameSet.DefaultCellHeight);
+        var cellRgba = RenderFrameCell(frame, frame.FrameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+        var crop = rect is null
+            ? new SpriteSheetRect(0, 0, cellWidth, cellHeight)
+            : ClampRect(rect.X, rect.Y, rect.Width, rect.Height, cellWidth, cellHeight);
+        var (croppedRgba, croppedWidth, croppedHeight) = CropToRgba(cellRgba, cellWidth, cellHeight, crop.X, crop.Y, crop.Width, crop.Height);
+        var requestedScale = Math.Clamp(scale <= 0 ? 4 : scale, 1, 8);
+        var outputWidth = checked(croppedWidth * requestedScale);
+        var outputHeight = checked(croppedHeight * requestedScale);
+        var longEdge = Math.Max(outputWidth, outputHeight);
+        if (longEdge > 1024)
+        {
+            var ratio = 1024d / longEdge;
+            outputWidth = Math.Max(1, (int)Math.Floor(outputWidth * ratio));
+            outputHeight = Math.Max(1, (int)Math.Floor(outputHeight * ratio));
+        }
+
+        ValidateCanvasSize(outputWidth, outputHeight, "Inspected frame image is too large.");
+        var outputRgba = outputWidth == croppedWidth && outputHeight == croppedHeight
+            ? croppedRgba
+            : ResizeNearest(croppedRgba, croppedWidth, croppedHeight, outputWidth, outputHeight);
+        return (SpriteSheetPngCodec.EncodeRgba(outputWidth, outputHeight, outputRgba), "image/png");
+    }
+
     private async Task<FrameSetView> BuildFrameSetViewAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken)
     {
         var frameSet = await LoadFrameSetAsync(projectId, frameSetId, cancellationToken);
@@ -1554,6 +1761,116 @@ public sealed class FrameSetService(
         if (!ImageRgbaDecoder.TryReadRgba(source, out var width, out var height, out var rgba))
             throw new InvalidOperationException("Sprite source editing requires a readable PNG or JPEG image.");
         return (width, height, rgba);
+    }
+
+    private async Task<(List<ImageProviderReference> References, List<string> RoleLines)> BuildEditFrameReferenceImagesAsync(
+        Guid projectId,
+        EditFrameRequest request,
+        IReadOnlyList<Frame> frames,
+        Frame frame,
+        FrameSet frameSet,
+        byte[] sourceRgba,
+        int sourceWidth,
+        int sourceHeight,
+        SpriteSheetBackground background,
+        CancellationToken cancellationToken)
+    {
+        var maxReferences = Math.Max(0, imageOptions.Value.MaxReferenceImages);
+        var references = new List<ImageProviderReference>();
+        var roleLines = new List<string>();
+        if (maxReferences == 0)
+            return (references, roleLines);
+
+        void AddReference(ImageProviderReference reference, string roleLine)
+        {
+            if (references.Count >= maxReferences)
+                return;
+
+            references.Add(reference);
+            roleLines.Add($"Reference image {references.Count} {roleLine}");
+        }
+
+        var explicitIds = (request.ReferenceAssetIds ?? [])
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .Take(maxReferences)
+            .ToList();
+        if (explicitIds.Count > 0)
+        {
+            var assets = await db.ArtAssets
+                .Where(asset => asset.ProjectId == projectId && explicitIds.Contains(asset.Id))
+                .ToListAsync(cancellationToken);
+            var byId = assets.ToDictionary(asset => asset.Id);
+            for (var index = 0; index < explicitIds.Count; index++)
+            {
+                if (!byId.TryGetValue(explicitIds[index], out var asset))
+                    continue;
+
+                AddReference(
+                    new ImageProviderReference(asset.FileName, asset.ContentType, asset.Data),
+                    index == 0
+                        ? "(character identity anchor): match palette, outfit, proportions exactly."
+                        : "(additional identity/style reference): match only the intended identity or style facts; do not redesign the frame.");
+            }
+        }
+
+        if (request.IncludeAdjacentFrames && references.Count < maxReferences)
+        {
+            var orderedIndex = frames.ToList().FindIndex(item => item.Id == frame.Id);
+            if (orderedIndex > 0)
+                AddAdjacentFrameReference(frames[orderedIndex - 1], "previous animation frame", "match character scale and motion continuity");
+            if (orderedIndex >= 0 && orderedIndex < frames.Count - 1)
+                AddAdjacentFrameReference(frames[orderedIndex + 1], "next animation frame", "match character scale and motion continuity");
+        }
+
+        return (references, roleLines);
+
+        void AddAdjacentFrameReference(Frame adjacent, string role, string instruction)
+        {
+            if (references.Count >= maxReferences)
+                return;
+
+            var adjacentWidth = Math.Clamp(adjacent.LogicalWidth > 0 ? adjacent.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
+            var adjacentHeight = Math.Clamp(adjacent.LogicalHeight > 0 ? adjacent.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
+            var adjacentRgba = RenderFrameCell(adjacent, frameSet, sourceRgba, sourceWidth, sourceHeight, background, adjacentWidth, adjacentHeight);
+            var adjacentPng = SpriteSheetPngCodec.EncodeRgba(adjacentWidth, adjacentHeight, adjacentRgba);
+            AddReference(
+                new ImageProviderReference($"{role.Replace(' ', '-')}-{adjacent.Index + 1}.png", "image/png", adjacentPng),
+                $"({role}): {instruction}.");
+        }
+    }
+
+    private async Task<ImageProviderReference?> ResolveFrameEditMaskReferenceAsync(
+        Guid projectId,
+        Frame frame,
+        CancellationToken cancellationToken)
+    {
+        var mask = await db.ImageMasks
+            .Where(item => item.ProjectId == projectId && item.OwnerKind == "frame" && item.OwnerId == frame.Id)
+            .OrderByDescending(item => item.UpdatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (mask is null)
+            return null;
+
+        var fileName = string.IsNullOrWhiteSpace(mask.Label)
+            ? $"frame-{frame.Index + 1}-mask.png"
+            : mask.Label.Trim();
+        var contentType = string.IsNullOrWhiteSpace(mask.ContentType) ? "image/png" : mask.ContentType;
+        return new ImageProviderReference(fileName, contentType, mask.Data);
+    }
+
+    private static string BuildEditFramePrompt(string prompt, IReadOnlyList<string> referenceRoleLines)
+    {
+        if (referenceRoleLines.Count == 0)
+            return prompt;
+
+        var lines = new List<string>(referenceRoleLines)
+        {
+            "Edit only what the instruction changes.",
+            string.Empty,
+            prompt,
+        };
+        return string.Join("\n", lines);
     }
 
     private static (byte[] Rgba, int Width, int Height) FrameContentPixels(
@@ -1792,6 +2109,24 @@ public sealed class FrameSetService(
         return outRgba;
     }
 
+    private static byte[] ResizeSmoothRgba(byte[] sourceRgba, int sourceWidth, int sourceHeight, int destWidth, int destHeight)
+    {
+        if (sourceWidth == destWidth && sourceHeight == destHeight)
+            return (byte[])sourceRgba.Clone();
+
+        using var image = Image.LoadPixelData<Rgba32>(sourceRgba, sourceWidth, sourceHeight);
+        image.Mutate(context => context.Resize(new ResizeOptions
+        {
+            Size = new Size(destWidth, destHeight),
+            Sampler = KnownResamplers.Bicubic,
+        }));
+        var output = new byte[destWidth * destHeight * 4];
+        image.CopyPixelDataTo(output);
+        for (var index = 3; index < output.Length; index += 4)
+            output[index] = 255;
+        return output;
+    }
+
     private static byte[] ResizeNearest(byte[] sourceRgba, int sourceWidth, int sourceHeight, int destWidth, int destHeight)
     {
         var output = new byte[destWidth * destHeight * 4];
@@ -1811,6 +2146,82 @@ public sealed class FrameSetService(
         }
 
         return output;
+    }
+
+    private static (double X, double Y) ForegroundCentroid(
+        byte[] rgba,
+        int width,
+        int height,
+        SpriteSheetBackground background,
+        SpriteSheetRect bounds)
+    {
+        double sumX = 0;
+        double sumY = 0;
+        var count = 0;
+        var right = Math.Min(width, bounds.X + bounds.Width);
+        var bottom = Math.Min(height, bounds.Y + bounds.Height);
+        for (var y = Math.Max(0, bounds.Y); y < bottom; y++)
+        {
+            for (var x = Math.Max(0, bounds.X); x < right; x++)
+            {
+                var offset = ((y * width) + x) * 4;
+                if (!SpriteSheetImageAnalyzer.IsForeground(rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3], background))
+                    continue;
+
+                count++;
+                sumX += x + 0.5d;
+                sumY += y + 0.5d;
+            }
+        }
+
+        return count == 0
+            ? (bounds.X + (bounds.Width / 2d), bounds.Y + (bounds.Height / 2d))
+            : (sumX / count, sumY / count);
+    }
+
+    private static (int X, int Y) ScalePlacementOffset(
+        SpriteSheetRect bounds,
+        (double X, double Y)? centroid,
+        int scaledWidth,
+        int scaledHeight,
+        string anchor)
+    {
+        if (anchor == "center")
+        {
+            var center = centroid ?? (bounds.X + (bounds.Width / 2d), bounds.Y + (bounds.Height / 2d));
+            var relativeX = center.X - bounds.X;
+            var relativeY = center.Y - bounds.Y;
+            var scaleX = scaledWidth / (double)Math.Max(1, bounds.Width);
+            var scaleY = scaledHeight / (double)Math.Max(1, bounds.Height);
+            return (
+                (int)Math.Round(center.X - (relativeX * scaleX), MidpointRounding.AwayFromZero),
+                (int)Math.Round(center.Y - (relativeY * scaleY), MidpointRounding.AwayFromZero));
+        }
+
+        var bottomCenterX = bounds.X + (bounds.Width / 2d);
+        var bottomY = bounds.Y + bounds.Height;
+        return (
+            (int)Math.Round(bottomCenterX - (scaledWidth / 2d), MidpointRounding.AwayFromZero),
+            (int)Math.Round((double)bottomY - scaledHeight, MidpointRounding.AwayFromZero));
+    }
+
+    private static string NormalizeScaleAnchor(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "center" or "centroid" => "center",
+            _ => "bottom",
+        };
+
+    private static double Median(IReadOnlyList<int> values)
+    {
+        if (values.Count == 0)
+            return 0;
+
+        var sorted = values.OrderBy(value => value).ToList();
+        var middle = sorted.Count / 2;
+        return sorted.Count % 2 == 1
+            ? sorted[middle]
+            : (sorted[middle - 1] + sorted[middle]) / 2d;
     }
 
     private static SpriteSheetRect NormalizeAnchorRect(SpriteSheetRect anchor, int imageWidth, int imageHeight)
@@ -2017,4 +2428,12 @@ public sealed class FrameSetService(
         double Score,
         bool LowConfidence,
         IReadOnlyList<string> Warnings);
+
+    private sealed record FrameScaleMeasurement(
+        Frame Frame,
+        byte[] CellRgba,
+        int CellWidth,
+        int CellHeight,
+        SpriteSheetRect? Bounds,
+        (double X, double Y)? Centroid);
 }

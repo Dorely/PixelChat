@@ -67,10 +67,19 @@ public sealed record SpriteSheetBackground(
     byte A);
 
 public sealed record SpriteAnimationMetricsView(
+    IReadOnlyList<SpriteAnimationFrameMetricView> Frames,
     IReadOnlyList<SpriteAnimationFramePairMetricsView> FramePairs,
     double MeanCentroidDrift,
     double MaxCentroidDrift,
     double AreaVariancePercent);
+
+public sealed record SpriteAnimationFrameMetricView(
+    int FrameIndex,
+    int ForegroundPixelCount,
+    SpriteSheetRect ForegroundBounds,
+    int ForegroundWidth,
+    int ForegroundHeight,
+    double HeightDeviationFromMedianPercent);
 
 public sealed record SpriteAnimationFramePairMetricsView(
     int FromFrame,

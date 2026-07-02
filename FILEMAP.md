@@ -26,7 +26,7 @@
 |------|-------------|
 | `PixelChat.csproj` | `net10.0` Blazor Web project with Electron.NET, EF Core SQLite, Microsoft.Extensions.AI, OpenAI SDK, ImageSharp image decoding, SharpGLTF motion-guide support, SQLitePCLRaw bundle pin, runtime IDs, and warnings-as-errors. |
 | `Program.cs` | App host setup: Electron mode detection/window launch, Blazor Interactive Server, DI wiring, art/sprite services, EF migrations, static files/assets, OAuth/media endpoints, and routing. |
-| `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OAuth redirect URI, SQLite, Blazor hub size, agent/tool limits, image-generation defaults, sprite-animation defaults, and local background-removal sidecar/model defaults. |
+| `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OAuth redirect URI, SQLite, Blazor hub size, agent/tool limits including candidate image visibility, image-generation defaults, sprite-animation defaults, and local background-removal sidecar/model defaults. |
 | `Properties/launchSettings.json` | Local launch profiles for browser-hosted HTTP and Electron desktop mode on `localhost:1455`. |
 | `Properties/electron-builder.json` | Electron/electron-builder packaging metadata for Windows, Linux, and macOS targets. |
 
@@ -40,23 +40,23 @@
 
 | File | Description |
 |------|-------------|
-| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, chat-visual persistence, autonomous generation budget wiring/model-only outputs including sprite diagnostics, tool streaming/execution, form drafts, and transcript replay. |
+| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, chat-visual persistence, autonomous generation budget wiring/model-only outputs including rebuilt sheets, frame inspection, sprite diagnostics, tool streaming/execution, form drafts, and transcript replay. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, throttles streaming state notifications, commits finished turns with visuals, and applies workspace/form side effects. |
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact workspace records for Review, live sprite focus/agent status, asset, and recipe context used by assistant tools. |
-| `AssistantPromptBuilder.cs` | Builds the assistant system prompt around the three jobs (iterative recipe building, sprite-sheet animation production, technical-art direction), the proactive-operator stance, and the greenfield-only generate -> detect/box -> align -> review -> rebuild one-row-sheet workflow that stops at the export-ready sheet. |
+| `AssistantPromptBuilder.cs` | Builds the assistant system prompt around labeled-slot image prompting, indexed references, identity preservation, named-check sprite-sheet review, deterministic repair, and the greenfield generate -> detect/box -> align -> review -> rebuild workflow. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records with explicit display titles, form draft payloads, animation frame mark payloads, and per-turn autonomous generation budget state. |
-| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, motion-clip catalog reads, generation, the greenfield Source/Frames/Sheet pipeline (including compose-from-assets, deterministic erase, AI edit_frame, and animation-quality review_frame_set_animation), Review sets, favorites, exports, and global `displayTitle` tool metadata schema. |
+| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, motion clips, generation, greenfield Source/Frames/Sheet tools including inspect/scale-normalize/masked referenced edits, structured animation QC, Review sets, favorites, exports, and `displayTitle` metadata. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, explicit display title metadata, visual metadata, completions, form drafts, workspace mutations, and errors. |
 
 ### Art/
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Review sets, motion-clip discovery, guide generation, sprite work, exports, recipes, masks, import, crop, and edits. |
-| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, lazy media URLs/binaries, animation-guide generation, sprite-sheet composition/provenance/stabilization/animation metadata, per-frame isolation/reassembly, standalone region extraction, art/animation recipe management, and assistant tools. |
-| `IFrameSetService.cs` / `FrameSetService.cs` | Greenfield deterministic Source -> Frames -> Sheet service over SpriteRegion/FrameSet/Frame/Anchor/SheetLayout/BuiltSheet: detect/save regions, create/compose/edit/order/align frames, deterministic frame erase/keep, AI single-frame edit, frame masks, build opaque sheets with linked manifests, and animation-quality review (metrics, diffs, onion-skin, filmstrip, removed-vs-source overlays). |
-| `ISpriteWorkspaceActionService.cs` / `SpriteWorkspaceActionService.cs` | Shared Sprites action layer used by UI clicks and assistant tools to wrap greenfield mutations, update persisted sprite focus, and keep the visible workspace synchronized. |
-| `FrameSetModels.cs` | View/request/result records for the greenfield source-region, frame-set, frame edit, mask, and build-sheet pipeline. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, media reads, assets, Review sets, motion-clip discovery, guide generation, labeled/constraints-based prompt assembly, sprite work, exports, recipes, masks, import, crop, and edits. |
+| `ArtWorkflowModels.cs` | Request/result/view records for the workbench, lazy media URLs/binaries, animation-guide generation, sprite-sheet composition/provenance/stabilization/animation metadata including per-frame scale metrics, per-frame isolation/reassembly, region extraction, recipes, and assistant tools. |
+| `IFrameSetService.cs` / `FrameSetService.cs` | Greenfield deterministic Source -> Frames -> Sheet service over SpriteRegion/FrameSet/Frame/Anchor/SheetLayout/BuiltSheet: detect/save regions, create/compose/edit/order/align/scale-normalize frames, inspect frame cells, deterministic erase/keep, masked/reference AI frame edits, frame masks, build sheets, and animation-quality review. |
+| `ISpriteWorkspaceActionService.cs` / `SpriteWorkspaceActionService.cs` | Shared Sprites action layer used by UI clicks and assistant tools to wrap greenfield mutations including scale normalization, update persisted sprite focus, and keep the visible workspace synchronized. |
+| `FrameSetModels.cs` | View/request/result records for the greenfield source-region, frame-set, frame edit/reference/mask, scale-normalization, inspection, and build-sheet pipeline. |
 | `AnimationGuideModels.cs` | Shared guide-rendering records for animation specs, frame specs, guide layouts, and per-frame slots without restoring the old animation job pipeline. |
 | `SpriteAnimationOptions.cs` | Configuration record for sprite-animation defaults used by guide rendering and animation-generation workflow setup. |
 | `SpriteFacing.cs` | Facing normalization, yaw conversion, left/right detection, and prompt phrasing helpers for animation guides. |
@@ -74,9 +74,9 @@
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 | `ImageRgbaDecoder.cs` | Shared RGBA decoder for PNG/JPEG source assets used by greenfield sprite region/frame operations and standalone region extraction. |
-| `SpriteSheetImageAnalyzer.cs` | Server-side PNG analyzer for background-aware foreground bounds, connected sprite boxes/shape outlines, and animation motion metrics. |
+| `SpriteSheetImageAnalyzer.cs` | Server-side PNG analyzer for background-aware foreground bounds, connected sprite boxes/shape outlines, per-frame foreground scale metrics, and animation motion metrics. |
 | `SpriteSheetPngCodec.cs` | Minimal PNG RGBA decoder/encoder used by server-side sprite-sheet rendering. |
-| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with irregular frame isolation, erase/keep cleanup, coordinate-grid and removed-vs-source overlays, working-frame stabilization diagnostics, outlier-aware reassembly, annotated sheet views, diffs, onion skins, and filmstrips. |
+| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with irregular frame isolation, erase/keep cleanup, coordinate-grid and upscaled model-facing removed-vs-source overlays, working-frame stabilization diagnostics, reassembly, annotated sheet views, diffs, onion skins, and filmstrips. |
 
 ### Assets/MotionClips/
 

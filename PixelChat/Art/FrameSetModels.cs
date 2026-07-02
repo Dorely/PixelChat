@@ -218,7 +218,38 @@ public sealed record EditFrameRequest(
     Guid FrameSetId,
     Guid FrameId,
     string Prompt,
-    string? Background = null);
+    string? Background = null,
+    IReadOnlyList<Guid>? ReferenceAssetIds = null,
+    bool IncludeAdjacentFrames = true,
+    bool UseFrameMask = true);
+
+public sealed record NormalizeFrameScaleRequest(
+    Guid FrameSetId,
+    int TargetHeight = 0,
+    double TolerancePercent = 2.0d,
+    string Anchor = "bottom");
+
+public sealed record NormalizeFrameScaleResult(
+    FrameSetView FrameSet,
+    int TargetHeight,
+    double TolerancePercent,
+    string Anchor,
+    IReadOnlyList<NormalizeFrameScaleFrameResult> Frames,
+    IReadOnlyList<string> Warnings);
+
+public sealed record NormalizeFrameScaleFrameResult(
+    Guid FrameId,
+    int FrameIndex,
+    string FrameName,
+    SpriteSheetRect? OriginalBounds,
+    SpriteSheetRect? NewBounds,
+    double ScaleFactor,
+    bool Applied,
+    int OldContentOffsetX,
+    int OldContentOffsetY,
+    int NewContentOffsetX,
+    int NewContentOffsetY,
+    string Message);
 
 public sealed record ComposeFrameSetFromAssetsRequest(
     IReadOnlyList<Guid> AssetIds,

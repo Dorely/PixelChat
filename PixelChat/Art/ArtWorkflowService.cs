@@ -3761,36 +3761,54 @@ public sealed class ArtWorkflowService(
         var parts = new List<string>();
         if (recipe is not null)
         {
-            parts.Add("Use this reusable visual style and production direction for the asset.");
             if (!string.IsNullOrWhiteSpace(recipe.Prompt))
-                parts.Add(recipe.Prompt.Trim());
+                parts.Add("Style direction (reusable):\n" + recipe.Prompt.Trim());
         }
 
         if (animationRecipe is not null)
         {
-            parts.Add("Use this reusable animation and motion direction for the asset. Treat it as motion guidance, not visual style guidance, unless it explicitly describes visual style.");
             if (!string.IsNullOrWhiteSpace(animationRecipe.Prompt))
-                parts.Add(animationRecipe.Prompt.Trim());
+                parts.Add("Motion direction (positions and timing only, not visual style):\n" + animationRecipe.Prompt.Trim());
         }
 
         parts.Add(recipe is null && animationRecipe is null
             ? prompt.Trim()
-            : "Create this asset: " + prompt.Trim());
+            : "Task:\n" + prompt.Trim());
 
-        var avoidRules = new List<string>();
-        if (!string.IsNullOrWhiteSpace(negativePrompt))
-            avoidRules.Add(negativePrompt.Trim());
-        if (avoidRules.Count > 0)
-            parts.Add("Avoid " + string.Join("; ", avoidRules) + ".");
+        var constraints = BuildConstraintLines(negativePrompt);
         if (NormalizeBackground(background) == "removable")
         {
-            parts.Add(
-                """
-                Place the asset on a flat, solid chroma-key magenta background using exactly #ff00ff. The same solid magenta should be visible through open holes, railings, gaps, cutouts, and transparent-looking interior spaces. Do not use checkerboards, transparency grids, white or gray faux transparency, texture, gradients, shadows, reflections, floor planes, scenery, or extra props in the background.
-                """);
+            constraints.Add("background must be flat, solid chroma-key magenta using exactly #ff00ff");
+            constraints.Add("the same solid magenta must be visible through open holes, railings, gaps, cutouts, and transparent-looking interior spaces");
+            constraints.Add("no checkerboards, transparency grids, white or gray faux transparency, texture, gradients, shadows, reflections, floor planes, scenery, or extra props in the background");
         }
 
+        if (constraints.Count > 0)
+            parts.Add("Constraints:\n" + string.Join("\n", constraints));
+
         return string.Join("\n\n", parts);
+    }
+
+    private static List<string> BuildConstraintLines(string? negativePrompt)
+    {
+        if (string.IsNullOrWhiteSpace(negativePrompt))
+            return [];
+
+        return negativePrompt
+            .Split([';', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(NormalizeConstraintLine)
+            .ToList();
+    }
+
+    private static string NormalizeConstraintLine(string item)
+    {
+        var trimmed = item.Trim().TrimEnd('.');
+        return trimmed.StartsWith("no ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("do not ", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("never ", StringComparison.OrdinalIgnoreCase)
+            ? trimmed
+            : "no " + trimmed;
     }
 
     private static void ApplyRecipeRequest(PromptRecipe recipe, SavePromptRecipeRequest request)

@@ -237,10 +237,11 @@ internal static class SpriteSheetServerRenderer
             output[index + 3] = 255;
         }
 
+        var reviewScale = ReviewPresentationScale(width, height);
         return new SpriteSheetFrameWorkingRenderResult(
-            SpriteSheetPngCodec.EncodeRgba(width, height, output),
-            width,
-            height);
+            EncodeReviewRgba(output, width, height, reviewScale),
+            width * reviewScale,
+            height * reviewScale);
     }
 
     public static SpriteSheetFrameWorkingRenderResult RenderCoordinateGridOverlay(byte[] sourceRgba, int width, int height)
@@ -491,6 +492,7 @@ internal static class SpriteSheetServerRenderer
 
         var metricFrames = new List<SpriteAnimationFramePixels>();
         var images = new List<SpriteSheetReviewImage>();
+        var reviewScale = ReviewPresentationScale(cellWidth, cellHeight);
         foreach (var frame in frames)
         {
             var cellRgba = NewFilledCanvas(cellWidth, cellHeight, background);
@@ -509,7 +511,7 @@ internal static class SpriteSheetServerRenderer
                 frame.Index,
                 null,
                 null,
-                SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, labeled)));
+                EncodeReviewRgba(labeled, cellWidth, cellHeight, reviewScale)));
         }
 
         images.Insert(0, BuildAnnotatedSheetView(
@@ -527,9 +529,9 @@ internal static class SpriteSheetServerRenderer
             "sprite-sheet-view.png"));
 
         for (var index = 0; index < metricFrames.Count - 1; index++)
-            images.Add(BuildPairDiff(metricFrames[index], metricFrames[index + 1], background));
+            images.Add(BuildPairDiff(metricFrames[index], metricFrames[index + 1], background, reviewScale));
         if (loop && metricFrames.Count > 1)
-            images.Add(BuildPairDiff(metricFrames[^1], metricFrames[0], background));
+            images.Add(BuildPairDiff(metricFrames[^1], metricFrames[0], background, reviewScale));
 
         var onion = BuildOnionSkin(metricFrames, cellWidth, cellHeight, background);
         DrawIndexSequence(onion, cellWidth, cellHeight, metricFrames.Select(frame => frame.Index).ToList());
@@ -540,7 +542,7 @@ internal static class SpriteSheetServerRenderer
             null,
             null,
             null,
-            SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, onion)));
+            EncodeReviewRgba(onion, cellWidth, cellHeight, reviewScale)));
 
         var filmstrip = BuildFilmstrip(metricFrames, cellWidth, cellHeight, background);
         images.Add(new SpriteSheetReviewImage(
@@ -553,6 +555,51 @@ internal static class SpriteSheetServerRenderer
             SpriteSheetPngCodec.EncodeRgba(checked((cellWidth * metricFrames.Count) + Math.Max(0, metricFrames.Count - 1)), cellHeight, filmstrip)));
 
         return new SpriteSheetReviewRenderResult(metricFrames, images);
+    }
+
+    private static int ReviewPresentationScale(int width, int height)
+    {
+        var longEdge = Math.Max(width, height);
+        if (longEdge <= 0 || longEdge >= 256)
+            return 1;
+
+        return Math.Clamp(512 / longEdge, 1, 4);
+    }
+
+    private static byte[] EncodeReviewRgba(byte[] rgba, int width, int height, int scale)
+    {
+        scale = Math.Clamp(scale, 1, 4);
+        if (scale == 1)
+            return SpriteSheetPngCodec.EncodeRgba(width, height, rgba);
+
+        var outputWidth = checked(width * scale);
+        var outputHeight = checked(height * scale);
+        ValidateCanvasSize(outputWidth, outputHeight, "Sprite animation review image is too large.");
+        return SpriteSheetPngCodec.EncodeRgba(
+            outputWidth,
+            outputHeight,
+            ResizeNearest(rgba, width, height, outputWidth, outputHeight));
+    }
+
+    private static byte[] ResizeNearest(byte[] sourceRgba, int sourceWidth, int sourceHeight, int destWidth, int destHeight)
+    {
+        var output = new byte[destWidth * destHeight * 4];
+        for (var y = 0; y < destHeight; y++)
+        {
+            var sourceY = Math.Clamp((int)Math.Floor(y * (sourceHeight / (double)destHeight)), 0, sourceHeight - 1);
+            for (var x = 0; x < destWidth; x++)
+            {
+                var sourceX = Math.Clamp((int)Math.Floor(x * (sourceWidth / (double)destWidth)), 0, sourceWidth - 1);
+                var sourceIndex = ((sourceY * sourceWidth) + sourceX) * 4;
+                var destIndex = ((y * destWidth) + x) * 4;
+                output[destIndex + 0] = sourceRgba[sourceIndex + 0];
+                output[destIndex + 1] = sourceRgba[sourceIndex + 1];
+                output[destIndex + 2] = sourceRgba[sourceIndex + 2];
+                output[destIndex + 3] = sourceRgba[sourceIndex + 3];
+            }
+        }
+
+        return output;
     }
 
     internal static SpriteSheetReviewImage BuildDetectionAnnotatedSheetView(
@@ -688,7 +735,8 @@ internal static class SpriteSheetServerRenderer
     private static SpriteSheetReviewImage BuildPairDiff(
         SpriteAnimationFramePixels from,
         SpriteAnimationFramePixels to,
-        SpriteSheetBackground background)
+        SpriteSheetBackground background,
+        int reviewScale)
     {
         var width = Math.Max(from.Width, to.Width);
         var height = Math.Max(from.Height, to.Height);
@@ -724,7 +772,7 @@ internal static class SpriteSheetServerRenderer
             null,
             from.Index,
             to.Index,
-            SpriteSheetPngCodec.EncodeRgba(width, height, output));
+            EncodeReviewRgba(output, width, height, reviewScale));
     }
 
     private static byte[] BuildOnionSkin(IReadOnlyList<SpriteAnimationFramePixels> frames, int width, int height, SpriteSheetBackground background)
