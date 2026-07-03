@@ -895,6 +895,9 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "read_asset", StringComparison.Ordinal)
                 && ReadGuidArgument(pendingCall, "assetId") is Guid assetId)
             {
+                if (!ToolResultHasModelImage(toolResult))
+                    return Array.Empty<AIContent>();
+
                 var asset = await workflow.GetAssetForExportAsync(projectId, assetId, cancellationToken);
                 return
                 [
@@ -934,6 +937,24 @@ public sealed class AssistantChatService(
         }
 
         return Array.Empty<AIContent>();
+    }
+
+    private static bool ToolResultHasModelImage(string toolResult)
+    {
+        if (string.IsNullOrWhiteSpace(toolResult))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(toolResult);
+            return document.RootElement.TryGetProperty("image", out var image)
+                && image.TryGetProperty("availableToModel", out var available)
+                && available.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return true;
+        }
     }
 
     private async Task<IReadOnlyList<AIContent>> BuildGenerationRoundModelOnlyContentsAsync(

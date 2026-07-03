@@ -404,11 +404,25 @@ public sealed class ArtWorkflowService(
     {
         var asset = await db.ArtAssets
             .AsNoTracking()
-            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
-            ?? throw new InvalidOperationException("Asset was not found.");
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken);
+        if (asset is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                found = false,
+                assetId,
+                error = "Asset was not found.",
+                note = "The asset id is not available in this project. Call list_assets to refresh available asset ids before retrying.",
+                image = new
+                {
+                    availableToModel = false,
+                },
+            }, JsonOptions);
+        }
 
         return JsonSerializer.Serialize(new
         {
+            found = true,
             asset = AssetDetail(asset),
             image = new
             {
