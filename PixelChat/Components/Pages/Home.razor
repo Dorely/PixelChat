@@ -127,6 +127,7 @@ else
             </main>
         </section>
 
+        @RenderDeleteConfirmation()
         @RenderExportModal()
         @RenderGuideBuilderModal()
         @RenderReviewPreviewModal()
@@ -782,13 +783,7 @@ else
     {
         if (item.Kind == CompareReviewItemKind.Asset && ReviewAsset(item) is { } asset)
         {
-            @RenderReviewImageCard(
-                item,
-                "Asset",
-                asset.PreviewImageUrl,
-                asset.Label,
-                FormatDimensions(asset),
-                () => OpenImageReviewPreview(asset.Label, asset.FullImageUrl, FormatDimensions(asset)))
+            @RenderAssetCard(asset, compact: false, guideCard: asset.Kind == ArtAssetKind.SpriteGuide, reviewItemId: item.Id)
         }
         else if (item.Kind == CompareReviewItemKind.Frame)
         {
@@ -1541,12 +1536,10 @@ else
                     </div>
                 }
             }
-
-            @RenderDeleteConfirmation()
         </div>
     };
 
-    private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact, bool guideCard = false) => __builder =>
+    private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact, bool guideCard = false, Guid? reviewItemId = null) => __builder =>
     {
         <article class="asset-card @(compact ? "asset-card-compact" : "")" @key="asset.Id">
             @if (!guideCard)
@@ -1597,14 +1590,16 @@ else
                 }
                 <div class="asset-actions">
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AttachAssetAsync(asset)">Attach</button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddAssetToReviewAsync(asset)">Add to Review</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => BeginRenameAsset(asset)">Rename</button>
                     @if (!guideCard)
                     {
                         <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenSpriteSheetAsync(asset)">Sprite Sheet</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!CanComposeSpriteFrame(asset))" @onclick="() => AddAssetToSpriteSheetAsync(asset)">Add Frame</button>
+                    }
+                    @if (reviewItemId is Guid removeReviewItemId)
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveReviewItemAsync(removeReviewItemId)">Remove</button>
                     }
                     <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RequestDeleteAssetAsync(asset.Id)">Delete</button>
                     @if (!guideCard)
@@ -2076,29 +2071,6 @@ else
         await ReloadWorkbenchAsync();
     }
 
-    private async Task AddAssetToReviewAsync(ArtAssetView asset)
-    {
-        if (_workbench is null)
-            return;
-
-        await RunWorkflowAsync("Adding asset to review...", () =>
-            AddCompareReviewItemsAsync([new CompareReviewSetItemRequest(
-                CompareReviewItemKind.Asset,
-                asset.Id,
-                asset.Label)]));
-    }
-
-
-    private Task AddCompareReviewItemsAsync(IReadOnlyList<CompareReviewSetItemRequest> items)
-    {
-        if (_workbench is null)
-            return Task.CompletedTask;
-
-        return Workflow.AddCompareReviewItemsAsync(
-            _workbench.Project.Id,
-            new AddCompareReviewItemsRequest(null, null, items));
-    }
-
     private async Task RemoveReviewItemAsync(Guid itemId)
     {
         if (_workbench is null)
@@ -2545,18 +2517,6 @@ else
             FrameSetId: null,
             FrameId: null,
             SelectedRegionIds: []));
-        await ReloadWorkbenchAsync();
-    }
-
-    private async Task AddAssetToSpriteSheetAsync(ArtAssetView asset)
-    {
-        if (_workbench is null || !CanComposeSpriteFrame(asset))
-            return;
-
-        await FlushMaskAutosaveAsync();
-        await SpriteActions.ComposeFrameSetFromAssetsAsync(_workbench.Project.Id, new ComposeFrameSetFromAssetsRequest(
-            [asset.Id],
-            $"{asset.Label} sheet"));
         await ReloadWorkbenchAsync();
     }
 
@@ -3967,9 +3927,6 @@ else
 
     private static string FormatDimensions(ArtAssetView asset) =>
         asset.Width is int width && asset.Height is int height ? $"{width} x {height}" : "Unknown size";
-
-    private static bool CanComposeSpriteFrame(ArtAssetView asset) =>
-        asset.ContentType.Equals("image/png", StringComparison.OrdinalIgnoreCase);
 
     private static string BackgroundLabel(string background) =>
         background.Trim().ToLowerInvariant() switch
