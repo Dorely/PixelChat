@@ -34,8 +34,8 @@ public static class ArtMediaEndpoints
             IArtWorkflowService workflow,
             CancellationToken cancellationToken) =>
         {
-            var image = await workflow.GetAssetPreviewImageAsync(projectId, assetId, cancellationToken);
-            return ImageResult(image);
+            return await ImageResultOrNotFoundAsync(
+                () => workflow.GetAssetPreviewImageAsync(projectId, assetId, cancellationToken));
         });
 
         group.MapGet("/assets/{assetId:guid}/full", async (
@@ -44,8 +44,8 @@ public static class ArtMediaEndpoints
             IArtWorkflowService workflow,
             CancellationToken cancellationToken) =>
         {
-            var image = await workflow.GetAssetFullImageAsync(projectId, assetId, cancellationToken);
-            return ImageResult(image);
+            return await ImageResultOrNotFoundAsync(
+                () => workflow.GetAssetFullImageAsync(projectId, assetId, cancellationToken));
         });
 
         group.MapGet("/masks/{maskId:guid}", async (
@@ -54,8 +54,8 @@ public static class ArtMediaEndpoints
             IArtWorkflowService workflow,
             CancellationToken cancellationToken) =>
         {
-            var image = await workflow.GetMaskImageAsync(projectId, maskId, cancellationToken);
-            return ImageResult(image);
+            return await ImageResultOrNotFoundAsync(
+                () => workflow.GetMaskImageAsync(projectId, maskId, cancellationToken));
         });
 
         group.MapGet("/chat-visuals/{visualId:guid}/preview", async (
@@ -64,8 +64,8 @@ public static class ArtMediaEndpoints
             IArtWorkflowService workflow,
             CancellationToken cancellationToken) =>
         {
-            var image = await workflow.GetChatVisualImageAsync(projectId, visualId, preview: true, cancellationToken);
-            return ImageResult(image);
+            return await ImageResultOrNotFoundAsync(
+                () => workflow.GetChatVisualImageAsync(projectId, visualId, preview: true, cancellationToken));
         });
 
         group.MapGet("/chat-visuals/{visualId:guid}/full", async (
@@ -74,8 +74,8 @@ public static class ArtMediaEndpoints
             IArtWorkflowService workflow,
             CancellationToken cancellationToken) =>
         {
-            var image = await workflow.GetChatVisualImageAsync(projectId, visualId, preview: false, cancellationToken);
-            return ImageResult(image);
+            return await ImageResultOrNotFoundAsync(
+                () => workflow.GetChatVisualImageAsync(projectId, visualId, preview: false, cancellationToken));
         });
 
         group.MapGet("/frame-set-frames/{frameId:guid}/preview", async (
@@ -116,6 +116,25 @@ public static class ArtMediaEndpoints
 
         return app;
     }
+
+    private static async Task<IResult> ImageResultOrNotFoundAsync(Func<Task<ImageBinaryView>> loadImage)
+    {
+        try
+        {
+            return ImageResult(await loadImage());
+        }
+        catch (InvalidOperationException ex) when (IsMissingMedia(ex))
+        {
+            return Results.NotFound();
+        }
+    }
+
+    private static bool IsMissingMedia(InvalidOperationException exception) =>
+        exception.Message is "Asset was not found."
+            or "Mask was not found."
+            or "Chat visual was not found."
+            or "Chat visual image data was not found."
+            or "Chat visual source was not found.";
 
     private static IResult ImageResult(ImageBinaryView image)
     {
