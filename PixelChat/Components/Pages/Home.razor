@@ -306,7 +306,7 @@ else
         }
     }
 
-    private async Task ReloadWorkbenchAsync()
+    private async Task ReloadWorkbenchAsync(bool acceptBackendMode = false)
     {
         _workbench = await Workflow.GetWorkbenchAsync(ParseProjectIdOrNull(_projectIdText));
         _projectIdText = _workbench.Project.Id.ToString();
@@ -316,6 +316,10 @@ else
             _activeWorkspaceMode = _workbench.Project.ActiveWorkspaceMode;
             _workspaceModePersistRequestVersion = 0;
             _workspaceModePersistCompleteVersion = 0;
+        }
+        else if (acceptBackendMode)
+        {
+            AcceptBackendWorkspaceMode(_workbench.Project.ActiveWorkspaceMode);
         }
         else if (_workspaceModePersistRequestVersion == _workspaceModePersistCompleteVersion)
         {
@@ -344,6 +348,14 @@ else
         await RefreshRecipeEditorAfterWorkbenchReloadAsync();
         await LoadReviewFrameSetsAsync();
         PublishVisibleState();
+    }
+
+    private void AcceptBackendWorkspaceMode(WorkspaceMode mode)
+    {
+        _activeWorkspaceMode = mode;
+        var acceptedVersion = _workspaceModePersistRequestVersion + 1;
+        _workspaceModePersistRequestVersion = acceptedVersion;
+        _workspaceModePersistCompleteVersion = acceptedVersion;
     }
 
     private readonly Dictionary<Guid, FrameSetView> _reviewFrameSets = [];
@@ -505,6 +517,15 @@ else
         var projectId = _workbench.Project.Id;
         var version = ++_workspaceModePersistRequestVersion;
         _ = InvokeAsync(() => PersistWorkspaceModeAsync(projectId, mode, version));
+    }
+
+    private async Task SetWorkspaceModeAndReloadAsync(WorkspaceMode mode)
+    {
+        if (_workbench is null)
+            return;
+
+        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, mode);
+        await ReloadWorkbenchAsync(acceptBackendMode: true);
     }
 
     private RenderFragment RenderGenerateWorkspace() => __builder =>
@@ -1771,7 +1792,7 @@ else
                 SelectedGenerateAnimationRecipeIdOrNull(),
                 CurrentReferenceAssetIds(),
                 _workbench.Project.ActiveBatchId));
-            await ReloadWorkbenchAsync();
+            await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Batches);
             Logger.LogDebug(
                 "Image generation background batch scheduled: projectId={ProjectId}, batchId={BatchId}, count={Count}, size={Size}, promptChars={PromptChars}, referenceImages={ReferenceImageCount}",
                 projectId,
@@ -2266,9 +2287,18 @@ else
     {
         try
         {
+            if (version != _workspaceModePersistRequestVersion)
+                return;
+
             await Workflow.SetWorkspaceModeAsync(projectId, mode);
             if (version == _workspaceModePersistRequestVersion)
+            {
                 _workspaceModePersistCompleteVersion = version;
+            }
+            else if (_workbench?.Project.Id == projectId)
+            {
+                await Workflow.SetWorkspaceModeAsync(projectId, _activeWorkspaceMode);
+            }
         }
         catch (Exception ex)
         {
@@ -2411,7 +2441,7 @@ else
                 sourceDataUrl,
                 maskDataUrl,
                 CurrentReferenceAssetIds().Where(id => id != asset.Id).ToList()));
-            await ReloadWorkbenchAsync();
+            await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Batches);
             Logger.LogDebug(
                 "Image edit background batch scheduled: projectId={ProjectId}, batchId={BatchId}, sourceAssetId={SourceAssetId}, count={Count}, size={Size}, promptChars={PromptChars}, referenceImages={ReferenceImageCount}, hasMask={HasMask}",
                 projectId,
@@ -2488,8 +2518,7 @@ else
             return;
 
         SetDraftReferences(CurrentReferenceAssetIds().Append(assetId).ToList());
-        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Generate);
-        await ReloadWorkbenchAsync();
+        await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Generate);
     }
 
     private async Task EditAssetAsync(Guid assetId)
@@ -2500,8 +2529,7 @@ else
         await FlushMaskAutosaveAsync();
         _editAssetId = assetId;
         _loadedEditorAssetId = null;
-        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Edit);
-        await ReloadWorkbenchAsync();
+        await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Edit);
     }
 
     private async Task OpenSpriteSheetAsync(ArtAssetView asset)
@@ -2517,19 +2545,19 @@ else
             FrameSetId: null,
             FrameId: null,
             SelectedRegionIds: []));
-        await ReloadWorkbenchAsync();
+        await ReloadWorkbenchAsync(acceptBackendMode: true);
     }
 
     private async Task OnSpriteSheetChangedAsync()
     {
-        await ReloadWorkbenchAsync();
+        await ReloadWorkbenchAsync(acceptBackendMode: true);
         StateHasChanged();
     }
 
     private async Task OnSpriteEditorSourceAssetChangedAsync(Guid assetId)
     {
         _spriteEditorSourceAssetId = assetId;
-        await ReloadWorkbenchAsync();
+        await ReloadWorkbenchAsync(acceptBackendMode: true);
         StateHasChanged();
     }
 
@@ -2742,7 +2770,7 @@ else
     {
         _ = InvokeAsync(async () =>
         {
-            await ReloadWorkbenchAsync();
+            await ReloadWorkbenchAsync(acceptBackendMode: true);
             StateHasChanged();
         });
     }
@@ -2768,12 +2796,24 @@ else
                 .ToHashSet();
             var snapshot = ImageRuntime.GetSnapshot();
             _generationRuntimeSnapshot = snapshot;
+            var startedBatch = projectId is Guid startedProjectId
+                && snapshot.Batches.Any(batch =>
+                    batch.ProjectId == startedProjectId
+                    && batch.IsRunning
+                    && !previousRunningBatchIds.Contains(batch.BatchId));
             var completedBatch = previousRunningBatchIds.Any(batchId =>
                 snapshot.Batches.Any(batch => batch.BatchId == batchId && !batch.IsRunning));
             var completedOutput = projectId is Guid currentProjectId
                 && HasNewTerminalGenerationOutput(previousSnapshot, snapshot, currentProjectId);
-            if (completedBatch || completedOutput)
+            if (startedBatch && projectId is Guid runningProjectId)
+            {
+                await Workflow.SetWorkspaceModeAsync(runningProjectId, WorkspaceMode.Batches);
+                await ReloadWorkbenchAsync(acceptBackendMode: true);
+            }
+            else if (completedBatch || completedOutput)
+            {
                 await ReloadWorkbenchAsync();
+            }
             StateHasChanged();
         });
     }
@@ -2954,8 +2994,7 @@ else
                 _generateAnimationRecipeText = ValidAnimationRecipeId(draft.AnimationRecipeId)?.ToString() ?? _generateAnimationRecipeText;
                 if (draft.ReferenceAssetIds is not null)
                     SetDraftReferences(draft.ReferenceAssetIds);
-                await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Generate);
-                await ReloadWorkbenchAsync();
+                await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Generate);
                 break;
 
             case AssistantFormDraftTarget.Edit:
@@ -2964,8 +3003,7 @@ else
                 _editBackground = NormalizeDraftBackground(draft.Background, _editBackground);
                 _editCount = NormalizeDraftCount(draft.Count, _editCount);
                 _editRecipeText = ValidRecipeId(draft.PromptRecipeId)?.ToString() ?? _editRecipeText;
-                await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Edit);
-                await ReloadWorkbenchAsync();
+                await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Edit);
                 break;
 
             case AssistantFormDraftTarget.Recipe:
@@ -2976,8 +3014,7 @@ else
                 _recipeEditorDirty = true;
                 _recipeChangedExternally = false;
                 _loadedRecipeSnapshot = string.Empty;
-                await Workflow.SetWorkspaceModeAsync(_workbench!.Project.Id, WorkspaceMode.Recipes);
-                await ReloadWorkbenchAsync();
+                await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Recipes);
                 break;
 
         }

@@ -437,7 +437,10 @@ public sealed class AssistantChatService(
                     yield return new AssistantFormDraftProposed(draft);
 
                 if (outcome.Error is null && toolRegistry.IsWorkspaceMutation(pendingCall.Name))
+                {
+                    await toolRegistry.ApplyAutomaticWorkspaceModeAsync(projectId, pendingCall.Name, cancellationToken);
                     yield return new AssistantWorkspaceMutated();
+                }
             }
 
             messages.Add(new ChatMessage(ChatRole.Tool, resultContents));

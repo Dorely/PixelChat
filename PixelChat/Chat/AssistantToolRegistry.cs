@@ -27,7 +27,6 @@ public sealed class AssistantToolRegistry(
 
     private static readonly HashSet<string> WorkspaceMutationTools = new(StringComparer.Ordinal)
     {
-        "switch_workspace_mode",
         "set_compare_review_set",
         "add_compare_review_items",
         "remove_compare_review_item",
@@ -71,6 +70,52 @@ public sealed class AssistantToolRegistry(
         "export_asset",
     };
 
+    private static readonly IReadOnlyDictionary<string, WorkspaceMode> AutomaticWorkspaceModes =
+        new Dictionary<string, WorkspaceMode>(StringComparer.Ordinal)
+        {
+            ["run_generation_round"] = WorkspaceMode.Batches,
+            ["generate_sprite_sheet_candidates"] = WorkspaceMode.Batches,
+            ["set_compare_review_set"] = WorkspaceMode.Review,
+            ["add_compare_review_items"] = WorkspaceMode.Review,
+            ["remove_compare_review_item"] = WorkspaceMode.Review,
+            ["clear_compare_review_set"] = WorkspaceMode.Review,
+            ["save_prompt_recipe"] = WorkspaceMode.Recipes,
+            ["set_prompt_recipe_attachments"] = WorkspaceMode.Recipes,
+            ["save_animation_recipe"] = WorkspaceMode.Recipes,
+            ["set_animation_recipe_attachments"] = WorkspaceMode.Recipes,
+            ["revert_recipe_version"] = WorkspaceMode.Recipes,
+            ["revert_animation_recipe_version"] = WorkspaceMode.Recipes,
+            ["update_sprite_sheet_frames"] = WorkspaceMode.Sprites,
+            ["normalize_sprite_sheet"] = WorkspaceMode.Sprites,
+            ["reset_sprite_sheet_to_original"] = WorkspaceMode.Sprites,
+            ["extract_region_as_asset"] = WorkspaceMode.Sprites,
+            ["detect_source_regions"] = WorkspaceMode.Sprites,
+            ["save_source_regions"] = WorkspaceMode.Sprites,
+            ["create_frame_set"] = WorkspaceMode.Sprites,
+            ["create_frame_set_from_regions"] = WorkspaceMode.Sprites,
+            ["compose_frame_set_from_assets"] = WorkspaceMode.Sprites,
+            ["set_active_frame_set"] = WorkspaceMode.Sprites,
+            ["set_common_cell_size"] = WorkspaceMode.Sprites,
+            ["add_frame_from_region"] = WorkspaceMode.Sprites,
+            ["duplicate_frame"] = WorkspaceMode.Sprites,
+            ["set_frame_logical_cell"] = WorkspaceMode.Sprites,
+            ["update_frame_source_bounds"] = WorkspaceMode.Sprites,
+            ["translate_frame_content"] = WorkspaceMode.Sprites,
+            ["reorder_frame"] = WorkspaceMode.Sprites,
+            ["delete_frame"] = WorkspaceMode.Sprites,
+            ["set_frame_duration"] = WorkspaceMode.Sprites,
+            ["auto_anchor_align_frames"] = WorkspaceMode.Sprites,
+            ["normalize_frame_scale"] = WorkspaceMode.Sprites,
+            ["upsert_frame_mask"] = WorkspaceMode.Sprites,
+            ["clear_frame_mask"] = WorkspaceMode.Sprites,
+            ["erase_frame_regions"] = WorkspaceMode.Sprites,
+            ["edit_frame"] = WorkspaceMode.Sprites,
+            ["build_sheet"] = WorkspaceMode.Sprites,
+            ["generate_animation_guide"] = WorkspaceMode.Assets,
+            ["mark_asset"] = WorkspaceMode.Assets,
+            ["export_asset"] = WorkspaceMode.Assets,
+        };
+
     public IList<AITool> Build(Guid projectId, AssistantTurnGenerationBudget budget) =>
         WithDisplayTitleParameters(
         [
@@ -94,7 +139,7 @@ public sealed class AssistantToolRegistry(
             method: (string? query = null, int? limit = null) =>
                 workflow.ListPromptRecipesJsonAsync(projectId, query, limit),
             name: "list_recipes",
-            description: "List compact saved art recipe summaries for the current project, including current version and attachment counts. Use read_recipe for the full reusable prompt, notes, and attachments."),
+            description: "List compact saved art recipe summaries for the current project, including current version and attachment counts. Check this before generation/editing when style or production guidance may be reusable. Use read_recipe for the full reusable prompt, notes, and attachments."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId) => workflow.ReadPromptRecipeJsonAsync(projectId, recipeId),
@@ -105,7 +150,7 @@ public sealed class AssistantToolRegistry(
             method: (string? query = null, int? limit = null) =>
                 workflow.ListAnimationRecipesJsonAsync(projectId, query, limit),
             name: "list_animation_recipes",
-            description: "List compact saved animation recipes for reusable motion prompt guidance, notes, and attachments. Animation recipes are independent of art style unless their prompt explicitly says otherwise."),
+            description: "List compact saved animation recipes for reusable motion prompt guidance, notes, and attachments. Check this before sprite-sheet or motion work. Animation recipes are independent of art style unless their prompt explicitly says otherwise."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId) => workflow.ReadAnimationRecipeJsonAsync(projectId, recipeId),
@@ -127,7 +172,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 SavePromptRecipeToolAsync(projectId, recipeId, name, prompt, changeSummary, notes, cancellationToken),
             name: "save_prompt_recipe",
-            description: "Create or update an art recipe. A recipe is a name, a reusable prompt for visual style and production guidance, private notes, and optional asset attachments. Keep the prompt minimal and composable. Always provide changeSummary. Every save is versioned and revertible."),
+            description: "Create or update an art recipe. A recipe is a name, a reusable prompt for visual style and production guidance, private notes, and optional asset attachments. Keep the prompt broad, minimal, and composable for the repeatable use case, not a one-off subject. Always provide changeSummary. Every save is versioned and revertible."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId, RecipeAttachmentToolItem[]? attachments = null, CancellationToken cancellationToken = default) =>
@@ -155,7 +200,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 SaveAnimationRecipeToolAsync(projectId, recipeId, name, prompt, changeSummary, notes, cancellationToken),
             name: "save_animation_recipe",
-            description: "Create or update an animation recipe: a name, a reusable prompt for motion and layout guidance, private notes, and optional asset attachments. It is independent of art style unless the prompt is intentionally style-specific. Keep the prompt minimal and composable. Always provide changeSummary."),
+            description: "Create or update an animation recipe: a name, a reusable prompt for motion and layout guidance, private notes, and optional asset attachments. It is independent of art style unless intentionally style-specific. Keep it broad, minimal, and composable for reusable motion/layout behavior. Always provide changeSummary."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId, RecipeAttachmentToolItem[]? attachments = null, CancellationToken cancellationToken = default) =>
@@ -220,7 +265,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 RunGenerationRoundAsync(projectId, budget, specificRequest, assetName, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId, recipeId, animationRecipeId, cancellationToken),
             name: "run_generation_round",
-            description: "Run one generic autonomous generation or edit round and wait for completion. Requires assetName, a readable saved asset base name. Use for starter assets, art recipe tests, focused variations, and non-sheet image edits. For recipe tests, first save the art recipe revision and pass recipeId. For generation, pass animationRecipeId when a saved motion/layout recipe should guide a sprite-sheet request; edits ignore animationRecipeId. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
+            description: "Run one generic autonomous generation or edit round and wait for completion. Requires assetName, a readable saved asset base name. Use for starter assets, broad recipe tests, focused variations, and non-sheet image edits. When reusable guidance applies, pass recipeId and/or animationRecipeId instead of pasting recipe text into specificRequest. For recipe tests, save the recipe revision first and pass recipeId. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
 
         AIFunctionFactory.Create(
             method: (
@@ -236,7 +281,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 RunGenerationRoundAsync(projectId, budget, prompt, assetName, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, animationRecipeId: animationRecipeId, cancellationToken: cancellationToken),
             name: "generate_sprite_sheet_candidates",
-            description: "Generate sprite-sheet candidates from a concise labeled-slot prompt plus ordered references whose roles are indexed in the prompt. Requires assetName, a readable saved asset base name. Pass animationRecipeId to use a saved animation recipe; its guide attachments are prepended automatically. For new guide-driven sprite sheets, first call generate_animation_guide with or without a motionClipId, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Starter/reference sprite and optional art recipe/style references should follow. Put hard prohibitions in negativePrompt. Returns model-only candidate images; add promising batches/assets to Review for the user."),
+            description: "Generate sprite-sheet candidates from a concise labeled-slot prompt plus ordered references whose roles are indexed in the prompt. Requires assetName, a readable saved asset base name. Pass artRecipeId and/or animationRecipeId when saved reusable guidance applies; do not paste recipe prompts into the one-off prompt. For new guide-driven sprite sheets, first call generate_animation_guide, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Put hard prohibitions in negativePrompt. Returns model-only candidate images; add promising batches/assets to Review for the user."),
 
         AIFunctionFactory.Create(
             method: (
@@ -506,11 +551,6 @@ public sealed class AssistantToolRegistry(
             description: "Greenfield animation-quality review for a FrameSet. Renders the frames into a one-row strip and returns motion metrics, scaleStability, and visualChecklist in JSON plus labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content. Answer every visualChecklist item individually before declaring the animation clean. For frames with edited/erased working images it also returns removed-vs-source overlays where red marks pixels erased from the source foreground; inspect these for clipped owned silhouette before declaring an animation clean. Omit frameSetId to use the active FrameSet. This is read-only."),
 
         AIFunctionFactory.Create(
-            method: (string mode) => SwitchWorkspaceModeAsync(projectId, mode),
-            name: "switch_workspace_mode",
-            description: "Switch the visible workspace mode. Allowed values: generate, batches, review, edit, sprites, recipes, assets. review is the curated set you show the user; batches is generation-batch history. Alias compare maps to review; history maps to batches."),
-
-        AIFunctionFactory.Create(
             method: (string? title = null, string? summary = null, CompareReviewToolItem[]? items = null, bool switchToCompare = true, CancellationToken cancellationToken = default) =>
                 SetCompareReviewSetAsync(projectId, title, summary, items, switchToCompare, cancellationToken),
             name: "set_compare_review_set",
@@ -545,7 +585,7 @@ public sealed class AssistantToolRegistry(
                 int? count = null,
                 Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, background, recipeId, animationRecipeId, count, referenceAssetIds),
             name: "draft_generate_form",
-            description: "Draft values for the Generate form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select a saved reusable art recipe for style/production guidance and animationRecipeId to select a saved motion/layout recipe for sprite-sheet generation. Keep prompt focused on the new one-off asset request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
+            description: "Draft values for the Generate form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select a saved reusable art recipe and animationRecipeId to select a saved motion/layout recipe; do not paste recipe prompts into the one-off prompt. Keep prompt focused on the new asset request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -555,7 +595,7 @@ public sealed class AssistantToolRegistry(
                 Guid? recipeId = null,
                 int count = 1) => DraftEditFormAsync(prompt, size, background, recipeId, count),
             name: "draft_edit_form",
-            description: "Draft values for the current Edit form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select a saved reusable recipe guide; keep prompt focused on the requested edit or animation, not the reusable recipe text. This does not choose an asset or run an image edit; the user selects an asset, may paint/review a mask for targeted edits, and clicks Send Edit manually."),
+            description: "Draft values for the current Edit form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select saved reusable guidance; keep prompt focused on the requested edit, not the reusable recipe text. This does not choose an asset or run an image edit; the user selects an asset, may paint/review a mask for targeted edits, and clicks Send Edit manually."),
 
         AIFunctionFactory.Create(
             method: (
@@ -610,6 +650,15 @@ public sealed class AssistantToolRegistry(
 
     public bool IsWorkspaceMutation(string toolName) => WorkspaceMutationTools.Contains(toolName);
 
+    public async Task ApplyAutomaticWorkspaceModeAsync(Guid projectId, string toolName, CancellationToken cancellationToken = default)
+    {
+        if (AutomaticWorkspaceModeForTool(toolName) is { } mode)
+            await workflow.SetWorkspaceModeAsync(projectId, mode, cancellationToken);
+    }
+
+    private static WorkspaceMode? AutomaticWorkspaceModeForTool(string toolName) =>
+        AutomaticWorkspaceModes.TryGetValue(toolName, out var mode) ? mode : null;
+
     private sealed class DisplayTitleAIFunction(AIFunction innerFunction) : DelegatingAIFunction(innerFunction)
     {
         private const string DisplayTitleDescription =
@@ -656,12 +705,6 @@ public sealed class AssistantToolRegistry(
         }
 
         return await workflow.GetWorkspaceStateJsonAsync(projectId);
-    }
-
-    private async Task<string> SwitchWorkspaceModeAsync(Guid projectId, string mode)
-    {
-        await workflow.SetWorkspaceModeAsync(projectId, ParseWorkspaceMode(mode));
-        return $"Workspace mode switched to {mode}.";
     }
 
     private async Task<string> SetCompareReviewSetAsync(
@@ -1917,19 +1960,6 @@ public sealed class AssistantToolRegistry(
             "frame" => CompareReviewItemKind.Frame,
             "animation" or "frameset" or "animationpreview" => CompareReviewItemKind.Animation,
             _ => throw new InvalidOperationException($"Unknown compare review item kind '{kind}'.")
-        };
-
-    private static WorkspaceMode ParseWorkspaceMode(string mode) =>
-        NormalizeToken(mode) switch
-        {
-            "generate" => WorkspaceMode.Generate,
-            "review" or "compare" => WorkspaceMode.Review,
-            "batches" or "batch" or "history" => WorkspaceMode.Batches,
-            "edit" => WorkspaceMode.Edit,
-            "sprites" or "sprite" or "spritesheet" or "spritesheets" => WorkspaceMode.Sprites,
-            "recipes" or "recipe" => WorkspaceMode.Recipes,
-            "assets" or "asset" => WorkspaceMode.Assets,
-            _ => throw new InvalidOperationException($"Unknown workspace mode '{mode}'.")
         };
 
     private static string NormalizeToken(string value) =>
