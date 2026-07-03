@@ -642,10 +642,8 @@
         if (projectChanged)
         {
             _loadedProjectId = Workbench.Project.Id;
-            _appliedSourceAssetId = null;
             _frameSet = null;
-            _regions = [];
-            _selectedRegionIds.Clear();
+            ClearSourceSelection();
             _selectedIndex = -1;
             _builtSheetAssetId = null;
             _builtSheetManifest = null;
@@ -677,6 +675,10 @@
                     setMode: false,
                     persistFocus: false);
             }
+            else
+            {
+                ClearSourceSelection();
+            }
 
             ApplyProjectSelectedRegions();
             ApplyProjectSelectedFrame();
@@ -695,6 +697,8 @@
         }
         catch (Exception ex)
         {
+            if (ex.Message == "Source asset was not found.")
+                ClearSourceSelection();
             _error = ex.Message;
             CaptureLoadedProjectFocus();
         }
@@ -830,11 +834,11 @@
         bool setMode = true,
         bool persistFocus = true)
     {
+        var regions = (await FrameSets.ListSourceRegionsAsync(Workbench.Project.Id, sourceId)).ToList();
         _sourceAssetIdText = sourceId.ToString();
         _appliedSourceAssetId = sourceId;
-        _regions = [];
+        _regions = regions;
         _selectedRegionIds.Clear();
-        _regions = (await FrameSets.ListSourceRegionsAsync(Workbench.Project.Id, sourceId)).ToList();
         if (clearMismatchedFrameSet && _frameSet?.SourceAssetId != sourceId)
         {
             StopAnimation();
@@ -857,6 +861,14 @@
         }
         await PublishSpritesStateAsync();
         await InvokeAsync(StateHasChanged);
+    }
+
+    private void ClearSourceSelection()
+    {
+        _sourceAssetIdText = string.Empty;
+        _appliedSourceAssetId = null;
+        _regions = [];
+        _selectedRegionIds.Clear();
     }
 
     private async Task DetectRegionsAsync()
@@ -2154,8 +2166,17 @@
 
     private int FrameCount() => _frameSet?.FrameCount ?? 0;
 
-    private Guid? SelectedSourceAssetId() =>
-        Guid.TryParse(_sourceAssetIdText, out var id) ? id : _frameSet?.SourceAssetId;
+    private Guid? SelectedSourceAssetId()
+    {
+        if (Guid.TryParse(_sourceAssetIdText, out var id) && CanRenderSourceAsset(id))
+            return id;
+        if (_frameSet?.SourceAssetId is Guid frameSetSourceId && CanRenderSourceAsset(frameSetSourceId))
+            return frameSetSourceId;
+        return null;
+    }
+
+    private bool CanRenderSourceAsset(Guid assetId) =>
+        _appliedSourceAssetId == assetId || Workbench.Assets.Any(asset => asset.Id == assetId);
 
     private WorkspaceAssetSummary? SelectedSourceAsset() =>
         SelectedSourceArtAsset() is { } asset
@@ -2179,8 +2200,7 @@
 
     private string? SourceImageUrl()
     {
-        var id = SelectedSourceAssetId() ?? _frameSet?.SourceAssetId;
-        return id is Guid assetId ? AssetFullUrl(assetId) : null;
+        return SelectedSourceAssetId() is Guid assetId ? AssetFullUrl(assetId) : null;
     }
 
     private Guid? BuiltSheetAssetId() => _builtSheetAssetId ?? _frameSet?.LatestBuiltSheetAssetId;

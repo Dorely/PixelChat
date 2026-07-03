@@ -2405,9 +2405,26 @@ public sealed class ArtWorkflowService(
 
         await RemoveCompareReviewItemsAsync(projectId, CompareReviewItemKind.Asset, [assetId], cancellationToken);
 
+        var sourceFrameSetIds = await db.FrameSets
+            .Where(frameSet => frameSet.ProjectId == projectId && frameSet.SourceAssetId == assetId)
+            .Select(frameSet => frameSet.Id)
+            .ToListAsync(cancellationToken);
+
         var now = DateTime.UtcNow;
         db.ArtAssets.Remove(asset);
         var project = await GetProjectAsync(projectId, cancellationToken);
+        if (project.ActiveSpriteSourceAssetId == assetId)
+        {
+            project.ActiveSpriteSourceAssetId = null;
+            project.ActiveSpriteRegionIdsJson = "[]";
+            if (SpriteWorkspaceModes.Normalize(project.ActiveSpriteMode) == SpriteWorkspaceModes.Source
+                && project.ActiveFrameSetId is Guid activeFrameSetId
+                && sourceFrameSetIds.Contains(activeFrameSetId))
+            {
+                project.ActiveSpriteMode = SpriteWorkspaceModes.Frames;
+            }
+        }
+
         project.UpdatedAt = now;
         await db.SaveChangesAsync(cancellationToken);
     }
