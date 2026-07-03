@@ -171,7 +171,7 @@ public sealed class AssistantChatService(
         };
 
         var history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
-        var messages = new List<ChatMessage> { new(ChatRole.System, AssistantPromptBuilder.Build()) };
+        var messages = new List<ChatMessage> { new(ChatRole.System, AssistantPromptBuilder.Build(agentOptions.Value)) };
         messages.AddRange(await BuildModelHistoryAsync(history, userMessage.Id, projectId, cancellationToken));
         var modelName = providerAvailability.Provider.ModelId;
         yield return BuildTokenCountUpdate(messages, modelName);
@@ -640,7 +640,7 @@ public sealed class AssistantChatService(
 
     private List<ChatMessage> BuildPersistedModelMessages(IReadOnlyList<AssistantMessage> history)
     {
-        var messages = new List<ChatMessage> { new(ChatRole.System, AssistantPromptBuilder.Build()) };
+        var messages = new List<ChatMessage> { new(ChatRole.System, AssistantPromptBuilder.Build(agentOptions.Value)) };
         foreach (var message in history)
         {
             if (message.Role == AssistantMessageRole.System)
