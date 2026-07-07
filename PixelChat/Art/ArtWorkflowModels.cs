@@ -395,7 +395,7 @@ public sealed record EditImageRequest(
     string? SourcePngDataUrl,
     string? MaskPngDataUrl,
     IReadOnlyList<Guid> ReferenceAssetIds,
-    bool SwitchToCompare = true,
+    bool SwitchToBatches = true,
     string? OutputLabel = null);
 
 public sealed record CompareReviewSetItemRequest(
@@ -408,13 +408,13 @@ public sealed record SetCompareReviewSetRequest(
     string? Title,
     string? Summary,
     IReadOnlyList<CompareReviewSetItemRequest> Items,
-    bool SwitchToCompare = true);
+    bool SwitchToReview = true);
 
 public sealed record AddCompareReviewItemsRequest(
     string? Title,
     string? Summary,
     IReadOnlyList<CompareReviewSetItemRequest> Items,
-    bool SwitchToCompare = true);
+    bool SwitchToReview = true);
 
 public sealed record ImportAssetRequest(
     string FileName,

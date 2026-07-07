@@ -32,9 +32,6 @@ public sealed class AssistantToolRegistry(
         "remove_compare_review_item",
         "clear_compare_review_set",
         "mark_asset",
-        "update_sprite_sheet_frames",
-        "normalize_sprite_sheet",
-        "reset_sprite_sheet_to_original",
         "run_generation_round",
         "save_prompt_recipe",
         "set_prompt_recipe_attachments",
@@ -67,54 +64,7 @@ public sealed class AssistantToolRegistry(
         "erase_frame_regions",
         "edit_frame",
         "build_sheet",
-        "export_asset",
     };
-
-    private static readonly IReadOnlyDictionary<string, WorkspaceMode> AutomaticWorkspaceModes =
-        new Dictionary<string, WorkspaceMode>(StringComparer.Ordinal)
-        {
-            ["run_generation_round"] = WorkspaceMode.Batches,
-            ["generate_sprite_sheet_candidates"] = WorkspaceMode.Batches,
-            ["set_compare_review_set"] = WorkspaceMode.Review,
-            ["add_compare_review_items"] = WorkspaceMode.Review,
-            ["remove_compare_review_item"] = WorkspaceMode.Review,
-            ["clear_compare_review_set"] = WorkspaceMode.Review,
-            ["save_prompt_recipe"] = WorkspaceMode.Recipes,
-            ["set_prompt_recipe_attachments"] = WorkspaceMode.Recipes,
-            ["save_animation_recipe"] = WorkspaceMode.Recipes,
-            ["set_animation_recipe_attachments"] = WorkspaceMode.Recipes,
-            ["revert_recipe_version"] = WorkspaceMode.Recipes,
-            ["revert_animation_recipe_version"] = WorkspaceMode.Recipes,
-            ["update_sprite_sheet_frames"] = WorkspaceMode.Sprites,
-            ["normalize_sprite_sheet"] = WorkspaceMode.Sprites,
-            ["reset_sprite_sheet_to_original"] = WorkspaceMode.Sprites,
-            ["extract_region_as_asset"] = WorkspaceMode.Sprites,
-            ["detect_source_regions"] = WorkspaceMode.Sprites,
-            ["save_source_regions"] = WorkspaceMode.Sprites,
-            ["create_frame_set"] = WorkspaceMode.Sprites,
-            ["create_frame_set_from_regions"] = WorkspaceMode.Sprites,
-            ["compose_frame_set_from_assets"] = WorkspaceMode.Sprites,
-            ["set_active_frame_set"] = WorkspaceMode.Sprites,
-            ["set_common_cell_size"] = WorkspaceMode.Sprites,
-            ["add_frame_from_region"] = WorkspaceMode.Sprites,
-            ["duplicate_frame"] = WorkspaceMode.Sprites,
-            ["set_frame_logical_cell"] = WorkspaceMode.Sprites,
-            ["update_frame_source_bounds"] = WorkspaceMode.Sprites,
-            ["translate_frame_content"] = WorkspaceMode.Sprites,
-            ["reorder_frame"] = WorkspaceMode.Sprites,
-            ["delete_frame"] = WorkspaceMode.Sprites,
-            ["set_frame_duration"] = WorkspaceMode.Sprites,
-            ["auto_anchor_align_frames"] = WorkspaceMode.Sprites,
-            ["normalize_frame_scale"] = WorkspaceMode.Sprites,
-            ["upsert_frame_mask"] = WorkspaceMode.Sprites,
-            ["clear_frame_mask"] = WorkspaceMode.Sprites,
-            ["erase_frame_regions"] = WorkspaceMode.Sprites,
-            ["edit_frame"] = WorkspaceMode.Sprites,
-            ["build_sheet"] = WorkspaceMode.Sprites,
-            ["generate_animation_guide"] = WorkspaceMode.Assets,
-            ["mark_asset"] = WorkspaceMode.Assets,
-            ["export_asset"] = WorkspaceMode.Assets,
-        };
 
     public IList<AITool> Build(Guid projectId, AssistantTurnGenerationBudget budget) =>
         WithDisplayTitleParameters(
@@ -551,14 +501,14 @@ public sealed class AssistantToolRegistry(
             description: "Greenfield animation-quality review for a FrameSet. Renders the frames into a one-row strip and returns motion metrics, scaleStability, and visualChecklist in JSON plus labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content. Answer every visualChecklist item individually before declaring the animation clean. For frames with edited/erased working images it also returns removed-vs-source overlays where red marks pixels erased from the source foreground; inspect these for clipped owned silhouette before declaring an animation clean. Omit frameSetId to use the active FrameSet. This is read-only."),
 
         AIFunctionFactory.Create(
-            method: (string? title = null, string? summary = null, CompareReviewToolItem[]? items = null, bool switchToCompare = true, CancellationToken cancellationToken = default) =>
-                SetCompareReviewSetAsync(projectId, title, summary, items, switchToCompare, cancellationToken),
+            method: (string? title = null, string? summary = null, CompareReviewToolItem[]? items = null, bool switchToReview = true, CancellationToken cancellationToken = default) =>
+                SetCompareReviewSetAsync(projectId, title, summary, items, switchToReview, cancellationToken),
             name: "set_compare_review_set",
             description: "Replace the Review tab set with ordered items to show the user. Item kind values: asset, artRecipe, animationRecipe, frame (a greenfield Frame id), animation (a greenfield FrameSet id, played as a looping preview). Use this to present assets, recipes, individual frames, and animation previews. This does not attach images to chat or send them back as model context."),
 
         AIFunctionFactory.Create(
-            method: (CompareReviewToolItem[]? items = null, string? title = null, string? summary = null, bool switchToCompare = true, CancellationToken cancellationToken = default) =>
-                AddCompareReviewItemsAsync(projectId, items, title, summary, switchToCompare, cancellationToken),
+            method: (CompareReviewToolItem[]? items = null, string? title = null, string? summary = null, bool switchToReview = true, CancellationToken cancellationToken = default) =>
+                AddCompareReviewItemsAsync(projectId, items, title, summary, switchToReview, cancellationToken),
             name: "add_compare_review_items",
             description: "Append or update items in the Review tab set. Item kind values: asset, artRecipe, animationRecipe, frame (a greenfield Frame id), animation (a greenfield FrameSet id, played as a looping preview). This is for grouping things the user should review visually, not for model image context."),
 
@@ -650,15 +600,6 @@ public sealed class AssistantToolRegistry(
 
     public bool IsWorkspaceMutation(string toolName) => WorkspaceMutationTools.Contains(toolName);
 
-    public async Task ApplyAutomaticWorkspaceModeAsync(Guid projectId, string toolName, CancellationToken cancellationToken = default)
-    {
-        if (AutomaticWorkspaceModeForTool(toolName) is { } mode)
-            await workflow.SetWorkspaceModeAsync(projectId, mode, cancellationToken);
-    }
-
-    private static WorkspaceMode? AutomaticWorkspaceModeForTool(string toolName) =>
-        AutomaticWorkspaceModes.TryGetValue(toolName, out var mode) ? mode : null;
-
     private sealed class DisplayTitleAIFunction(AIFunction innerFunction) : DelegatingAIFunction(innerFunction)
     {
         private const string DisplayTitleDescription =
@@ -712,12 +653,12 @@ public sealed class AssistantToolRegistry(
         string? title,
         string? summary,
         CompareReviewToolItem[]? items,
-        bool switchToCompare,
+        bool switchToReview,
         CancellationToken cancellationToken)
     {
         var reviewSet = await workflow.SetCompareReviewSetAsync(
             projectId,
-            new SetCompareReviewSetRequest(title, summary, ToCompareReviewRequests(items), switchToCompare),
+            new SetCompareReviewSetRequest(title, summary, ToCompareReviewRequests(items), switchToReview),
             cancellationToken);
         return JsonSerializer.Serialize(reviewSet, JsonOptions);
     }
@@ -727,12 +668,12 @@ public sealed class AssistantToolRegistry(
         CompareReviewToolItem[]? items,
         string? title,
         string? summary,
-        bool switchToCompare,
+        bool switchToReview,
         CancellationToken cancellationToken)
     {
         var reviewSet = await workflow.AddCompareReviewItemsAsync(
             projectId,
-            new AddCompareReviewItemsRequest(title, summary, ToCompareReviewRequests(items), switchToCompare),
+            new AddCompareReviewItemsRequest(title, summary, ToCompareReviewRequests(items), switchToReview),
             cancellationToken);
         return JsonSerializer.Serialize(reviewSet, JsonOptions);
     }

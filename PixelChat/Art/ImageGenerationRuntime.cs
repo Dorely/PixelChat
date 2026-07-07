@@ -53,7 +53,7 @@ public sealed class ImageGenerationRuntime(
                 batch = await workflow.StartGenerateImagesAsync(projectId, request, cancellationToken);
             }
 
-            RegisterStartedBatch(projectId, batch);
+            RegisterStartedBatch(projectId, batch, followInBatches: true);
         }
         catch
         {
@@ -81,7 +81,7 @@ public sealed class ImageGenerationRuntime(
                 batch = await workflow.StartEditImageAsync(projectId, request, cancellationToken);
             }
 
-            RegisterStartedBatch(projectId, batch);
+            RegisterStartedBatch(projectId, batch, request.SwitchToBatches);
         }
         catch
         {
@@ -157,12 +157,13 @@ public sealed class ImageGenerationRuntime(
         }
     }
 
-    private void RegisterStartedBatch(Guid projectId, GenerationBatchView batch)
+    private void RegisterStartedBatch(Guid projectId, GenerationBatchView batch, bool followInBatches)
     {
         var runtimeBatch = new ImageGenerationBatchRuntimeView(
             projectId,
             batch.Id,
             IsRunning: true,
+            followInBatches,
             batch.OutputStates.Select(ToRuntimeOutput).ToList());
         var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_lock)

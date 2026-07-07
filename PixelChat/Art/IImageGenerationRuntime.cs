@@ -19,6 +19,7 @@ public sealed record ImageGenerationBatchRuntimeView(
     Guid ProjectId,
     Guid BatchId,
     bool IsRunning,
+    bool FollowInBatches,
     IReadOnlyList<ImageGenerationOutputRuntimeView> Outputs);
 
 public sealed record ImageGenerationOutputRuntimeView(

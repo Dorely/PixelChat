@@ -912,7 +912,7 @@ public sealed class ArtWorkflowService(
         };
         await db.GenerationBatches.AddAsync(batch, cancellationToken);
         project.ActiveBatchId = batch.Id;
-        project.ActiveWorkspaceMode = WorkspaceMode.Review;
+        project.ActiveWorkspaceMode = WorkspaceMode.Batches;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
 
@@ -1359,8 +1359,8 @@ public sealed class ArtWorkflowService(
         };
         await db.GenerationBatches.AddAsync(batch, cancellationToken);
         project.ActiveBatchId = batch.Id;
-        if (request.SwitchToCompare)
-            project.ActiveWorkspaceMode = WorkspaceMode.Review;
+        if (request.SwitchToBatches)
+            project.ActiveWorkspaceMode = WorkspaceMode.Batches;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
 
@@ -2511,7 +2511,7 @@ public sealed class ArtWorkflowService(
         reviewSet.UpdatedAt = DateTime.UtcNow;
         await AddCompareReviewItemsCoreAsync(projectId, reviewSet, request.Items, cancellationToken);
 
-        if (request.SwitchToCompare)
+        if (request.SwitchToReview)
             project.ActiveWorkspaceMode = WorkspaceMode.Review;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
@@ -2533,7 +2533,7 @@ public sealed class ArtWorkflowService(
 
         await AddCompareReviewItemsCoreAsync(projectId, reviewSet, request.Items, cancellationToken);
 
-        if (request.SwitchToCompare)
+        if (request.SwitchToReview)
             project.ActiveWorkspaceMode = WorkspaceMode.Review;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
@@ -2548,6 +2548,9 @@ public sealed class ArtWorkflowService(
         if (item is null)
             return;
 
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveWorkspaceMode = WorkspaceMode.Review;
+        project.UpdatedAt = DateTime.UtcNow;
         item.CompareReviewSet.UpdatedAt = DateTime.UtcNow;
         db.CompareReviewSetItems.Remove(item);
         await db.SaveChangesAsync(cancellationToken);
@@ -2559,6 +2562,9 @@ public sealed class ArtWorkflowService(
         if (reviewSet is null)
             return;
 
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveWorkspaceMode = WorkspaceMode.Review;
+        project.UpdatedAt = DateTime.UtcNow;
         db.CompareReviewSets.Remove(reviewSet);
         await db.SaveChangesAsync(cancellationToken);
     }

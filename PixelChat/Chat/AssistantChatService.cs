@@ -441,7 +441,6 @@ public sealed class AssistantChatService(
 
                 if (outcome.Error is null && toolRegistry.IsWorkspaceMutation(pendingCall.Name))
                 {
-                    await toolRegistry.ApplyAutomaticWorkspaceModeAsync(projectId, pendingCall.Name, cancellationToken);
                     yield return new AssistantWorkspaceMutated();
                 }
             }

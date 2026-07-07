@@ -2807,16 +2807,17 @@ else
                 .ToHashSet();
             var snapshot = ImageRuntime.GetSnapshot();
             _generationRuntimeSnapshot = snapshot;
-            var startedBatch = projectId is Guid startedProjectId
+            var startedFollowedBatch = projectId is Guid startedProjectId
                 && snapshot.Batches.Any(batch =>
                     batch.ProjectId == startedProjectId
                     && batch.IsRunning
+                    && batch.FollowInBatches
                     && !previousRunningBatchIds.Contains(batch.BatchId));
             var completedBatch = previousRunningBatchIds.Any(batchId =>
                 snapshot.Batches.Any(batch => batch.BatchId == batchId && !batch.IsRunning));
             var completedOutput = projectId is Guid currentProjectId
                 && HasNewTerminalGenerationOutput(previousSnapshot, snapshot, currentProjectId);
-            if (startedBatch && projectId is Guid runningProjectId)
+            if (startedFollowedBatch && projectId is Guid runningProjectId)
             {
                 await Workflow.SetWorkspaceModeAsync(runningProjectId, WorkspaceMode.Batches);
                 await ReloadWorkbenchAsync(acceptBackendMode: true);
