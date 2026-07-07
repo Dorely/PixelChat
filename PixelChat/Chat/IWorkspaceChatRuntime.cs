@@ -11,7 +11,11 @@ public interface IWorkspaceChatRuntime
     event Action<WorkspaceChatTurnFinished>? TurnFinished;
     bool IsRunning { get; }
     WorkspaceChatRuntimeSnapshot GetSnapshot();
-    Task StartTurnAsync(Guid projectId, string userText, CancellationToken cancellationToken = default);
+    Task StartTurnAsync(
+        Guid projectId,
+        string userText,
+        IReadOnlyList<AssistantChatImageInput>? pastedImages = null,
+        CancellationToken cancellationToken = default);
     Task StopTurnAsync();
     Task ResetConversationAsync(Guid projectId, CancellationToken cancellationToken = default);
     void ClearError();

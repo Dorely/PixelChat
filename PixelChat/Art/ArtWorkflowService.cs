@@ -1528,9 +1528,10 @@ public sealed class ArtWorkflowService(
             animationRecipeId: null,
             animationRecipeVersion: null,
             prompt: string.Empty,
-            metadata: new { Source = "import" });
+            metadata: new { Source = string.IsNullOrWhiteSpace(request.Source) ? "import" : request.Source.Trim() });
         await db.ArtAssets.AddAsync(asset, cancellationToken);
-        await SetWorkspaceModeAfterAssetMutationAsync(projectId, WorkspaceMode.Edit, cancellationToken);
+        if (request.SwitchToEdit)
+            await SetWorkspaceModeAfterAssetMutationAsync(projectId, WorkspaceMode.Edit, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return AssetView(asset);
     }

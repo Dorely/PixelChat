@@ -73,10 +73,12 @@ else
                              Error="@_error"
                              Input="@_input"
                              InputChanged="OnInputChanged"
+                             PendingImages="@_pendingChatImages"
+                             MaxPasteImageBytes="MaxChatPasteImageBytes"
                              Placeholder="Ask for image analysis, recipe design, or a form draft..."
                              Running="@_running"
                              ComposerDisabled="@(_loadingChat || !_hasWorkingProvider)"
-                             SendDisabled="@(_loadingChat || _running || !_hasWorkingProvider || string.IsNullOrWhiteSpace(_input))"
+                             SendDisabled="@(_loadingChat || _running || !_hasWorkingProvider || !CanSendChat)"
                              CssClass="workbench-chat"
                              ForceScrollKey="@_forceScrollKey"
                              ScrollKey="@_scrollKey"
@@ -84,7 +86,10 @@ else
                              OnSend="SendAsync"
                              OnStop="StopAsync"
                              OnClearError="ClearError"
-                             OnImageOpen="OpenChatVisualPreview">
+                             OnImageOpen="OpenChatVisualPreview"
+                             OnImagePasted="AddPendingChatImage"
+                             OnPendingImageRemoved="RemovePendingChatImage"
+                             OnPasteError="ShowChatPasteError">
                     <HeaderActions>
                         <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_running" @onclick="ResetChatAsync">Reset</button>
                     </HeaderActions>
@@ -140,6 +145,8 @@ else
         WriteIndented = true,
     };
 
+    private const long MaxChatPasteImageBytes = 50L * 1024 * 1024;
+
     private static readonly HashSet<string> SpriteToolNames = new(StringComparer.Ordinal)
     {
         "detect_source_regions",
@@ -164,6 +171,7 @@ else
     };
 
     private readonly List<ChatRenderableMessage> _messages = [];
+    private readonly List<ChatPendingImageDraft> _pendingChatImages = [];
     private readonly HashSet<Guid> _draftReferenceAssetIds = [];
     private WorkbenchView? _workbench;
     private WorkspaceSpritesVisibleState? _spritesVisibleState;
@@ -201,6 +209,8 @@ else
     private string ChatSubtitle => _tokenCount is null
         ? _providerSubtitle
         : $"{_providerSubtitle} - {FormatTokenCount(_tokenCount)}";
+
+    private bool CanSendChat => !string.IsNullOrWhiteSpace(_input) || _pendingChatImages.Count > 0;
 
     private string _busyText = string.Empty;
     private string _generatePrompt = string.Empty;
@@ -476,6 +486,7 @@ else
         await FlushMaskAutosaveAsync();
         _projectIdText = args.Value?.ToString() ?? string.Empty;
         _input = string.Empty;
+        _pendingChatImages.Clear();
         _loadedEditorAssetId = null;
         _draftReferenceAssetIds.Clear();
         _editAssetId = null;
@@ -3026,38 +3037,96 @@ else
         return Task.CompletedTask;
     }
 
+    private Task AddPendingChatImage(ChatPendingImageDraft image)
+    {
+        var maxImages = MaxPendingChatImages();
+        if (_pendingChatImages.Count >= maxImages)
+        {
+            _error = $"Chat can include up to {maxImages} pasted image(s) at a time.";
+            return Task.CompletedTask;
+        }
+
+        if (image.Size > MaxChatPasteImageBytes)
+        {
+            _error = "Pasted image is too large. The limit is 50 MB.";
+            return Task.CompletedTask;
+        }
+
+        _pendingChatImages.Add(image);
+        _error = null;
+        return Task.CompletedTask;
+    }
+
+    private Task RemovePendingChatImage(Guid imageId)
+    {
+        _pendingChatImages.RemoveAll(image => image.Id == imageId);
+        return Task.CompletedTask;
+    }
+
+    private Task ShowChatPasteError(string message)
+    {
+        _error = message;
+        return Task.CompletedTask;
+    }
+
     private async Task SendAsync()
     {
-        if (_workbench is null || _running || string.IsNullOrWhiteSpace(_input))
+        if (_workbench is null || _running || !CanSendChat)
             return;
 
         PublishVisibleState();
         var text = _input.Trim();
-        _input = string.Empty;
-        _resetComposerKey++;
+        var pastedImages = _pendingChatImages.ToList();
+        var imageInputs = pastedImages.Select(ToAssistantChatImageInput).ToList();
         _error = null;
         _pendingUserText = text;
 
         var optimisticUserMessageId = Guid.NewGuid();
         _optimisticUserMessageId = optimisticUserMessageId;
+        var optimisticParts = new List<ChatMessagePart>();
+        if (!string.IsNullOrWhiteSpace(text))
+            optimisticParts.Add(new ChatTextPart(text));
         _messages.Add(new ChatRenderableMessage(
             optimisticUserMessageId,
             ChatMessageRole.User,
             ChatMessageStatus.Completed,
-            [new ChatTextPart(text)]));
+            optimisticParts));
         _scrollKey++;
 
         try
         {
-            await ChatRuntime.StartTurnAsync(_workbench.Project.Id, text);
+            await ChatRuntime.StartTurnAsync(_workbench.Project.Id, text, imageInputs);
+            _input = string.Empty;
+            _pendingChatImages.Clear();
+            _resetComposerKey++;
             ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
         }
         catch (Exception ex)
         {
+            _messages.RemoveAll(message => message.Id == optimisticUserMessageId);
+            _optimisticUserMessageId = null;
             _error = ex.Message;
             _running = false;
             _pendingUserText = null;
         }
+    }
+
+    private int MaxPendingChatImages() =>
+        Math.Max(1, ImageOptions.Value.MaxReferenceImages);
+
+    private static AssistantChatImageInput ToAssistantChatImageInput(ChatPendingImageDraft image) =>
+        new(
+            image.FileName,
+            image.ContentType,
+            image.Data,
+            PendingChatImageLabel(image));
+
+    private static string PendingChatImageLabel(ChatPendingImageDraft image)
+    {
+        var label = System.IO.Path.GetFileNameWithoutExtension(image.FileName);
+        return string.IsNullOrWhiteSpace(label)
+            ? "Clipboard image"
+            : label.Trim();
     }
 
     private Task StopAsync() => ChatRuntime.StopTurnAsync();
@@ -3070,6 +3139,7 @@ else
         await ChatRuntime.ResetConversationAsync(_workbench.Project.Id);
         _error = null;
         _input = string.Empty;
+        _pendingChatImages.Clear();
         _pendingUserText = null;
         _optimisticUserMessageId = null;
         _live = null;

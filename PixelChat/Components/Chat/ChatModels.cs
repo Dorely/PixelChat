@@ -54,6 +54,16 @@ public sealed record ChatImageVisual(
     int? Height,
     string? ToolCallId = null);
 
+public sealed record ChatPendingImageDraft(
+    Guid Id,
+    string FileName,
+    string ContentType,
+    byte[] Data,
+    string PreviewImageUrl,
+    long Size,
+    int? Width,
+    int? Height);
+
 public sealed class ChatToolChip
 {
     private readonly StringBuilder _arguments = new();

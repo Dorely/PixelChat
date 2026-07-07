@@ -45,10 +45,15 @@ public sealed class WorkspaceChatRuntime(
         }
     }
 
-    public async Task StartTurnAsync(Guid projectId, string userText, CancellationToken cancellationToken = default)
+    public async Task StartTurnAsync(
+        Guid projectId,
+        string userText,
+        IReadOnlyList<AssistantChatImageInput>? pastedImages = null,
+        CancellationToken cancellationToken = default)
     {
         var text = userText.Trim();
-        if (string.IsNullOrWhiteSpace(text))
+        var images = pastedImages?.ToList() ?? [];
+        if (string.IsNullOrWhiteSpace(text) && images.Count == 0)
             throw new ArgumentException("Message cannot be empty.", nameof(userText));
 
         var persisted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -65,7 +70,7 @@ public sealed class WorkspaceChatRuntime(
             _error = null;
             _turnCts = new CancellationTokenSource();
             turnCts = _turnCts;
-            _ = Task.Run(() => RunTurnAsync(projectId, text, turnCts, persisted), CancellationToken.None);
+            _ = Task.Run(() => RunTurnAsync(projectId, text, images, turnCts, persisted), CancellationToken.None);
         }
         NotifyStateChanged(immediate: true);
 
@@ -113,6 +118,7 @@ public sealed class WorkspaceChatRuntime(
     private async Task RunTurnAsync(
         Guid projectId,
         string text,
+        IReadOnlyList<AssistantChatImageInput> pastedImages,
         CancellationTokenSource turnCts,
         TaskCompletionSource persisted)
     {
@@ -126,7 +132,7 @@ public sealed class WorkspaceChatRuntime(
         {
             using var scope = scopeFactory.CreateScope();
             var chat = scope.ServiceProvider.GetRequiredService<IAssistantChatService>();
-            await foreach (var update in chat.SendAsync(projectId, text, turnCts.Token))
+            await foreach (var update in chat.SendAsync(projectId, text, pastedImages, turnCts.Token))
             {
                 if (update is AssistantUserMessagePersisted userPersisted)
                 {

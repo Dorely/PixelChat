@@ -98,9 +98,11 @@ public sealed class AssistantChatService(
     public async IAsyncEnumerable<AssistantTurnUpdate> SendAsync(
         Guid projectId,
         string userText,
+        IReadOnlyList<AssistantChatImageInput>? pastedImages = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(userText))
+        var imageInputs = pastedImages?.ToList() ?? [];
+        if (string.IsNullOrWhiteSpace(userText) && imageInputs.Count == 0)
             throw new ArgumentException("Message cannot be empty.", nameof(userText));
 
         var conversation = await GetOrCreateAsync(projectId, cancellationToken);
@@ -114,6 +116,7 @@ public sealed class AssistantChatService(
         }
 
         var nextOrder = await conversations.GetMaxOrderAsync(conversation.Id, cancellationToken) + 1;
+        var pastedAssets = await ImportPastedImagesAsync(projectId, imageInputs, cancellationToken);
 
         var userMessage = new AssistantMessage
         {
@@ -128,7 +131,7 @@ public sealed class AssistantChatService(
         await conversations.SaveChangesAsync(cancellationToken);
 
         var workbenchForUserMessage = await workflow.GetWorkbenchAsync(projectId, cancellationToken);
-        var userVisuals = BuildUserMessageVisuals(userMessage.Id, workbenchForUserMessage);
+        var userVisuals = BuildUserMessageVisuals(userMessage.Id, workbenchForUserMessage, pastedAssets);
         if (userVisuals.Count > 0)
         {
             await conversations.AddMessageVisualsAsync(userVisuals, cancellationToken);
@@ -172,7 +175,7 @@ public sealed class AssistantChatService(
 
         var history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
         var messages = new List<ChatMessage> { new(ChatRole.System, AssistantPromptBuilder.Build(agentOptions.Value)) };
-        messages.AddRange(await BuildModelHistoryAsync(history, userMessage.Id, projectId, cancellationToken));
+        messages.AddRange(await BuildModelHistoryAsync(history, userMessage.Id, projectId, pastedAssets, cancellationToken));
         var modelName = providerAvailability.Provider.ModelId;
         yield return BuildTokenCountUpdate(messages, modelName);
 
@@ -458,10 +461,46 @@ public sealed class AssistantChatService(
         }
     }
 
+    private async Task<IReadOnlyList<ArtAssetView>> ImportPastedImagesAsync(
+        Guid projectId,
+        IReadOnlyList<AssistantChatImageInput> pastedImages,
+        CancellationToken cancellationToken)
+    {
+        if (pastedImages.Count == 0)
+            return [];
+
+        var assets = new List<ArtAssetView>(pastedImages.Count);
+        for (var index = 0; index < pastedImages.Count; index++)
+        {
+            var image = pastedImages[index];
+            var contentType = string.IsNullOrWhiteSpace(image.ContentType)
+                ? "image/png"
+                : image.ContentType.Trim();
+            var fileName = CleanPastedImageFileName(image, index + 1, contentType);
+            var label = string.IsNullOrWhiteSpace(image.Label)
+                ? Path.GetFileNameWithoutExtension(fileName)
+                : image.Label.Trim();
+
+            assets.Add(await workflow.ImportAssetAsync(
+                projectId,
+                new ImportAssetRequest(
+                    fileName,
+                    contentType,
+                    image.Data,
+                    label,
+                    SwitchToEdit: false,
+                    Source: "chat-paste"),
+                cancellationToken));
+        }
+
+        return assets;
+    }
+
     private async Task<List<ChatMessage>> BuildModelHistoryAsync(
         IReadOnlyList<AssistantMessage> history,
         Guid currentUserMessageId,
         Guid projectId,
+        IReadOnlyList<ArtAssetView> currentUserPastedAssets,
         CancellationToken cancellationToken)
     {
         var messages = new List<ChatMessage>();
@@ -474,7 +513,7 @@ public sealed class AssistantChatService(
             if (message.Id == currentUserMessageId)
             {
                 workbench ??= await workflow.GetWorkbenchAsync(projectId, cancellationToken);
-                messages.Add(await BuildCurrentUserMessageAsync(message.Content, workbench, projectId, cancellationToken));
+                messages.Add(await BuildCurrentUserMessageAsync(message.Content, workbench, projectId, currentUserPastedAssets, cancellationToken));
                 continue;
             }
 
@@ -633,7 +672,7 @@ public sealed class AssistantChatService(
         var messages = BuildPersistedModelMessages(history);
         var workbench = await workflow.GetWorkbenchAsync(projectId, cancellationToken);
         if (workbench.Attachments.Count > 0)
-            messages.Add(await BuildCurrentUserMessageAsync(string.Empty, workbench, projectId, cancellationToken));
+            messages.Add(await BuildCurrentUserMessageAsync(string.Empty, workbench, projectId, [], cancellationToken));
 
         return messages;
     }
@@ -699,13 +738,26 @@ public sealed class AssistantChatService(
         string text,
         WorkbenchView workbench,
         Guid projectId,
+        IReadOnlyList<ArtAssetView>? pastedAssets,
         CancellationToken cancellationToken)
     {
         var contents = new List<AIContent>();
         var contextSummary = BuildVisibleContextSummary(workbench);
-        contents.Add(new TextContent(BuildUserTextWithVisibleContext(text, contextSummary)));
+        var currentPastedAssets = pastedAssets ?? [];
+        contents.Add(new TextContent(BuildUserTextWithVisibleContext(text, contextSummary, currentPastedAssets)));
 
         var includedAssetIds = new HashSet<Guid>();
+        foreach (var asset in currentPastedAssets)
+        {
+            if (!includedAssetIds.Add(asset.Id))
+                continue;
+
+            var image = await workflow.GetAssetFullImageAsync(projectId, asset.Id, cancellationToken);
+            contents.Add(new DataContent(DataUrl.ToDataUrl(image.ContentType, image.Data), image.ContentType)
+            {
+                Name = asset.FileName,
+            });
+        }
 
         foreach (var attachment in workbench.Attachments)
         {
@@ -742,14 +794,25 @@ public sealed class AssistantChatService(
         return new ChatMessage(ChatRole.User, contents);
     }
 
-    private static string BuildUserTextWithVisibleContext(string text, string contextSummary)
+    private static string BuildUserTextWithVisibleContext(
+        string text,
+        string contextSummary,
+        IReadOnlyList<ArtAssetView> pastedAssets)
     {
-        if (string.IsNullOrWhiteSpace(contextSummary))
-            return text;
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(text))
+            parts.Add(text.Trim());
 
-        return string.IsNullOrWhiteSpace(text)
-            ? $"Visible PixelChat chat attachments:\n{contextSummary}"
-            : $"{text}\n\nVisible PixelChat chat attachments:\n{contextSummary}";
+        if (pastedAssets.Count > 0)
+        {
+            parts.Add("Pasted clipboard images saved as project assets for this message:\n"
+                + string.Join('\n', pastedAssets.Select(asset => $"- Asset: {asset.Label} ({asset.Id})")));
+        }
+
+        if (!string.IsNullOrWhiteSpace(contextSummary))
+            parts.Add($"Visible PixelChat chat attachments:\n{contextSummary}");
+
+        return string.Join("\n\n", parts);
     }
 
     private static string BuildVisibleContextSummary(WorkbenchView workbench)
@@ -1180,11 +1243,32 @@ public sealed class AssistantChatService(
 
     private static List<AssistantMessageVisual> BuildUserMessageVisuals(
         Guid messageId,
-        WorkbenchView workbench)
+        WorkbenchView workbench,
+        IReadOnlyList<ArtAssetView> pastedAssets)
     {
         var visuals = new List<AssistantMessageVisual>();
         var includedAssetIds = new HashSet<Guid>();
         var sortOrder = 0;
+
+        foreach (var asset in pastedAssets)
+        {
+            if (!includedAssetIds.Add(asset.Id))
+                continue;
+
+            visuals.Add(new AssistantMessageVisual
+            {
+                AssistantMessageId = messageId,
+                SortOrder = sortOrder++,
+                Title = VisualTitle(asset.Label, asset.FileName),
+                Caption = "Pasted clipboard image.",
+                SourceKind = "asset",
+                SourceRefId = asset.Id,
+                ContentType = asset.ContentType,
+                FileName = asset.FileName,
+                Width = asset.Width,
+                Height = asset.Height,
+            });
+        }
 
         foreach (var attachment in workbench.Attachments.OrderBy(attachment => attachment.SortOrder))
         {
@@ -1570,6 +1654,16 @@ public sealed class AssistantChatService(
             .ToArray())
             .Trim();
         return string.IsNullOrWhiteSpace(cleaned) ? fallback : cleaned;
+    }
+
+    private static string CleanPastedImageFileName(AssistantChatImageInput image, int index, string contentType)
+    {
+        var fallback = $"clipboard-image-{DateTime.UtcNow:yyyyMMddHHmmss}-{index}.{ExtensionForVisualContentType(contentType)}";
+        var candidate = Path.GetFileName(image.FileName);
+        var cleaned = CleanVisualFileName(candidate, fallback);
+        if (string.IsNullOrWhiteSpace(Path.GetExtension(cleaned)))
+            cleaned += "." + ExtensionForVisualContentType(contentType);
+        return cleaned;
     }
 
     private static string ExtensionForVisualContentType(string contentType) =>

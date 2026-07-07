@@ -10,5 +10,15 @@ public interface IAssistantChatService
     Task RecoverInterruptedToolCallsAsync(Guid projectId, CancellationToken cancellationToken = default);
     Task<TokenContextEstimate?> EstimateNextRequestTokensAsync(Guid projectId, CancellationToken cancellationToken = default);
     Task ResetAsync(Guid projectId, CancellationToken cancellationToken = default);
-    IAsyncEnumerable<AssistantTurnUpdate> SendAsync(Guid projectId, string userText, CancellationToken cancellationToken = default);
+    IAsyncEnumerable<AssistantTurnUpdate> SendAsync(
+        Guid projectId,
+        string userText,
+        IReadOnlyList<AssistantChatImageInput>? pastedImages = null,
+        CancellationToken cancellationToken = default);
 }
+
+public sealed record AssistantChatImageInput(
+    string FileName,
+    string ContentType,
+    byte[] Data,
+    string Label);

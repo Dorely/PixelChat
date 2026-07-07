@@ -420,7 +420,9 @@ public sealed record ImportAssetRequest(
     string FileName,
     string ContentType,
     byte[] Data,
-    string Label);
+    string Label,
+    bool SwitchToEdit = true,
+    string Source = "import");
 
 public sealed record CropAssetRequest(
     Guid ParentAssetId,
