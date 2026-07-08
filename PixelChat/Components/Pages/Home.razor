@@ -487,6 +487,7 @@ else
         _projectIdText = args.Value?.ToString() ?? string.Empty;
         _input = string.Empty;
         _pendingChatImages.Clear();
+        _resetComposerKey++;
         _loadedEditorAssetId = null;
         _draftReferenceAssetIds.Clear();
         _editAssetId = null;
@@ -503,6 +504,9 @@ else
         var project = await Workflow.CreateProjectAsync(_newProjectName);
         _newProjectName = string.Empty;
         _projectIdText = project.Id.ToString();
+        _input = string.Empty;
+        _pendingChatImages.Clear();
+        _resetComposerKey++;
         await ReloadAllAsync();
     }
 
@@ -2817,6 +2821,7 @@ else
                 snapshot.Batches.Any(batch => batch.BatchId == batchId && !batch.IsRunning));
             var completedOutput = projectId is Guid currentProjectId
                 && HasNewTerminalGenerationOutput(previousSnapshot, snapshot, currentProjectId);
+            var showProgress = WorkspaceShowsGenerationProgress(_activeWorkspaceMode);
             if (startedFollowedBatch && projectId is Guid runningProjectId)
             {
                 await Workflow.SetWorkspaceModeAsync(runningProjectId, WorkspaceMode.Batches);
@@ -2826,9 +2831,13 @@ else
             {
                 await ReloadWorkbenchAsync();
             }
-            StateHasChanged();
+            if (startedFollowedBatch || completedBatch || completedOutput || showProgress)
+                StateHasChanged();
         });
     }
+
+    private static bool WorkspaceShowsGenerationProgress(WorkspaceMode mode) =>
+        mode is WorkspaceMode.Generate or WorkspaceMode.Batches;
 
     private static bool HasNewTerminalGenerationOutput(
         ImageGenerationRuntimeSnapshot previousSnapshot,
