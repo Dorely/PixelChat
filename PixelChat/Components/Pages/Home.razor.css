@@ -606,6 +606,37 @@
     overflow-anchor: none;
 }
 
+.asset-grid-measure {
+    width: 100%;
+    height: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.asset-virtual-grid {
+    --asset-grid-columns: 3;
+    --asset-grid-row-height: 430px;
+    display: block;
+    min-width: 0;
+    overflow-anchor: none;
+}
+
+.asset-grid-row {
+    display: grid;
+    grid-template-columns: repeat(var(--asset-grid-columns), minmax(0, 1fr));
+    gap: 0.85rem;
+    box-sizing: border-box;
+    height: var(--asset-grid-row-height);
+    min-height: var(--asset-grid-row-height);
+    padding-bottom: 0.85rem;
+    overflow: hidden;
+    contain: layout paint;
+}
+
+.asset-grid-row-placeholder {
+    pointer-events: none;
+}
+
 .asset-group-stack,
 .asset-group {
     display: grid;
@@ -954,6 +985,12 @@
     overflow: hidden;
 }
 
+.asset-virtual-grid .asset-card {
+    grid-template-rows: 210px minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+}
+
 .asset-card-compact {
     grid-template-rows: 82px auto;
     height: auto;
@@ -981,6 +1018,12 @@
     min-height: 160px;
     overflow: hidden;
     overflow-anchor: none;
+}
+
+.asset-virtual-grid .asset-thumb {
+    aspect-ratio: auto;
+    height: 210px;
+    min-height: 0;
 }
 
 .asset-thumb:hover,
@@ -1034,6 +1077,12 @@
     gap: 0.45rem;
     padding: 0.55rem;
     min-width: 0;
+}
+
+.asset-virtual-grid .asset-card-body {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .asset-card-compact .asset-card-body {
@@ -1096,6 +1145,18 @@
     color: #475467;
     font-size: 0.82rem;
     line-height: 1.35;
+}
+
+.asset-virtual-grid .asset-card p {
+    max-height: none;
+    min-height: 0;
+}
+
+.asset-virtual-grid .asset-actions {
+    max-height: 4.9rem;
+    min-height: 0;
+    overflow: auto;
+    padding-bottom: 0.1rem;
 }
 
 .generation-placeholder-card,

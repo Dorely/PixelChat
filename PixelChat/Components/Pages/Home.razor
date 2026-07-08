@@ -185,6 +185,7 @@ else
     private IJSObjectReference? _editorModule;
     private DotNetObjectReference<Home>? _dotNetRef;
     private ElementReference _editorCanvas;
+    private ElementReference _assetGridMeasureEl;
     private Guid? _loadedEditorAssetId;
     private CancellationTokenSource? _maskAutosaveCts;
     private readonly SemaphoreSlim _maskAutosaveLock = new(1, 1);
@@ -249,6 +250,12 @@ else
     private int _brushSize = 36;
     private string _editorTool = "mask";
     private string _assetOrganization = "latest";
+    private const int AssetGridMinColumnWidthPixels = 220;
+    private const int AssetGridGapPixels = 14;
+    private const int AssetGridVirtualRowHeightPixels = 430;
+    private const int AssetGridOverscanCount = 3;
+    private int _assetGridColumnCount = 3;
+    private bool _assetGridMeasurementBound;
     private bool _assetDeleteMode;
     private Guid? _editAssetId;
     private Guid? _assetDeleteCandidateId;
@@ -290,6 +297,7 @@ else
 
         await LoadEditorAssetIfNeededAsync();
         await BindReviewPreviewEscapeIfNeededAsync();
+        await BindAssetGridMeasurementIfNeededAsync();
     }
 
     private async Task ReloadAllAsync()
@@ -313,6 +321,46 @@ else
         {
             await _editorModule.InvokeVoidAsync("unbindReviewPreviewEscape");
             _reviewPreviewEscapeBound = false;
+        }
+    }
+
+    private async Task BindAssetGridMeasurementIfNeededAsync()
+    {
+        if (_editorModule is null || _dotNetRef is null)
+            return;
+
+        if (_activeWorkspaceMode == WorkspaceMode.Assets)
+        {
+            try
+            {
+                await _editorModule.InvokeVoidAsync(
+                    "bindAssetGridMeasurement",
+                    _assetGridMeasureEl,
+                    _dotNetRef,
+                    AssetGridMinColumnWidthPixels,
+                    AssetGridGapPixels);
+                _assetGridMeasurementBound = true;
+            }
+            catch
+            {
+            }
+
+            return;
+        }
+
+        if (!_assetGridMeasurementBound)
+            return;
+
+        try
+        {
+            await _editorModule.InvokeVoidAsync("unbindAssetGridMeasurement");
+        }
+        catch
+        {
+        }
+        finally
+        {
+            _assetGridMeasurementBound = false;
         }
     }
 
@@ -1519,6 +1567,8 @@ else
                 </div>
             </div>
 
+            <div class="asset-grid-measure" @ref="_assetGridMeasureEl" aria-hidden="true"></div>
+
             @if (_workbench.Assets.Count == 0)
             {
                 <div class="empty-state">No assets yet. Generate or import images to build the library.</div>
@@ -1530,12 +1580,7 @@ else
                     {
                         <section class="asset-group" @key="group.Label">
                             <div class="section-title">@group.Label</div>
-                            <div class="asset-grid">
-                                @foreach (var asset in group.Assets)
-                                {
-                                    @RenderAssetCard(asset, compact: false)
-                                }
-                            </div>
+                            @RenderVirtualAssetGrid(group.Assets)
                         </section>
                     }
                 </div>
@@ -1548,12 +1593,7 @@ else
                 }
                 else
                 {
-                    <div class="asset-grid">
-                        @foreach (var asset in guideAssets)
-                        {
-                            @RenderAssetCard(asset, compact: false, guideCard: true)
-                        }
-                    </div>
+                    @RenderVirtualAssetGrid(guideAssets, guideCard: true)
                 }
             }
             else
@@ -1564,12 +1604,7 @@ else
                 }
                 else
                 {
-                    <div class="asset-grid">
-                        @foreach (var asset in latestAssets)
-                        {
-                            @RenderAssetCard(asset, compact: false)
-                        }
-                    </div>
+                    @RenderVirtualAssetGrid(latestAssets)
                 }
             }
         </div>
@@ -1645,6 +1680,36 @@ else
                 </div>
             </div>
         </article>
+    };
+
+    private RenderFragment RenderVirtualAssetGrid(IReadOnlyList<ArtAssetView> assets, bool guideCard = false) => __builder =>
+    {
+        var rows = AssetGridRows(assets, guideCard);
+        <div class="asset-virtual-grid" style="@AssetGridStyle">
+            <Virtualize TItem="AssetGridRow"
+                        Items="@rows"
+                        Context="row"
+                        ItemSize="@AssetGridVirtualRowHeight"
+                        OverscanCount="@AssetGridOverscanCount"
+                        SpacerElement="div">
+                <ItemContent>
+                    @RenderAssetGridRow(row)
+                </ItemContent>
+                <Placeholder>
+                    <div class="asset-grid-row asset-grid-row-placeholder" aria-hidden="true"></div>
+                </Placeholder>
+            </Virtualize>
+        </div>
+    };
+
+    private RenderFragment RenderAssetGridRow(AssetGridRow row) => __builder =>
+    {
+        <div class="asset-grid-row" @key="row.Key">
+            @foreach (var asset in row.Assets)
+            {
+                @RenderAssetCard(asset, compact: false, guideCard: row.GuideCard)
+            }
+        </div>
     };
 
     private RenderFragment RenderGenerationPlaceholderCard(GenerationOutputStateView outputState, ImageGenerationOutputRuntimeView? runtimeOutput) => __builder =>
@@ -2169,6 +2234,17 @@ else
 
     [JSInvokable]
     public Task CloseReviewPreviewFromJs() => CloseReviewPreviewAsync();
+
+    [JSInvokable]
+    public Task OnAssetGridColumnCountChanged(int columnCount)
+    {
+        var normalized = Math.Clamp(columnCount, 1, 8);
+        if (_assetGridColumnCount == normalized)
+            return Task.CompletedTask;
+
+        _assetGridColumnCount = normalized;
+        return InvokeAsync(StateHasChanged);
+    }
 
     private async Task ImportAssetAsync(InputFileChangeEventArgs args)
     {
@@ -3661,6 +3737,33 @@ else
             .Where(asset => asset.Kind == ArtAssetKind.SpriteGuide)
             .OrderByDescending(asset => asset.CreatedAt);
 
+    private string AssetGridStyle =>
+        $"--asset-grid-columns: {AssetGridColumnCount}; --asset-grid-row-height: {AssetGridVirtualRowHeightPixels}px";
+
+    private int AssetGridColumnCount => Math.Clamp(_assetGridColumnCount, 1, 8);
+
+    private static float AssetGridVirtualRowHeight => AssetGridVirtualRowHeightPixels;
+
+    private List<AssetGridRow> AssetGridRows(IReadOnlyList<ArtAssetView> assets, bool guideCard)
+    {
+        var columnCount = AssetGridColumnCount;
+        var rows = new List<AssetGridRow>((assets.Count + columnCount - 1) / columnCount);
+        for (var rowStart = 0; rowStart < assets.Count; rowStart += columnCount)
+        {
+            var rowCount = Math.Min(columnCount, assets.Count - rowStart);
+            var rowAssets = new ArtAssetView[rowCount];
+            for (var index = 0; index < rowCount; index++)
+                rowAssets[index] = assets[rowStart + index];
+
+            rows.Add(new AssetGridRow(
+                $"{(guideCard ? "guide" : "asset")}:{columnCount}:{rowStart}:{rowAssets[0].Id:N}",
+                rowAssets,
+                guideCard));
+        }
+
+        return rows;
+    }
+
     private IReadOnlyList<AssetGroup> AssetRecipeGroups()
     {
         if (_workbench is null)
@@ -4137,6 +4240,8 @@ else
 
     private sealed record AssetGroup(string Label, IReadOnlyList<ArtAssetView> Assets);
 
+    private sealed record AssetGridRow(string Key, IReadOnlyList<ArtAssetView> Assets, bool GuideCard);
+
     private sealed record RecipeOutputGroup(string Label, int? Version, IReadOnlyList<ArtAssetView> Assets);
 
     private sealed record CapturedMaskAutosave(
@@ -4165,6 +4270,8 @@ else
             {
                 if (_reviewPreviewEscapeBound)
                     await _editorModule.InvokeVoidAsync("unbindReviewPreviewEscape");
+                if (_assetGridMeasurementBound)
+                    await _editorModule.InvokeVoidAsync("unbindAssetGridMeasurement");
                 await _editorModule.DisposeAsync();
             }
             catch { }

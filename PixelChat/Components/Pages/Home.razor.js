@@ -1,6 +1,7 @@
 const states = new WeakMap();
 const imageCache = new Map();
 let reviewPreviewEscapeHandler = null;
+let assetGridMeasurement = null;
 
 export function bindReviewPreviewEscape(dotNetRef) {
     unbindReviewPreviewEscape();
@@ -22,6 +23,95 @@ export function unbindReviewPreviewEscape() {
 
     document.removeEventListener("keydown", reviewPreviewEscapeHandler);
     reviewPreviewEscapeHandler = null;
+}
+
+export function bindAssetGridMeasurement(element, dotNetRef, minColumnWidth, gapPixels) {
+    if (!element || !dotNetRef) {
+        return;
+    }
+
+    const minWidth = Math.max(1, Number(minColumnWidth) || 220);
+    const gap = Math.max(0, Number(gapPixels) || 14);
+    if (assetGridMeasurement?.element !== element) {
+        unbindAssetGridMeasurement();
+        assetGridMeasurement = {
+            element,
+            dotNetRef,
+            minWidth,
+            gap,
+            columnCount: 0,
+            frame: 0,
+            resizeObserver: null,
+            resizeHandler: null,
+        };
+
+        const schedule = () => scheduleAssetGridMeasurement();
+        if (window.ResizeObserver) {
+            assetGridMeasurement.resizeObserver = new ResizeObserver(schedule);
+            assetGridMeasurement.resizeObserver.observe(element);
+        } else {
+            assetGridMeasurement.resizeHandler = schedule;
+            window.addEventListener("resize", assetGridMeasurement.resizeHandler);
+        }
+    } else {
+        assetGridMeasurement.dotNetRef = dotNetRef;
+        assetGridMeasurement.minWidth = minWidth;
+        assetGridMeasurement.gap = gap;
+    }
+
+    scheduleAssetGridMeasurement();
+}
+
+export function unbindAssetGridMeasurement() {
+    if (!assetGridMeasurement) {
+        return;
+    }
+
+    if (assetGridMeasurement.frame) {
+        cancelAnimationFrame(assetGridMeasurement.frame);
+    }
+
+    assetGridMeasurement.resizeObserver?.disconnect();
+    if (assetGridMeasurement.resizeHandler) {
+        window.removeEventListener("resize", assetGridMeasurement.resizeHandler);
+    }
+
+    assetGridMeasurement = null;
+}
+
+function scheduleAssetGridMeasurement() {
+    if (!assetGridMeasurement || assetGridMeasurement.frame) {
+        return;
+    }
+
+    assetGridMeasurement.frame = requestAnimationFrame(() => {
+        if (!assetGridMeasurement) {
+            return;
+        }
+
+        assetGridMeasurement.frame = 0;
+        reportAssetGridColumns();
+    });
+}
+
+function reportAssetGridColumns() {
+    const state = assetGridMeasurement;
+    if (!state?.element) {
+        return;
+    }
+
+    const width = state.element.clientWidth || state.element.getBoundingClientRect().width || 0;
+    if (width <= 0) {
+        return;
+    }
+
+    const columns = Math.max(1, Math.floor((width + state.gap) / (state.minWidth + state.gap)));
+    if (columns === state.columnCount) {
+        return;
+    }
+
+    state.columnCount = columns;
+    state.dotNetRef.invokeMethodAsync("OnAssetGridColumnCountChanged", columns).catch(() => { });
 }
 
 export async function loadEditor(canvas, imageUrl, brushSize, tool, maskUrl, dotNetRef) {

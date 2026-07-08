@@ -125,7 +125,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, chat attachments/inline visuals, Generate (with inline latest-batch outputs), a Batches history tab, a greenfield Review tab (curated asset/recipe/frame/FrameSet-animation items the agent shows the user), Edit, Sprites, art/animation recipe editors, guide-aware Assets tabs, canvas helpers, and exports. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: local tab state, chat attachments/inline visuals, Generate/Batches/Review/Edit/Sprites/Recipes/Assets workspaces, virtualized asset-grid measurement, canvas helpers, and exports. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, thinking modes, defaults, API-key updates, and child model rows. |
