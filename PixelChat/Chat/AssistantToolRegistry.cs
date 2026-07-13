@@ -31,7 +31,8 @@ public sealed class AssistantToolRegistry(
         "add_compare_review_items",
         "remove_compare_review_item",
         "clear_compare_review_set",
-        "mark_asset",
+        "mark_batch_review_outputs",
+        "finish_batch_review",
         "run_generation_round",
         "save_prompt_recipe",
         "set_prompt_recipe_attachments",
@@ -75,10 +76,10 @@ public sealed class AssistantToolRegistry(
             description: "Read only the visible PixelChat UI state: project, active tab, provider status, visible chat attachments, and the active page's selected/draft form context. This intentionally omits broad libraries; use list/read asset, recipe, batch, or sprite-sheet tools for broader data. This is read-only."),
 
         AIFunctionFactory.Create(
-            method: (string? kind = null, string? query = null, bool? favorite = null, int? limit = null) =>
-                workflow.ListAssetsJsonAsync(projectId, kind, query, favorite, limit),
+            method: (string? kind = null, string? query = null, bool? favorite = null, int? limit = null, string? reviewStatus = null) =>
+                workflow.ListAssetsJsonAsync(projectId, kind, query, favorite, limit, reviewStatus),
             name: "list_assets",
-            description: "List compact asset metadata for the current project. Optional kind values include generated, imported, edited, cropped, spriteGuide, and spriteSheet. This omits image bytes; use read_asset to inspect an image."),
+            description: "List compact asset metadata for the current project. Defaults to kept assets; reviewStatus may be kept, pending, rejected, or all. Optional kind values include generated, imported, edited, cropped, spriteGuide, and spriteSheet. This omits image bytes; use read_asset to inspect an image."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId) => workflow.ReadAssetJsonAsync(projectId, assetId),
@@ -215,7 +216,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 RunGenerationRoundAsync(projectId, budget, specificRequest, assetName, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId, recipeId, animationRecipeId, cancellationToken),
             name: "run_generation_round",
-            description: "Run one generic autonomous generation or edit round and wait for completion. Requires assetName, a readable saved asset base name. Use for starter assets, broad recipe tests, focused variations, and non-sheet image edits. When reusable guidance applies, pass recipeId and/or animationRecipeId instead of pasting recipe text into specificRequest. For recipe tests, save the recipe revision first and pass recipeId. Outputs are returned as model-only images. Counts against the fixed per-turn generation-round budget."),
+            description: "Run one generic autonomous generation or edit round and wait for completion. Requires assetName, a readable saved asset base name. Use for starter assets, broad recipe tests, focused variations, and non-sheet image edits. When reusable guidance applies, pass recipeId and/or animationRecipeId instead of pasting recipe text into specificRequest. For recipe tests, save the recipe revision first and pass recipeId. Outputs are returned as model-only images and appear automatically in Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
 
         AIFunctionFactory.Create(
             method: (
@@ -231,7 +232,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 RunGenerationRoundAsync(projectId, budget, prompt, assetName, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, animationRecipeId: animationRecipeId, cancellationToken: cancellationToken),
             name: "generate_sprite_sheet_candidates",
-            description: "Generate sprite-sheet candidates from a concise labeled-slot prompt plus ordered references whose roles are indexed in the prompt. Requires assetName, a readable saved asset base name. Pass artRecipeId and/or animationRecipeId when saved reusable guidance applies; do not paste recipe prompts into the one-off prompt. For new guide-driven sprite sheets, first call generate_animation_guide, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Put hard prohibitions in negativePrompt. Returns model-only candidate images; add promising batches/assets to Review for the user."),
+            description: "Generate sprite-sheet candidates from a concise labeled-slot prompt plus ordered references whose roles are indexed in the prompt. Requires assetName, a readable saved asset base name. Pass artRecipeId and/or animationRecipeId when saved reusable guidance applies; do not paste recipe prompts into the one-off prompt. For new guide-driven sprite sheets, first call generate_animation_guide, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Put hard prohibitions in negativePrompt. Returns model-only candidate images; outputs appear automatically in Pending Generations, where you can explicitly mark and finish their batch review."),
 
         AIFunctionFactory.Create(
             method: (
@@ -504,13 +505,25 @@ public sealed class AssistantToolRegistry(
             method: (string? title = null, string? summary = null, CompareReviewToolItem[]? items = null, bool switchToReview = true, CancellationToken cancellationToken = default) =>
                 SetCompareReviewSetAsync(projectId, title, summary, items, switchToReview, cancellationToken),
             name: "set_compare_review_set",
-            description: "Replace the Review tab set with ordered items to show the user. Item kind values: asset, artRecipe, animationRecipe, frame (a greenfield Frame id), animation (a greenfield FrameSet id, played as a looping preview). Use this to present assets, recipes, individual frames, and animation previews. This does not attach images to chat or send them back as model context."),
+            description: "Replace the curated Review tab set with ordered visual items. Item kind values: asset, frame (a greenfield Frame id), animation (a greenfield FrameSet id, played as a looping preview). This does not attach images to chat or send them back as model context."),
 
         AIFunctionFactory.Create(
             method: (CompareReviewToolItem[]? items = null, string? title = null, string? summary = null, bool switchToReview = true, CancellationToken cancellationToken = default) =>
                 AddCompareReviewItemsAsync(projectId, items, title, summary, switchToReview, cancellationToken),
             name: "add_compare_review_items",
-            description: "Append or update items in the Review tab set. Item kind values: asset, artRecipe, animationRecipe, frame (a greenfield Frame id), animation (a greenfield FrameSet id, played as a looping preview). This is for grouping things the user should review visually, not for model image context."),
+            description: "Append or update visual items in the curated Review tab set. Item kind values: asset, frame (a greenfield Frame id), animation (a greenfield FrameSet id, played as a looping preview). This is for grouping things the user should review visually, not for model image context."),
+
+        AIFunctionFactory.Create(
+            method: (Guid batchId, BatchReviewToolDecision[] decisions, CancellationToken cancellationToken = default) =>
+                MarkBatchReviewOutputsToolAsync(projectId, batchId, decisions, cancellationToken),
+            name: "mark_batch_review_outputs",
+            description: "Mark pending successful outputs from one completed generation/edit batch as Keep or Reject. Inspect every image before marking it. Every decision requires a concise visual reason. Marks remain visible in Review and may be overridden by the user. Do not re-mark an already-finished batch; a stale repeated call is reported as an already-completed no-op."),
+
+        AIFunctionFactory.Create(
+            method: (Guid batchId, CancellationToken cancellationToken = default) =>
+                FinishBatchReviewToolAsync(projectId, batchId, cancellationToken),
+            name: "finish_batch_review",
+            description: "Finish one completed batch review using assistant marks. This fails unless every pending successful output currently has an explicit assistant Keep or Reject decision with a reason. Kept outputs enter the asset library, rejected outputs enter Rejected, and Review shows the latest agent result."),
 
         AIFunctionFactory.Create(
             method: (Guid itemId, CancellationToken cancellationToken = default) =>
@@ -580,12 +593,6 @@ public sealed class AssistantToolRegistry(
                 EditFrameAsync(projectId, budget, frameSetId, frameId, prompt, background, referenceAssetIds, includeAdjacentFrames, useFrameMask, cancellationToken),
             name: "edit_frame",
             description: "Greenfield Frames pipeline: AI-edit one frame's logical cell with a Change/Preserve/Constraints prompt, store the result as the frame's working image, and update the visible Sprites workspace. Consumes one autonomous generation round budget. Use only when deterministic crop/cell/offset/align/erase cannot fix the frame. Pass the identity anchor asset in referenceAssetIds when fixing anatomy or identity; previous/next frame references are included by default for continuity. Use upsert_frame_mask first for surgical edits and keep useFrameMask true. background defaults to opaque so the frame stays opaque."),
-
-        AIFunctionFactory.Create(
-            method: (Guid assetId, bool? favorite = null, string? notes = null) =>
-                MarkAssetAsync(projectId, assetId, favorite, notes),
-            name: "mark_asset",
-            description: "Mark an asset as favorite/unfavorite and optionally update notes."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId) => ExportAssetAsync(projectId, assetId),
@@ -688,6 +695,45 @@ public sealed class AssistantToolRegistry(
     {
         await workflow.ClearCompareReviewSetAsync(projectId, cancellationToken);
         return "Review set cleared.";
+    }
+
+    private async Task<string> MarkBatchReviewOutputsToolAsync(
+        Guid projectId,
+        Guid batchId,
+        IReadOnlyList<BatchReviewToolDecision> decisions,
+        CancellationToken cancellationToken)
+    {
+        var requests = new List<AssetReviewDecisionRequest>();
+        foreach (var decision in decisions.Where(decision => decision.AssetId != Guid.Empty))
+        {
+            if (!TryParseReviewDecision(decision.Decision, out var parsedDecision))
+            {
+                return JsonSerializer.Serialize(new BatchReviewOperationResult(
+                    batchId,
+                    Succeeded: false,
+                    AlreadyCompleted: false,
+                    AffectedCount: 0,
+                    KeepCount: 0,
+                    RejectCount: 0,
+                    $"Unknown asset review decision '{decision.Decision}'. Use keep or reject."), JsonOptions);
+            }
+
+            requests.Add(new AssetReviewDecisionRequest(decision.AssetId, parsedDecision, decision.Reason));
+        }
+
+        var result = await workflow.MarkBatchReviewOutputsAsync(
+            projectId,
+            batchId,
+            requests,
+            AssetReviewActor.Assistant,
+            cancellationToken);
+        return JsonSerializer.Serialize(result, JsonOptions);
+    }
+
+    private async Task<string> FinishBatchReviewToolAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken)
+    {
+        var result = await workflow.FinishBatchReviewAsync(projectId, batchId, AssetReviewActor.Assistant, cancellationToken);
+        return JsonSerializer.Serialize(result, JsonOptions);
     }
 
     private async Task<string> SavePromptRecipeToolAsync(
@@ -1862,12 +1908,6 @@ public sealed class AssistantToolRegistry(
             .Sum(path => path.Points.Count);
 
 
-    private async Task<string> MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes)
-    {
-        await workflow.MarkAssetAsync(projectId, assetId, favorite, notes);
-        return $"Asset {assetId} updated.";
-    }
-
     private static Task<string> ExportAssetAsync(Guid projectId, Guid assetId) =>
         Task.FromResult(JsonSerializer.Serialize(new
         {
@@ -1896,12 +1936,21 @@ public sealed class AssistantToolRegistry(
         NormalizeToken(kind) switch
         {
             "asset" => CompareReviewItemKind.Asset,
-            "artrecipe" or "recipe" or "promptrecipe" => CompareReviewItemKind.ArtRecipe,
-            "animationrecipe" or "motionrecipe" => CompareReviewItemKind.AnimationRecipe,
             "frame" => CompareReviewItemKind.Frame,
             "animation" or "frameset" or "animationpreview" => CompareReviewItemKind.Animation,
             _ => throw new InvalidOperationException($"Unknown compare review item kind '{kind}'.")
         };
+
+    private static bool TryParseReviewDecision(string decision, out AssetReviewDecisionKind parsed)
+    {
+        parsed = NormalizeToken(decision) switch
+        {
+            "keep" or "approve" or "approved" => AssetReviewDecisionKind.Keep,
+            "reject" or "rejected" => AssetReviewDecisionKind.Reject,
+            _ => AssetReviewDecisionKind.Clear,
+        };
+        return parsed != AssetReviewDecisionKind.Clear;
+    }
 
     private static string NormalizeToken(string value) =>
         value.Trim().Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();

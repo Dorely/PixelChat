@@ -33,8 +33,6 @@ public class CompareReviewSetItem
 public enum CompareReviewItemKind
 {
     Asset = 0,
-    ArtRecipe = 5,
-    AnimationRecipe = 6,
     Frame = 7,
     Animation = 8,
 }

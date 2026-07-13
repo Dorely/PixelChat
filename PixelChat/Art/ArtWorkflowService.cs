@@ -108,6 +108,7 @@ public sealed class ArtWorkflowService(
                 a.SourceAnimationRecipeId,
                 a.SourceAnimationRecipeVersion,
                 a.IsFavorite,
+                a.ReviewStatus,
                 a.Notes,
                 a.Prompt,
                 a.SourceMetadataJson,
@@ -140,7 +141,15 @@ public sealed class ArtWorkflowService(
                 b.Error,
                 b.OutputErrorsJson,
                 b.OutputStatesJson,
-                b.CreatedAt))
+                b.CreatedAt,
+                b.ReviewCompletedBy,
+                b.ReviewCompletedAt))
+            .ToListAsync(cancellationToken);
+        var reviewDecisions = await db.AssetReviewDecisions
+            .AsNoTracking()
+            .Where(decision => decision.ProjectId == selected.Id)
+            .OrderBy(decision => decision.CreatedAt)
+            .ThenBy(decision => decision.Id)
             .ToListAsync(cancellationToken);
         var recipes = await db.PromptRecipes
             .AsNoTracking()
@@ -189,7 +198,19 @@ public sealed class ArtWorkflowService(
                 .ThenBy(item => item.CreatedAt)
                 .ToListAsync(cancellationToken);
         var currentRecipeVersions = await LoadCurrentRecipeVersionsAsync(selected.Id, recipes.Select(recipe => recipe.Id).ToList(), cancellationToken);
-        var assetViews = assets.Select(AssetView).ToList();
+        var currentDecisions = reviewDecisions
+            .GroupBy(decision => decision.AssetId)
+            .ToDictionary(group => group.Key, group => group.Last());
+        var latestAgentDecisions = reviewDecisions
+            .Where(decision => decision.Actor == AssetReviewActor.Assistant && decision.Decision != AssetReviewDecisionKind.Clear)
+            .GroupBy(decision => decision.AssetId)
+            .ToDictionary(group => group.Key, group => group.Last());
+        var assetViews = assets
+            .Select(asset => AssetView(
+                asset,
+                currentDecisions.GetValueOrDefault(asset.Id),
+                latestAgentDecisions.GetValueOrDefault(asset.Id)))
+            .ToList();
         var batchViews = batches.Select(batch => BatchView(batch, assets)).ToList();
         var recipeViews = recipes
             .Select(recipe => RecipeView(recipe, currentRecipeVersions.GetValueOrDefault(recipe.Id)))
@@ -204,7 +225,9 @@ public sealed class ArtWorkflowService(
         return new WorkbenchView(
             ProjectView(selected),
             projects.Select(ProjectView).ToList(),
-            assetViews,
+            assetViews.Where(asset => asset.ReviewStatus == AssetReviewStatus.Kept).ToList(),
+            assetViews.Where(asset => asset.ReviewStatus == AssetReviewStatus.Pending).ToList(),
+            assetViews.Where(asset => asset.ReviewStatus == AssetReviewStatus.Rejected).ToList(),
             batchViews,
             recipeViews,
             animationRecipeViews,
@@ -362,12 +385,21 @@ public sealed class ArtWorkflowService(
         string? query = null,
         bool? favorite = null,
         int? limit = null,
+        string? reviewStatus = null,
         CancellationToken cancellationToken = default)
     {
         var max = NormalizeToolLimit(limit, 12, 50);
         var assets = db.ArtAssets
             .AsNoTracking()
             .Where(a => a.ProjectId == projectId);
+
+        if (!string.Equals(reviewStatus?.Trim(), "all", StringComparison.OrdinalIgnoreCase))
+        {
+            var parsedReviewStatus = TryParseAssetReviewStatus(reviewStatus, out var requestedReviewStatus)
+                ? requestedReviewStatus
+                : AssetReviewStatus.Kept;
+            assets = assets.Where(a => a.ReviewStatus == parsedReviewStatus);
+        }
 
         if (TryParseAssetKind(kind, out var parsedKind))
             assets = assets.Where(a => a.Kind == parsedKind);
@@ -396,7 +428,7 @@ public sealed class ArtWorkflowService(
             assets = results.Select(CompactAsset),
             returned = results.Count,
             limit = max,
-            note = "Use read_asset with an asset id to inspect the full image. This list omits image bytes.",
+            note = "Assets default to kept status. Pass reviewStatus pending, rejected, or all to inspect other lifecycle states. Use read_asset with an asset id to inspect the full image.",
         }, JsonOptions);
     }
 
@@ -627,8 +659,29 @@ public sealed class ArtWorkflowService(
             .AsNoTracking()
             .Where(a => a.ProjectId == projectId && a.SourceBatchId == batchId)
             .ToListAsync(cancellationToken);
+        var decisions = await db.AssetReviewDecisions
+            .AsNoTracking()
+            .Where(decision => decision.ProjectId == projectId && decision.SourceBatchId == batchId)
+            .OrderBy(decision => decision.CreatedAt)
+            .ThenBy(decision => decision.Id)
+            .ToListAsync(cancellationToken);
+        var currentDecisions = decisions.GroupBy(decision => decision.AssetId).ToDictionary(group => group.Key, group => group.Last());
+        var agentDecisions = decisions
+            .Where(decision => decision.Actor == AssetReviewActor.Assistant && decision.Decision != AssetReviewDecisionKind.Clear)
+            .GroupBy(decision => decision.AssetId)
+            .ToDictionary(group => group.Key, group => group.Last());
 
-        return JsonSerializer.Serialize(BatchView(batch, outputAssets), JsonOptions);
+        return JsonSerializer.Serialize(new
+        {
+            batch = BatchView(batch, outputAssets),
+            outputs = outputAssets
+                .OrderBy(asset => ReadBatchOutputIndex(asset) ?? int.MaxValue)
+                .ThenBy(asset => asset.CreatedAt)
+                .Select(asset => AssetView(
+                    AssetListItem(asset),
+                    currentDecisions.GetValueOrDefault(asset.Id),
+                    agentDecisions.GetValueOrDefault(asset.Id))),
+        }, JsonOptions);
     }
 
 
@@ -1017,6 +1070,7 @@ public sealed class ArtWorkflowService(
                 image.OutputFormat,
                 References = references.Select(a => new { a.Id, a.Label, a.ContentType }),
             });
+        asset.ReviewStatus = AssetReviewStatus.Pending;
         await db.ArtAssets.AddAsync(asset, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
 
@@ -1490,6 +1544,7 @@ public sealed class ArtWorkflowService(
                 MaskId = storedMask?.Id,
                 References = references.Select(a => new { a.Id, a.Label, a.ContentType }),
             });
+        asset.ReviewStatus = AssetReviewStatus.Pending;
         await db.ArtAssets.AddAsync(asset, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
 
@@ -2392,6 +2447,246 @@ public sealed class ArtWorkflowService(
         await db.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<BatchReviewOperationResult> MarkBatchReviewOutputsAsync(
+        Guid projectId,
+        Guid batchId,
+        IReadOnlyList<AssetReviewDecisionRequest> decisions,
+        AssetReviewActor actor,
+        CancellationToken cancellationToken = default)
+    {
+        var batch = await db.GenerationBatches
+            .FirstOrDefaultAsync(item => item.ProjectId == projectId && item.Id == batchId, cancellationToken);
+        if (batch is null)
+            return FailedBatchReviewOperation(batchId, "Generation batch was not found.");
+        if (!IsTerminalBatchStatus(batch.Status))
+            return FailedBatchReviewOperation(batchId, "A batch can only be reviewed after generation finishes.");
+
+        var requested = decisions
+            .Where(decision => decision.AssetId != Guid.Empty)
+            .GroupBy(decision => decision.AssetId)
+            .Select(group => group.Last())
+            .ToList();
+        if (requested.Count == 0)
+            return FailedBatchReviewOperation(batchId, "At least one review decision is required.");
+
+        var invalidDecision = requested.FirstOrDefault(request =>
+            request.Decision is not (AssetReviewDecisionKind.Keep or AssetReviewDecisionKind.Reject or AssetReviewDecisionKind.Clear));
+        if (invalidDecision is not null)
+            return FailedBatchReviewOperation(batchId, "Review decisions must be keep, reject, or clear.");
+        if (actor == AssetReviewActor.Assistant && requested.Any(request => request.Decision == AssetReviewDecisionKind.Clear))
+            return FailedBatchReviewOperation(batchId, "The assistant cannot clear a review decision.");
+        if (actor == AssetReviewActor.Assistant && requested.Any(request => string.IsNullOrWhiteSpace(request.Reason)))
+            return FailedBatchReviewOperation(batchId, "Assistant review decisions require a concise reason.");
+
+        var requestedIds = requested.Select(decision => decision.AssetId).ToList();
+        var assets = await db.ArtAssets
+            .Where(asset => asset.ProjectId == projectId
+                && asset.SourceBatchId == batchId
+                && requestedIds.Contains(asset.Id))
+            .ToListAsync(cancellationToken);
+        if (assets.Count != requested.Count)
+            return FailedBatchReviewOperation(batchId, "Every review decision must reference an output from this batch.");
+        if (assets.Any(asset => asset.ReviewStatus != AssetReviewStatus.Pending))
+        {
+            if (batch.ReviewCompletedAt is not null && assets.All(asset => asset.ReviewStatus != AssetReviewStatus.Pending))
+            {
+                return new BatchReviewOperationResult(
+                    batchId,
+                    Succeeded: true,
+                    AlreadyCompleted: true,
+                    AffectedCount: 0,
+                    KeepCount: 0,
+                    RejectCount: 0,
+                    $"Batch review was already finished on {batch.ReviewCompletedAt.Value:O}; no marks were changed.");
+            }
+
+            return FailedBatchReviewOperation(batchId, "Only pending batch outputs can be marked for review.");
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var request in requested)
+        {
+            var reason = request.Reason?.Trim() ?? string.Empty;
+            await db.AssetReviewDecisions.AddAsync(new AssetReviewDecision
+            {
+                ProjectId = projectId,
+                AssetId = request.AssetId,
+                SourceBatchId = batchId,
+                Decision = request.Decision,
+                Actor = actor,
+                Reason = reason,
+                CreatedAt = now,
+            }, cancellationToken);
+        }
+
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveWorkspaceMode = WorkspaceMode.Review;
+        project.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+        return new BatchReviewOperationResult(
+            batchId,
+            Succeeded: true,
+            AlreadyCompleted: false,
+            AffectedCount: requested.Count,
+            KeepCount: requested.Count(request => request.Decision == AssetReviewDecisionKind.Keep),
+            RejectCount: requested.Count(request => request.Decision == AssetReviewDecisionKind.Reject),
+            "Review marks were saved and are visible in Review.");
+    }
+
+    public async Task<BatchReviewOperationResult> FinishBatchReviewAsync(
+        Guid projectId,
+        Guid batchId,
+        AssetReviewActor actor,
+        CancellationToken cancellationToken = default)
+    {
+        var batch = await db.GenerationBatches
+            .FirstOrDefaultAsync(item => item.ProjectId == projectId && item.Id == batchId, cancellationToken);
+        if (batch is null)
+            return FailedBatchReviewOperation(batchId, "Generation batch was not found.");
+        if (!IsTerminalBatchStatus(batch.Status))
+            return FailedBatchReviewOperation(batchId, "A batch can only be reviewed after generation finishes.");
+
+        var pendingAssets = await db.ArtAssets
+            .Where(asset => asset.ProjectId == projectId
+                && asset.SourceBatchId == batchId
+                && asset.ReviewStatus == AssetReviewStatus.Pending)
+            .ToListAsync(cancellationToken);
+        if (pendingAssets.Count == 0)
+        {
+            if (batch.ReviewCompletedAt is not null)
+            {
+                return new BatchReviewOperationResult(
+                    batchId,
+                    Succeeded: true,
+                    AlreadyCompleted: true,
+                    AffectedCount: 0,
+                    KeepCount: 0,
+                    RejectCount: 0,
+                    $"Batch review was already finished on {batch.ReviewCompletedAt.Value:O}; no assets were changed.");
+            }
+
+            return FailedBatchReviewOperation(batchId, "This batch has no pending outputs to review.");
+        }
+
+        var pendingIds = pendingAssets.Select(asset => asset.Id).ToList();
+        var decisions = await db.AssetReviewDecisions
+            .Where(decision => decision.ProjectId == projectId && pendingIds.Contains(decision.AssetId))
+            .OrderBy(decision => decision.CreatedAt)
+            .ThenBy(decision => decision.Id)
+            .ToListAsync(cancellationToken);
+        var latestByAsset = decisions
+            .GroupBy(decision => decision.AssetId)
+            .ToDictionary(group => group.Key, group => group.Last());
+
+        if (actor == AssetReviewActor.Assistant)
+        {
+            var missingDecision = pendingAssets.FirstOrDefault(asset =>
+                !latestByAsset.TryGetValue(asset.Id, out var decision)
+                || decision.Actor != AssetReviewActor.Assistant
+                || decision.Decision is not (AssetReviewDecisionKind.Keep or AssetReviewDecisionKind.Reject)
+                || string.IsNullOrWhiteSpace(decision.Reason));
+            if (missingDecision is not null)
+                return FailedBatchReviewOperation(
+                    batchId,
+                    $"The assistant must explicitly mark every pending output Keep or Reject with a reason before finishing review. Asset {missingDecision.Id} is not ready.");
+        }
+
+        var now = DateTime.UtcNow;
+        var keepCount = 0;
+        foreach (var asset in pendingAssets)
+        {
+            var keep = latestByAsset.TryGetValue(asset.Id, out var decision)
+                && decision.Decision == AssetReviewDecisionKind.Keep;
+            asset.ReviewStatus = keep ? AssetReviewStatus.Kept : AssetReviewStatus.Rejected;
+            if (keep)
+                keepCount++;
+            asset.UpdatedAt = now;
+        }
+
+        batch.ReviewCompletedBy = actor;
+        batch.ReviewCompletedAt = now;
+        batch.UpdatedAt = now;
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.ActiveWorkspaceMode = WorkspaceMode.Review;
+        project.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+        return new BatchReviewOperationResult(
+            batchId,
+            Succeeded: true,
+            AlreadyCompleted: false,
+            AffectedCount: pendingAssets.Count,
+            KeepCount: keepCount,
+            RejectCount: pendingAssets.Count - keepCount,
+            "Batch review finished. Kept outputs are in Library and rejected outputs are in Rejected.");
+    }
+
+    private static BatchReviewOperationResult FailedBatchReviewOperation(Guid batchId, string message) =>
+        new(
+            batchId,
+            Succeeded: false,
+            AlreadyCompleted: false,
+            AffectedCount: 0,
+            KeepCount: 0,
+            RejectCount: 0,
+            message);
+
+    public async Task MoveAssetsReviewStatusAsync(
+        Guid projectId,
+        IReadOnlyList<Guid> assetIds,
+        AssetReviewStatus status,
+        AssetReviewActor actor,
+        CancellationToken cancellationToken = default)
+    {
+        if (status is not (AssetReviewStatus.Kept or AssetReviewStatus.Rejected))
+            throw new InvalidOperationException("Assets can only be moved to Kept or Rejected.");
+
+        var ids = assetIds.Where(id => id != Guid.Empty).Distinct().ToList();
+        if (ids.Count == 0)
+            return;
+        var assets = await db.ArtAssets
+            .Where(asset => asset.ProjectId == projectId && ids.Contains(asset.Id))
+            .ToListAsync(cancellationToken);
+        if (assets.Count != ids.Count)
+            throw new InvalidOperationException("One or more assets were not found.");
+
+        var now = DateTime.UtcNow;
+        foreach (var asset in assets)
+        {
+            if (asset.ReviewStatus == AssetReviewStatus.Pending)
+                throw new InvalidOperationException("Pending batch outputs must be finished through Review.");
+            asset.ReviewStatus = status;
+            asset.UpdatedAt = now;
+            await db.AssetReviewDecisions.AddAsync(new AssetReviewDecision
+            {
+                ProjectId = projectId,
+                AssetId = asset.Id,
+                SourceBatchId = asset.SourceBatchId,
+                Decision = status == AssetReviewStatus.Kept ? AssetReviewDecisionKind.Keep : AssetReviewDecisionKind.Reject,
+                Actor = actor,
+                Reason = actor == AssetReviewActor.User ? "Moved by user." : "Moved by assistant.",
+                CreatedAt = now,
+            }, cancellationToken);
+        }
+
+        var project = await GetProjectAsync(projectId, cancellationToken);
+        project.UpdatedAt = now;
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task DeleteRejectedAssetsAsync(Guid projectId, IReadOnlyList<Guid> assetIds, CancellationToken cancellationToken = default)
+    {
+        var ids = assetIds.Where(id => id != Guid.Empty).Distinct().ToList();
+        if (ids.Count == 0)
+            return;
+        var count = await db.ArtAssets.CountAsync(
+            asset => asset.ProjectId == projectId && ids.Contains(asset.Id) && asset.ReviewStatus == AssetReviewStatus.Rejected,
+            cancellationToken);
+        if (count != ids.Count)
+            throw new InvalidOperationException("Only rejected assets can be bulk deleted.");
+
+        await DeleteAssetsAsync(projectId, ids, cancellationToken);
+    }
+
     public async Task<ArtAssetView> RenameAssetAsync(Guid projectId, Guid assetId, string label, CancellationToken cancellationToken = default)
     {
         var asset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
@@ -2404,31 +2699,40 @@ public sealed class ArtWorkflowService(
 
     public async Task DeleteAssetAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default)
     {
-        var asset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken);
-        if (asset is null)
+        await DeleteAssetsAsync(projectId, [assetId], cancellationToken);
+    }
+
+    private async Task DeleteAssetsAsync(Guid projectId, IReadOnlyList<Guid> assetIds, CancellationToken cancellationToken)
+    {
+        var ids = assetIds.Where(id => id != Guid.Empty).Distinct().ToList();
+        var assets = await db.ArtAssets
+            .Where(asset => asset.ProjectId == projectId && ids.Contains(asset.Id))
+            .ToListAsync(cancellationToken);
+        if (assets.Count == 0)
             return;
 
         var maskIds = await db.ImageMasks
-            .Where(m => m.ProjectId == projectId && m.AssetId == assetId)
+            .Where(m => m.ProjectId == projectId && ids.Contains(m.AssetId))
             .Select(m => m.Id)
             .ToListAsync(cancellationToken);
         var attachments = await db.ChatContextAttachments
             .Where(a => a.ProjectId == projectId
-                && (a.RefId == assetId || (a.Type == ChatContextAttachmentType.Mask && maskIds.Contains(a.RefId))))
+                && (ids.Contains(a.RefId) || (a.Type == ChatContextAttachmentType.Mask && maskIds.Contains(a.RefId))))
             .ToListAsync(cancellationToken);
         db.ChatContextAttachments.RemoveRange(attachments);
 
-        await RemoveCompareReviewItemsAsync(projectId, CompareReviewItemKind.Asset, [assetId], cancellationToken);
+        await RemoveCompareReviewItemsAsync(projectId, CompareReviewItemKind.Asset, ids, cancellationToken);
 
         var sourceFrameSetIds = await db.FrameSets
-            .Where(frameSet => frameSet.ProjectId == projectId && frameSet.SourceAssetId == assetId)
+            .Where(frameSet => frameSet.ProjectId == projectId && frameSet.SourceAssetId != null && ids.Contains(frameSet.SourceAssetId.Value))
             .Select(frameSet => frameSet.Id)
             .ToListAsync(cancellationToken);
 
         var now = DateTime.UtcNow;
-        db.ArtAssets.Remove(asset);
+        await MarkDeletedBatchOutputsAsync(assets, now, cancellationToken);
+        db.ArtAssets.RemoveRange(assets);
         var project = await GetProjectAsync(projectId, cancellationToken);
-        if (project.ActiveSpriteSourceAssetId == assetId)
+        if (project.ActiveSpriteSourceAssetId is Guid activeAssetId && ids.Contains(activeAssetId))
         {
             project.ActiveSpriteSourceAssetId = null;
             project.ActiveSpriteRegionIdsJson = "[]";
@@ -2442,6 +2746,41 @@ public sealed class ArtWorkflowService(
 
         project.UpdatedAt = now;
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task MarkDeletedBatchOutputsAsync(
+        IReadOnlyList<ArtAsset> assets,
+        DateTime deletedAt,
+        CancellationToken cancellationToken)
+    {
+        var batchIds = assets.Select(asset => asset.SourceBatchId).OfType<Guid>().Distinct().ToList();
+        if (batchIds.Count == 0)
+            return;
+
+        var batches = await db.GenerationBatches
+            .Where(batch => batchIds.Contains(batch.Id))
+            .ToListAsync(cancellationToken);
+        foreach (var batch in batches)
+        {
+            var states = NormalizeOutputStates(batch.OutputStatesJson, batch.Count);
+            foreach (var asset in assets.Where(asset => asset.SourceBatchId == batch.Id))
+            {
+                if (ReadBatchOutputIndex(asset) is not int outputIndex || outputIndex < 0 || outputIndex >= batch.Count)
+                    continue;
+                var previous = states.LastOrDefault(state => state.OutputIndex == outputIndex);
+                states = UpsertOutputState(states, new GenerationOutputStateView(
+                    outputIndex,
+                    GenerationOutputStatus.Deleted,
+                    previous?.Attempt ?? 0,
+                    "Deleted from asset storage.",
+                    StartedAt: previous?.StartedAt,
+                    UpdatedAt: deletedAt,
+                    CompletedAt: deletedAt));
+            }
+
+            batch.OutputStatesJson = SerializeOutputStates(states);
+            batch.UpdatedAt = deletedAt;
+        }
     }
 
     public async Task<ChatContextAttachmentView> AttachContextAsync(
@@ -3674,10 +4013,6 @@ public sealed class ArtWorkflowService(
         {
             CompareReviewItemKind.Asset =>
                 await db.ArtAssets.AnyAsync(asset => asset.ProjectId == projectId && asset.Id == refId, cancellationToken),
-            CompareReviewItemKind.ArtRecipe =>
-                await db.PromptRecipes.AnyAsync(recipe => recipe.ProjectId == projectId && recipe.Id == refId, cancellationToken),
-            CompareReviewItemKind.AnimationRecipe =>
-                await db.AnimationRecipes.AnyAsync(recipe => recipe.ProjectId == projectId && recipe.Id == refId, cancellationToken),
             CompareReviewItemKind.Frame =>
                 await db.Frames.AnyAsync(frame => frame.ProjectId == projectId && frame.Id == refId, cancellationToken),
             CompareReviewItemKind.Animation =>
@@ -3700,12 +4035,6 @@ public sealed class ArtWorkflowService(
             CompareReviewItemKind.Asset =>
                 await db.ArtAssets.Where(asset => asset.ProjectId == projectId && asset.Id == refId).Select(asset => asset.Label).FirstOrDefaultAsync(cancellationToken)
                 ?? "Asset",
-            CompareReviewItemKind.ArtRecipe =>
-                await db.PromptRecipes.Where(recipe => recipe.ProjectId == projectId && recipe.Id == refId).Select(recipe => recipe.Name).FirstOrDefaultAsync(cancellationToken)
-                ?? "Art recipe",
-            CompareReviewItemKind.AnimationRecipe =>
-                await db.AnimationRecipes.Where(recipe => recipe.ProjectId == projectId && recipe.Id == refId).Select(recipe => recipe.Name).FirstOrDefaultAsync(cancellationToken)
-                ?? "Animation recipe",
             CompareReviewItemKind.Frame =>
                 await db.Frames.Where(frame => frame.ProjectId == projectId && frame.Id == refId).Select(frame => frame.Name).FirstOrDefaultAsync(cancellationToken)
                 ?? "Frame",
@@ -4005,6 +4334,13 @@ public sealed class ArtWorkflowService(
         return Enum.TryParse(kind.Trim().Replace("-", string.Empty, StringComparison.Ordinal).Replace("_", string.Empty, StringComparison.Ordinal), ignoreCase: true, out assetKind);
     }
 
+    private static bool TryParseAssetReviewStatus(string? status, out AssetReviewStatus reviewStatus)
+    {
+        reviewStatus = AssetReviewStatus.Kept;
+        return !string.IsNullOrWhiteSpace(status)
+            && Enum.TryParse(status.Trim(), ignoreCase: true, out reviewStatus);
+    }
+
     private static bool TryParseBatchStatus(string? status, out GenerationBatchStatus batchStatus)
     {
         batchStatus = default;
@@ -4029,6 +4365,7 @@ public sealed class ArtWorkflowService(
         asset.SourcePromptRecipeId,
         asset.SourcePromptRecipeVersion,
         asset.IsFavorite,
+        asset.ReviewStatus,
         asset.Notes,
         promptPreview = Preview(asset.Prompt, 240),
         asset.CreatedAt,
@@ -4049,6 +4386,7 @@ public sealed class ArtWorkflowService(
         asset.SourcePromptRecipeId,
         asset.SourcePromptRecipeVersion,
         asset.IsFavorite,
+        asset.ReviewStatus,
         asset.Notes,
         asset.Prompt,
         asset.SourceMetadataJson,
@@ -4188,6 +4526,8 @@ public sealed class ArtWorkflowService(
         negativePromptPreview = Preview(batch.NegativePrompt, 220),
         batch.Error,
         batch.CreatedAt,
+        batch.ReviewCompletedBy,
+        batch.ReviewCompletedAt,
     };
 
     private static object CompactAsset(ArtAssetView asset) => new
@@ -4200,6 +4540,9 @@ public sealed class ArtWorkflowService(
         asset.ParentAssetId,
         asset.SourceBatchId,
         asset.IsFavorite,
+        asset.ReviewStatus,
+        asset.CurrentReviewDecision,
+        asset.LatestAgentReviewDecision,
         asset.SourcePromptRecipeId,
         asset.SourcePromptRecipeVersion,
         asset.SourceAnimationRecipeId,
@@ -4244,7 +4587,10 @@ public sealed class ArtWorkflowService(
     private static ArtAssetView AssetView(ArtAsset asset) =>
         AssetView(AssetListItem(asset));
 
-    private static ArtAssetView AssetView(ArtAssetListItem asset) =>
+    private static ArtAssetView AssetView(
+        ArtAssetListItem asset,
+        AssetReviewDecision? currentDecision = null,
+        AssetReviewDecision? latestAgentDecision = null) =>
         new(
             asset.Id,
             asset.Label,
@@ -4265,7 +4611,22 @@ public sealed class ArtWorkflowService(
             asset.IsFavorite,
             asset.Notes,
             asset.Prompt,
-            asset.CreatedAt);
+            asset.CreatedAt,
+            asset.ReviewStatus,
+            ReviewDecisionView(currentDecision),
+            ReviewDecisionView(latestAgentDecision));
+
+    private static AssetReviewDecisionView? ReviewDecisionView(AssetReviewDecision? decision) =>
+        decision is null
+            ? null
+            : new(
+                decision.Id,
+                decision.AssetId,
+                decision.SourceBatchId,
+                decision.Decision,
+                decision.Actor,
+                decision.Reason,
+                decision.CreatedAt);
 
     private static ArtAssetExportView ExportAssetView(ArtAsset asset) =>
         new(
@@ -4530,7 +4891,9 @@ public sealed class ArtWorkflowService(
             displayError,
             outputStates,
             outputErrors,
-            batch.CreatedAt);
+            batch.CreatedAt,
+            batch.ReviewCompletedBy,
+            batch.ReviewCompletedAt);
     }
 
     private static PromptRecipeView RecipeView(PromptRecipe recipe, int currentVersion) =>
@@ -4885,6 +5248,7 @@ public sealed class ArtWorkflowService(
             asset.SourceAnimationRecipeId,
             asset.SourceAnimationRecipeVersion,
             asset.IsFavorite,
+            asset.ReviewStatus,
             asset.Notes,
             asset.Prompt,
             asset.SourceMetadataJson,
@@ -4914,7 +5278,9 @@ public sealed class ArtWorkflowService(
             batch.Error,
             batch.OutputErrorsJson,
             batch.OutputStatesJson,
-            batch.CreatedAt);
+            batch.CreatedAt,
+            batch.ReviewCompletedBy,
+            batch.ReviewCompletedAt);
 
     private static ImageMaskListItem ToImageMaskListItem(ImageMask mask) =>
         new(
@@ -5129,6 +5495,9 @@ public sealed class ArtWorkflowService(
     private static bool IsFailedOutputStatus(GenerationOutputStatus status) =>
         status is GenerationOutputStatus.Failed or GenerationOutputStatus.Cancelled;
 
+    private static bool IsTerminalBatchStatus(GenerationBatchStatus status) =>
+        status is GenerationBatchStatus.Succeeded or GenerationBatchStatus.CompletedWithErrors or GenerationBatchStatus.Failed;
+
     private static string? CleanNullable(string? value)
     {
         var cleaned = Clean(value);
@@ -5179,6 +5548,7 @@ public sealed class ArtWorkflowService(
         Guid? SourceAnimationRecipeId,
         int? SourceAnimationRecipeVersion,
         bool IsFavorite,
+        AssetReviewStatus ReviewStatus,
         string Notes,
         string Prompt,
         string SourceMetadataJson,
@@ -5207,7 +5577,9 @@ public sealed class ArtWorkflowService(
         string Error,
         string OutputErrorsJson,
         string OutputStatesJson,
-        DateTime CreatedAt);
+        DateTime CreatedAt,
+        AssetReviewActor? ReviewCompletedBy,
+        DateTime? ReviewCompletedAt);
 
     private sealed record ImageMaskListItem(
         Guid Id,

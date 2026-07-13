@@ -37,10 +37,13 @@ public class GenerationBatch
     public string OutputStatesJson { get; set; } = "[]";
     public string AgentSummary { get; set; } = string.Empty;
     public string RawProviderResponseJson { get; set; } = string.Empty;
+    public AssetReviewActor? ReviewCompletedBy { get; set; }
+    public DateTime? ReviewCompletedAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
     public ICollection<ArtAsset> OutputAssets { get; set; } = [];
+    public ICollection<AssetReviewDecision> ReviewDecisions { get; set; } = [];
 }
 
 public enum GenerationBatchStatus

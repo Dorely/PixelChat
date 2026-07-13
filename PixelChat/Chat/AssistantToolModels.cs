@@ -36,6 +36,11 @@ public sealed record CompareReviewToolItem(
     string? Label = null,
     string? Notes = null);
 
+public sealed record BatchReviewToolDecision(
+    Guid AssetId,
+    string Decision,
+    string Reason);
+
 public sealed record RecipeAttachmentToolItem(
     Guid AssetId,
     string Role = "example",

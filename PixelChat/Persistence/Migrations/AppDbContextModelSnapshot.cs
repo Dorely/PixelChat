@@ -197,6 +197,12 @@ namespace PixelChat.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ReviewStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Kept");
+
                     b.Property<Guid?>("SourceAnimationRecipeId")
                         .HasColumnType("TEXT");
 
@@ -237,7 +243,52 @@ namespace PixelChat.Persistence.Migrations
 
                     b.HasIndex("ProjectId", "CreatedAt");
 
+                    b.HasIndex("ProjectId", "ReviewStatus", "CreatedAt");
+
                     b.ToTable("ArtAssets");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.AssetReviewDecision", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("AssetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Decision")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("SourceBatchId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AssetId");
+
+                    b.HasIndex("SourceBatchId");
+
+                    b.HasIndex("ProjectId", "AssetId", "CreatedAt");
+
+                    b.HasIndex("ProjectId", "SourceBatchId", "CreatedAt");
+
+                    b.ToTable("AssetReviewDecisions");
                 });
 
             modelBuilder.Entity("PixelChat.Models.AssistantConversation", b =>
@@ -950,6 +1001,12 @@ namespace PixelChat.Persistence.Migrations
 
                     b.Property<string>("RawProviderResponseJson")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReviewCompletedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReviewCompletedBy")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Size")
@@ -1787,6 +1844,32 @@ namespace PixelChat.Persistence.Migrations
                     b.Navigation("SourcePromptRecipe");
                 });
 
+            modelBuilder.Entity("PixelChat.Models.AssetReviewDecision", b =>
+                {
+                    b.HasOne("PixelChat.Models.ArtAsset", "Asset")
+                        .WithMany("ReviewDecisions")
+                        .HasForeignKey("AssetId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PixelChat.Models.Project", "Project")
+                        .WithMany("AssetReviewDecisions")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PixelChat.Models.GenerationBatch", "SourceBatch")
+                        .WithMany("ReviewDecisions")
+                        .HasForeignKey("SourceBatchId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Asset");
+
+                    b.Navigation("Project");
+
+                    b.Navigation("SourceBatch");
+                });
+
             modelBuilder.Entity("PixelChat.Models.AssistantConversation", b =>
                 {
                     b.HasOne("PixelChat.Models.Project", "Project")
@@ -2219,6 +2302,8 @@ namespace PixelChat.Persistence.Migrations
             modelBuilder.Entity("PixelChat.Models.ArtAsset", b =>
                 {
                     b.Navigation("ChildAssets");
+
+                    b.Navigation("ReviewDecisions");
                 });
 
             modelBuilder.Entity("PixelChat.Models.AssistantConversation", b =>
@@ -2253,6 +2338,8 @@ namespace PixelChat.Persistence.Migrations
                     b.Navigation("ChildBatches");
 
                     b.Navigation("OutputAssets");
+
+                    b.Navigation("ReviewDecisions");
                 });
 
             modelBuilder.Entity("PixelChat.Models.LlmProvider", b =>
@@ -2271,6 +2358,8 @@ namespace PixelChat.Persistence.Migrations
                     b.Navigation("AnimationRecipes");
 
                     b.Navigation("Assets");
+
+                    b.Navigation("AssetReviewDecisions");
 
                     b.Navigation("AssistantConversations");
 

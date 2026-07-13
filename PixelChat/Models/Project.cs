@@ -33,6 +33,7 @@ public class Project
     public ICollection<ImageMask> Masks { get; set; } = [];
     public ICollection<ChatContextAttachment> ChatContextAttachments { get; set; } = [];
     public ICollection<CompareReviewSet> CompareReviewSets { get; set; } = [];
+    public ICollection<AssetReviewDecision> AssetReviewDecisions { get; set; } = [];
     public ICollection<AssistantConversation> AssistantConversations { get; set; } = [];
 }
 

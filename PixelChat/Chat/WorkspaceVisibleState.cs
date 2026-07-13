@@ -75,7 +75,9 @@ public sealed record WorkspaceEditVisibleState(
     int BrushSize);
 
 public sealed record WorkspaceReviewVisibleState(
-    WorkspaceCompareReviewSetSummary? ReviewSet);
+    WorkspaceCompareReviewSetSummary? ReviewSet,
+    IReadOnlyList<WorkspaceBatchSummary>? PendingGenerationBatches = null,
+    WorkspaceBatchSummary? LatestAgentReview = null);
 
 public sealed record WorkspaceBatchesVisibleState(
     WorkspaceBatchSummary? ActiveBatch,
@@ -173,7 +175,11 @@ public sealed record WorkspaceAssetSummary(
     bool IsFavorite,
     string Notes,
     string PromptPreview,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    AssetReviewStatus ReviewStatus = AssetReviewStatus.Kept,
+    AssetReviewDecisionKind? ReviewDecision = null,
+    AssetReviewActor? ReviewDecisionActor = null,
+    string ReviewDecisionReason = "");
 
 public sealed record WorkspaceBatchSummary(
     Guid Id,

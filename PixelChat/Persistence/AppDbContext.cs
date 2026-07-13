@@ -13,6 +13,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<StoredSecret> StoredSecrets => Set<StoredSecret>();
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<ArtAsset> ArtAssets => Set<ArtAsset>();
+    public DbSet<AssetReviewDecision> AssetReviewDecisions => Set<AssetReviewDecision>();
     public DbSet<BackgroundRemovalExportCache> BackgroundRemovalExportCaches => Set<BackgroundRemovalExportCache>();
     public DbSet<ExportStepCache> ExportStepCaches => Set<ExportStepCache>();
     public DbSet<GenerationBatch> GenerationBatches => Set<GenerationBatch>();
@@ -119,10 +120,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
         modelBuilder.Entity<ArtAsset>(entity =>
         {
             entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
+            entity.HasIndex(e => new { e.ProjectId, e.ReviewStatus, e.CreatedAt });
             entity.HasIndex(e => e.ParentAssetId);
             entity.HasIndex(e => e.SourceBatchId);
             entity.HasIndex(e => e.SourceAnimationRecipeId).IsUnique(false);
             entity.Property(e => e.Kind).HasConversion<string>();
+            entity.Property(e => e.ReviewStatus).HasConversion<string>().HasDefaultValue(AssetReviewStatus.Kept);
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.Assets)
@@ -147,6 +150,29 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasOne(e => e.SourceAnimationRecipe)
                 .WithMany()
                 .HasForeignKey(e => e.SourceAnimationRecipeId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AssetReviewDecision>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.AssetId, e.CreatedAt });
+            entity.HasIndex(e => new { e.ProjectId, e.SourceBatchId, e.CreatedAt });
+            entity.Property(e => e.Decision).HasConversion<string>();
+            entity.Property(e => e.Actor).HasConversion<string>();
+
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.AssetReviewDecisions)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Asset)
+                .WithMany(a => a.ReviewDecisions)
+                .HasForeignKey(e => e.AssetId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.SourceBatch)
+                .WithMany(b => b.ReviewDecisions)
+                .HasForeignKey(e => e.SourceBatchId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
@@ -187,6 +213,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
             entity.HasIndex(e => e.AnimationRecipeId);
             entity.Property(e => e.Status).HasConversion<string>();
+            entity.Property(e => e.ReviewCompletedBy).HasConversion<string>();
             entity.Property(e => e.Background).HasDefaultValue("auto");
             entity.Property(e => e.OutputStatesJson).HasDefaultValue("[]");
 

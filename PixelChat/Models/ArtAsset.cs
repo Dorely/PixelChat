@@ -31,12 +31,22 @@ public class ArtAsset
     public int? SourceAnimationRecipeVersion { get; set; }
 
     public bool IsFavorite { get; set; }
+    public AssetReviewStatus ReviewStatus { get; set; } = AssetReviewStatus.Kept;
     public string Notes { get; set; } = string.Empty;
     public string Prompt { get; set; } = string.Empty;
     public string SourceMetadataJson { get; set; } = string.Empty;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    public ICollection<AssetReviewDecision> ReviewDecisions { get; set; } = [];
+}
+
+public enum AssetReviewStatus
+{
+    Kept,
+    Pending,
+    Rejected
 }
 
 public enum ArtAssetKind

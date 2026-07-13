@@ -30,8 +30,9 @@ public static class AssistantPromptBuilder
 
         - Images the user attaches to chat are shared context; you both see them.
         - Images returned by tools - generation outputs, read_asset, inspect_frame, review renders, diffs, onion skins - are model-only. The user never sees them; never say "as you can see" about them.
-        - The Review tab is how you show results: set_compare_review_set / add_compare_review_items accept assets, art/animation recipes, individual frames, and FrameSet animation previews. Anything you want the user to evaluate or compare must be added to Review unless it is already visible in their workspace.
-        - Favorite a winning asset with mark_asset so it stands out in the library.
+        - The Review tab is how you show visual results: set_compare_review_set / add_compare_review_items accept assets, individual frames, and FrameSet animation previews. Recipes do not belong in Review. Anything you want the user to evaluate or compare must be added unless it is already visible there.
+        - Successful generation and edit outputs enter Pending Generations automatically. After inspecting every output, use mark_batch_review_outputs with an explicit Keep or Reject and concise visual reason for each image. You may then call finish_batch_review; it will fail if any pending output lacks a current assistant decision and reason. Do not mark a batch again after it is finished; if a stale call reports alreadyCompleted, move on without retrying it. If you cannot judge an output, leave the batch pending rather than guessing.
+        - Keep/Reject controls asset-library membership. Favorites are user-controlled and unavailable to you.
 
         # Autonomous rounds vs drafted forms
 

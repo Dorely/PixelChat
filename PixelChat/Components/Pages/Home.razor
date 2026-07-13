@@ -250,6 +250,7 @@ else
     private int _brushSize = 36;
     private string _editorTool = "mask";
     private string _assetOrganization = "latest";
+    private string _assetLibraryView = "library";
     private const int AssetGridMinColumnWidthPixels = 220;
     private const int AssetGridGapPixels = 14;
     private const int AssetGridVirtualRowHeightPixels = 430;
@@ -257,6 +258,8 @@ else
     private int _assetGridColumnCount = 3;
     private bool _assetGridMeasurementBound;
     private bool _assetDeleteMode;
+    private readonly HashSet<Guid> _selectedRejectedAssetIds = [];
+    private readonly HashSet<Guid> _bulkDeleteCandidateIds = [];
     private Guid? _editAssetId;
     private Guid? _assetDeleteCandidateId;
     private Guid? _renamingAssetId;
@@ -401,8 +404,11 @@ else
         if (_renamingAssetId is Guid renamingAssetId && !_workbench.Assets.Any(asset => asset.Id == renamingAssetId))
             CancelRenameAsset();
         _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
-        _recipeAttachments.RemoveAll(attachment => !_workbench.Assets.Any(asset => asset.Id == attachment.AssetId));
-        _animationRecipeAttachments.RemoveAll(attachment => !_workbench.Assets.Any(asset => asset.Id == attachment.AssetId));
+        var allAssetIds = AllWorkbenchAssets().Select(asset => asset.Id).ToHashSet();
+        _recipeAttachments.RemoveAll(attachment => !allAssetIds.Contains(attachment.AssetId));
+        _animationRecipeAttachments.RemoveAll(attachment => !allAssetIds.Contains(attachment.AssetId));
+        _selectedRejectedAssetIds.RemoveWhere(assetId => !_workbench.RejectedAssets.Any(asset => asset.Id == assetId));
+        _bulkDeleteCandidateIds.RemoveWhere(assetId => !_workbench.RejectedAssets.Any(asset => asset.Id == assetId));
         await RefreshRecipeEditorAfterWorkbenchReloadAsync();
         await LoadReviewFrameSetsAsync();
         PublishVisibleState();
@@ -742,6 +748,8 @@ else
     private RenderFragment RenderReviewWorkspace() => __builder =>
     {
         <div class="workspace-panel compare-panel">
+            @RenderPendingGenerationReviews()
+            @RenderLatestAgentReview()
             @RenderCompareReviewSet()
         </div>
     };
@@ -749,7 +757,7 @@ else
     private RenderFragment RenderBatchOutputs(GenerationBatchView activeBatch) => __builder =>
     {
         var outputAssetsByIndex = activeBatch.OutputAssetIds
-            .Select(assetId => _workbench!.Assets.FirstOrDefault(asset => asset.Id == assetId))
+            .Select(assetId => AllWorkbenchAssets().FirstOrDefault(asset => asset.Id == assetId))
             .OfType<ArtAssetView>()
             .Select((asset, fallbackIndex) => new
             {
@@ -807,7 +815,11 @@ else
                 else
                 {
                     var outputState = ResolveOutputState(index, outputStatesByIndex, runtimeOutputsByIndex);
-                    if (IsFailedOutputStatus(outputState.Status))
+                    if (outputState.Status == GenerationOutputStatus.Deleted)
+                    {
+                        @RenderGenerationDeletedCard(index)
+                    }
+                    else if (IsFailedOutputStatus(outputState.Status))
                     {
                         @RenderGenerationErrorCard(OutputErrorFromState(outputState, runtimeOutputsByIndex.GetValueOrDefault(index)))
                     }
@@ -826,6 +838,146 @@ else
                 }
             }
         </div>
+    };
+
+    private RenderFragment RenderPendingGenerationReviews() => __builder =>
+    {
+        var groups = PendingReviewGroups();
+        <section class="pending-review-section">
+            <div class="compare-review-head">
+                <div>
+                    <div class="section-title">Pending Generations</div>
+                    <h2>@(groups.Count == 0 ? "Nothing waiting for review" : $"{groups.Sum(group => group.Assets.Count)} image(s) across {groups.Count} batch(es)")</h2>
+                </div>
+            </div>
+
+            @foreach (var group in groups)
+            {
+                var keepCount = group.Assets.Count(asset => CurrentReviewMark(asset) == AssetReviewDecisionKind.Keep);
+                var rejectCount = group.Assets.Count - keepCount;
+                <article class="pending-review-batch" @key="group.Batch.Id">
+                    <div class="pending-review-batch-head">
+                        <div>
+                            <strong>@group.Batch.Label</strong>
+                            <span>@group.Batch.ImageModel · @group.Batch.Size · @group.Assets.Count output(s)</span>
+                            <p>@group.Batch.Prompt</p>
+                        </div>
+                        <div class="pending-review-actions">
+                            <button type="button" class="btn btn-sm btn-outline-success" @onclick="() => MarkAllPendingAsync(group, AssetReviewDecisionKind.Keep)">Mark All Keep</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => MarkAllPendingAsync(group, AssetReviewDecisionKind.Clear)">Clear Marks</button>
+                            <button type="button" class="btn btn-sm btn-primary" @onclick="() => FinishPendingBatchReviewAsync(group.Batch.Id)">Finish: Keep @keepCount, Reject @rejectCount</button>
+                        </div>
+                    </div>
+                    <div class="review-grid pending-review-grid">
+                        @foreach (var asset in group.Assets)
+                        {
+                            @RenderPendingReviewCard(group.Batch, asset)
+                        }
+                    </div>
+                </article>
+            }
+        </section>
+    };
+
+    private RenderFragment RenderPendingReviewCard(GenerationBatchView batch, ArtAssetView asset) => __builder =>
+    {
+        var current = asset.CurrentReviewDecision;
+        var agent = asset.LatestAgentReviewDecision;
+        var currentMark = CurrentReviewMark(asset);
+        <article class="asset-card pending-review-card @ReviewMarkClass(currentMark)" @key="asset.Id">
+            <button type="button" class="asset-thumb" @onclick="() => OpenAssetReviewPreview(asset)">
+                <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" />
+            </button>
+            <div class="asset-card-body">
+                <div class="asset-title-row">
+                    <strong>@asset.Label</strong>
+                    <span>Pending</span>
+                </div>
+                @if (agent is not null)
+                {
+                    <div class="agent-review-callout">
+                        <strong>Agent @DecisionLabel(agent.Decision)</strong>
+                        <span>@agent.Reason</span>
+                    </div>
+                }
+                @if (current is not null && current.Actor == AssetReviewActor.User)
+                {
+                    <div class="user-review-mark">
+                        @(current.Decision == AssetReviewDecisionKind.Clear ? "Your mark is cleared" : $"Your override: {DecisionLabel(current.Decision)}")
+                    </div>
+                }
+                <div class="asset-actions review-decision-actions">
+                    <button type="button" class="btn btn-sm @(currentMark == AssetReviewDecisionKind.Keep ? "btn-success" : "btn-outline-success")" @onclick="() => MarkPendingAssetAsync(batch.Id, asset.Id, AssetReviewDecisionKind.Keep)">Keep</button>
+                    <button type="button" class="btn btn-sm @(currentMark == AssetReviewDecisionKind.Reject ? "btn-danger" : "btn-outline-danger")" @onclick="() => MarkPendingAssetAsync(batch.Id, asset.Id, AssetReviewDecisionKind.Reject)">Reject</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => MarkPendingAssetAsync(batch.Id, asset.Id, AssetReviewDecisionKind.Clear)">Clear</button>
+                </div>
+            </div>
+        </article>
+    };
+
+    private RenderFragment RenderLatestAgentReview() => __builder =>
+    {
+        var batch = LatestAgentReviewedBatch();
+        if (batch is null)
+            return;
+        var assets = AllWorkbenchAssets()
+            .Where(asset => asset.SourceBatchId == batch.Id)
+            .OrderBy(asset => asset.BatchOutputIndex ?? int.MaxValue)
+            .ThenBy(asset => asset.CreatedAt)
+            .ToList();
+        <section class="latest-agent-review">
+            <div class="compare-review-head">
+                <div>
+                    <div class="section-title">Latest Agent Review</div>
+                    <h2>@batch.Label</h2>
+                    <p>@($"Completed {batch.ReviewCompletedAt?.ToLocalTime():g}")</p>
+                </div>
+            </div>
+            <div class="review-grid">
+                @foreach (var asset in assets)
+                {
+                    @RenderCompletedAgentReviewCard(asset)
+                }
+            </div>
+        </section>
+    };
+
+    private RenderFragment RenderCompletedAgentReviewCard(ArtAssetView asset) => __builder =>
+    {
+        var agent = asset.LatestAgentReviewDecision;
+        var userOverride = asset.CurrentReviewDecision is { Actor: AssetReviewActor.User } decision ? decision : null;
+        <article class="asset-card completed-agent-review-card" @key="asset.Id">
+            <button type="button" class="asset-thumb" @onclick="() => OpenAssetReviewPreview(asset)">
+                <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" />
+            </button>
+            <div class="asset-card-body">
+                <div class="asset-title-row">
+                    <strong>@asset.Label</strong>
+                    <span class="review-status-badge @asset.ReviewStatus.ToString().ToLowerInvariant()">@asset.ReviewStatus</span>
+                </div>
+                @if (agent is not null)
+                {
+                    <div class="agent-review-callout">
+                        <strong>Agent @DecisionLabel(agent.Decision)</strong>
+                        <span>@agent.Reason</span>
+                    </div>
+                }
+                @if (userOverride is not null)
+                {
+                    <div class="user-review-mark">User override: @DecisionLabel(userOverride.Decision)</div>
+                }
+                <div class="asset-actions">
+                    @if (asset.ReviewStatus == AssetReviewStatus.Rejected)
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-success" @onclick="() => MoveAssetsReviewStatusAsync([asset.Id], AssetReviewStatus.Kept)">Keep</button>
+                    }
+                    else if (asset.ReviewStatus == AssetReviewStatus.Kept)
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => MoveAssetsReviewStatusAsync([asset.Id], AssetReviewStatus.Rejected)">Reject</button>
+                    }
+                </div>
+            </div>
+        </article>
     };
 
     private RenderFragment RenderCompareReviewSet() => __builder =>
@@ -849,7 +1001,7 @@ else
 
             @if (reviewSet is null || reviewSet.Items.Count == 0)
             {
-                <div class="empty-state">No review items yet. Add assets, batches, sprite sheets, or animation previews for final review.</div>
+                <div class="empty-state">No curated review items yet. Add assets, frames, or animation previews for final review.</div>
             }
             else
             {
@@ -880,11 +1032,6 @@ else
                 string.Empty,
                 () => OpenImageReviewPreview(item.Label, frameUrl, string.Empty))
         }
-        else if ((item.Kind == CompareReviewItemKind.ArtRecipe || item.Kind == CompareReviewItemKind.AnimationRecipe)
-            && ReviewRecipe(item) is { } recipe)
-        {
-            @RenderReviewRecipeCard(item, recipe)
-        }
         else if (item.Kind == CompareReviewItemKind.Animation && _reviewFrameSets.TryGetValue(item.RefId, out var frameSet) && frameSet.FrameCount > 0)
         {
             <article class="review-card" @key="item.Id">
@@ -909,41 +1056,6 @@ else
         {
             @RenderReviewMissingCard(item)
         }
-    };
-
-    private (string Name, string Prompt, bool IsAnimation)? ReviewRecipe(CompareReviewSetItemView item)
-    {
-        if (item.Kind == CompareReviewItemKind.ArtRecipe
-            && _workbench!.Recipes.FirstOrDefault(recipe => recipe.Id == item.RefId) is { } artRecipe)
-        {
-            return (artRecipe.Name, artRecipe.Prompt, false);
-        }
-
-        if (item.Kind == CompareReviewItemKind.AnimationRecipe
-            && _workbench!.AnimationRecipes.FirstOrDefault(recipe => recipe.Id == item.RefId) is { } animationRecipe)
-        {
-            return (animationRecipe.Name, animationRecipe.Prompt, true);
-        }
-
-        return null;
-    }
-
-    private RenderFragment RenderReviewRecipeCard(CompareReviewSetItemView item, (string Name, string Prompt, bool IsAnimation) recipe) => __builder =>
-    {
-        <article class="review-card review-recipe-card" @key="item.Id">
-            <div class="review-card-body">
-                <div class="asset-title-row">
-                    <strong>@recipe.Name</strong>
-                    <span>@(recipe.IsAnimation ? "Animation recipe" : "Art recipe")</span>
-                </div>
-                <p class="review-recipe-prompt">@recipe.Prompt</p>
-                @if (!string.IsNullOrWhiteSpace(item.Notes))
-                {
-                    <p>@item.Notes</p>
-                }
-                <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveReviewItemAsync(item.Id)">Remove</button>
-            </div>
-        </article>
     };
 
     private RenderFragment RenderReviewImageCard(
@@ -976,7 +1088,7 @@ else
     private RenderFragment RenderReviewBatchCard(CompareReviewSetItemView item, GenerationBatchView batch) => __builder =>
     {
         var outputAssets = batch.OutputAssetIds
-            .Select(assetId => _workbench!.Assets.FirstOrDefault(asset => asset.Id == assetId))
+            .Select(assetId => AllWorkbenchAssets().FirstOrDefault(asset => asset.Id == assetId))
             .OfType<ArtAssetView>()
             .ToList();
         <article class="review-card review-batch-card" @key="item.Id">
@@ -1544,32 +1656,43 @@ else
             <div class="panel-head">
                 <div>
                     <h1>Assets</h1>
-                    <span>@_workbench!.Assets.Count asset(s)</span>
+                    <span>@_workbench!.Assets.Count kept · @_workbench.RejectedAssets.Count rejected</span>
                 </div>
                 <div class="panel-actions">
-                    <div class="asset-filters">
-                        <button type="button" class="@AssetOrganizationClass("latest")" @onclick='() => SetAssetOrganization("latest")'>Latest</button>
-                        <button type="button" class="@AssetOrganizationClass("recipe")" @onclick='() => SetAssetOrganization("recipe")'>Art Recipe</button>
-                        <button type="button" class="@AssetOrganizationClass("guides")" @onclick='() => SetAssetOrganization("guides")'>Guides</button>
+                    <div class="asset-filters asset-lifecycle-tabs">
+                        <button type="button" class="@AssetLibraryViewClass("library")" @onclick='() => SetAssetLibraryView("library")'>Library (@_workbench.Assets.Count)</button>
+                        <button type="button" class="@AssetLibraryViewClass("rejected")" @onclick='() => SetAssetLibraryView("rejected")'>Rejected (@_workbench.RejectedAssets.Count)</button>
                     </div>
-                    <button type="button"
-                            class="@AssetDeleteModeClass()"
-                            aria-pressed="@(_assetDeleteMode ? "true" : "false")"
-                            title="Delete buttons skip confirmation while this is on."
-                            @onclick="ToggleAssetDeleteMode">
-                        <span class="asset-delete-mode-switch" aria-hidden="true"></span>
-                        <span>Delete Mode</span>
-                    </button>
-                    @if (_assetOrganization == "guides")
+                    @if (_assetLibraryView == "library")
                     {
-                        <button type="button" class="btn btn-sm btn-primary" @onclick="OpenGuideBuilder">Create Guide</button>
+                        <div class="asset-filters">
+                            <button type="button" class="@AssetOrganizationClass("latest")" @onclick='() => SetAssetOrganization("latest")'>Latest</button>
+                            <button type="button" class="@AssetOrganizationClass("recipe")" @onclick='() => SetAssetOrganization("recipe")'>Art Recipe</button>
+                            <button type="button" class="@AssetOrganizationClass("guides")" @onclick='() => SetAssetOrganization("guides")'>Guides</button>
+                        </div>
+                        <button type="button"
+                                class="@AssetDeleteModeClass()"
+                                aria-pressed="@(_assetDeleteMode ? "true" : "false")"
+                                title="Delete buttons skip confirmation while this is on."
+                                @onclick="ToggleAssetDeleteMode">
+                            <span class="asset-delete-mode-switch" aria-hidden="true"></span>
+                            <span>Delete Mode</span>
+                        </button>
+                        @if (_assetOrganization == "guides")
+                        {
+                            <button type="button" class="btn btn-sm btn-primary" @onclick="OpenGuideBuilder">Create Guide</button>
+                        }
                     }
                 </div>
             </div>
 
             <div class="asset-grid-measure" @ref="_assetGridMeasureEl" aria-hidden="true"></div>
 
-            @if (_workbench.Assets.Count == 0)
+            @if (_assetLibraryView == "rejected")
+            {
+                @RenderRejectedAssets()
+            }
+            else if (_workbench.Assets.Count == 0)
             {
                 <div class="empty-state">No assets yet. Generate or import images to build the library.</div>
             }
@@ -1610,10 +1733,70 @@ else
         </div>
     };
 
-    private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact, bool guideCard = false, Guid? reviewItemId = null) => __builder =>
+    private RenderFragment RenderRejectedAssets() => __builder =>
+    {
+        var rejected = _workbench!.RejectedAssets.OrderByDescending(asset => asset.CreatedAt).ToList();
+        <section class="rejected-assets-section">
+            <div class="rejected-bulk-bar">
+                <span>@_selectedRejectedAssetIds.Count selected</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(rejected.Count == 0)" @onclick="SelectAllRejectedAssets">Select All</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_selectedRejectedAssetIds.Count == 0)" @onclick="ClearRejectedSelection">Clear</button>
+                <button type="button" class="btn btn-sm btn-outline-success" disabled="@(_selectedRejectedAssetIds.Count == 0)" @onclick="KeepSelectedRejectedAssetsAsync">Keep Selected</button>
+                <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_selectedRejectedAssetIds.Count == 0)" @onclick="RequestDeleteSelectedRejectedAssets">Delete Selected</button>
+                <button type="button" class="btn btn-sm btn-success" disabled="@(rejected.Count == 0)" @onclick="KeepAllRejectedAssetsAsync">Keep All</button>
+                <button type="button" class="btn btn-sm btn-danger" disabled="@(rejected.Count == 0)" @onclick="RequestDeleteAllRejectedAssets">Delete All</button>
+            </div>
+            @if (rejected.Count == 0)
+            {
+                <div class="empty-state">No rejected assets.</div>
+            }
+            else
+            {
+                <div class="review-grid rejected-asset-grid">
+                    @foreach (var asset in rejected)
+                    {
+                        @RenderRejectedAssetCard(asset)
+                    }
+                </div>
+            }
+        </section>
+    };
+
+    private RenderFragment RenderRejectedAssetCard(ArtAssetView asset) => __builder =>
+    {
+        var selected = _selectedRejectedAssetIds.Contains(asset.Id);
+        <article class="asset-card rejected-asset-card @(selected ? "is-selected" : "")" @key="asset.Id">
+            <label class="rejected-select">
+                <input type="checkbox" checked="@selected" @onchange="args => SetRejectedAssetSelected(asset.Id, args.Value is true)" />
+                <span>Select</span>
+            </label>
+            <button type="button" class="asset-thumb" @onclick="() => OpenAssetReviewPreview(asset)">
+                <LazyImage Src="@asset.PreviewImageUrl" Alt="@asset.Label" />
+            </button>
+            <div class="asset-card-body">
+                <div class="asset-title-row">
+                    <strong>@asset.Label</strong>
+                    <span>Rejected</span>
+                </div>
+                @if (asset.LatestAgentReviewDecision is { } agent)
+                {
+                    <div class="agent-review-callout">
+                        <strong>Agent @DecisionLabel(agent.Decision)</strong>
+                        <span>@agent.Reason</span>
+                    </div>
+                }
+                <div class="asset-actions">
+                    <button type="button" class="btn btn-sm btn-outline-success" @onclick="() => MoveAssetsReviewStatusAsync([asset.Id], AssetReviewStatus.Kept)">Keep</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RequestDeleteRejectedAsset(asset.Id)">Delete</button>
+                </div>
+            </div>
+        </article>
+    };
+
+    private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact, bool guideCard = false, Guid? reviewItemId = null, bool allowReject = false) => __builder =>
     {
         <article class="asset-card @(compact ? "asset-card-compact" : "")" @key="asset.Id">
-            @if (!guideCard)
+            @if (!guideCard && asset.ReviewStatus == AssetReviewStatus.Kept)
             {
                 <button type="button"
                         class="asset-favorite @(asset.IsFavorite ? "is-on" : "")"
@@ -1652,7 +1835,7 @@ else
                 {
                     <div class="asset-title-row">
                         <strong>@asset.Label</strong>
-                        <span>@asset.Kind</span>
+                        <span>@(asset.ReviewStatus == AssetReviewStatus.Kept ? asset.Kind : asset.ReviewStatus)</span>
                     </div>
                 }
                 @if (!compact)
@@ -1660,22 +1843,29 @@ else
                     <p>@(string.IsNullOrWhiteSpace(asset.Prompt) ? FormatDimensions(asset) : asset.Prompt)</p>
                 }
                 <div class="asset-actions">
-                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AttachAssetAsync(asset)">Attach</button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => BeginRenameAsset(asset)">Rename</button>
-                    @if (!guideCard)
+                    @if (asset.ReviewStatus == AssetReviewStatus.Kept)
                     {
-                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenSpriteSheetAsync(asset)">Sprite Sheet</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AttachAssetAsync(asset)">Attach</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => BeginRenameAsset(asset)">Rename</button>
+                        @if (!guideCard)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenSpriteSheetAsync(asset)">Sprite Sheet</button>
+                        }
+                        @if (allowReject)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-warning" @onclick="() => MoveAssetsReviewStatusAsync([asset.Id], AssetReviewStatus.Rejected)">Reject</button>
+                        }
+                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RequestDeleteAssetAsync(asset.Id)">Delete</button>
+                        @if (!guideCard)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => OpenExportAsync(asset)">Export</button>
+                        }
                     }
                     @if (reviewItemId is Guid removeReviewItemId)
                     {
                         <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveReviewItemAsync(removeReviewItemId)">Remove</button>
-                    }
-                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RequestDeleteAssetAsync(asset.Id)">Delete</button>
-                    @if (!guideCard)
-                    {
-                        <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => OpenExportAsync(asset)">Export</button>
                     }
                 </div>
             </div>
@@ -1707,7 +1897,7 @@ else
         <div class="asset-grid-row" @key="row.Key">
             @foreach (var asset in row.Assets)
             {
-                @RenderAssetCard(asset, compact: false, guideCard: row.GuideCard)
+                @RenderAssetCard(asset, compact: false, guideCard: row.GuideCard, allowReject: true)
             }
         </div>
     };
@@ -1781,19 +1971,34 @@ else
         </article>
     };
 
+    private RenderFragment RenderGenerationDeletedCard(int outputIndex) => __builder =>
+    {
+        <article class="asset-card generation-deleted-card">
+            <div class="generation-deleted-mark">×</div>
+            <div class="asset-card-body">
+                <div class="asset-title-row">
+                    <strong>Image @LabelForIndex(outputIndex)</strong>
+                    <span>Deleted</span>
+                </div>
+                <p>This output was removed from asset storage.</p>
+            </div>
+        </article>
+    };
+
     private RenderFragment RenderDeleteConfirmation() => __builder =>
     {
         var asset = DeleteCandidateAsset();
-        if (asset is null)
+        var bulkCount = _bulkDeleteCandidateIds.Count;
+        if (asset is null && bulkCount == 0)
             return;
 
         <div class="delete-confirm-backdrop">
             <div class="delete-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-asset-title">
-                <h2 id="delete-asset-title">Delete asset?</h2>
-                <p>This permanently removes @asset.Label and any saved masks attached to it.</p>
+                <h2 id="delete-asset-title">@(bulkCount > 0 ? $"Delete {bulkCount} rejected assets?" : "Delete asset?")</h2>
+                <p>@(bulkCount > 0 ? "This permanently removes the selected images and their saved masks." : $"This permanently removes {asset!.Label} and any saved masks attached to it.")</p>
                 <div class="delete-confirm-actions">
                     <button type="button" class="btn btn-outline-secondary" @onclick="CancelDeleteAsset">Cancel</button>
-                    <button type="button" class="btn btn-danger" @onclick="ConfirmDeleteAssetAsync">Delete</button>
+                    <button type="button" class="btn btn-danger" @onclick="ConfirmDeleteRequestAsync">Delete</button>
                 </div>
             </div>
         </div>
@@ -2188,6 +2393,63 @@ else
 
         await RunWorkflowAsync("Clearing review set...", () =>
             Workflow.ClearCompareReviewSetAsync(_workbench.Project.Id));
+    }
+
+    private async Task MarkPendingAssetAsync(Guid batchId, Guid assetId, AssetReviewDecisionKind decision)
+    {
+        if (_workbench is null)
+            return;
+        await RunWorkflowAsync("Updating review mark...", async () =>
+        {
+            var result = await Workflow.MarkBatchReviewOutputsAsync(
+                _workbench.Project.Id,
+                batchId,
+                [new AssetReviewDecisionRequest(assetId, decision)],
+                AssetReviewActor.User);
+            if (!result.Succeeded)
+                _error = result.Message;
+        });
+    }
+
+    private async Task MarkAllPendingAsync(PendingReviewGroup group, AssetReviewDecisionKind decision)
+    {
+        if (_workbench is null)
+            return;
+        var requests = group.Assets
+            .Select(asset => new AssetReviewDecisionRequest(asset.Id, decision))
+            .ToList();
+        await RunWorkflowAsync("Updating batch review marks...", async () =>
+        {
+            var result = await Workflow.MarkBatchReviewOutputsAsync(
+                _workbench.Project.Id,
+                group.Batch.Id,
+                requests,
+                AssetReviewActor.User);
+            if (!result.Succeeded)
+                _error = result.Message;
+        });
+    }
+
+    private async Task FinishPendingBatchReviewAsync(Guid batchId)
+    {
+        if (_workbench is null)
+            return;
+        await RunWorkflowAsync("Finishing batch review...", async () =>
+        {
+            var result = await Workflow.FinishBatchReviewAsync(_workbench.Project.Id, batchId, AssetReviewActor.User);
+            if (!result.Succeeded)
+                _error = result.Message;
+        });
+    }
+
+    private async Task MoveAssetsReviewStatusAsync(IReadOnlyList<Guid> assetIds, AssetReviewStatus status)
+    {
+        if (_workbench is null || assetIds.Count == 0)
+            return;
+        await RunWorkflowAsync(status == AssetReviewStatus.Kept ? "Keeping assets..." : "Rejecting assets...", () =>
+            Workflow.MoveAssetsReviewStatusAsync(_workbench.Project.Id, assetIds, status, AssetReviewActor.User));
+        foreach (var assetId in assetIds)
+            _selectedRejectedAssetIds.Remove(assetId);
     }
 
     private void OpenImageReviewPreview(string title, string imageUrl, string subtitle)
@@ -2740,6 +3002,51 @@ else
         _assetDeleteCandidateId = null;
     }
 
+    private void SetRejectedAssetSelected(Guid assetId, bool selected)
+    {
+        if (selected)
+            _selectedRejectedAssetIds.Add(assetId);
+        else
+            _selectedRejectedAssetIds.Remove(assetId);
+    }
+
+    private void SelectAllRejectedAssets()
+    {
+        if (_workbench is null)
+            return;
+        _selectedRejectedAssetIds.UnionWith(_workbench.RejectedAssets.Select(asset => asset.Id));
+    }
+
+    private void ClearRejectedSelection() => _selectedRejectedAssetIds.Clear();
+
+    private Task KeepSelectedRejectedAssetsAsync() =>
+        MoveAssetsReviewStatusAsync(_selectedRejectedAssetIds.ToList(), AssetReviewStatus.Kept);
+
+    private Task KeepAllRejectedAssetsAsync() =>
+        MoveAssetsReviewStatusAsync(_workbench?.RejectedAssets.Select(asset => asset.Id).ToList() ?? [], AssetReviewStatus.Kept);
+
+    private void RequestDeleteRejectedAsset(Guid assetId)
+    {
+        _bulkDeleteCandidateIds.Clear();
+        _bulkDeleteCandidateIds.Add(assetId);
+        _assetDeleteCandidateId = null;
+    }
+
+    private void RequestDeleteSelectedRejectedAssets()
+    {
+        _bulkDeleteCandidateIds.Clear();
+        _bulkDeleteCandidateIds.UnionWith(_selectedRejectedAssetIds);
+        _assetDeleteCandidateId = null;
+    }
+
+    private void RequestDeleteAllRejectedAssets()
+    {
+        _bulkDeleteCandidateIds.Clear();
+        if (_workbench is not null)
+            _bulkDeleteCandidateIds.UnionWith(_workbench.RejectedAssets.Select(asset => asset.Id));
+        _assetDeleteCandidateId = null;
+    }
+
     private async Task RequestDeleteAssetAsync(Guid assetId)
     {
         if (_assetDeleteMode && _activeWorkspaceMode == WorkspaceMode.Assets)
@@ -2751,7 +3058,29 @@ else
         _assetDeleteCandidateId = assetId;
     }
 
-    private void CancelDeleteAsset() => _assetDeleteCandidateId = null;
+    private void CancelDeleteAsset()
+    {
+        _assetDeleteCandidateId = null;
+        _bulkDeleteCandidateIds.Clear();
+    }
+
+    private Task ConfirmDeleteRequestAsync() =>
+        _bulkDeleteCandidateIds.Count > 0 ? ConfirmBulkDeleteRejectedAssetsAsync() : ConfirmDeleteAssetAsync();
+
+    private async Task ConfirmBulkDeleteRejectedAssetsAsync()
+    {
+        if (_workbench is null || _bulkDeleteCandidateIds.Count == 0)
+            return;
+        var ids = _bulkDeleteCandidateIds.ToList();
+        await RunWorkflowAsync($"Deleting {ids.Count} rejected asset(s)...", () =>
+            Workflow.DeleteRejectedAssetsAsync(_workbench.Project.Id, ids));
+        foreach (var assetId in ids)
+        {
+            _selectedRejectedAssetIds.Remove(assetId);
+            ClearDeletedAssetState(assetId);
+        }
+        _bulkDeleteCandidateIds.Clear();
+    }
 
     private async Task ConfirmDeleteAssetAsync()
     {
@@ -2893,6 +3222,13 @@ else
                     && batch.IsRunning
                     && batch.FollowInBatches
                     && !previousRunningBatchIds.Contains(batch.BatchId));
+            var completedFollowedBatchIds = previousSnapshot.Batches
+                .Where(batch => batch.IsRunning
+                    && batch.FollowInBatches
+                    && (projectId is null || batch.ProjectId == projectId.Value)
+                    && snapshot.Batches.Any(current => current.BatchId == batch.BatchId && !current.IsRunning))
+                .Select(batch => batch.BatchId)
+                .ToHashSet();
             var completedBatch = previousRunningBatchIds.Any(batchId =>
                 snapshot.Batches.Any(batch => batch.BatchId == batchId && !batch.IsRunning));
             var completedOutput = projectId is Guid currentProjectId
@@ -2906,6 +3242,15 @@ else
             else if (completedBatch || completedOutput)
             {
                 await ReloadWorkbenchAsync();
+                if (completedFollowedBatchIds.Count > 0
+                    && _activeWorkspaceMode == WorkspaceMode.Batches
+                    && _workbench is not null
+                    && _workbench.PendingReviewAssets.Any(asset =>
+                        asset.SourceBatchId is Guid batchId && completedFollowedBatchIds.Contains(batchId)))
+                {
+                    await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Review);
+                    await ReloadWorkbenchAsync(acceptBackendMode: true);
+                }
             }
             if (startedFollowedBatch || completedBatch || completedOutput || showProgress)
                 StateHasChanged();
@@ -3439,7 +3784,10 @@ else
     }
 
     private WorkspaceReviewVisibleState BuildReviewVisibleState() =>
-        new(_workbench?.CompareReviewSet is null ? null : CompareReviewSetSummary(_workbench.CompareReviewSet));
+        new(
+            _workbench?.CompareReviewSet is null ? null : CompareReviewSetSummary(_workbench.CompareReviewSet),
+            PendingReviewGroups().Select(group => BatchSummary(group.Batch)).ToList(),
+            LatestAgentReviewedBatch() is { } batch ? BatchSummary(batch) : null);
 
     private WorkspaceBatchesVisibleState BuildBatchesVisibleState() =>
         new(
@@ -3552,7 +3900,7 @@ else
 
     private WorkspaceAssetsVisibleState BuildAssetsVisibleState() =>
         new(
-            _assetOrganization,
+            _assetLibraryView == "rejected" ? "rejected" : _assetOrganization,
             VisibleAssetsForSnapshot().Select(AssetSummary).ToList());
 
     private IReadOnlyList<ArtAssetView> VisibleAssetsForSnapshot()
@@ -3560,7 +3908,9 @@ else
         if (_workbench is null)
             return [];
 
-        return (_assetOrganization == "guides"
+        return (_assetLibraryView == "rejected"
+                ? _workbench.RejectedAssets.OrderByDescending(asset => asset.CreatedAt)
+                : _assetOrganization == "guides"
                 ? GuideAssetsByLatest()
                 : _assetOrganization == "recipe"
                     ? AssetRecipeGroups().SelectMany(group => group.Assets)
@@ -3585,7 +3935,11 @@ else
             asset.IsFavorite,
             asset.Notes,
             Preview(asset.Prompt, 240),
-            asset.CreatedAt);
+            asset.CreatedAt,
+            asset.ReviewStatus,
+            asset.CurrentReviewDecision?.Decision,
+            asset.CurrentReviewDecision?.Actor,
+            asset.CurrentReviewDecision?.Reason ?? string.Empty);
 
     private static WorkspaceBatchSummary BatchSummary(GenerationBatchView batch) =>
         new(
@@ -3700,18 +4054,63 @@ else
 
     private ArtAssetView? DeleteCandidateAsset() =>
         _assetDeleteCandidateId is Guid assetId
-            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId)
+            ? AllWorkbenchAssets().FirstOrDefault(asset => asset.Id == assetId)
             : null;
 
     private ArtAssetView? ReviewAsset(CompareReviewSetItemView item) =>
         item.Kind == CompareReviewItemKind.Asset
-            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == item.RefId)
+            ? AllWorkbenchAssets().FirstOrDefault(asset => asset.Id == item.RefId && asset.ReviewStatus != AssetReviewStatus.Pending)
             : null;
 
     private ArtAssetView? AttachmentAsset(ChatContextAttachmentView attachment) =>
         attachment.Type is ChatContextAttachmentType.Asset or ChatContextAttachmentType.Crop
-            ? _workbench?.Assets.FirstOrDefault(asset => asset.Id == attachment.RefId)
+            ? AllWorkbenchAssets().FirstOrDefault(asset => asset.Id == attachment.RefId)
             : null;
+
+    private IReadOnlyList<ArtAssetView> AllWorkbenchAssets() =>
+        _workbench is null
+            ? []
+            : _workbench.Assets.Concat(_workbench.PendingReviewAssets).Concat(_workbench.RejectedAssets).ToList();
+
+    private IReadOnlyList<PendingReviewGroup> PendingReviewGroups()
+    {
+        if (_workbench is null)
+            return [];
+        return _workbench.PendingReviewAssets
+            .Where(asset => asset.SourceBatchId is not null)
+            .GroupBy(asset => asset.SourceBatchId!.Value)
+            .Select(group => new PendingReviewGroup(
+                _workbench.Batches.First(batch => batch.Id == group.Key),
+                group.OrderBy(asset => asset.BatchOutputIndex ?? int.MaxValue).ThenBy(asset => asset.CreatedAt).ToList()))
+            .Where(group => IsTerminalGenerationStatus(group.Batch.Status))
+            .OrderByDescending(group => group.Batch.CreatedAt)
+            .ToList();
+    }
+
+    private GenerationBatchView? LatestAgentReviewedBatch() =>
+        _workbench?.Batches
+            .Where(batch => batch.ReviewCompletedBy == AssetReviewActor.Assistant && batch.ReviewCompletedAt is not null)
+            .OrderByDescending(batch => batch.ReviewCompletedAt)
+            .FirstOrDefault();
+
+    private static AssetReviewDecisionKind? CurrentReviewMark(ArtAssetView asset) =>
+        asset.CurrentReviewDecision?.Decision is AssetReviewDecisionKind.Keep or AssetReviewDecisionKind.Reject
+            ? asset.CurrentReviewDecision.Decision
+            : null;
+
+    private static string DecisionLabel(AssetReviewDecisionKind decision) => decision switch
+    {
+        AssetReviewDecisionKind.Keep => "Keep",
+        AssetReviewDecisionKind.Reject => "Reject",
+        _ => "Undecided",
+    };
+
+    private static string ReviewMarkClass(AssetReviewDecisionKind? decision) => decision switch
+    {
+        AssetReviewDecisionKind.Keep => "is-keep",
+        AssetReviewDecisionKind.Reject => "is-reject",
+        _ => "is-undecided",
+    };
 
     private ImageMaskView? AttachmentMask(ChatContextAttachmentView attachment) =>
         attachment.Type == ChatContextAttachmentType.Mask
@@ -3803,6 +4202,16 @@ else
     private void SetAssetOrganization(string organization) =>
         _assetOrganization = organization is "recipe" or "guides" ? organization : "latest";
 
+    private void SetAssetLibraryView(string view)
+    {
+        _assetLibraryView = view == "rejected" ? "rejected" : "library";
+        if (_assetLibraryView == "rejected")
+            ResetAssetDeleteMode();
+    }
+
+    private string AssetLibraryViewClass(string view) =>
+        _assetLibraryView == view ? "filter-button is-active" : "filter-button";
+
     private string ReferenceSummary()
     {
         var count = CurrentReferenceAssetIds().Count;
@@ -3878,7 +4287,7 @@ else
             .ThenByDescending(asset => asset.CreatedAt);
 
     private ArtAssetView? RecipeAttachmentAsset(Guid assetId) =>
-        _workbench?.Assets.FirstOrDefault(asset => asset.Id == assetId);
+        AllWorkbenchAssets().FirstOrDefault(asset => asset.Id == assetId);
 
     private void SetNewRecipeAttachmentAsset(bool animation, string? value)
     {
@@ -4239,6 +4648,8 @@ else
         value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private sealed record AssetGroup(string Label, IReadOnlyList<ArtAssetView> Assets);
+
+    private sealed record PendingReviewGroup(GenerationBatchView Batch, IReadOnlyList<ArtAssetView> Assets);
 
     private sealed record AssetGridRow(string Key, IReadOnlyList<ArtAssetView> Assets, bool GuideCard);
 

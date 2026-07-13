@@ -6,6 +6,8 @@ public sealed record WorkbenchView(
     ProjectView Project,
     IReadOnlyList<ProjectView> Projects,
     IReadOnlyList<ArtAssetView> Assets,
+    IReadOnlyList<ArtAssetView> PendingReviewAssets,
+    IReadOnlyList<ArtAssetView> RejectedAssets,
     IReadOnlyList<GenerationBatchView> Batches,
     IReadOnlyList<PromptRecipeView> Recipes,
     IReadOnlyList<AnimationRecipeView> AnimationRecipes,
@@ -47,6 +49,18 @@ public sealed record ArtAssetView(
     bool IsFavorite,
     string Notes,
     string Prompt,
+    DateTime CreatedAt,
+    AssetReviewStatus ReviewStatus,
+    AssetReviewDecisionView? CurrentReviewDecision,
+    AssetReviewDecisionView? LatestAgentReviewDecision);
+
+public sealed record AssetReviewDecisionView(
+    Guid Id,
+    Guid AssetId,
+    Guid? SourceBatchId,
+    AssetReviewDecisionKind Decision,
+    AssetReviewActor Actor,
+    string Reason,
     DateTime CreatedAt);
 
 public sealed record ArtAssetExportView(
@@ -258,7 +272,9 @@ public sealed record GenerationBatchView(
     string Error,
     IReadOnlyList<GenerationOutputStateView> OutputStates,
     IReadOnlyList<GenerationOutputErrorView> OutputErrors,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    AssetReviewActor? ReviewCompletedBy,
+    DateTime? ReviewCompletedAt);
 
 public sealed record GenerationOutputErrorView(
     int OutputIndex,
@@ -294,8 +310,23 @@ public enum GenerationOutputStatus
     Generating,
     Succeeded,
     Failed,
-    Cancelled
+    Cancelled,
+    Deleted
 }
+
+public sealed record AssetReviewDecisionRequest(
+    Guid AssetId,
+    AssetReviewDecisionKind Decision,
+    string? Reason = null);
+
+public sealed record BatchReviewOperationResult(
+    Guid BatchId,
+    bool Succeeded,
+    bool AlreadyCompleted,
+    int AffectedCount,
+    int KeepCount,
+    int RejectCount,
+    string Message);
 
 public sealed record PromptRecipeView(
     Guid Id,

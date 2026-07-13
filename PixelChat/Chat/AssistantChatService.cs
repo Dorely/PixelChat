@@ -932,6 +932,11 @@ public sealed class AssistantChatService(
                 return new ToolInvocationOutcome(string.Empty, Error: null, Cancelled: true, stopwatch.Elapsed.TotalMilliseconds, Array.Empty<AIContent>());
             }
             var result = invokeResult?.ToString() ?? string.Empty;
+            if (TryReadReportedToolError(result, out var reportedError))
+            {
+                stopwatch.Stop();
+                return new ToolInvocationOutcome(result, reportedError, Cancelled: false, stopwatch.Elapsed.TotalMilliseconds, Array.Empty<AIContent>());
+            }
             var modelOnlyContents = await BuildModelOnlyToolContentsAsync(pendingCall, projectId, result, cancellationToken);
             stopwatch.Stop();
             return new ToolInvocationOutcome(result, Error: null, Cancelled: false, stopwatch.Elapsed.TotalMilliseconds, modelOnlyContents);
@@ -946,6 +951,35 @@ public sealed class AssistantChatService(
             stopwatch.Stop();
             logger.LogWarning(ex, "Assistant tool '{Tool}' failed.", pendingCall.Name);
             return new ToolInvocationOutcome($"Error: {ex.Message}", ex.Message, Cancelled: false, stopwatch.Elapsed.TotalMilliseconds, Array.Empty<AIContent>());
+        }
+    }
+
+    private static bool TryReadReportedToolError(string result, out string error)
+    {
+        error = string.Empty;
+        if (string.IsNullOrWhiteSpace(result))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(result);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("succeeded", out var succeeded)
+                || succeeded.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
+                || succeeded.GetBoolean())
+            {
+                return false;
+            }
+
+            error = root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String
+                ? message.GetString() ?? "The tool could not complete the requested operation."
+                : "The tool could not complete the requested operation.";
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 
