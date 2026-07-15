@@ -34,6 +34,7 @@ public sealed class AssistantToolRegistry(
         "mark_batch_review_outputs",
         "finish_batch_review",
         "run_generation_round",
+        "edit_asset",
         "save_prompt_recipe",
         "set_prompt_recipe_attachments",
         "save_animation_recipe",
@@ -60,7 +61,6 @@ public sealed class AssistantToolRegistry(
         "set_frame_duration",
         "auto_anchor_align_frames",
         "normalize_frame_scale",
-        "upsert_frame_mask",
         "clear_frame_mask",
         "erase_frame_regions",
         "edit_frame",
@@ -73,7 +73,7 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: () => ListWorkspaceStateAsync(projectId),
             name: "list_workspace_state",
-            description: "Read only the visible PixelChat UI state: project, active tab, provider status, visible chat attachments, and the active page's selected/draft form context. This intentionally omits broad libraries; use list/read asset, recipe, batch, or sprite-sheet tools for broader data. This is read-only."),
+            description: "Read only the visible PixelChat UI state: project, active tab, provider status, visible chat attachments, and the active page's current selections and form inputs. This intentionally omits broad libraries; use list/read asset, recipe, batch, or sprite-sheet tools for broader data. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (string? kind = null, string? query = null, bool? favorite = null, int? limit = null, string? reviewStatus = null) =>
@@ -210,13 +210,30 @@ public sealed class AssistantToolRegistry(
                 string? background = null,
                 int count = 2,
                 Guid[]? referenceAssetIds = null,
-                Guid? editSourceAssetId = null,
                 Guid? recipeId = null,
                 Guid? animationRecipeId = null,
                 CancellationToken cancellationToken = default) =>
-                RunGenerationRoundAsync(projectId, budget, specificRequest, assetName, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId, recipeId, animationRecipeId, cancellationToken),
+                RunGenerationRoundAsync(projectId, budget, specificRequest, assetName, negativePrompt, size, background, count, referenceAssetIds, recipeId, animationRecipeId, cancellationToken),
             name: "run_generation_round",
-            description: "Run one generic autonomous generation or edit round and wait for completion. Requires assetName, a readable saved asset base name. Use for starter assets, broad recipe tests, focused variations, and non-sheet image edits. When reusable guidance applies, pass recipeId and/or animationRecipeId instead of pasting recipe text into specificRequest. For recipe tests, save the recipe revision first and pass recipeId. Outputs are returned as model-only images and appear automatically in Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
+            description: "Generate new image assets in one autonomous round and wait for completion. Requires assetName, a readable saved asset base name. Use for starter assets, broad recipe tests, and focused new variations; use edit_asset instead when changing an existing image. When reusable guidance applies, pass recipeId and/or animationRecipeId instead of pasting recipe text into specificRequest. For recipe tests, save the recipe revision first and pass recipeId. Outputs are returned as model-only images and appear automatically in Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid sourceAssetId,
+                string prompt,
+                [Description("Required readable name for the edited asset(s) this round will save. Use a short production name, not Image A or a generic batch label.")] string assetName,
+                string? size = null,
+                string? background = null,
+                int count = 2,
+                Guid[]? referenceAssetIds = null,
+                Guid? recipeId = null,
+                Guid? maskId = null,
+                SpriteSheetRect[]? maskRects = null,
+                SpriteSheetShapePath[]? maskPolygons = null,
+                CancellationToken cancellationToken = default) =>
+                EditAssetAsync(projectId, budget, sourceAssetId, prompt, assetName, size, background, count, referenceAssetIds, recipeId, maskId, maskRects, maskPolygons, cancellationToken),
+            name: "edit_asset",
+            description: "Directly edit an existing image asset and wait for completion. Use this whenever the user asks to change, replace, repair, or refine an existing non-frame image; do not substitute new generation or UI instructions. Inspect the source first. For a localized edit, pass maskRects and/or maskPolygons in full source-image pixel coordinates; their union becomes the editable area and is persisted as the asset's mask. To reuse a saved manual mask, pass maskId instead. maskId and drawn regions are mutually exclusive. Omit all mask inputs only when an unmasked edit is appropriate. Use recipeId for saved reusable art guidance and keep the prompt focused on Change/Preserve/Constraints. Outputs are returned as model-only images and enter Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
 
         AIFunctionFactory.Create(
             method: (
@@ -230,7 +247,7 @@ public sealed class AssistantToolRegistry(
                 string? background = null,
                 int count = 2,
                 CancellationToken cancellationToken = default) =>
-                RunGenerationRoundAsync(projectId, budget, prompt, assetName, negativePrompt, size, background, count, referenceAssetIds, editSourceAssetId: null, recipeId: artRecipeId, animationRecipeId: animationRecipeId, cancellationToken: cancellationToken),
+                RunGenerationRoundAsync(projectId, budget, prompt, assetName, negativePrompt, size, background, count, referenceAssetIds, artRecipeId, animationRecipeId, cancellationToken),
             name: "generate_sprite_sheet_candidates",
             description: "Generate sprite-sheet candidates from a concise labeled-slot prompt plus ordered references whose roles are indexed in the prompt. Requires assetName, a readable saved asset base name. Pass artRecipeId and/or animationRecipeId when saved reusable guidance applies; do not paste recipe prompts into the one-off prompt. For new guide-driven sprite sheets, first call generate_animation_guide, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Put hard prohibitions in negativePrompt. Returns model-only candidate images; outputs appear automatically in Pending Generations, where you can explicitly mark and finish their batch review."),
 
@@ -470,17 +487,6 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (
                 Guid frameId,
-                string maskDataUrl,
-                string? label = null,
-                string coordinateSpace = "logicalFrame",
-                CancellationToken cancellationToken = default) =>
-                UpsertFrameMaskAsync(projectId, frameId, maskDataUrl, label, coordinateSpace, cancellationToken),
-            name: "upsert_frame_mask",
-            description: "Greenfield Frames pipeline: create or replace a frame-owned mask and update the visible Sprites workspace. The mask payload is a PNG data URL in the requested coordinate space, usually logicalFrame from the frame canvas."),
-
-        AIFunctionFactory.Create(
-            method: (
-                Guid frameId,
                 CancellationToken cancellationToken = default) =>
                 ClearFrameMaskAsync(projectId, frameId, cancellationToken),
             name: "clear_frame_mask",
@@ -539,37 +545,6 @@ public sealed class AssistantToolRegistry(
 
         AIFunctionFactory.Create(
             method: (
-                string? prompt = null,
-                string? negativePrompt = null,
-                string? size = null,
-                string? background = null,
-                Guid? recipeId = null,
-                Guid? animationRecipeId = null,
-                int? count = null,
-                Guid[]? referenceAssetIds = null) => DraftGenerateFormAsync(prompt, negativePrompt, size, background, recipeId, animationRecipeId, count, referenceAssetIds),
-            name: "draft_generate_form",
-            description: "Draft values for the Generate form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select a saved reusable art recipe and animationRecipeId to select a saved motion/layout recipe; do not paste recipe prompts into the one-off prompt. Keep prompt focused on the new asset request and omit fields that should stay unchanged. This does not run image generation; the user reviews the form and clicks Generate manually."),
-
-        AIFunctionFactory.Create(
-            method: (
-                string prompt,
-                string? size = null,
-                string? background = null,
-                Guid? recipeId = null,
-                int count = 1) => DraftEditFormAsync(prompt, size, background, recipeId, count),
-            name: "draft_edit_form",
-            description: "Draft values for the current Edit form. Use background as removable, auto, or opaque instead of adding background instructions to the prompt. Use removable for isolated sprites, icons, props, reusable foreground assets, and transparent-background requests; PixelChat will add the flat magenta export-prep instruction and Export background removal creates the final real-alpha PNG. Use recipeId to select saved reusable guidance; keep prompt focused on the requested edit, not the reusable recipe text. This does not choose an asset or run an image edit; the user selects an asset, may paint/review a mask for targeted edits, and clicks Send Edit manually."),
-
-        AIFunctionFactory.Create(
-            method: (
-                string name,
-                string prompt,
-                string? notes = null) => DraftPromptRecipeFormAsync(name, prompt, notes),
-            name: "draft_prompt_recipe_form",
-            description: "Draft values for the recipe editor. A recipe is a reusable named prompt with private notes and optional asset attachments. This does not save a recipe; the user reviews the form and clicks Save manually."),
-
-        AIFunctionFactory.Create(
-            method: (
                 Guid frameSetId,
                 Guid frameId,
                 SpriteSheetRect[] rects,
@@ -589,10 +564,12 @@ public sealed class AssistantToolRegistry(
                 Guid[]? referenceAssetIds = null,
                 bool includeAdjacentFrames = true,
                 bool useFrameMask = true,
+                SpriteSheetRect[]? maskRects = null,
+                SpriteSheetShapePath[]? maskPolygons = null,
                 CancellationToken cancellationToken = default) =>
-                EditFrameAsync(projectId, budget, frameSetId, frameId, prompt, background, referenceAssetIds, includeAdjacentFrames, useFrameMask, cancellationToken),
+                EditFrameAsync(projectId, budget, frameSetId, frameId, prompt, background, referenceAssetIds, includeAdjacentFrames, useFrameMask, maskRects, maskPolygons, cancellationToken),
             name: "edit_frame",
-            description: "Greenfield Frames pipeline: AI-edit one frame's logical cell with a Change/Preserve/Constraints prompt, store the result as the frame's working image, and update the visible Sprites workspace. Consumes one autonomous generation round budget. Use only when deterministic crop/cell/offset/align/erase cannot fix the frame. Pass the identity anchor asset in referenceAssetIds when fixing anatomy or identity; previous/next frame references are included by default for continuity. Use upsert_frame_mask first for surgical edits and keep useFrameMask true. background defaults to opaque so the frame stays opaque."),
+            description: "Greenfield Frames pipeline: AI-edit one frame's logical cell with a Change/Preserve/Constraints prompt, store the result as the frame's working image, and update the visible Sprites workspace. Consumes one autonomous generation round budget. Use only when deterministic crop/cell/offset/align/erase cannot fix the frame. Pass the identity anchor asset in referenceAssetIds when fixing anatomy or identity; previous/next frame references are included by default for continuity. For a surgical edit, pass maskRects and/or maskPolygons in logical-frame pixel coordinates; their union replaces the saved frame mask and is used automatically. When no regions are supplied, useFrameMask true reuses an existing saved mask and false performs an unmasked edit. background defaults to opaque so the frame stays opaque."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId) => ExportAssetAsync(projectId, assetId),
@@ -1005,7 +982,6 @@ public sealed class AssistantToolRegistry(
         string? background,
         int count,
         Guid[]? referenceAssetIds,
-        Guid? editSourceAssetId,
         Guid? recipeId,
         Guid? animationRecipeId,
         CancellationToken cancellationToken)
@@ -1062,42 +1038,146 @@ public sealed class AssistantToolRegistry(
         var outputCount = ClampGenerationRoundCount(count);
         var normalizedBackground = NormalizeBackground(background) ?? "auto";
         var references = referenceAssetIds ?? [];
-        GenerationBatchView batch;
-        if (editSourceAssetId is Guid sourceAssetId)
+        var batch = await imageRuntime.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
+            specificRequest,
+            negativePrompt ?? string.Empty,
+            normalizedSize,
+            outputCount,
+            normalizedBackground,
+            recipeId,
+            animationRecipeId,
+            references,
+            ParentBatchId: null,
+            OutputLabel: outputLabel), cancellationToken);
+        return await AwaitGenerationRoundAsync(projectId, budget, round, batch, maskId: null, cancellationToken);
+    }
+
+    private async Task<string> EditAssetAsync(
+        Guid projectId,
+        AssistantTurnGenerationBudget budget,
+        Guid sourceAssetId,
+        string prompt,
+        string assetName,
+        string? size,
+        string? background,
+        int count,
+        Guid[]? referenceAssetIds,
+        Guid? recipeId,
+        Guid? maskId,
+        SpriteSheetRect[]? maskRects,
+        SpriteSheetShapePath[]? maskPolygons,
+        CancellationToken cancellationToken)
+    {
+        var outputLabel = CleanAssetName(assetName);
+        if (outputLabel is null)
         {
-            batch = await imageRuntime.StartEditImageAsync(projectId, new EditImageRequest(
-                sourceAssetId,
-                specificRequest,
-                normalizedSize,
-                outputCount,
-                normalizedBackground,
-                recipeId,
-                null,
-                null,
-                references,
-                OutputLabel: outputLabel), cancellationToken);
-        }
-        else
-        {
-            batch = await imageRuntime.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
-                specificRequest,
-                negativePrompt ?? string.Empty,
-                normalizedSize,
-                outputCount,
-                normalizedBackground,
-                recipeId,
-                animationRecipeId,
-                references,
-                ParentBatchId: null,
-                OutputLabel: outputLabel), cancellationToken);
+            return JsonSerializer.Serialize(new
+            {
+                error = "assetName is required for assistant-edited assets. Provide a short readable saved asset name before starting the edit.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            }, JsonOptions);
         }
 
+        if (budget.IsExhausted)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                budgetExhausted = true,
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = 0,
+                message = "The autonomous edit budget is exhausted for this turn. Report what remains without handing the work off to a UI form.",
+            }, JsonOptions);
+        }
+
+        if (imageRuntime.HasRunningBatch(projectId))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "An image generation batch is already running for this project. Wait for it to finish before starting an asset edit.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+            }, JsonOptions);
+        }
+
+        var normalizedSize = string.IsNullOrWhiteSpace(size) ? "auto" : size.Trim();
+        if (!ImageSizeValidator.TryValidate(normalizedSize, out var sizeError, out var suggestedSize))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = sizeError,
+                suggestedSize,
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+                message = "No edit round was consumed. Fix the size and run the edit again.",
+            }, JsonOptions);
+        }
+
+        var hasDrawnMask = (maskRects?.Length ?? 0) > 0 || (maskPolygons?.Length ?? 0) > 0;
+        if (maskId is not null && hasDrawnMask)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "Use either maskId or maskRects/maskPolygons for an asset edit, not both.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            }, JsonOptions);
+        }
+
+        string? drawnMaskDataUrl = null;
+        if (hasDrawnMask)
+        {
+            var source = await workflow.GetAssetFullImageAsync(projectId, sourceAssetId, cancellationToken);
+            if (!ImageRgbaDecoder.TryReadRgba(source.Data, out var sourceWidth, out var sourceHeight, out _))
+                throw new InvalidOperationException("Asset masks require a readable PNG or JPEG source image.");
+            var maskPng = ImageEditMaskRenderer.RenderPng(sourceWidth, sourceHeight, maskRects, maskPolygons);
+            drawnMaskDataUrl = DataUrl.ToDataUrl("image/png", maskPng);
+        }
+
+        var outputCount = ClampGenerationRoundCount(count);
+        var normalizedBackground = NormalizeBackground(background) ?? "auto";
+        var references = referenceAssetIds ?? [];
+        var batch = await imageRuntime.StartEditImageAsync(projectId, new EditImageRequest(
+            sourceAssetId,
+            prompt,
+            normalizedSize,
+            outputCount,
+            normalizedBackground,
+            recipeId,
+            SourcePngDataUrl: null,
+            MaskPngDataUrl: drawnMaskDataUrl,
+            ReferenceAssetIds: references,
+            OutputLabel: outputLabel,
+            MaskId: maskId), cancellationToken);
+        var round = budget.Consume();
+        var effectiveMaskId = batch.InputMaskIds.FirstOrDefault();
+        return await AwaitGenerationRoundAsync(
+            projectId,
+            budget,
+            round,
+            batch,
+            effectiveMaskId == Guid.Empty ? null : effectiveMaskId,
+            cancellationToken);
+    }
+
+    private async Task<string> AwaitGenerationRoundAsync(
+        Guid projectId,
+        AssistantTurnGenerationBudget budget,
+        int round,
+        GenerationBatchView batch,
+        Guid? maskId,
+        CancellationToken cancellationToken)
+    {
         var timeoutSeconds = agentOptions.Value.GenerationRoundWaitTimeoutSeconds <= 0
             ? 600
             : agentOptions.Value.GenerationRoundWaitTimeoutSeconds;
         var completed = await imageRuntime.WaitForBatchCompletionAsync(batch.Id, TimeSpan.FromSeconds(timeoutSeconds), cancellationToken);
         if (cancellationToken.IsCancellationRequested)
-            return JsonSerializer.Serialize(new { round, budget.RoundsUsed, budget.MaxRounds, cancelled = true }, JsonOptions);
+            return JsonSerializer.Serialize(new { round, budget.RoundsUsed, budget.MaxRounds, maskId, cancelled = true }, JsonOptions);
         var batchJson = await workflow.ReadGenerationBatchJsonAsync(projectId, batch.Id, cancellationToken);
         using var document = JsonDocument.Parse(batchJson);
         return JsonSerializer.Serialize(new
@@ -1106,6 +1186,7 @@ public sealed class AssistantToolRegistry(
             budget.RoundsUsed,
             budget.MaxRounds,
             roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            maskId,
             timedOut = !completed,
             batch = document.RootElement.Clone(),
         }, JsonOptions);
@@ -1473,30 +1554,6 @@ public sealed class AssistantToolRegistry(
         }, JsonOptions);
     }
 
-    private async Task<string> UpsertFrameMaskAsync(
-        Guid projectId,
-        Guid frameId,
-        string maskDataUrl,
-        string? label,
-        string coordinateSpace,
-        CancellationToken cancellationToken)
-    {
-        var mask = await spriteActions.UpsertFrameMaskAsync(projectId, new UpsertFrameMaskRequest(
-            frameId,
-            maskDataUrl,
-            string.IsNullOrWhiteSpace(label) ? null : label,
-            string.IsNullOrWhiteSpace(coordinateSpace) ? "logicalFrame" : coordinateSpace), cancellationToken);
-        return JsonSerializer.Serialize(new
-        {
-            mask.Id,
-            mask.AssetId,
-            mask.Label,
-            mask.Width,
-            mask.Height,
-            message = "Frame mask saved.",
-        }, JsonOptions);
-    }
-
     private async Task<string> ClearFrameMaskAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken)
     {
         await spriteActions.ClearFrameMaskAsync(projectId, frameId, cancellationToken);
@@ -1684,6 +1741,8 @@ public sealed class AssistantToolRegistry(
         Guid[]? referenceAssetIds,
         bool includeAdjacentFrames,
         bool useFrameMask,
+        SpriteSheetRect[]? maskRects,
+        SpriteSheetShapePath[]? maskPolygons,
         CancellationToken cancellationToken)
     {
         if (budget.IsExhausted)
@@ -1708,6 +1767,27 @@ public sealed class AssistantToolRegistry(
             }, JsonOptions);
         }
 
+        ImageMaskView? savedMask = null;
+        var effectiveUseFrameMask = useFrameMask;
+        var hasDrawnMask = (maskRects?.Length ?? 0) > 0 || (maskPolygons?.Length ?? 0) > 0;
+        if (hasDrawnMask)
+        {
+            var frameSet = await frameSets.GetFrameSetAsync(projectId, frameSetId, cancellationToken);
+            var frame = frameSet.Frames.FirstOrDefault(item => item.Id == frameId)
+                ?? throw new InvalidOperationException("Frame was not found in the requested frame set.");
+            var maskPng = ImageEditMaskRenderer.RenderPng(
+                frame.LogicalWidth,
+                frame.LogicalHeight,
+                maskRects,
+                maskPolygons);
+            savedMask = await spriteActions.UpsertFrameMaskAsync(projectId, new UpsertFrameMaskRequest(
+                frameId,
+                DataUrl.ToDataUrl("image/png", maskPng),
+                $"{frame.Name} agent mask",
+                "logicalFrame"), cancellationToken);
+            effectiveUseFrameMask = true;
+        }
+
         var round = budget.Consume();
         var view = await spriteActions.EditFrameAsync(projectId, new EditFrameRequest(
             frameSetId,
@@ -1716,7 +1796,7 @@ public sealed class AssistantToolRegistry(
             background,
             referenceAssetIds?.Where(id => id != Guid.Empty).Distinct().ToList(),
             includeAdjacentFrames,
-            useFrameMask), cancellationToken);
+            effectiveUseFrameMask), cancellationToken);
         using var document = JsonDocument.Parse(SerializeFrameSet(view, "Frame AI edit completed."));
         return JsonSerializer.Serialize(new
         {
@@ -1724,61 +1804,9 @@ public sealed class AssistantToolRegistry(
             budget.RoundsUsed,
             budget.MaxRounds,
             roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            maskId = savedMask?.Id,
             frameSet = document.RootElement.Clone(),
         }, JsonOptions);
-    }
-
-    private static Task<string> DraftGenerateFormAsync(
-        string? prompt,
-        string? negativePrompt,
-        string? size,
-        string? background,
-        Guid? recipeId,
-        Guid? animationRecipeId,
-        int? count,
-        Guid[]? referenceAssetIds)
-    {
-        var draft = new AssistantFormDraft(
-            AssistantFormDraftTarget.Generate,
-            Prompt: string.IsNullOrWhiteSpace(prompt) ? null : prompt,
-            NegativePrompt: negativePrompt,
-            Size: size,
-            Background: NormalizeBackground(background),
-            Count: count is int countValue ? ClampCount(countValue) : null,
-            PromptRecipeId: recipeId,
-            AnimationRecipeId: animationRecipeId,
-            ReferenceAssetIds: referenceAssetIds);
-        return Task.FromResult(JsonSerializer.Serialize(draft, JsonOptions));
-    }
-
-    private static Task<string> DraftEditFormAsync(
-        string prompt,
-        string? size,
-        string? background,
-        Guid? recipeId,
-        int count)
-    {
-        var draft = new AssistantFormDraft(
-            AssistantFormDraftTarget.Edit,
-            Prompt: prompt,
-            Size: size ?? "auto",
-            Background: NormalizeBackground(background),
-            Count: ClampCount(count),
-            PromptRecipeId: recipeId);
-        return Task.FromResult(JsonSerializer.Serialize(draft, JsonOptions));
-    }
-
-    private static Task<string> DraftPromptRecipeFormAsync(
-        string name,
-        string prompt,
-        string? notes)
-    {
-        var draft = new AssistantFormDraft(
-            AssistantFormDraftTarget.Recipe,
-            RecipeName: name,
-            Prompt: prompt,
-            Notes: notes ?? string.Empty);
-        return Task.FromResult(JsonSerializer.Serialize(draft, JsonOptions));
     }
 
     private static object BuildAnimationQualityGate(SpriteAnimationMetricsView metrics)
@@ -2000,8 +2028,6 @@ public sealed class AssistantToolRegistry(
         var trimmed = value?.Trim();
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
-
-    private static int ClampCount(int count) => Math.Clamp(count <= 0 ? 1 : count, 1, 4);
 
     private static int CeilDiv(int value, int divisor) =>
         (Math.Max(0, value) + Math.Max(1, divisor) - 1) / Math.Max(1, divisor);

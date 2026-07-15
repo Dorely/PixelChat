@@ -75,7 +75,7 @@ else
                              InputChanged="OnInputChanged"
                              PendingImages="@_pendingChatImages"
                              MaxPasteImageBytes="MaxChatPasteImageBytes"
-                             Placeholder="Ask for image analysis, recipe design, or a form draft..."
+                             Placeholder="Ask for image analysis, art direction, generation, or an edit..."
                              Running="@_running"
                              ComposerDisabled="@(_loadingChat || !_hasWorkingProvider)"
                              SendDisabled="@(_loadingChat || _running || !_hasWorkingProvider || !CanSendChat)"
@@ -164,7 +164,6 @@ else
         "delete_frame",
         "set_frame_duration",
         "auto_anchor_align_frames",
-        "upsert_frame_mask",
         "clear_frame_mask",
         "build_sheet",
         "export_asset",
@@ -282,7 +281,6 @@ else
     {
         ChatRuntime.StateChanged += OnChatRuntimeStateChanged;
         ChatRuntime.WorkspaceChanged += OnChatRuntimeWorkspaceChanged;
-        ChatRuntime.FormDraftProposed += OnChatRuntimeFormDraftProposed;
         ChatRuntime.TurnFinished += OnChatRuntimeTurnFinished;
         ImageRuntime.StateChanged += OnImageGenerationRuntimeStateChanged;
         _generationRuntimeSnapshot = ImageRuntime.GetSnapshot();
@@ -3195,15 +3193,6 @@ else
         });
     }
 
-    private void OnChatRuntimeFormDraftProposed(AssistantFormDraft draft)
-    {
-        _ = InvokeAsync(async () =>
-        {
-            await ApplyFormDraftAsync(draft);
-            StateHasChanged();
-        });
-    }
-
     private void OnImageGenerationRuntimeStateChanged(object? sender, EventArgs args)
     {
         _ = InvokeAsync(async () =>
@@ -3420,46 +3409,6 @@ else
     {
         foreach (var visual in visuals)
             parts.Add(new ChatImagePart(visual));
-    }
-
-    private async Task ApplyFormDraftAsync(AssistantFormDraft draft)
-    {
-        switch (draft.Target)
-        {
-            case AssistantFormDraftTarget.Generate:
-                _generatePrompt = draft.Prompt ?? _generatePrompt;
-                _negativePrompt = draft.NegativePrompt ?? _negativePrompt;
-                _generateSize = NormalizeDraftSize(draft.Size, _generateSize);
-                _generateBackground = NormalizeDraftBackground(draft.Background, _generateBackground);
-                _generateCount = NormalizeDraftCount(draft.Count, _generateCount);
-                _generateRecipeText = ValidRecipeId(draft.PromptRecipeId)?.ToString() ?? _generateRecipeText;
-                _generateAnimationRecipeText = ValidAnimationRecipeId(draft.AnimationRecipeId)?.ToString() ?? _generateAnimationRecipeText;
-                if (draft.ReferenceAssetIds is not null)
-                    SetDraftReferences(draft.ReferenceAssetIds);
-                await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Generate);
-                break;
-
-            case AssistantFormDraftTarget.Edit:
-                _editPrompt = draft.Prompt ?? _editPrompt;
-                _editSize = NormalizeDraftSize(draft.Size, _editSize);
-                _editBackground = NormalizeDraftBackground(draft.Background, _editBackground);
-                _editCount = NormalizeDraftCount(draft.Count, _editCount);
-                _editRecipeText = ValidRecipeId(draft.PromptRecipeId)?.ToString() ?? _editRecipeText;
-                await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Edit);
-                break;
-
-            case AssistantFormDraftTarget.Recipe:
-                ClearRecipeEditor();
-                _recipeName = draft.RecipeName ?? string.Empty;
-                _recipePrompt = draft.Prompt ?? string.Empty;
-                _recipeNotes = draft.Notes ?? string.Empty;
-                _recipeEditorDirty = true;
-                _recipeChangedExternally = false;
-                _loadedRecipeSnapshot = string.Empty;
-                await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Recipes);
-                break;
-
-        }
     }
 
     private Task OnInputChanged(string value)
@@ -4497,22 +4446,6 @@ else
 
     private string RecipePromptForSave() => _recipePrompt;
 
-    private static string NormalizeDraftSize(string? size, string current) =>
-        string.IsNullOrWhiteSpace(size) ? current : size.Trim();
-
-    private static string NormalizeDraftBackground(string? background, string current) =>
-        background?.Trim().ToLowerInvariant() switch
-        {
-            "transparent" => "removable",
-            "removable" or "removablecolor" or "removable-color" or "chroma" or "chromakey" or "chroma-key" => "removable",
-            "opaque" => "opaque",
-            "auto" => "auto",
-            _ => current,
-        };
-
-    private int NormalizeDraftCount(int? count, int current) =>
-        count is int value ? Math.Clamp(value <= 0 ? 1 : value, 1, Math.Max(1, ImageOptions.Value.MaxOutputs)) : current;
-
     private string ModeButtonClass(WorkspaceMode mode) =>
         _activeWorkspaceMode == mode ? "mode-tab is-active" : "mode-tab";
 
@@ -4672,7 +4605,6 @@ else
     {
         ChatRuntime.StateChanged -= OnChatRuntimeStateChanged;
         ChatRuntime.WorkspaceChanged -= OnChatRuntimeWorkspaceChanged;
-        ChatRuntime.FormDraftProposed -= OnChatRuntimeFormDraftProposed;
         ChatRuntime.TurnFinished -= OnChatRuntimeTurnFinished;
         ImageRuntime.StateChanged -= OnImageGenerationRuntimeStateChanged;
         if (_editorModule is not null)

@@ -7,7 +7,6 @@ public interface IWorkspaceChatRuntime
 {
     event Action? StateChanged;
     event Action? WorkspaceChanged;
-    event Action<AssistantFormDraft>? FormDraftProposed;
     event Action<WorkspaceChatTurnFinished>? TurnFinished;
     bool IsRunning { get; }
     WorkspaceChatRuntimeSnapshot GetSnapshot();

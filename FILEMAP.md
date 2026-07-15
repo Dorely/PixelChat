@@ -40,13 +40,13 @@
 
 | File | Description |
 |------|-------------|
-| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, chat-visual persistence, autonomous generation budget wiring/model-only outputs including rebuilt sheets, frame inspection, sprite diagnostics, tool streaming/execution, form drafts, and transcript replay. |
-| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, throttles streaming state notifications, commits finished turns with visuals, and applies workspace/form side effects. |
+| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, chat-visual persistence, autonomous generation/edit budget wiring, model-only outputs including rebuilt sheets, frame inspection, sprite diagnostics, tool streaming/execution, and transcript replay. |
+| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, throttles streaming state notifications, commits finished turns with visuals, and broadcasts workspace side effects. |
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact workspace records for Review, live sprite focus/agent status, asset, and recipe context used by assistant tools. |
-| `AssistantPromptBuilder.cs` | Builds the assistant system prompt from `AgentOptions` budget limits, covering model-vs-user visibility, visual Review presentation, explicit agent Keep/Reject triage, autonomous rounds vs drafted forms, and greenfield sprite workflows. |
-| `AssistantToolModels.cs` | Persisted tool-call manifest records with explicit display titles, form draft payloads, animation frame mark payloads, and per-turn autonomous generation budget state. |
-| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, generation, greenfield Source/Frames/Sheet tools, visual Review sets, explicit batch Keep/Reject/finalization, exports, and `displayTitle` metadata. |
-| `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, explicit display title metadata, visual metadata, completions, form drafts, workspace mutations, and errors. |
+| `AssistantPromptBuilder.cs` | Builds the assistant system prompt from `AgentOptions` budget limits, covering model-vs-user visibility, direct generation/edit execution, visual Review presentation, explicit agent Keep/Reject triage, and greenfield sprite workflows. |
+| `AssistantToolModels.cs` | Persisted tool-call manifest records with explicit display titles, animation frame mark payloads, and per-turn autonomous generation budget state. |
+| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, generation, masked asset/frame editing, greenfield Source/Frames/Sheet tools, visual Review sets, explicit batch Keep/Reject/finalization, exports, and `displayTitle` metadata. |
+| `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, explicit display title metadata, visual metadata, completions, workspace mutations, and errors. |
 
 ### Art/
 
@@ -74,6 +74,7 @@
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 | `ImageRgbaDecoder.cs` | Shared RGBA decoder for PNG/JPEG source assets used by greenfield sprite region/frame operations and standalone region extraction. |
+| `ImageEditMaskRenderer.cs` | Rasterizes assistant rectangle/polygon selections into full-size PNG edit masks with opaque-preserve and transparent-edit semantics. |
 | `SpriteSheetImageAnalyzer.cs` | Server-side PNG analyzer for background-aware foreground bounds, connected sprite boxes/shape outlines, per-frame foreground scale metrics, and animation motion metrics. |
 | `SpriteSheetPngCodec.cs` | Minimal PNG RGBA decoder/encoder used by server-side sprite-sheet rendering. |
 | `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with irregular frame isolation, erase/keep cleanup, coordinate-grid and upscaled model-facing removed-vs-source overlays, working-frame stabilization diagnostics, reassembly, annotated sheet views, diffs, onion skins, and filmstrips. |

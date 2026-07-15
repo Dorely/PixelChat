@@ -37,8 +37,6 @@ public sealed record AssistantToolCallCompleted(
     double DurationMs,
     IReadOnlyList<AssistantMessageVisualUpdate> Visuals) : AssistantTurnUpdate;
 
-public sealed record AssistantFormDraftProposed(AssistantFormDraft Draft) : AssistantTurnUpdate;
-
 public sealed record AssistantMessagePersisted(Guid MessageId) : AssistantTurnUpdate;
 
 public sealed record AssistantWorkspaceMutated : AssistantTurnUpdate;

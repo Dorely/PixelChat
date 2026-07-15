@@ -427,7 +427,8 @@ public sealed record EditImageRequest(
     string? MaskPngDataUrl,
     IReadOnlyList<Guid> ReferenceAssetIds,
     bool SwitchToBatches = true,
-    string? OutputLabel = null);
+    string? OutputLabel = null,
+    Guid? MaskId = null);
 
 public sealed record CompareReviewSetItemRequest(
     CompareReviewItemKind Kind,

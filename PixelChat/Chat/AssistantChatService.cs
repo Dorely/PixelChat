@@ -25,7 +25,7 @@ public sealed class AssistantChatService(
     ILogger<AssistantChatService> logger) : IAssistantChatService
 {
     private const string InitialAssistantGreeting =
-        "Tell me what kind of 2D game art you are working on. I can analyze the active or attached images, shape style direction, draft generation and edit forms, and help build reusable prompt recipes for you to review.";
+        "Tell me what kind of 2D game art you are working on. I can analyze active or attached images, shape style direction, generate or edit assets directly, and help build reusable prompt recipes.";
     private const string InterruptedToolResult = "Error: PixelChat was interrupted before this tool call produced a saved result.";
     private const string InterruptedToolError = "PixelChat was interrupted before this tool call produced a saved result.";
     private const string CancelledToolResult = "Error: PixelChat was cancelled before this tool call produced a saved result.";
@@ -435,9 +435,6 @@ public sealed class AssistantChatService(
                     outcome.DurationMs,
                     toolVisuals.Select(visual => ToVisualUpdate(projectId, visual)).ToList());
                 yield return BuildTokenCountUpdate(BuildToolPreviewMessages(messages, resultContents, modelOnlyContents), modelName);
-
-                if (outcome.Error is null && TryReadFormDraft(pendingCall.Name, outcome.Result, out var draft))
-                    yield return new AssistantFormDraftProposed(draft);
 
                 if (outcome.Error is null && toolRegistry.IsWorkspaceMutation(pendingCall.Name))
                 {
@@ -1008,7 +1005,8 @@ public sealed class AssistantChatService(
                 ];
             }
 
-            if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal))
+            if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal)
+                || string.Equals(pendingCall.Name, "edit_asset", StringComparison.Ordinal))
                 return await BuildGenerationRoundModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
             if (string.Equals(pendingCall.Name, "generate_animation_guide", StringComparison.Ordinal))
@@ -1077,7 +1075,7 @@ public sealed class AssistantChatService(
             : 0;
         var contents = new List<AIContent>
         {
-            new TextContent($"Model-only images: outputs of generation round {round}, batch {batchId ?? "unknown"}. These images are not attached to visible chat context."),
+            new TextContent($"Model-only images: outputs of generation/edit round {round}, batch {batchId ?? "unknown"}. These images are not attached to visible chat context."),
         };
         foreach (var item in outputAssetIds.EnumerateArray().Take(maxImages))
         {
@@ -1416,7 +1414,8 @@ public sealed class AssistantChatService(
         {
             using var document = JsonDocument.Parse(toolResult);
             var root = document.RootElement;
-            if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal)
+            if ((string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal)
+                    || string.Equals(pendingCall.Name, "edit_asset", StringComparison.Ordinal))
                 && root.TryGetProperty("batch", out var batch)
                 && batch.TryGetProperty("outputAssetIds", out var outputAssetIds)
                 && outputAssetIds.ValueKind == JsonValueKind.Array)
@@ -1432,11 +1431,12 @@ public sealed class AssistantChatService(
                         continue;
                     }
 
+                    var editing = string.Equals(pendingCall.Name, "edit_asset", StringComparison.Ordinal);
                     if (await TryCreateAssetVisualDraftAsync(
                             projectId,
                             generatedOutputAssetId,
-                            pendingCall.ExplicitDisplayTitle ?? "Generate candidates",
-                            $"Generated output {outputIndex}.",
+                            pendingCall.ExplicitDisplayTitle ?? (editing ? "Edit asset" : "Generate candidates"),
+                            $"{(editing ? "Edited" : "Generated")} output {outputIndex}.",
                             cancellationToken) is { } draft)
                     {
                         drafts.Add(draft);
@@ -1846,30 +1846,6 @@ public sealed class AssistantChatService(
         catch (JsonException)
         {
             return [];
-        }
-    }
-
-    private static bool TryReadFormDraft(string toolName, string result, out AssistantFormDraft draft)
-    {
-        draft = null!;
-        if (toolName is not ("draft_generate_form" or "draft_edit_form" or "draft_prompt_recipe_form")
-            || string.IsNullOrWhiteSpace(result))
-        {
-            return false;
-        }
-
-        try
-        {
-            var parsed = JsonSerializer.Deserialize<AssistantFormDraft>(result, JsonOptions);
-            if (parsed is null)
-                return false;
-
-            draft = parsed;
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
         }
     }
 

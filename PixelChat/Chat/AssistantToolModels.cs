@@ -1,5 +1,3 @@
-using System.Text.Json.Serialization;
-
 namespace PixelChat.Chat;
 
 public sealed record PersistedToolCall(
@@ -8,27 +6,6 @@ public sealed record PersistedToolCall(
     string ArgumentsJson,
     int? TextOffset = null,
     string? ExplicitDisplayTitle = null);
-
-[JsonConverter(typeof(JsonStringEnumConverter<AssistantFormDraftTarget>))]
-public enum AssistantFormDraftTarget
-{
-    Generate,
-    Edit,
-    Recipe
-}
-
-public sealed record AssistantFormDraft(
-    AssistantFormDraftTarget Target,
-    string? Prompt = null,
-    string? NegativePrompt = null,
-    string? Size = null,
-    string? Background = null,
-    int? Count = null,
-    Guid? PromptRecipeId = null,
-    Guid? AnimationRecipeId = null,
-    IReadOnlyList<Guid>? ReferenceAssetIds = null,
-    string? RecipeName = null,
-    string? Notes = null);
 
 public sealed record CompareReviewToolItem(
     string Kind,

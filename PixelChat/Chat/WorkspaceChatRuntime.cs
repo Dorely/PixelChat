@@ -20,7 +20,6 @@ public sealed class WorkspaceChatRuntime(
 
     public event Action? StateChanged;
     public event Action? WorkspaceChanged;
-    public event Action<AssistantFormDraft>? FormDraftProposed;
     public event Action<WorkspaceChatTurnFinished>? TurnFinished;
 
     public bool IsRunning
@@ -215,7 +214,6 @@ public sealed class WorkspaceChatRuntime(
     private void ApplyUpdate(AssistantTurnUpdate update)
     {
         var notifyWorkspaceChanged = false;
-        AssistantFormDraft? formDraft = null;
         lock (_gate)
         {
             switch (update)
@@ -249,10 +247,6 @@ public sealed class WorkspaceChatRuntime(
                         completed.Visuals.Select(ToChatImageVisual).ToList());
                     break;
 
-                case AssistantFormDraftProposed draft:
-                    formDraft = draft.Draft;
-                    break;
-
                 case AssistantWorkspaceMutated:
                     notifyWorkspaceChanged = true;
                     break;
@@ -266,9 +260,6 @@ public sealed class WorkspaceChatRuntime(
                     break;
             }
         }
-
-        if (formDraft is not null)
-            NotifyFormDraftProposed(formDraft);
 
         if (notifyWorkspaceChanged)
             NotifyWorkspaceChanged();
@@ -351,24 +342,6 @@ public sealed class WorkspaceChatRuntime(
             catch (Exception ex)
             {
                 logger.LogDebug(ex, "Workspace chat turn-finished subscriber failed.");
-            }
-        }
-    }
-
-    private void NotifyFormDraftProposed(AssistantFormDraft draft)
-    {
-        if (FormDraftProposed is null)
-            return;
-
-        foreach (Action<AssistantFormDraft> handler in FormDraftProposed.GetInvocationList())
-        {
-            try
-            {
-                handler(draft);
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Workspace chat form draft subscriber failed.");
             }
         }
     }

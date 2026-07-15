@@ -1362,8 +1362,21 @@ public sealed class ArtWorkflowService(
 
         var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
         var batchId = Guid.NewGuid();
+        if (request.MaskId is not null && !string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
+            throw new InvalidOperationException("Use either an existing mask id or mask image data, not both.");
+
         ImageMask? storedMask = null;
-        if (!string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
+        if (request.MaskId is Guid maskId)
+        {
+            storedMask = await db.ImageMasks.FirstOrDefaultAsync(mask =>
+                mask.ProjectId == projectId
+                && mask.Id == maskId
+                && mask.AssetId == sourceAsset.Id
+                && mask.OwnerKind == "asset", cancellationToken)
+                ?? throw new InvalidOperationException("The selected edit mask was not found for the source asset.");
+            EnsurePngMaskHasAlpha(storedMask.Data, requireEditableArea: true);
+        }
+        else if (!string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
         {
             storedMask = string.IsNullOrWhiteSpace(request.SourcePngDataUrl)
                 ? await UpsertAssetMaskEntityAsync(
@@ -1381,6 +1394,11 @@ public sealed class ArtWorkflowService(
                     $"{sourceAsset.Label} edit mask",
                     sourceImage,
                     cancellationToken);
+        }
+
+        if (storedMask is not null)
+        {
+            sourceImage = NormalizeMaskedEditSource(sourceImage);
             ValidateEditImageAndMask(sourceImage, storedMask);
         }
 
@@ -3080,6 +3098,20 @@ public sealed class ArtWorkflowService(
             throw new InvalidOperationException("Edit source snapshot dimensions could not be read.");
 
         return new ImagePayload(contentType, data, width.Value, height.Value);
+    }
+
+    private static ImagePayload NormalizeMaskedEditSource(ImagePayload sourceImage)
+    {
+        if (sourceImage.ContentType.Equals("image/png", StringComparison.OrdinalIgnoreCase))
+            return sourceImage;
+        if (!ImageRgbaDecoder.TryReadRgba(sourceImage.Data, out var width, out var height, out var rgba))
+            throw new InvalidOperationException("Masked edits require a readable PNG or JPEG source image.");
+
+        return new ImagePayload(
+            "image/png",
+            SpriteSheetPngCodec.EncodeRgba(width, height, rgba),
+            width,
+            height);
     }
 
     private static ImagePayload ParsePngDataUrl(string dataUrl, string error)
