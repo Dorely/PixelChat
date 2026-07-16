@@ -20,6 +20,10 @@ public class SpriteEditSession
     public bool PreviewOverlayActive { get; set; }
     public string Prompt { get; set; } = string.Empty;
     public int Count { get; set; } = 2;
+    public string CanvasOptionsJson { get; set; } = "{}";
+    public Guid? CanvasPreparationId { get; set; }
+    public string CanvasPreparationTransformJson { get; set; } = string.Empty;
+    public DateTime? CanvasPreparationExpiresAt { get; set; }
     public string CropJson { get; set; } = "{}";
     public string CandidateAssetIdsJson { get; set; } = "[]";
     public string OutputStatesJson { get; set; } = "[]";

@@ -123,17 +123,37 @@ public sealed record ImageProviderCapabilities(
     bool SupportsMaskedEdit,
     int MaxReferenceImages,
     IReadOnlyList<string> Sizes,
-    IReadOnlyList<string> OutputFormats);
+    IReadOnlyList<string> OutputFormats,
+    ImageSizeConstraints SizeConstraints,
+    long? ReliableEditMaximumPixels = null,
+    bool MayReturnNoncanonicalEditDimensions = false);
+
+public sealed record ImageSizeConstraints(
+    int DimensionMultiple,
+    int MaximumEdge,
+    long MinimumPixels,
+    long MaximumPixels,
+    double MaximumAspectRatio);
 
 public static class ImageSizeValidator
 {
-    public const int MaxAspectRatio = 3;
-    public const int MinDimension = 256;
-    public const int MaxDimension = 4096;
+    public static readonly ImageSizeConstraints GptImage2Constraints = new(
+        DimensionMultiple: 16,
+        MaximumEdge: 3840,
+        MinimumPixels: 655_360,
+        MaximumPixels: 8_294_400,
+        MaximumAspectRatio: 3d);
 
     private static readonly string[] PreferredSizes = ["1024x1024", "1536x1024", "1024x1536"];
 
     public static bool TryValidate(string? size, out string error, out string suggestedSize)
+        => TryValidate(size, GptImage2Constraints, out error, out suggestedSize);
+
+    public static bool TryValidate(
+        string? size,
+        ImageSizeConstraints constraints,
+        out string error,
+        out string suggestedSize)
     {
         error = string.Empty;
         suggestedSize = PreferredSizes[0];
@@ -148,16 +168,31 @@ public static class ImageSizeValidator
             return false;
         }
 
-        if (width < MinDimension || height < MinDimension || width > MaxDimension || height > MaxDimension)
+        if (width <= 0 || height <= 0 || width > constraints.MaximumEdge || height > constraints.MaximumEdge)
         {
-            error = $"Size '{trimmed}' is outside the supported {MinDimension}-{MaxDimension} pixel range per dimension.";
+            error = $"Size '{trimmed}' must use positive dimensions no larger than {constraints.MaximumEdge}px per edge.";
             suggestedSize = SuggestFor(width, height);
             return false;
         }
 
-        if (width > height * MaxAspectRatio || height > width * MaxAspectRatio)
+        if (width % constraints.DimensionMultiple != 0 || height % constraints.DimensionMultiple != 0)
         {
-            error = $"Size '{trimmed}' exceeds the maximum supported aspect ratio of {MaxAspectRatio}:1.";
+            error = $"Size '{trimmed}' must use dimensions that are multiples of {constraints.DimensionMultiple}px.";
+            suggestedSize = SuggestFor(width, height);
+            return false;
+        }
+
+        if (width > height * constraints.MaximumAspectRatio || height > width * constraints.MaximumAspectRatio)
+        {
+            error = $"Size '{trimmed}' exceeds the maximum supported aspect ratio of {constraints.MaximumAspectRatio:0.##}:1.";
+            suggestedSize = SuggestFor(width, height);
+            return false;
+        }
+
+        var pixels = (long)width * height;
+        if (pixels < constraints.MinimumPixels || pixels > constraints.MaximumPixels)
+        {
+            error = $"Size '{trimmed}' must contain between {constraints.MinimumPixels:N0} and {constraints.MaximumPixels:N0} pixels.";
             suggestedSize = SuggestFor(width, height);
             return false;
         }

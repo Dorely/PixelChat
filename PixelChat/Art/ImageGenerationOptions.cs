@@ -16,4 +16,5 @@ public sealed class ImageGenerationOptions
     public int RequestTimeoutSeconds { get; set; } = 600;
     public int PartialImages { get; set; } = 2;
     public int MaxReferenceImages { get; set; } = 4;
+    public long OpenAIAccountReliableEditMaximumPixels { get; set; } = 1_572_864;
 }

@@ -20,7 +20,12 @@ public sealed class OpenAIAccountImageProvider(
             SupportsMaskedEdit: true,
             MaxReferenceImages: Math.Max(1, options.Value.MaxReferenceImages),
             Sizes: ["auto", "1024x1024", "1024x1536", "1536x1024"],
-            OutputFormats: ["png", "jpeg", "webp"]);
+            OutputFormats: ["png", "jpeg", "webp"],
+            SizeConstraints: ImageSizeValidator.GptImage2Constraints,
+            ReliableEditMaximumPixels: Math.Max(
+                ImageSizeValidator.GptImage2Constraints.MinimumPixels,
+                options.Value.OpenAIAccountReliableEditMaximumPixels),
+            MayReturnNoncanonicalEditDimensions: true);
 
     public async Task<ImageProviderResult> GenerateAsync(
         ImageProviderGenerateRequest request,

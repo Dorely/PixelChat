@@ -19,6 +19,7 @@ public sealed class AssistantChatService(
     AssistantToolRegistry toolRegistry,
     IArtWorkflowService workflow,
     IFrameSetService frameSets,
+    IEditCanvasPreparationStore canvasPreparations,
     IChatTokenEstimator tokenEstimator,
     IOptions<AgentOptions> agentOptions,
     IOptions<PixelChat.Art.ImageGenerationOptions> imageOptions,
@@ -1005,6 +1006,10 @@ public sealed class AssistantChatService(
                 ];
             }
 
+            if (string.Equals(pendingCall.Name, "preview_asset_edit_canvas", StringComparison.Ordinal)
+                || string.Equals(pendingCall.Name, "preview_frame_edit_canvas", StringComparison.Ordinal))
+                return BuildCanvasPreviewModelOnlyContents(projectId, toolResult);
+
             if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal)
                 || string.Equals(pendingCall.Name, "edit_asset", StringComparison.Ordinal))
                 return await BuildGenerationRoundModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
@@ -1034,6 +1039,32 @@ public sealed class AssistantChatService(
         }
 
         return Array.Empty<AIContent>();
+    }
+
+    private IReadOnlyList<AIContent> BuildCanvasPreviewModelOnlyContents(Guid projectId, string toolResult)
+    {
+        using var document = JsonDocument.Parse(toolResult);
+        if (!document.RootElement.TryGetProperty("canvasPreparationId", out var idValue)
+            || idValue.ValueKind != JsonValueKind.String
+            || !Guid.TryParse(idValue.GetString(), out var preparationId)
+            || !canvasPreparations.TryPeek(projectId, preparationId, out var preparation))
+        {
+            return Array.Empty<AIContent>();
+        }
+
+        return
+        [
+            new TextContent($"Model-only deterministic edit-canvas preview {preparation.Id}. First image: exact logical prepared source at {preparation.Canvas.Transform.LogicalWidth}x{preparation.Canvas.Transform.LogicalHeight}."),
+            new DataContent(DataUrl.ToDataUrl("image/png", preparation.Canvas.LogicalSourcePng), "image/png")
+            {
+                Name = "prepared-logical-source.png",
+            },
+            new TextContent("Second image: the same logical canvas with the effective editable region tinted cyan and mask boundaries highlighted yellow. Inspect placement and mask coverage before generating."),
+            new DataContent(DataUrl.ToDataUrl("image/png", preparation.Canvas.PreviewPng), "image/png")
+            {
+                Name = "editable-region-overlay.png",
+            },
+        ];
     }
 
     private static bool ToolResultHasModelImage(string toolResult)

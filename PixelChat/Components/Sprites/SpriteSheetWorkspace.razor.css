@@ -945,6 +945,82 @@
     font-weight: 700;
 }
 
+.sprite-edit-canvas-options {
+    display: grid;
+    gap: .55rem;
+    margin: 0;
+    padding: .65rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: .45rem;
+}
+
+.sprite-edit-canvas-options legend {
+    float: none;
+    width: auto;
+    margin: 0;
+    padding: 0 .25rem;
+    font-size: .8rem;
+    font-weight: 700;
+}
+
+.sprite-edit-padding-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .4rem;
+}
+
+.sprite-edit-check {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center;
+    gap: .4rem;
+}
+
+.sprite-edit-outpaint-preview {
+    box-sizing: border-box;
+    width: 100%;
+    max-height: 10rem;
+    overflow: hidden;
+    background: #ff00ff;
+    border: 1px solid rgba(255, 255, 255, .18);
+}
+
+.sprite-edit-outpaint-preview img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: fill;
+    image-rendering: pixelated;
+}
+
+.sprite-edit-preview-pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .4rem;
+}
+
+.sprite-edit-preview-pair figure {
+    display: grid;
+    gap: .2rem;
+    margin: 0;
+}
+
+.sprite-edit-preview-pair img {
+    display: block;
+    width: 100%;
+    max-height: 10rem;
+    object-fit: contain;
+    image-rendering: pixelated;
+    background: #ff00ff;
+    border: 1px solid rgba(255, 255, 255, .18);
+}
+
+.sprite-edit-preview-pair figcaption {
+    color: #94a3b8;
+    font-size: .68rem;
+    text-align: center;
+}
+
 .sprite-edit-tool-row {
     display: flex;
     flex-wrap: wrap;

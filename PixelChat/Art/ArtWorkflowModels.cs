@@ -262,6 +262,7 @@ public sealed record GenerationBatchView(
     int Count,
     IReadOnlyList<Guid> InputAssetIds,
     IReadOnlyList<Guid> InputMaskIds,
+    EditCanvasTransform? EditCanvasTransform,
     IReadOnlyList<Guid> OutputAssetIds,
     Guid? ParentBatchId,
     Guid? PromptRecipeId,
@@ -376,6 +377,13 @@ public sealed record ImageBinaryView(
     string FileName,
     DateTime LastModified);
 
+public sealed record EditCanvasPreviewView(
+    Guid PreparationId,
+    EditCanvasTransform Transform,
+    DateTime ExpiresAt,
+    ImageBinaryView PreparedSource,
+    ImageBinaryView MaskOverlay);
+
 public sealed record ChatContextAttachmentView(
     Guid Id,
     ChatContextAttachmentType Type,
@@ -428,7 +436,17 @@ public sealed record EditImageRequest(
     IReadOnlyList<Guid> ReferenceAssetIds,
     bool SwitchToBatches = true,
     string? OutputLabel = null,
-    Guid? MaskId = null);
+    Guid? MaskId = null,
+    EditCanvasOptions? CanvasOptions = null,
+    Guid? CanvasPreparationId = null);
+
+public sealed record PreviewAssetEditCanvasRequest(
+    Guid SourceAssetId,
+    string Background,
+    string? SourcePngDataUrl = null,
+    string? MaskPngDataUrl = null,
+    Guid? MaskId = null,
+    EditCanvasOptions? CanvasOptions = null);
 
 public sealed record CompareReviewSetItemRequest(
     CompareReviewItemKind Kind,

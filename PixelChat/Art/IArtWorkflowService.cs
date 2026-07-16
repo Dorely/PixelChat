@@ -32,6 +32,7 @@ public interface IArtWorkflowService
     Task<GenerationBatchView> StartGenerateImagesAsync(Guid projectId, GenerateImagesRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> GenerateBatchOutputAsync(Guid projectId, Guid batchId, int outputIndex, CancellationToken cancellationToken = default, IProgress<ImageProviderProgress>? progress = null);
     Task<GenerationBatchView> StartEditImageAsync(Guid projectId, EditImageRequest request, CancellationToken cancellationToken = default);
+    Task<EditCanvasPreviewView> PreviewAssetEditCanvasAsync(Guid projectId, PreviewAssetEditCanvasRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> GenerateEditBatchOutputAsync(Guid projectId, Guid batchId, int outputIndex, CancellationToken cancellationToken = default, IProgress<ImageProviderProgress>? progress = null);
     Task MarkGenerationBatchOutputStateAsync(Guid projectId, Guid batchId, GenerationOutputStateView outputState, CancellationToken cancellationToken = default);
     Task MarkGenerationBatchOutputFailedAsync(Guid projectId, Guid batchId, int outputIndex, string error, CancellationToken cancellationToken = default);

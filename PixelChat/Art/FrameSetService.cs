@@ -14,6 +14,8 @@ namespace PixelChat.Art;
 public sealed class FrameSetService(
     AppDbContext db,
     IImageProvider imageProvider,
+    IImageEditCanvasService imageEditCanvas,
+    IEditCanvasPreparationStore canvasPreparations,
     IOptions<ImageGenerationOptions> imageOptions,
     ILogger<FrameSetService> logger) : IFrameSetService
 {
@@ -348,6 +350,8 @@ public sealed class FrameSetService(
             DurationMs = source.DurationMs,
             ShapeJson = source.ShapeJson,
             WorkingState = source.WorkingState,
+            WorkingCanvasTransformJson = source.WorkingCanvasTransformJson,
+            WorkingCanvasFinalizationJson = source.WorkingCanvasFinalizationJson,
             WorkingContentType = source.WorkingContentType,
             WorkingData = source.WorkingData.ToArray(),
             WorkingWidth = source.WorkingWidth,
@@ -435,6 +439,8 @@ public sealed class FrameSetService(
         frame.PreviewHeight = previewH;
         frame.WorkingData = [];
         frame.WorkingState = "none";
+        frame.WorkingCanvasTransformJson = string.Empty;
+        frame.WorkingCanvasFinalizationJson = string.Empty;
         frame.WorkingWidth = 0;
         frame.WorkingHeight = 0;
         frame.WorkingUpdatedAt = null;
@@ -487,21 +493,27 @@ public sealed class FrameSetService(
         if (!ImageRgbaDecoder.TryReadRgba(candidate, out var candidateWidth, out var candidateHeight, out var candidateRgba))
             throw new InvalidOperationException("Edit candidate image could not be read.");
 
-        var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
-        var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
+        var cellWidth = Math.Clamp(request.CanvasTransform?.LogicalWidth ?? (frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth), 1, 8192);
+        var cellHeight = Math.Clamp(request.CanvasTransform?.LogicalHeight ?? (frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight), 1, 8192);
         var editSourceWidth = Math.Max(1, request.EditSourceWidth);
         var editSourceHeight = Math.Max(1, request.EditSourceHeight);
         var scaleX = candidateWidth / (double)editSourceWidth;
         var scaleY = candidateHeight / (double)editSourceHeight;
-        var cropX = (int)Math.Round(request.CropX * scaleX);
-        var cropY = (int)Math.Round(request.CropY * scaleY);
-        var cropWidth = Math.Clamp((int)Math.Round(Math.Max(1, request.CropWidth) * scaleX), 1, 8192);
-        var cropHeight = Math.Clamp((int)Math.Round(Math.Max(1, request.CropHeight) * scaleY), 1, 8192);
+        var cropX = request.CanvasTransform is null ? (int)Math.Round(request.CropX * scaleX) : 0;
+        var cropY = request.CanvasTransform is null ? (int)Math.Round(request.CropY * scaleY) : 0;
+        var cropWidth = request.CanvasTransform is null
+            ? Math.Clamp((int)Math.Round(Math.Max(1, request.CropWidth) * scaleX), 1, 8192)
+            : cellWidth;
+        var cropHeight = request.CanvasTransform is null
+            ? Math.Clamp((int)Math.Round(Math.Max(1, request.CropHeight) * scaleY), 1, 8192)
+            : cellHeight;
         var background = SpriteSheetImageAnalyzer.ResolveBackground(candidateRgba, candidateWidth, candidateHeight);
         var cropped = CropToRgbaWithFill(candidateRgba, candidateWidth, candidateHeight, cropX, cropY, cropWidth, cropHeight, background);
         if (cropWidth != cellWidth || cropHeight != cellHeight)
         {
-            cropped = ResizeNearest(cropped, cropWidth, cropHeight, cellWidth, cellHeight);
+            cropped = request.CanvasTransform?.ResampleMode == EditCanvasResampleMode.Smooth
+                ? ResizeSmoothRgba(cropped, cropWidth, cropHeight, cellWidth, cellHeight)
+                : ResizeNearest(cropped, cropWidth, cropHeight, cellWidth, cellHeight);
             cropWidth = cellWidth;
             cropHeight = cellHeight;
         }
@@ -519,15 +531,88 @@ public sealed class FrameSetService(
         frame.WorkingHeight = workingHeight;
         frame.WorkingMargin = 0;
         frame.WorkingState = "edited";
+        frame.WorkingCanvasTransformJson = request.CanvasTransform is null ? string.Empty : JsonSerializer.Serialize(request.CanvasTransform, JsonOptions);
+        frame.WorkingCanvasFinalizationJson = request.CanvasTransform is null ? string.Empty : ReadCanvasFinalizationJson(candidate.SourceMetadataJson);
         frame.WorkingUpdatedAt = now;
         frame.ContentOffsetX = bounds.X;
         frame.ContentOffsetY = bounds.Y;
+        frame.LogicalWidth = cellWidth;
+        frame.LogicalHeight = cellHeight;
         frame.UpdatedAt = now;
+        frameSet.DefaultCellWidth = Math.Max(frameSet.DefaultCellWidth, cellWidth);
+        frameSet.DefaultCellHeight = Math.Max(frameSet.DefaultCellHeight, cellHeight);
         frameSet.UpdatedAt = now;
 
         await TouchProjectAsync(projectId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+    }
+
+    public async Task<EditCanvasPreviewView> PreviewFrameEditCanvasAsync(
+        Guid projectId,
+        PreviewFrameEditCanvasRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
+        var frame = await db.Frames.FirstOrDefaultAsync(
+            item => item.ProjectId == projectId && item.FrameSetId == frameSet.Id && item.Id == request.FrameId,
+            cancellationToken)
+            ?? throw new InvalidOperationException("Frame was not found.");
+        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
+        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
+        var sourceBackground = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
+        var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
+        var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, sourceBackground, cellWidth, cellHeight);
+        var cellPng = SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, cellRgba);
+
+        var hasDrawnMask = (request.MaskRects?.Count ?? 0) > 0 || (request.MaskPolygons?.Count ?? 0) > 0;
+        ImageMask? savedMask = null;
+        byte[]? maskPng = null;
+        if (hasDrawnMask)
+        {
+            maskPng = ImageEditMaskRenderer.RenderPng(cellWidth, cellHeight, request.MaskRects, request.MaskPolygons);
+        }
+        else if (request.UseFrameMask)
+        {
+            savedMask = await db.ImageMasks
+                .Where(item => item.ProjectId == projectId && item.OwnerKind == "frame" && item.OwnerId == frame.Id)
+                .OrderByDescending(item => item.UpdatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (savedMask is not null)
+            {
+                if (savedMask.Width != cellWidth || savedMask.Height != cellHeight)
+                    throw new InvalidOperationException("The saved frame mask is stale for the current logical cell. Redraw or clear it before previewing.");
+                maskPng = savedMask.Data;
+            }
+        }
+
+        var background = NormalizeBackgroundMode(request.Background);
+        var options = request.CanvasOptions ?? new EditCanvasOptions();
+        var prepared = imageEditCanvas.Prepare(
+            cellPng,
+            maskPng,
+            background,
+            options,
+            imageProvider.DescribeCapabilities());
+        prepared = prepared with { Transform = prepared.Transform with { OriginalMaskId = savedMask?.Id } };
+        var stored = canvasPreparations.Add(
+            projectId,
+            EditCanvasPreparationTargetKinds.Frame,
+            frame.Id,
+            frameSet.Id,
+            PreparationRevision(frame.UpdatedAt, savedMask?.UpdatedAt),
+            background,
+            options,
+            savedMask?.Id,
+            maskPng,
+            prepared);
+        return new EditCanvasPreviewView(
+            stored.Id,
+            prepared.Transform,
+            stored.ExpiresAt,
+            new ImageBinaryView("image/png", prepared.LogicalSourcePng, $"{frame.Name}-prepared-source.png", stored.CreatedAt),
+            new ImageBinaryView("image/png", prepared.PreviewPng, $"{frame.Name}-edit-mask-overlay.png", stored.CreatedAt));
     }
 
     public async Task<FrameSetView> EditFrameAsync(
@@ -562,34 +647,119 @@ public sealed class FrameSetService(
             background,
             cancellationToken);
         var editPrompt = BuildEditFramePrompt(prompt, referenceRoleLines);
-        var mask = request.UseFrameMask
-            ? await ResolveFrameEditMaskReferenceAsync(projectId, frame, cellWidth, cellHeight, cancellationToken)
-            : null;
-
         var options = imageOptions.Value;
         var backgroundMode = NormalizeBackgroundMode(request.Background);
+        var canvasOptions = request.CanvasOptions ?? new EditCanvasOptions();
+        PreparedEditCanvas? prepared = null;
+        ImageProviderReference? mask = null;
+        Guid? preparationToRemove = null;
+        if (request.CanvasPreparationId is Guid preparationId)
+        {
+            if (request.CanvasOptions is not null)
+                throw new InvalidOperationException("canvasPreparationId locks the frame canvas controls; do not also pass inline canvas arguments.");
+            if (!canvasPreparations.TryPeek(projectId, preparationId, out var previewedPreparation))
+                throw new InvalidOperationException("Canvas preparation was not found or has expired. Preview the frame edit canvas again.");
+            DateTime? maskUpdatedAt = null;
+            if (previewedPreparation.OriginalMaskId is Guid originalMaskId)
+            {
+                maskUpdatedAt = await db.ImageMasks
+                    .Where(item => item.ProjectId == projectId && item.Id == originalMaskId && item.OwnerKind == "frame" && item.OwnerId == frame.Id)
+                    .Select(item => (DateTime?)item.UpdatedAt)
+                    .FirstOrDefaultAsync(cancellationToken);
+                if (maskUpdatedAt is null)
+                    throw new InvalidOperationException("The frame mask used by the canvas preview no longer exists. Preview the canvas again.");
+            }
+            if (!canvasPreparations.TryGet(
+                    projectId,
+                    preparationId,
+                    EditCanvasPreparationTargetKinds.Frame,
+                    frame.Id,
+                    frameSet.Id,
+                    PreparationRevision(frame.UpdatedAt, maskUpdatedAt),
+                    out var preparation,
+                    out var preparationError))
+            {
+                throw new InvalidOperationException(preparationError);
+            }
+            if (!string.Equals(backgroundMode, preparation.Background, StringComparison.Ordinal))
+                throw new InvalidOperationException("The frame background conflicts with the canvas preview. Preview the intended background again.");
+            prepared = preparation.Canvas;
+            preparationToRemove = preparationId;
+        }
+        else
+        {
+            if (canvasOptions.HasPadding)
+                throw new InvalidOperationException("Padded frame edits require a current canvas preview. Preview the final padding and mask before generating.");
+            mask = request.UseFrameMask
+                ? await ResolveFrameEditMaskReferenceAsync(projectId, frame, cellWidth, cellHeight, cancellationToken)
+                : null;
+            if (mask is not null)
+            {
+                prepared = imageEditCanvas.Prepare(
+                    cellPng,
+                    mask.Data,
+                    backgroundMode,
+                    canvasOptions,
+                    imageProvider.DescribeCapabilities());
+            }
+        }
+        var providerSource = prepared?.ProviderSourcePng ?? cellPng;
+        var providerMask = prepared?.ProviderMaskPng is { } preparedMask
+            ? new ImageProviderReference($"frame-{frame.Index + 1}-prepared-mask.png", "image/png", preparedMask)
+            : mask;
         var providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
             editPrompt,
-            NormalizeSize(options.DefaultSize),
+            prepared?.OutputSize ?? NormalizeSize(options.DefaultSize),
             1,
             options.DefaultMainlineModel,
             options.DefaultImageModel,
-            new ImageProviderReference($"frame-{frame.Index + 1}.png", "image/png", cellPng),
-            mask,
+            new ImageProviderReference($"frame-{frame.Index + 1}.png", "image/png", providerSource),
+            providerMask,
             references,
             OutputFormat: "png",
             Quality: options.DefaultQuality,
             Background: backgroundMode), cancellationToken);
         var image = providerResult.Images.FirstOrDefault()
             ?? throw new InvalidOperationException("Image provider completed without returning a frame image.");
-        if (!SpriteSheetPngCodec.TryReadRgba(image.Data, out var editedWidth, out var editedHeight, out var editedRgba))
+        EditCanvasFinalization? finalization = null;
+        var outputData = image.Data;
+        if (prepared is not null)
+        {
+            var finalized = imageEditCanvas.Finalize(
+                image.Data,
+                prepared.LogicalSourcePng,
+                prepared.LogicalMaskPng,
+                prepared.Transform,
+                backgroundMode);
+            outputData = finalized.Png;
+            finalization = finalized.Finalization;
+        }
+        if (!SpriteSheetPngCodec.TryReadRgba(outputData, out var editedWidth, out var editedHeight, out var editedRgba))
             throw new InvalidOperationException("Image provider returned a non-PNG frame image.");
 
         var now = DateTime.UtcNow;
-        StoreEditedCellWorkingImage(frame, editedRgba, editedWidth, editedHeight, cellWidth, cellHeight, now);
+        var targetWidth = prepared?.Transform.LogicalWidth ?? cellWidth;
+        var targetHeight = prepared?.Transform.LogicalHeight ?? cellHeight;
+        StoreEditedCellWorkingImage(
+            frame,
+            editedRgba,
+            editedWidth,
+            editedHeight,
+            targetWidth,
+            targetHeight,
+            prepared?.Transform.ResampleMode ?? EditCanvasResampleMode.NearestNeighbor,
+            now);
+        frame.WorkingCanvasTransformJson = prepared is null ? string.Empty : JsonSerializer.Serialize(prepared.Transform, JsonOptions);
+        frame.WorkingCanvasFinalizationJson = finalization is null ? string.Empty : JsonSerializer.Serialize(finalization, JsonOptions);
+        frame.LogicalWidth = targetWidth;
+        frame.LogicalHeight = targetHeight;
+        frameSet.DefaultCellWidth = Math.Max(frameSet.DefaultCellWidth, targetWidth);
+        frameSet.DefaultCellHeight = Math.Max(frameSet.DefaultCellHeight, targetHeight);
         frameSet.UpdatedAt = now;
         await TouchProjectAsync(projectId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
+        if (preparationToRemove is Guid consumedPreparationId)
+            canvasPreparations.Remove(consumedPreparationId);
         return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
     }
 
@@ -620,7 +790,7 @@ public sealed class FrameSetService(
             throw new InvalidOperationException("Frame erase produced an unreadable image.");
 
         var now = DateTime.UtcNow;
-        StoreEditedCellWorkingImage(frame, erasedRgba, erasedWidth, erasedHeight, cellWidth, cellHeight, now);
+        StoreEditedCellWorkingImage(frame, erasedRgba, erasedWidth, erasedHeight, cellWidth, cellHeight, EditCanvasResampleMode.NearestNeighbor, now);
         frameSet.UpdatedAt = now;
         await TouchProjectAsync(projectId, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
@@ -1443,6 +1613,12 @@ public sealed class FrameSetService(
         session.PreviewOverlayActive = request.PreviewOverlayActive;
         session.Prompt = request.Prompt;
         session.Count = Math.Clamp(request.Count, 1, 16);
+        session.CanvasOptionsJson = JsonSerializer.Serialize(request.CanvasOptions, JsonOptions);
+        session.CanvasPreparationId = request.CanvasPreparationId;
+        session.CanvasPreparationTransformJson = request.CanvasPreparationTransform is null
+            ? string.Empty
+            : JsonSerializer.Serialize(request.CanvasPreparationTransform, JsonOptions);
+        session.CanvasPreparationExpiresAt = request.CanvasPreparationExpiresAt;
         session.CropJson = request.Crop is null ? "{}" : JsonSerializer.Serialize(request.Crop, JsonOptions);
         session.CandidateAssetIdsJson = JsonSerializer.Serialize(request.CandidateAssetIds.Distinct().ToList(), JsonOptions);
         session.OutputStatesJson = JsonSerializer.Serialize(request.OutputStates.OrderBy(state => state.OutputIndex).ToList(), JsonOptions);
@@ -1613,7 +1789,9 @@ public sealed class FrameSetService(
                         frame.WorkingHeight,
                         frame.HideFromOnionSkin,
                         mask is not null,
-                        mask?.Id);
+                        mask?.Id,
+                        DeserializeCanvasTransform(frame.WorkingCanvasTransformJson),
+                        DeserializeCanvasFinalization(frame.WorkingCanvasFinalizationJson));
                 })
                 .ToList());
     }
@@ -1707,6 +1885,10 @@ public sealed class FrameSetService(
             session.PreviewOverlayActive,
             session.Prompt,
             Math.Max(1, session.Count),
+            DeserializeCanvasOptions(session.CanvasOptionsJson),
+            session.CanvasPreparationId,
+            DeserializeCanvasTransform(session.CanvasPreparationTransformJson),
+            session.CanvasPreparationExpiresAt,
             DeserializeSpriteEditCrop(session.CropJson),
             DeserializeGuidList(session.CandidateAssetIdsJson),
             DeserializeOutputStates(session.OutputStatesJson),
@@ -1726,6 +1908,75 @@ public sealed class FrameSetService(
         catch (JsonException)
         {
             return null;
+        }
+    }
+
+    private static EditCanvasOptions DeserializeCanvasOptions(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json.Trim() == "{}")
+            return new EditCanvasOptions();
+        try
+        {
+            return JsonSerializer.Deserialize<EditCanvasOptions>(json, JsonOptions) ?? new EditCanvasOptions();
+        }
+        catch (JsonException)
+        {
+            return new EditCanvasOptions();
+        }
+    }
+
+    private static EditCanvasTransform? DeserializeCanvasTransform(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize<EditCanvasTransform>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static EditCanvasFinalization? DeserializeCanvasFinalization(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize<EditCanvasFinalization>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string ReadCanvasFinalizationJson(string? sourceMetadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(sourceMetadataJson))
+            return string.Empty;
+        try
+        {
+            using var document = JsonDocument.Parse(sourceMetadataJson);
+            if (document.RootElement.TryGetProperty("editCanvasFinalization", out var finalization)
+                || document.RootElement.TryGetProperty("EditCanvasFinalization", out finalization))
+            {
+                return finalization.ValueKind == JsonValueKind.Null ? string.Empty : finalization.GetRawText();
+            }
+        }
+        catch (JsonException)
+        {
+        }
+        return string.Empty;
+    }
+
+    private static long PreparationRevision(DateTime targetUpdatedAt, DateTime? maskUpdatedAt)
+    {
+        unchecked
+        {
+            return (targetUpdatedAt.Ticks * 397L) ^ (maskUpdatedAt?.Ticks ?? 0L);
         }
     }
 
@@ -1942,11 +2193,14 @@ public sealed class FrameSetService(
         int height,
         int cellWidth,
         int cellHeight,
+        EditCanvasResampleMode resampleMode,
         DateTime now)
     {
         var cell = (width == cellWidth && height == cellHeight)
             ? rgba
-            : ResizeNearest(rgba, width, height, cellWidth, cellHeight);
+            : resampleMode == EditCanvasResampleMode.Smooth
+                ? ResizeSmoothRgba(rgba, width, height, cellWidth, cellHeight)
+                : ResizeNearest(rgba, width, height, cellWidth, cellHeight);
         frame.WorkingData = SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, cell);
         frame.WorkingContentType = "image/png";
         frame.WorkingWidth = cellWidth;
@@ -2135,7 +2389,7 @@ public sealed class FrameSetService(
         image.Mutate(context => context.Resize(new ResizeOptions
         {
             Size = new Size(destWidth, destHeight),
-            Sampler = KnownResamplers.Bicubic,
+            Sampler = KnownResamplers.Lanczos3,
         }));
         var output = new byte[destWidth * destHeight * 4];
         image.CopyPixelDataTo(output);

@@ -17,6 +17,8 @@
 @inject IWorkspaceChatRuntime ChatRuntime
 @inject IWorkspaceVisibleStateStore VisibleState
 @inject IImageGenerationRuntime ImageRuntime
+@inject IImageProvider ImageProvider
+@inject IImageEditCanvasService ImageEditCanvas
 @inject ILlmProviderService ProviderService
 @inject IOptions<ImageGenerationOptions> ImageOptions
 @inject ILogger<Home> Logger
@@ -246,6 +248,17 @@ else
     private string _editSize = "auto";
     private string _editBackground = "removable";
     private int _editCount = 1;
+    private int _editPaddingTop;
+    private int _editPaddingRight;
+    private int _editPaddingBottom;
+    private int _editPaddingLeft;
+    private bool _editAllowScaleDown = true;
+    private string _editResampleMode = "nearest";
+    private Guid? _editCanvasPreparationId;
+    private DateTime? _editCanvasPreparationExpiresAt;
+    private EditCanvasTransform? _editCanvasPreparedTransform;
+    private string? _editCanvasPreparedSourceDataUrl;
+    private string? _editCanvasMaskOverlayDataUrl;
     private int _brushSize = 36;
     private string _editorTool = "mask";
     private string _assetOrganization = "latest";
@@ -1197,7 +1210,7 @@ else
                             </label>
                             <label>
                                 <span>Background</span>
-                                <select class="form-select" @bind="_editBackground">
+                                <select class="form-select" @bind="_editBackground" @bind:after="InvalidateEditCanvasPreview">
                                     <option value="removable">Removable color</option>
                                     <option value="auto">Auto</option>
                                     <option value="opaque">Opaque</option>
@@ -1208,8 +1221,32 @@ else
                                 <input class="form-control" type="number" min="1" max="@ImageOptions.Value.MaxOutputs" @bind="_editCount" />
                             </label>
                         </div>
+                        <fieldset class="edit-canvas-options">
+                            <legend>Canvas room</legend>
+                            <div class="form-grid edit-padding-grid">
+                                <label><span>Top</span><input class="form-control" type="number" min="0" max="8192" @bind="_editPaddingTop" @bind:after="InvalidateEditCanvasPreview" /></label>
+                                <label><span>Right</span><input class="form-control" type="number" min="0" max="8192" @bind="_editPaddingRight" @bind:after="InvalidateEditCanvasPreview" /></label>
+                                <label><span>Bottom</span><input class="form-control" type="number" min="0" max="8192" @bind="_editPaddingBottom" @bind:after="InvalidateEditCanvasPreview" /></label>
+                                <label><span>Left</span><input class="form-control" type="number" min="0" max="8192" @bind="_editPaddingLeft" @bind:after="InvalidateEditCanvasPreview" /></label>
+                            </div>
+                            <label><span>Scaling</span><select class="form-select" @bind="_editResampleMode" @bind:after="InvalidateEditCanvasPreview"><option value="nearest">Pixel art (nearest)</option><option value="smooth">Artwork (smooth)</option></select></label>
+                            <label class="edit-canvas-check"><input type="checkbox" @bind="_editAllowScaleDown" @bind:after="InvalidateEditCanvasPreview" /> <span>Scale down only if provider limits require it</span></label>
+                            @if (_editCanvasPreparedSourceDataUrl is not null && _editCanvasMaskOverlayDataUrl is not null)
+                            {
+                                <div class="edit-canvas-preview-pair">
+                                    <figure><img src="@_editCanvasPreparedSourceDataUrl" alt="Exact logical prepared source" /><figcaption>Prepared source</figcaption></figure>
+                                    <figure><img src="@_editCanvasMaskOverlayDataUrl" alt="Effective editable mask overlay" /><figcaption>Editable region</figcaption></figure>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="edit-outpaint-preview" style="@EditCanvasPreviewStyle(asset)"><img src="@asset.FullImageUrl" alt="Canvas placement estimate" /></div>
+                            }
+                            <small>@EditCanvasSummary(asset)</small>
+                            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(!CanPrepareEditCanvas)" @onclick="PreviewEditCanvasAsync">Prepare Preview</button>
+                        </fieldset>
                         <button type="button" class="btn btn-primary"
-                                disabled="@(!CanEditImage)"
+                                disabled="@(!CanSubmitEditImage)"
                                 @onclick="EditImageAsync">
                             Send Edit
                         </button>
@@ -2522,6 +2559,7 @@ else
                 args.File.ContentType,
                 memory.ToArray(),
                 Path.GetFileNameWithoutExtension(args.File.Name)));
+            InvalidateEditCanvasPreview();
             _editAssetId = asset.Id;
         });
     }
@@ -2542,6 +2580,7 @@ else
     [JSInvokable]
     public Task OnEditorMaskChanged()
     {
+        InvalidateEditCanvasPreview();
         ScheduleMaskAutosave();
         return Task.CompletedTask;
     }
@@ -2721,6 +2760,7 @@ else
     private async Task ClearMaskAsync()
     {
         var asset = CurrentEditAsset();
+        InvalidateEditCanvasPreview();
         CancelMaskAutosave();
         try
         {
@@ -2756,6 +2796,7 @@ else
                 asset.Id,
                 cropDataUrl,
                 $"{asset.Label} crop"));
+            InvalidateEditCanvasPreview();
             _editAssetId = crop.Id;
         });
     }
@@ -2771,14 +2812,21 @@ else
         StateHasChanged();
         try
         {
+            if (CurrentEditCanvasOptions().HasPadding
+                && (_editCanvasPreparationId is null || _editCanvasPreparationExpiresAt <= DateTime.UtcNow))
+            {
+                throw new InvalidOperationException("Prepare and inspect the current padded canvas before sending the edit.");
+            }
             var hasPaint = await _editorModule.InvokeAsync<bool>("hasMaskPaint", _editorCanvas);
-            if (hasPaint)
+            if (hasPaint && _editCanvasPreparationId is null)
                 await FlushMaskAutosaveAsync();
             else
                 CancelMaskAutosave();
 
-            var sourceDataUrl = await _editorModule.InvokeAsync<string>("exportSourcePng", _editorCanvas);
-            var maskDataUrl = hasPaint
+            var sourceDataUrl = _editCanvasPreparationId is null
+                ? await _editorModule.InvokeAsync<string>("exportSourcePng", _editorCanvas)
+                : null;
+            var maskDataUrl = _editCanvasPreparationId is null && hasPaint
                 ? await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas)
                 : null;
             var projectId = _workbench.Project.Id;
@@ -2789,9 +2837,12 @@ else
                 _editCount,
                 _editBackground,
                 SelectedEditRecipeIdOrNull(),
-                sourceDataUrl,
-                maskDataUrl,
-                CurrentReferenceAssetIds().Where(id => id != asset.Id).ToList()));
+                _editCanvasPreparationId is null ? sourceDataUrl : null,
+                _editCanvasPreparationId is null ? maskDataUrl : null,
+                CurrentReferenceAssetIds().Where(id => id != asset.Id).ToList(),
+                CanvasOptions: _editCanvasPreparationId is null ? CurrentEditCanvasOptions() : null,
+                CanvasPreparationId: _editCanvasPreparationId));
+            InvalidateEditCanvasPreview();
             await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Batches);
             Logger.LogDebug(
                 "Image edit background batch scheduled: projectId={ProjectId}, batchId={BatchId}, sourceAssetId={SourceAssetId}, count={Count}, size={Size}, promptChars={PromptChars}, referenceImages={ReferenceImageCount}, hasMask={HasMask}",
@@ -2815,6 +2866,104 @@ else
             _loadedEditorAssetId = null;
             StateHasChanged();
         }
+    }
+
+    private async Task PreviewEditCanvasAsync()
+    {
+        var asset = CurrentEditAsset();
+        if (_workbench is null || asset is null || _editorModule is null || !CanPrepareEditCanvas)
+            return;
+
+        _busyText = "Preparing edit canvas...";
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            var hasPaint = await _editorModule.InvokeAsync<bool>("hasMaskPaint", _editorCanvas);
+            var sourceDataUrl = await _editorModule.InvokeAsync<string>("exportSourcePng", _editorCanvas);
+            var maskDataUrl = hasPaint
+                ? await _editorModule.InvokeAsync<string>("exportMaskPng", _editorCanvas)
+                : null;
+            var preview = await Workflow.PreviewAssetEditCanvasAsync(
+                _workbench.Project.Id,
+                new PreviewAssetEditCanvasRequest(
+                    asset.Id,
+                    _editBackground,
+                    sourceDataUrl,
+                    maskDataUrl,
+                    CanvasOptions: CurrentEditCanvasOptions()));
+            _editCanvasPreparationId = preview.PreparationId;
+            _editCanvasPreparationExpiresAt = preview.ExpiresAt;
+            _editCanvasPreparedTransform = preview.Transform;
+            _editCanvasPreparedSourceDataUrl = DataUrl.ToDataUrl(preview.PreparedSource.ContentType, preview.PreparedSource.Data);
+            _editCanvasMaskOverlayDataUrl = DataUrl.ToDataUrl(preview.MaskOverlay.ContentType, preview.MaskOverlay.Data);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Edit canvas preview failed.");
+            InvalidateEditCanvasPreview();
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busyText = string.Empty;
+            StateHasChanged();
+        }
+    }
+
+    private void InvalidateEditCanvasPreview()
+    {
+        _editCanvasPreparationId = null;
+        _editCanvasPreparationExpiresAt = null;
+        _editCanvasPreparedTransform = null;
+        _editCanvasPreparedSourceDataUrl = null;
+        _editCanvasMaskOverlayDataUrl = null;
+    }
+
+    private EditCanvasOptions CurrentEditCanvasOptions() => new(
+        Math.Max(0, _editPaddingTop),
+        Math.Max(0, _editPaddingRight),
+        Math.Max(0, _editPaddingBottom),
+        Math.Max(0, _editPaddingLeft),
+        _editAllowScaleDown,
+        _editResampleMode == "smooth" ? EditCanvasResampleMode.Smooth : EditCanvasResampleMode.NearestNeighbor,
+        32);
+
+    private string EditCanvasSummary(ArtAssetView asset)
+    {
+        var width = Math.Max(1, asset.Width ?? 1);
+        var height = Math.Max(1, asset.Height ?? 1);
+        try
+        {
+            var transform = _editCanvasPreparedTransform
+                ?? ImageEditCanvas.Estimate(width, height, CurrentEditCanvasOptions(), ImageProvider.DescribeCapabilities());
+            var fallback = transform.UsedScaleFallback
+                ? $"scale fallback will run at {transform.Scale:P0}"
+                : transform.Scale > 1.000001d
+                    ? $"provider minimum requires {transform.Scale:P0} normalization"
+                    : "source scale is preserved";
+            var previewState = _editCanvasPreparedTransform is null
+                ? "Prepare the preview to lock source placement and the effective mask."
+                : $"Preview locked until {_editCanvasPreparationExpiresAt?.ToLocalTime():t}.";
+            return $"Logical canvas {transform.LogicalWidth} x {transform.LogicalHeight}; provider output {transform.ProviderWidth} x {transform.ProviderHeight}; provider-logical region {transform.ProviderLogicalWidth} x {transform.ProviderLogicalHeight}; {fallback}. {previewState}";
+        }
+        catch (InvalidOperationException exception)
+        {
+            return exception.Message;
+        }
+    }
+
+    private string EditCanvasPreviewStyle(ArtAssetView asset)
+    {
+        var width = Math.Max(1, asset.Width ?? 1);
+        var height = Math.Max(1, asset.Height ?? 1);
+        var left = Math.Max(0, _editPaddingLeft);
+        var right = Math.Max(0, _editPaddingRight);
+        var top = Math.Max(0, _editPaddingTop);
+        var bottom = Math.Max(0, _editPaddingBottom);
+        var outputWidth = Math.Max(1, width + left + right);
+        var outputHeight = Math.Max(1, height + top + bottom);
+        return FormattableString.Invariant($"aspect-ratio:{outputWidth}/{outputHeight};padding:{top * 100d / outputHeight:0.###}% {right * 100d / outputWidth:0.###}% {bottom * 100d / outputHeight:0.###}% {left * 100d / outputWidth:0.###}%;");
     }
 
     private async Task AttachAssetAsync(ArtAssetView asset)
@@ -2878,6 +3027,7 @@ else
             return;
 
         await FlushMaskAutosaveAsync();
+        InvalidateEditCanvasPreview();
         _editAssetId = assetId;
         _loadedEditorAssetId = null;
         await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Edit);
@@ -4190,6 +4340,18 @@ else
         && CurrentEditAsset() is not null
         && _editorModule is not null
         && !ImageRuntime.HasRunningBatch(_workbench.Project.Id);
+
+    private bool CanPrepareEditCanvas =>
+        string.IsNullOrWhiteSpace(_busyText)
+        && _workbench is not null
+        && CurrentEditAsset() is not null
+        && _editorModule is not null
+        && !ImageRuntime.HasRunningBatch(_workbench.Project.Id);
+
+    private bool CanSubmitEditImage =>
+        CanEditImage
+        && (!CurrentEditCanvasOptions().HasPadding
+            || (_editCanvasPreparationId is not null && _editCanvasPreparationExpiresAt > DateTime.UtcNow));
 
     private bool CanSaveRecipe =>
         !string.IsNullOrWhiteSpace(_recipeName)

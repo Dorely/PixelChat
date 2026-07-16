@@ -19,6 +19,7 @@ public interface IFrameSetService
     Task<FrameSetView> UpdateFrameSourceBoundsAsync(Guid projectId, UpdateFrameSourceBoundsRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> TranslateFrameContentAsync(Guid projectId, TranslateFrameContentRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> ApplyFrameEditCandidateAsync(Guid projectId, ApplyFrameEditCandidateRequest request, CancellationToken cancellationToken = default);
+    Task<EditCanvasPreviewView> PreviewFrameEditCanvasAsync(Guid projectId, PreviewFrameEditCanvasRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> EditFrameAsync(Guid projectId, EditFrameRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> EraseFrameRegionsAsync(Guid projectId, EraseFrameRegionsRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> ComposeFrameSetFromAssetsAsync(Guid projectId, ComposeFrameSetFromAssetsRequest request, CancellationToken cancellationToken = default);

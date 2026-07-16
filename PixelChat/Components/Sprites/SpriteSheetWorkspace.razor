@@ -8,6 +8,9 @@
 @inject IFrameSetService FrameSets
 @inject ISpriteWorkspaceActionService SpriteActions
 @inject IImageGenerationRuntime ImageRuntime
+@inject IImageProvider ImageProvider
+@inject IImageEditCanvasService ImageEditCanvas
+@inject IEditCanvasPreparationStore CanvasPreparations
 @inject IOptions<ImageGenerationOptions> ImageOptions
 @inject IJSRuntime JS
 
@@ -432,6 +435,36 @@
                         <input class="form-control form-control-sm" type="number" min="1" max="@ImageOptions.Value.MaxOutputs" @bind="_editCount" @bind:after="PersistEditSessionAsync" />
                     </label>
 
+                    <fieldset class="sprite-edit-canvas-options" disabled="@_editGenerating">
+                        <legend>Canvas room</legend>
+                        <div class="sprite-edit-padding-grid">
+                            <label><span>Top</span><input class="form-control form-control-sm" type="number" min="0" max="8192" @bind="_editPaddingTop" @bind:after="EditCanvasControlsChangedAsync" /></label>
+                            <label><span>Right</span><input class="form-control form-control-sm" type="number" min="0" max="8192" @bind="_editPaddingRight" @bind:after="EditCanvasControlsChangedAsync" /></label>
+                            <label><span>Bottom</span><input class="form-control form-control-sm" type="number" min="0" max="8192" @bind="_editPaddingBottom" @bind:after="EditCanvasControlsChangedAsync" /></label>
+                            <label><span>Left</span><input class="form-control form-control-sm" type="number" min="0" max="8192" @bind="_editPaddingLeft" @bind:after="EditCanvasControlsChangedAsync" /></label>
+                        </div>
+                        <label><span>Scaling</span><select class="form-select form-select-sm" @bind="_editResampleMode" @bind:after="EditCanvasControlsChangedAsync"><option value="nearest">Pixel art (nearest)</option><option value="smooth">Artwork (smooth)</option></select></label>
+                        <label class="sprite-edit-check"><input type="checkbox" @bind="_editAllowScaleDown" @bind:after="EditCanvasControlsChangedAsync" /> <span>Scale down only if provider limits require it</span></label>
+                        @if (_editPreparedSourceDataUrl is not null && _editMaskOverlayDataUrl is not null)
+                        {
+                            <div class="sprite-edit-preview-pair">
+                                <figure><img src="@_editPreparedSourceDataUrl" alt="Exact logical prepared source" /><figcaption>Prepared source</figcaption></figure>
+                                <figure><img src="@_editMaskOverlayDataUrl" alt="Effective editable mask overlay" /><figcaption>Editable region</figcaption></figure>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="sprite-edit-outpaint-preview" style="@EditCanvasPreviewStyle()">
+                                @if (!string.IsNullOrWhiteSpace(_editImageUrl))
+                                {
+                                    <img src="@_editImageUrl" alt="Canvas placement estimate" />
+                                }
+                            </div>
+                        }
+                        <small>@EditCanvasSummary()</small>
+                        <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(!CanPrepareEditCanvas())" @onclick="PreviewEditCanvasAsync">Prepare Preview</button>
+                    </fieldset>
+
                     <button type="button" class="btn btn-sm btn-primary"
                             disabled="@(!CanGenerateEditCandidates())"
                             @onclick="GenerateEditCandidatesAsync">
@@ -576,6 +609,18 @@
     private string _editTool = "mask";
     private int _editBrushSize = 28;
     private int _editCount = 2;
+    private int _editPaddingTop;
+    private int _editPaddingRight;
+    private int _editPaddingBottom;
+    private int _editPaddingLeft;
+    private bool _editAllowScaleDown = true;
+    private string _editResampleMode = "nearest";
+    private Guid? _editCanvasPreparationId;
+    private DateTime? _editCanvasPreparationExpiresAt;
+    private EditCanvasTransform? _editPreparedTransform;
+    private string? _editPreparedSourceDataUrl;
+    private string? _editMaskOverlayDataUrl;
+    private EditCanvasTransform? _editCanvasTransform;
     private string _editPrompt = string.Empty;
     private string? _editModalError;
     private Guid? _editBatchId;
@@ -1324,6 +1369,26 @@
         _editPreviewOverlayActive = session.PreviewOverlayActive;
         _editPrompt = session.Prompt;
         _editCount = Math.Clamp(session.Count, 1, Math.Max(1, ImageOptions.Value.MaxOutputs));
+        _editPaddingTop = session.CanvasOptions.PaddingTop;
+        _editPaddingRight = session.CanvasOptions.PaddingRight;
+        _editPaddingBottom = session.CanvasOptions.PaddingBottom;
+        _editPaddingLeft = session.CanvasOptions.PaddingLeft;
+        _editAllowScaleDown = session.CanvasOptions.AllowScaleDown;
+        _editResampleMode = session.CanvasOptions.ResampleMode == EditCanvasResampleMode.Smooth ? "smooth" : "nearest";
+        InvalidateEditCanvasPreparation();
+        if (session.CanvasPreparationId is Guid preparationId
+            && session.CanvasPreparationExpiresAt > DateTime.UtcNow
+            && CanvasPreparations.TryPeek(Workbench.Project.Id, preparationId, out var preparation))
+        {
+            _editCanvasPreparationId = preparation.Id;
+            _editCanvasPreparationExpiresAt = preparation.ExpiresAt;
+            _editPreparedTransform = preparation.Canvas.Transform;
+            _editPreparedSourceDataUrl = DataUrl.ToDataUrl("image/png", preparation.Canvas.LogicalSourcePng);
+            _editMaskOverlayDataUrl = DataUrl.ToDataUrl("image/png", preparation.Canvas.PreviewPng);
+        }
+        _editCanvasTransform = session.BatchId is Guid sessionBatchId
+            ? Workbench.Batches.FirstOrDefault(batch => batch.Id == sessionBatchId)?.EditCanvasTransform
+            : null;
         _editCrop = session.Crop is null
             ? null
             : new SpriteEditCrop(
@@ -1362,7 +1427,22 @@
     {
         if (_module is not null && _editModalOpen)
             await _module.InvokeVoidAsync("clearEditMask", _editCanvas);
+        InvalidateEditCanvasPreparation();
         _editMaskId = null;
+        await PersistEditSessionAsync();
+    }
+
+    [JSInvokable]
+    public async Task OnEditMaskChanged()
+    {
+        InvalidateEditCanvasPreparation();
+        await PersistEditSessionAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task EditCanvasControlsChangedAsync()
+    {
+        InvalidateEditCanvasPreparation();
         await PersistEditSessionAsync();
     }
 
@@ -1374,7 +1454,57 @@
         && _module is not null
         && _editTargetSourceAssetId is not null
         && !string.IsNullOrWhiteSpace(_editPrompt)
+        && (!CurrentEditCanvasOptions().HasPadding
+            || (_editCanvasPreparationId is not null && _editCanvasPreparationExpiresAt > DateTime.UtcNow))
         && !ImageRuntime.HasRunningBatch(Workbench.Project.Id);
+
+    private bool CanPrepareEditCanvas() =>
+        _editModalOpen
+        && !_editGenerating
+        && _editBatchId is null
+        && _editCandidateAssetIds.Count == 0
+        && _module is not null
+        && _editTargetSourceAssetId is not null
+        && !ImageRuntime.HasRunningBatch(Workbench.Project.Id);
+
+    private async Task PreviewEditCanvasAsync()
+    {
+        if (!CanPrepareEditCanvas() || _editTargetSourceAssetId is not Guid sourceAssetId || _module is null)
+            return;
+
+        _editModalError = null;
+        try
+        {
+            var hasPaint = await _module.InvokeAsync<bool>("hasEditMaskPaint", _editCanvas);
+            var sourceDataUrl = await _module.InvokeAsync<string>("exportEditSourcePng", _editCanvas);
+            var maskDataUrl = hasPaint
+                ? await _module.InvokeAsync<string>("exportEditMaskPng", _editCanvas)
+                : null;
+            var preview = await Workflow.PreviewAssetEditCanvasAsync(
+                Workbench.Project.Id,
+                new PreviewAssetEditCanvasRequest(
+                    sourceAssetId,
+                    "opaque",
+                    sourceDataUrl,
+                    maskDataUrl,
+                    CanvasOptions: CurrentEditCanvasOptions()));
+            _editCanvasPreparationId = preview.PreparationId;
+            _editCanvasPreparationExpiresAt = preview.ExpiresAt;
+            _editPreparedTransform = preview.Transform;
+            _editPreparedSourceDataUrl = DataUrl.ToDataUrl(preview.PreparedSource.ContentType, preview.PreparedSource.Data);
+            _editMaskOverlayDataUrl = DataUrl.ToDataUrl(preview.MaskOverlay.ContentType, preview.MaskOverlay.Data);
+            await PersistEditSessionAsync();
+        }
+        catch (Exception ex)
+        {
+            InvalidateEditCanvasPreparation();
+            _editModalError = ex.Message;
+        }
+        finally
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+    }
 
     private async Task GenerateEditCandidatesAsync()
     {
@@ -1385,10 +1515,17 @@
         _editGenerating = true;
         try
         {
+            if (CurrentEditCanvasOptions().HasPadding
+                && (_editCanvasPreparationId is null || _editCanvasPreparationExpiresAt <= DateTime.UtcNow))
+            {
+                throw new InvalidOperationException("Prepare and inspect the current padded canvas before generating candidates.");
+            }
             await ClearEditPreviewAsync(persist: false);
             var hasPaint = await _module.InvokeAsync<bool>("hasEditMaskPaint", _editCanvas);
-            var sourceDataUrl = await _module.InvokeAsync<string>("exportEditSourcePng", _editCanvas);
-            var maskDataUrl = hasPaint
+            var sourceDataUrl = _editCanvasPreparationId is null
+                ? await _module.InvokeAsync<string>("exportEditSourcePng", _editCanvas)
+                : null;
+            var maskDataUrl = _editCanvasPreparationId is null && hasPaint
                 ? await _module.InvokeAsync<string>("exportEditMaskPng", _editCanvas)
                 : null;
             var count = Math.Clamp(_editCount, 1, Math.Max(1, ImageOptions.Value.MaxOutputs));
@@ -1403,9 +1540,13 @@
                 sourceDataUrl,
                 maskDataUrl,
                 [],
-                SwitchToBatches: false));
+                SwitchToBatches: false,
+                CanvasOptions: _editCanvasPreparationId is null ? CurrentEditCanvasOptions() : null,
+                CanvasPreparationId: _editCanvasPreparationId));
             _editBatchId = batch.Id;
-            _editMaskId = batch.InputMaskIds.FirstOrDefault() is Guid maskId && maskId != Guid.Empty ? maskId : null;
+            _editCanvasTransform = batch.EditCanvasTransform;
+            _editMaskId = batch.EditCanvasTransform?.OriginalMaskId;
+            InvalidateEditCanvasPreparation();
             _editCandidateAssetIds = [];
             _editPersistedOutputStates = Enumerable.Range(0, count)
                 .Select(index => new GenerationOutputStateView(index, GenerationOutputStatus.Queued, Message: "Waiting for image request."))
@@ -1511,7 +1652,8 @@
                     crop.CropX,
                     crop.CropY,
                     crop.CropWidth,
-                    crop.CropHeight));
+                    crop.CropHeight,
+                    _editCanvasTransform ?? (_editBatchId is Guid batchId ? Workbench.Batches.FirstOrDefault(batch => batch.Id == batchId)?.EditCanvasTransform : null)));
                 ApplyFrameSet(updated);
                 CaptureLoadedProjectFocus();
                 if (sessionId is Guid id)
@@ -1548,6 +1690,14 @@
         _editSessionId = null;
         _editMaskId = null;
         _editTool = "mask";
+        _editPaddingTop = 0;
+        _editPaddingRight = 0;
+        _editPaddingBottom = 0;
+        _editPaddingLeft = 0;
+        _editAllowScaleDown = true;
+        _editResampleMode = "nearest";
+        InvalidateEditCanvasPreparation();
+        _editCanvasTransform = null;
         _editPrompt = string.Empty;
         _editModalError = null;
         _editBatchId = null;
@@ -1584,6 +1734,10 @@
             _editPreviewOverlayActive,
             _editPrompt,
             Math.Clamp(_editCount, 1, Math.Max(1, ImageOptions.Value.MaxOutputs)),
+            CurrentEditCanvasOptions(),
+            _editCanvasPreparationId,
+            _editPreparedTransform,
+            _editCanvasPreparationExpiresAt,
             _editCrop is null
                 ? null
                 : new SpriteEditSessionCrop(
@@ -1598,6 +1752,67 @@
         _editSessionId = view.Id;
         _editPersistedOutputStates = view.OutputStates.ToList();
         _editCandidateAssetIds = view.CandidateAssetIds.ToList();
+    }
+
+    private EditCanvasOptions CurrentEditCanvasOptions() => new(
+        Math.Max(0, _editPaddingTop),
+        Math.Max(0, _editPaddingRight),
+        Math.Max(0, _editPaddingBottom),
+        Math.Max(0, _editPaddingLeft),
+        _editAllowScaleDown,
+        _editResampleMode == "smooth" ? EditCanvasResampleMode.Smooth : EditCanvasResampleMode.NearestNeighbor,
+        32);
+
+    private void InvalidateEditCanvasPreparation()
+    {
+        _editCanvasPreparationId = null;
+        _editCanvasPreparationExpiresAt = null;
+        _editPreparedTransform = null;
+        _editPreparedSourceDataUrl = null;
+        _editMaskOverlayDataUrl = null;
+    }
+
+    private (int Width, int Height) EditCanvasBaseSize()
+    {
+        if (_editCrop is { } crop)
+            return (crop.EditSourceWidth, crop.EditSourceHeight);
+        var asset = _editTargetSourceAssetId is Guid assetId ? Workbench.Assets.FirstOrDefault(item => item.Id == assetId) : null;
+        return (Math.Max(1, asset?.Width ?? 1), Math.Max(1, asset?.Height ?? 1));
+    }
+
+    private string EditCanvasSummary()
+    {
+        var (width, height) = EditCanvasBaseSize();
+        try
+        {
+            var transform = _editPreparedTransform
+                ?? ImageEditCanvas.Estimate(width, height, CurrentEditCanvasOptions(), ImageProvider.DescribeCapabilities());
+            var fallback = transform.UsedScaleFallback
+                ? $"scale fallback will run at {transform.Scale:P0}"
+                : transform.Scale > 1.000001d
+                    ? $"provider minimum requires {transform.Scale:P0} normalization"
+                    : "source scale is preserved";
+            var previewState = _editPreparedTransform is null
+                ? "Prepare the preview to lock source placement and the effective mask."
+                : $"Preview locked until {_editCanvasPreparationExpiresAt?.ToLocalTime():t}.";
+            return $"Logical canvas {transform.LogicalWidth} x {transform.LogicalHeight}; provider output {transform.ProviderWidth} x {transform.ProviderHeight}; provider-logical region {transform.ProviderLogicalWidth} x {transform.ProviderLogicalHeight}; {fallback}. {previewState}";
+        }
+        catch (InvalidOperationException exception)
+        {
+            return exception.Message;
+        }
+    }
+
+    private string EditCanvasPreviewStyle()
+    {
+        var (width, height) = EditCanvasBaseSize();
+        var left = Math.Max(0, _editPaddingLeft);
+        var right = Math.Max(0, _editPaddingRight);
+        var top = Math.Max(0, _editPaddingTop);
+        var bottom = Math.Max(0, _editPaddingBottom);
+        var outputWidth = Math.Max(1, width + left + right);
+        var outputHeight = Math.Max(1, height + top + bottom);
+        return FormattableString.Invariant($"aspect-ratio:{outputWidth}/{outputHeight};padding:{top * 100d / outputHeight:0.###}% {right * 100d / outputWidth:0.###}% {bottom * 100d / outputHeight:0.###}% {left * 100d / outputWidth:0.###}%;");
     }
 
     private void RefreshEditImageUrls()
@@ -1947,6 +2162,7 @@
         await _module.InvokeVoidAsync(
             "loadEditCanvas",
             _editCanvas,
+            _dotNetRef,
             _editImageUrl,
             _editMaskUrl,
             _editTool,

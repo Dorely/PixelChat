@@ -216,6 +216,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.Property(e => e.ReviewCompletedBy).HasConversion<string>();
             entity.Property(e => e.Background).HasDefaultValue("auto");
             entity.Property(e => e.OutputStatesJson).HasDefaultValue("[]");
+            entity.Property(e => e.EditCanvasTransformJson).HasDefaultValue(string.Empty);
+            entity.Property(e => e.EditLogicalSourceContentType).HasMaxLength(100);
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.GenerationBatches)
@@ -394,6 +396,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.Property(e => e.ShapeJson).HasDefaultValue("[]");
             entity.Property(e => e.WorkingState).HasDefaultValue("none");
             entity.Property(e => e.WorkingContentType).HasDefaultValue("image/png");
+            entity.Property(e => e.WorkingCanvasTransformJson).HasDefaultValue(string.Empty);
+            entity.Property(e => e.WorkingCanvasFinalizationJson).HasDefaultValue(string.Empty);
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.Frames)
@@ -496,6 +500,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.Property(e => e.Status).HasDefaultValue("pending");
             entity.Property(e => e.TargetKind).HasDefaultValue("source");
             entity.Property(e => e.CropJson).HasDefaultValue("{}");
+            entity.Property(e => e.CanvasOptionsJson).HasDefaultValue("{}");
+            entity.Property(e => e.CanvasPreparationTransformJson).HasDefaultValue(string.Empty);
             entity.Property(e => e.CandidateAssetIdsJson).HasDefaultValue("[]");
             entity.Property(e => e.OutputStatesJson).HasDefaultValue("[]");
 

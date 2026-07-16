@@ -30,7 +30,9 @@ public sealed record FrameView(
     int WorkingHeight,
     bool HideFromOnionSkin,
     bool HasMask,
-    Guid? MaskId);
+    Guid? MaskId,
+    EditCanvasTransform? WorkingCanvasTransform,
+    EditCanvasFinalization? WorkingCanvasFinalization);
 
 public sealed record FrameSetView(
     Guid Id,
@@ -138,7 +140,8 @@ public sealed record ApplyFrameEditCandidateRequest(
     int CropX,
     int CropY,
     int CropWidth,
-    int CropHeight);
+    int CropHeight,
+    EditCanvasTransform? CanvasTransform = null);
 
 public sealed record UpsertFrameMaskRequest(
     Guid FrameId,
@@ -221,7 +224,18 @@ public sealed record EditFrameRequest(
     string? Background = null,
     IReadOnlyList<Guid>? ReferenceAssetIds = null,
     bool IncludeAdjacentFrames = true,
-    bool UseFrameMask = true);
+    bool UseFrameMask = true,
+    EditCanvasOptions? CanvasOptions = null,
+    Guid? CanvasPreparationId = null);
+
+public sealed record PreviewFrameEditCanvasRequest(
+    Guid FrameSetId,
+    Guid FrameId,
+    string? Background = null,
+    bool UseFrameMask = true,
+    IReadOnlyList<SpriteSheetRect>? MaskRects = null,
+    IReadOnlyList<SpriteSheetShapePath>? MaskPolygons = null,
+    EditCanvasOptions? CanvasOptions = null);
 
 public sealed record NormalizeFrameScaleRequest(
     Guid FrameSetId,
@@ -290,6 +304,10 @@ public sealed record SpriteEditSessionView(
     bool PreviewOverlayActive,
     string Prompt,
     int Count,
+    EditCanvasOptions CanvasOptions,
+    Guid? CanvasPreparationId,
+    EditCanvasTransform? CanvasPreparationTransform,
+    DateTime? CanvasPreparationExpiresAt,
     SpriteEditSessionCrop? Crop,
     IReadOnlyList<Guid> CandidateAssetIds,
     IReadOnlyList<GenerationOutputStateView> OutputStates,
@@ -308,6 +326,10 @@ public sealed record SaveSpriteEditSessionRequest(
     bool PreviewOverlayActive,
     string Prompt,
     int Count,
+    EditCanvasOptions CanvasOptions,
+    Guid? CanvasPreparationId,
+    EditCanvasTransform? CanvasPreparationTransform,
+    DateTime? CanvasPreparationExpiresAt,
     SpriteEditSessionCrop? Crop,
     IReadOnlyList<Guid> CandidateAssetIds,
     IReadOnlyList<GenerationOutputStateView> OutputStates);

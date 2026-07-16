@@ -75,7 +75,7 @@ export async function loadFrameCanvas(canvas, dotNetRef, imageUrl, frame, previo
     renderFrame(canvas, state);
 }
 
-export async function loadEditCanvas(canvas, imageUrl, maskUrl, tool, brushSize, editSourceWidth, editSourceHeight, cropX, cropY, cropWidth, cropHeight) {
+export async function loadEditCanvas(canvas, dotNetRef, imageUrl, maskUrl, tool, brushSize, editSourceWidth, editSourceHeight, cropX, cropY, cropWidth, cropHeight) {
     if (!isCanvas(canvas)) return;
     const image = await loadImage(imageUrl);
     const imageW = imageWidth(image);
@@ -105,6 +105,7 @@ export async function loadEditCanvas(canvas, imageUrl, maskUrl, tool, brushSize,
     let state = editStates.get(canvas);
     if (!state) {
         state = {
+            dotNetRef,
             source,
             paint,
             target,
@@ -117,6 +118,7 @@ export async function loadEditCanvas(canvas, imageUrl, maskUrl, tool, brushSize,
         editStates.set(canvas, state);
         attachEdit(canvas, state);
     } else {
+        state.dotNetRef = dotNetRef;
         state.source = source;
         state.paint = paint;
         state.target = target;
@@ -147,6 +149,7 @@ export function clearEditMask(canvas) {
     if (!state) return;
     state.paint.getContext("2d").clearRect(0, 0, state.paint.width, state.paint.height);
     renderEdit(canvas, state);
+    state.dotNetRef?.invokeMethodAsync("OnEditMaskChanged").catch(() => { });
 }
 
 export async function setEditPreviewOverlay(canvas, imageUrl) {
@@ -526,9 +529,11 @@ function onEditPointerMove(canvas, state, event) {
 function onEditPointerUp(canvas, state, event) {
     if (!state.drag) return;
     event.preventDefault();
+    const changedMask = state.drag.type === "mask";
     state.drag = null;
     try { canvas.releasePointerCapture?.(event.pointerId); } catch { }
     renderEdit(canvas, state);
+    if (changedMask) state.dotNetRef?.invokeMethodAsync("OnEditMaskChanged").catch(() => { });
 }
 
 function renderSource(canvas, state) {

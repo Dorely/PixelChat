@@ -220,6 +220,25 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (
                 Guid sourceAssetId,
+                string? background = null,
+                Guid? maskId = null,
+                SpriteSheetRect[]? maskRects = null,
+                SpriteSheetShapePath[]? maskPolygons = null,
+                int canvasPaddingTop = 0,
+                int canvasPaddingRight = 0,
+                int canvasPaddingBottom = 0,
+                int canvasPaddingLeft = 0,
+                bool allowScaleDown = true,
+                string resampleMode = "nearest",
+                int seamOverlapPixels = 32,
+                CancellationToken cancellationToken = default) =>
+                PreviewAssetEditCanvasAsync(projectId, sourceAssetId, background, maskId, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, cancellationToken),
+            name: "preview_asset_edit_canvas",
+            description: "Deterministically prepare and inspect an asset edit canvas without generating an image, consuming a generation round, creating a batch, or creating a library asset. Use this immediately before every edit_asset call with nonzero padding. Pass the final intended padding and effective saved/drawn mask once; the result returns a 15-minute canvasPreparationId plus model-only prepared-source and editable-mask-overlay images. After inspecting them, call edit_asset with only that id for canvas/mask locking; do not repeat inline padding or mask arguments."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid sourceAssetId,
                 string prompt,
                 [Description("Required readable name for the edited asset(s) this round will save. Use a short production name, not Image A or a generic batch label.")] string assetName,
                 string? size = null,
@@ -230,10 +249,18 @@ public sealed class AssistantToolRegistry(
                 Guid? maskId = null,
                 SpriteSheetRect[]? maskRects = null,
                 SpriteSheetShapePath[]? maskPolygons = null,
+                int canvasPaddingTop = 0,
+                int canvasPaddingRight = 0,
+                int canvasPaddingBottom = 0,
+                int canvasPaddingLeft = 0,
+                bool allowScaleDown = true,
+                string resampleMode = "nearest",
+                int seamOverlapPixels = 32,
+                Guid? canvasPreparationId = null,
                 CancellationToken cancellationToken = default) =>
-                EditAssetAsync(projectId, budget, sourceAssetId, prompt, assetName, size, background, count, referenceAssetIds, recipeId, maskId, maskRects, maskPolygons, cancellationToken),
+                EditAssetAsync(projectId, budget, sourceAssetId, prompt, assetName, size, background, count, referenceAssetIds, recipeId, maskId, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, canvasPreparationId, cancellationToken),
             name: "edit_asset",
-            description: "Directly edit an existing image asset and wait for completion. Use this whenever the user asks to change, replace, repair, or refine an existing non-frame image; do not substitute new generation or UI instructions. Inspect the source first. For a localized edit, pass maskRects and/or maskPolygons in full source-image pixel coordinates; their union becomes the editable area and is persisted as the asset's mask. To reuse a saved manual mask, pass maskId instead. maskId and drawn regions are mutually exclusive. Omit all mask inputs only when an unmasked edit is appropriate. Use recipeId for saved reusable art guidance and keep the prompt focused on Change/Preserve/Constraints. Outputs are returned as model-only images and enter Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
+            description: "Directly edit an existing image asset and wait for completion. Use this whenever the user asks to change, replace, repair, or refine an existing non-frame image; do not substitute new generation or UI instructions. Inspect the source first. For an ordinary zero-padding localized edit, pass maskRects/maskPolygons in full source pixels or maskId. For every padded/outpaint edit, first call preview_asset_edit_canvas with the final mask, padding, seam, and resampling; inspect both images, then call this tool with canvasPreparationId and no inline mask/canvas arguments. A preparation locks exact logical/provider canvases and expires after 15 minutes. Padding is deterministic and must never be its own generation round. Use recipeId for reusable guidance and keep the prompt focused on Change/Preserve/Constraints. Outputs are model-only images and enter Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
 
         AIFunctionFactory.Create(
             method: (
@@ -327,6 +354,26 @@ public sealed class AssistantToolRegistry(
                 SetActiveFrameSetAsync(projectId, frameSetId, cancellationToken),
             name: "set_active_frame_set",
             description: "Greenfield Frames pipeline: set the active FrameSet used by the visible Sprites workspace, assistant state, and subsequent frame/sheet operations."),
+
+        AIFunctionFactory.Create(
+            method: (
+                Guid frameSetId,
+                Guid frameId,
+                string? background = null,
+                bool useFrameMask = true,
+                SpriteSheetRect[]? maskRects = null,
+                SpriteSheetShapePath[]? maskPolygons = null,
+                int canvasPaddingTop = 0,
+                int canvasPaddingRight = 0,
+                int canvasPaddingBottom = 0,
+                int canvasPaddingLeft = 0,
+                bool allowScaleDown = true,
+                string resampleMode = "nearest",
+                int seamOverlapPixels = 32,
+                CancellationToken cancellationToken = default) =>
+                PreviewFrameEditCanvasAsync(projectId, frameSetId, frameId, background, useFrameMask, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, cancellationToken),
+            name: "preview_frame_edit_canvas",
+            description: "Deterministically prepare and inspect a frame edit canvas without generating an image, consuming a generation round, creating a batch, or creating a library asset. Use this immediately before every edit_frame call with nonzero padding. Pass the final intended padding and effective saved/drawn mask once; the result returns a 15-minute canvasPreparationId plus model-only prepared-source and editable-mask-overlay images. After inspecting them, call edit_frame with only that id for canvas/mask locking; do not repeat inline padding or mask arguments."),
 
         AIFunctionFactory.Create(
             method: (
@@ -566,10 +613,18 @@ public sealed class AssistantToolRegistry(
                 bool useFrameMask = true,
                 SpriteSheetRect[]? maskRects = null,
                 SpriteSheetShapePath[]? maskPolygons = null,
+                int canvasPaddingTop = 0,
+                int canvasPaddingRight = 0,
+                int canvasPaddingBottom = 0,
+                int canvasPaddingLeft = 0,
+                bool allowScaleDown = true,
+                string resampleMode = "nearest",
+                int seamOverlapPixels = 32,
+                Guid? canvasPreparationId = null,
                 CancellationToken cancellationToken = default) =>
-                EditFrameAsync(projectId, budget, frameSetId, frameId, prompt, background, referenceAssetIds, includeAdjacentFrames, useFrameMask, maskRects, maskPolygons, cancellationToken),
+                EditFrameAsync(projectId, budget, frameSetId, frameId, prompt, background, referenceAssetIds, includeAdjacentFrames, useFrameMask, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, canvasPreparationId, cancellationToken),
             name: "edit_frame",
-            description: "Greenfield Frames pipeline: AI-edit one frame's logical cell with a Change/Preserve/Constraints prompt, store the result as the frame's working image, and update the visible Sprites workspace. Consumes one autonomous generation round budget. Use only when deterministic crop/cell/offset/align/erase cannot fix the frame. Pass the identity anchor asset in referenceAssetIds when fixing anatomy or identity; previous/next frame references are included by default for continuity. For a surgical edit, pass maskRects and/or maskPolygons in logical-frame pixel coordinates; their union replaces the saved frame mask and is used automatically. When no regions are supplied, useFrameMask true reuses an existing saved mask and false performs an unmasked edit. background defaults to opaque so the frame stays opaque."),
+            description: "Greenfield Frames pipeline: AI-edit one frame's logical cell with a Change/Preserve/Constraints prompt, store the logical result as the frame's working image, and update the visible Sprites workspace. Consumes one autonomous generation round. Use only when deterministic crop/cell/offset/align/erase cannot fix the frame. For an ordinary zero-padding surgical edit, pass maskRects/maskPolygons in logical-frame pixels. For every padded/outpaint edit, first call preview_frame_edit_canvas with the final mask, padding, seam, and resampling; inspect both images, then call this tool with canvasPreparationId and no inline mask/canvas arguments. The accepted result expands the logical cell and is never squashed into the old one. Padding is deterministic and must never be its own generation round or a reason to construct a temporary frame set. background defaults to opaque."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId) => ExportAssetAsync(projectId, assetId),
@@ -1052,6 +1107,66 @@ public sealed class AssistantToolRegistry(
         return await AwaitGenerationRoundAsync(projectId, budget, round, batch, maskId: null, cancellationToken);
     }
 
+    private async Task<string> PreviewAssetEditCanvasAsync(
+        Guid projectId,
+        Guid sourceAssetId,
+        string? background,
+        Guid? maskId,
+        SpriteSheetRect[]? maskRects,
+        SpriteSheetShapePath[]? maskPolygons,
+        int canvasPaddingTop,
+        int canvasPaddingRight,
+        int canvasPaddingBottom,
+        int canvasPaddingLeft,
+        bool allowScaleDown,
+        string resampleMode,
+        int seamOverlapPixels,
+        CancellationToken cancellationToken)
+    {
+        if (!TryCreateCanvasOptions(
+                canvasPaddingTop,
+                canvasPaddingRight,
+                canvasPaddingBottom,
+                canvasPaddingLeft,
+                allowScaleDown,
+                resampleMode,
+                seamOverlapPixels,
+                out var canvasOptions,
+                out var canvasError))
+        {
+            return JsonSerializer.Serialize(new { error = canvasError, generationRoundConsumed = false }, JsonOptions);
+        }
+
+        var hasDrawnMask = (maskRects?.Length ?? 0) > 0 || (maskPolygons?.Length ?? 0) > 0;
+        if (maskId is not null && hasDrawnMask)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "Use either maskId or maskRects/maskPolygons for an asset canvas preview, not both.",
+                generationRoundConsumed = false,
+            }, JsonOptions);
+        }
+
+        string? drawnMaskDataUrl = null;
+        if (hasDrawnMask)
+        {
+            var source = await workflow.GetAssetFullImageAsync(projectId, sourceAssetId, cancellationToken);
+            if (!ImageRgbaDecoder.TryReadRgba(source.Data, out var sourceWidth, out var sourceHeight, out _))
+                throw new InvalidOperationException("Asset masks require a readable PNG or JPEG source image.");
+            drawnMaskDataUrl = DataUrl.ToDataUrl(
+                "image/png",
+                ImageEditMaskRenderer.RenderPng(sourceWidth, sourceHeight, maskRects, maskPolygons));
+        }
+
+        var preview = await workflow.PreviewAssetEditCanvasAsync(projectId, new PreviewAssetEditCanvasRequest(
+            sourceAssetId,
+            NormalizeBackground(background) ?? "auto",
+            MaskPngDataUrl: drawnMaskDataUrl,
+            MaskId: maskId,
+            CanvasOptions: canvasOptions), cancellationToken);
+        return SerializeCanvasPreview(preview, "asset");
+    }
+
     private async Task<string> EditAssetAsync(
         Guid projectId,
         AssistantTurnGenerationBudget budget,
@@ -1066,6 +1181,14 @@ public sealed class AssistantToolRegistry(
         Guid? maskId,
         SpriteSheetRect[]? maskRects,
         SpriteSheetShapePath[]? maskPolygons,
+        int canvasPaddingTop,
+        int canvasPaddingRight,
+        int canvasPaddingBottom,
+        int canvasPaddingLeft,
+        bool allowScaleDown,
+        string resampleMode,
+        int seamOverlapPixels,
+        Guid? canvasPreparationId,
         CancellationToken cancellationToken)
     {
         var outputLabel = CleanAssetName(assetName);
@@ -1116,7 +1239,55 @@ public sealed class AssistantToolRegistry(
             }, JsonOptions);
         }
 
+        if (!TryCreateCanvasOptions(
+                canvasPaddingTop,
+                canvasPaddingRight,
+                canvasPaddingBottom,
+                canvasPaddingLeft,
+                allowScaleDown,
+                resampleMode,
+                seamOverlapPixels,
+                out var canvasOptions,
+                out var canvasError))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = canvasError,
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+                message = "No edit round was consumed. Fix the canvas options and run the edit again.",
+            }, JsonOptions);
+        }
+
+        var hasInlineCanvasArguments = canvasOptions.HasPadding
+            || !canvasOptions.AllowScaleDown
+            || canvasOptions.ResampleMode != EditCanvasResampleMode.NearestNeighbor
+            || canvasOptions.SeamOverlapPixels != 32;
         var hasDrawnMask = (maskRects?.Length ?? 0) > 0 || (maskPolygons?.Length ?? 0) > 0;
+        if (canvasPreparationId is not null && (maskId is not null || hasDrawnMask || hasInlineCanvasArguments))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "canvasPreparationId already locks the source, mask, padding, seam, and resampling. Remove inline mask/canvas arguments.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+                message = "No edit round was consumed.",
+            }, JsonOptions);
+        }
+        if (canvasOptions.HasPadding && canvasPreparationId is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "canvas_preview_required",
+                message = "Call preview_asset_edit_canvas with the final padding and mask, inspect its images, then call edit_asset with the returned canvasPreparationId. No generation round was consumed.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            }, JsonOptions);
+        }
+
         if (maskId is not null && hasDrawnMask)
         {
             return JsonSerializer.Serialize(new
@@ -1152,7 +1323,9 @@ public sealed class AssistantToolRegistry(
             MaskPngDataUrl: drawnMaskDataUrl,
             ReferenceAssetIds: references,
             OutputLabel: outputLabel,
-            MaskId: maskId), cancellationToken);
+            MaskId: canvasPreparationId is null ? maskId : null,
+            CanvasOptions: canvasPreparationId is null ? canvasOptions : null,
+            CanvasPreparationId: canvasPreparationId), cancellationToken);
         var round = budget.Consume();
         var effectiveMaskId = batch.InputMaskIds.FirstOrDefault();
         return await AwaitGenerationRoundAsync(
@@ -1731,6 +1904,48 @@ public sealed class AssistantToolRegistry(
             : "Frame regions erased.");
     }
 
+    private async Task<string> PreviewFrameEditCanvasAsync(
+        Guid projectId,
+        Guid frameSetId,
+        Guid frameId,
+        string? background,
+        bool useFrameMask,
+        SpriteSheetRect[]? maskRects,
+        SpriteSheetShapePath[]? maskPolygons,
+        int canvasPaddingTop,
+        int canvasPaddingRight,
+        int canvasPaddingBottom,
+        int canvasPaddingLeft,
+        bool allowScaleDown,
+        string resampleMode,
+        int seamOverlapPixels,
+        CancellationToken cancellationToken)
+    {
+        if (!TryCreateCanvasOptions(
+                canvasPaddingTop,
+                canvasPaddingRight,
+                canvasPaddingBottom,
+                canvasPaddingLeft,
+                allowScaleDown,
+                resampleMode,
+                seamOverlapPixels,
+                out var canvasOptions,
+                out var canvasError))
+        {
+            return JsonSerializer.Serialize(new { error = canvasError, generationRoundConsumed = false }, JsonOptions);
+        }
+
+        var preview = await frameSets.PreviewFrameEditCanvasAsync(projectId, new PreviewFrameEditCanvasRequest(
+            frameSetId,
+            frameId,
+            background,
+            useFrameMask,
+            maskRects,
+            maskPolygons,
+            canvasOptions), cancellationToken);
+        return SerializeCanvasPreview(preview, "frame");
+    }
+
     private async Task<string> EditFrameAsync(
         Guid projectId,
         AssistantTurnGenerationBudget budget,
@@ -1743,6 +1958,14 @@ public sealed class AssistantToolRegistry(
         bool useFrameMask,
         SpriteSheetRect[]? maskRects,
         SpriteSheetShapePath[]? maskPolygons,
+        int canvasPaddingTop,
+        int canvasPaddingRight,
+        int canvasPaddingBottom,
+        int canvasPaddingLeft,
+        bool allowScaleDown,
+        string resampleMode,
+        int seamOverlapPixels,
+        Guid? canvasPreparationId,
         CancellationToken cancellationToken)
     {
         if (budget.IsExhausted)
@@ -1767,9 +1990,57 @@ public sealed class AssistantToolRegistry(
             }, JsonOptions);
         }
 
+        if (!TryCreateCanvasOptions(
+                canvasPaddingTop,
+                canvasPaddingRight,
+                canvasPaddingBottom,
+                canvasPaddingLeft,
+                allowScaleDown,
+                resampleMode,
+                seamOverlapPixels,
+                out var canvasOptions,
+                out var canvasError))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = canvasError,
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+                message = "No generation round was consumed. Fix the canvas options and run the frame edit again.",
+            }, JsonOptions);
+        }
+
+        var hasInlineCanvasArguments = canvasOptions.HasPadding
+            || !canvasOptions.AllowScaleDown
+            || canvasOptions.ResampleMode != EditCanvasResampleMode.NearestNeighbor
+            || canvasOptions.SeamOverlapPixels != 32;
+        var hasDrawnMask = (maskRects?.Length ?? 0) > 0 || (maskPolygons?.Length ?? 0) > 0;
+        if (canvasPreparationId is not null && (hasDrawnMask || hasInlineCanvasArguments))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "canvasPreparationId already locks the frame source, mask, padding, seam, and resampling. Remove inline mask/canvas arguments.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+                message = "No generation round was consumed.",
+            }, JsonOptions);
+        }
+        if (canvasOptions.HasPadding && canvasPreparationId is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "canvas_preview_required",
+                message = "Call preview_frame_edit_canvas with the final padding and mask, inspect its images, then call edit_frame with the returned canvasPreparationId. No generation round was consumed.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            }, JsonOptions);
+        }
+
         ImageMaskView? savedMask = null;
         var effectiveUseFrameMask = useFrameMask;
-        var hasDrawnMask = (maskRects?.Length ?? 0) > 0 || (maskPolygons?.Length ?? 0) > 0;
         if (hasDrawnMask)
         {
             var frameSet = await frameSets.GetFrameSetAsync(projectId, frameSetId, cancellationToken);
@@ -1788,7 +2059,6 @@ public sealed class AssistantToolRegistry(
             effectiveUseFrameMask = true;
         }
 
-        var round = budget.Consume();
         var view = await spriteActions.EditFrameAsync(projectId, new EditFrameRequest(
             frameSetId,
             frameId,
@@ -1796,7 +2066,10 @@ public sealed class AssistantToolRegistry(
             background,
             referenceAssetIds?.Where(id => id != Guid.Empty).Distinct().ToList(),
             includeAdjacentFrames,
-            effectiveUseFrameMask), cancellationToken);
+            effectiveUseFrameMask,
+            canvasPreparationId is null ? canvasOptions : null,
+            canvasPreparationId), cancellationToken);
+        var round = budget.Consume();
         using var document = JsonDocument.Parse(SerializeFrameSet(view, "Frame AI edit completed."));
         return JsonSerializer.Serialize(new
         {
@@ -2055,6 +2328,44 @@ public sealed class AssistantToolRegistry(
             _ => "middle",
         };
 
+    private static string SerializeCanvasPreview(EditCanvasPreviewView preview, string targetKind) =>
+        JsonSerializer.Serialize(new
+        {
+            canvasPreparationId = preview.PreparationId,
+            targetKind,
+            preview.ExpiresAt,
+            generationRoundConsumed = false,
+            generationBatchCreated = false,
+            libraryAssetCreated = false,
+            transform = preview.Transform,
+            logicalDimensions = new { width = preview.Transform.LogicalWidth, height = preview.Transform.LogicalHeight },
+            providerDimensions = new { width = preview.Transform.ProviderWidth, height = preview.Transform.ProviderHeight },
+            providerLogicalBounds = new
+            {
+                x = 0,
+                y = 0,
+                width = preview.Transform.ProviderLogicalWidth,
+                height = preview.Transform.ProviderLogicalHeight,
+            },
+            sourcePlacement = new
+            {
+                x = preview.Transform.SourceOffsetX,
+                y = preview.Transform.SourceOffsetY,
+                width = preview.Transform.OriginalWidth,
+                height = preview.Transform.OriginalHeight,
+            },
+            preview.Transform.Scale,
+            preview.Transform.UsedScaleFallback,
+            preview.Transform.ResampleMode,
+            preview.Transform.SeamOverlapPixels,
+            modelOnlyImages = new[]
+            {
+                new { kind = "preparedSource", preview.PreparedSource.FileName, preview.PreparedSource.ContentType },
+                new { kind = "editableMaskOverlay", preview.MaskOverlay.FileName, preview.MaskOverlay.ContentType },
+            },
+            instruction = "Inspect both images. If placement and the effective editable region are correct, perform exactly one semantic edit using canvasPreparationId and no inline mask/canvas arguments.",
+        }, JsonOptions);
+
     private static string? NormalizeBackground(string? value) =>
         value?.Trim().ToLowerInvariant() switch
         {
@@ -2064,4 +2375,39 @@ public sealed class AssistantToolRegistry(
             null or "" => null,
             _ => "auto",
         };
+
+    private static EditCanvasResampleMode ParseResampleMode(string? value) =>
+        string.Equals(value?.Trim(), "smooth", StringComparison.OrdinalIgnoreCase)
+            ? EditCanvasResampleMode.Smooth
+            : EditCanvasResampleMode.NearestNeighbor;
+
+    private static bool TryCreateCanvasOptions(
+        int paddingTop,
+        int paddingRight,
+        int paddingBottom,
+        int paddingLeft,
+        bool allowScaleDown,
+        string? resampleMode,
+        int seamOverlapPixels,
+        out EditCanvasOptions options,
+        out string error)
+    {
+        var normalizedResample = resampleMode?.Trim().ToLowerInvariant();
+        if (normalizedResample is not (null or "" or "nearest" or "nearest-neighbor" or "smooth"))
+        {
+            options = new EditCanvasOptions();
+            error = "resampleMode must be nearest or smooth.";
+            return false;
+        }
+
+        options = new EditCanvasOptions(
+            paddingTop,
+            paddingRight,
+            paddingBottom,
+            paddingLeft,
+            allowScaleDown,
+            ParseResampleMode(normalizedResample),
+            seamOverlapPixels);
+        return ImageEditCanvasService.TryValidateOptions(options, out error);
+    }
 }

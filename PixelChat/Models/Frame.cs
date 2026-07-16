@@ -53,6 +53,8 @@ public class Frame
     public int WorkingWidth { get; set; }
     public int WorkingHeight { get; set; }
     public int WorkingMargin { get; set; }
+    public string WorkingCanvasTransformJson { get; set; } = string.Empty;
+    public string WorkingCanvasFinalizationJson { get; set; } = string.Empty;
     public DateTime? WorkingUpdatedAt { get; set; }
 
     // Cached preview rendered from the source region.

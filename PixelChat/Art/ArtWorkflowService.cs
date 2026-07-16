@@ -15,6 +15,8 @@ namespace PixelChat.Art;
 public sealed class ArtWorkflowService(
     AppDbContext db,
     IImageProvider imageProvider,
+    IImageEditCanvasService imageEditCanvas,
+    IEditCanvasPreparationStore canvasPreparations,
     ILlmProviderService providerService,
     IOptions<ImageGenerationOptions> imageOptions,
     IOptions<SpriteAnimationOptions> animationOptions,
@@ -132,6 +134,7 @@ public sealed class ArtWorkflowService(
                 b.Count,
                 b.InputAssetIdsJson,
                 b.InputMaskIdsJson,
+                b.EditCanvasTransformJson,
                 b.ParentBatchId,
                 b.PromptRecipeId,
                 b.PromptRecipeVersion,
@@ -1329,6 +1332,76 @@ public sealed class ArtWorkflowService(
         }
     }
 
+    public async Task<EditCanvasPreviewView> PreviewAssetEditCanvasAsync(
+        Guid projectId,
+        PreviewAssetEditCanvasRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        _ = await GetProjectAsync(projectId, cancellationToken);
+        var sourceAsset = await db.ArtAssets.FirstOrDefaultAsync(
+            asset => asset.ProjectId == projectId && asset.Id == request.SourceAssetId,
+            cancellationToken)
+            ?? throw new InvalidOperationException("Source asset was not found.");
+        if (request.MaskId is not null && !string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
+            throw new InvalidOperationException("Use either an existing mask id or mask image data, not both.");
+
+        var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
+        Guid? originalMaskId = null;
+        DateTime? originalMaskUpdatedAt = null;
+        byte[]? originalMaskPng = null;
+        if (request.MaskId is Guid maskId)
+        {
+            var storedMask = await db.ImageMasks.FirstOrDefaultAsync(mask =>
+                mask.ProjectId == projectId
+                && mask.Id == maskId
+                && mask.AssetId == sourceAsset.Id
+                && mask.OwnerKind == "asset", cancellationToken)
+                ?? throw new InvalidOperationException("The selected edit mask was not found for the source asset.");
+            EnsurePngMaskHasAlpha(storedMask.Data, requireEditableArea: true);
+            ValidateEditImageAndMask(sourceImage, storedMask);
+            originalMaskId = storedMask.Id;
+            originalMaskUpdatedAt = storedMask.UpdatedAt;
+            originalMaskPng = storedMask.Data;
+        }
+        else if (!string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
+        {
+            var maskImage = ParsePngDataUrl(request.MaskPngDataUrl, "Mask must be a PNG data URL.");
+            EnsurePngMaskHasAlpha(maskImage.Data, requireEditableArea: true);
+            if (maskImage.Width != sourceImage.Width || maskImage.Height != sourceImage.Height)
+                throw new InvalidOperationException("The edit image and mask dimensions must match.");
+            originalMaskPng = maskImage.Data;
+        }
+
+        var options = request.CanvasOptions ?? new EditCanvasOptions();
+        if (originalMaskPng is not null)
+            sourceImage = NormalizeMaskedEditSource(sourceImage);
+        var background = NormalizeBackground(request.Background);
+        var prepared = imageEditCanvas.Prepare(
+            sourceImage.Data,
+            originalMaskPng,
+            background,
+            options,
+            imageProvider.DescribeCapabilities());
+        prepared = prepared with { Transform = prepared.Transform with { OriginalMaskId = originalMaskId } };
+        var stored = canvasPreparations.Add(
+            projectId,
+            EditCanvasPreparationTargetKinds.Asset,
+            sourceAsset.Id,
+            parentTargetId: null,
+            PreparationRevision(sourceAsset.UpdatedAt, originalMaskUpdatedAt),
+            background,
+            options,
+            originalMaskId,
+            originalMaskPng,
+            prepared);
+        return new EditCanvasPreviewView(
+            stored.Id,
+            prepared.Transform,
+            stored.ExpiresAt,
+            new ImageBinaryView("image/png", prepared.LogicalSourcePng, $"{sourceAsset.Label}-prepared-source.png", stored.CreatedAt),
+            new ImageBinaryView("image/png", prepared.PreviewPng, $"{sourceAsset.Label}-edit-mask-overlay.png", stored.CreatedAt));
+    }
+
     public async Task<GenerationBatchView> StartEditImageAsync(
         Guid projectId,
         EditImageRequest request,
@@ -1360,46 +1433,150 @@ public sealed class ArtWorkflowService(
 
         var references = await MergeRecipeExampleReferenceAsync(projectId, recipe, explicitReferences, sourceAsset.Id, cancellationToken);
 
-        var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
         var batchId = Guid.NewGuid();
-        if (request.MaskId is not null && !string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
-            throw new InvalidOperationException("Use either an existing mask id or mask image data, not both.");
+        var normalizedBackground = NormalizeBackground(request.Background);
+        var canvasOptions = request.CanvasOptions ?? new EditCanvasOptions();
+        if (request.CanvasPreparationId is null && canvasOptions.HasPadding)
+            throw new InvalidOperationException("Padded edits require a current canvas preview. Preview the final padding and mask before generating.");
 
+        var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
         ImageMask? storedMask = null;
-        if (request.MaskId is Guid maskId)
+        EditCanvasTransform? canvasTransform = null;
+        byte[]? logicalSourceSnapshot = null;
+        byte[]? logicalMaskSnapshot = null;
+        Guid? preparationToRemove = null;
+
+        if (request.CanvasPreparationId is Guid preparationId)
         {
-            storedMask = await db.ImageMasks.FirstOrDefaultAsync(mask =>
-                mask.ProjectId == projectId
-                && mask.Id == maskId
-                && mask.AssetId == sourceAsset.Id
-                && mask.OwnerKind == "asset", cancellationToken)
-                ?? throw new InvalidOperationException("The selected edit mask was not found for the source asset.");
-            EnsurePngMaskHasAlpha(storedMask.Data, requireEditableArea: true);
-        }
-        else if (!string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
-        {
-            storedMask = string.IsNullOrWhiteSpace(request.SourcePngDataUrl)
-                ? await UpsertAssetMaskEntityAsync(
+            if (!string.IsNullOrWhiteSpace(request.SourcePngDataUrl)
+                || !string.IsNullOrWhiteSpace(request.MaskPngDataUrl)
+                || request.MaskId is not null
+                || request.CanvasOptions is not null)
+            {
+                throw new InvalidOperationException("canvasPreparationId locks the source, mask, and canvas controls; do not also pass inline source, mask, or canvas arguments.");
+            }
+            if (!canvasPreparations.TryPeek(projectId, preparationId, out var previewedPreparation))
+                throw new InvalidOperationException("Canvas preparation was not found or has expired. Preview the asset edit canvas again.");
+            DateTime? maskUpdatedAt = null;
+            if (previewedPreparation.OriginalMaskId is Guid originalMaskId)
+            {
+                maskUpdatedAt = await db.ImageMasks
+                    .Where(mask => mask.ProjectId == projectId && mask.Id == originalMaskId && mask.AssetId == sourceAsset.Id && mask.OwnerKind == "asset")
+                    .Select(mask => (DateTime?)mask.UpdatedAt)
+                    .FirstOrDefaultAsync(cancellationToken);
+                if (maskUpdatedAt is null)
+                    throw new InvalidOperationException("The asset mask used by the canvas preview no longer exists. Preview the canvas again.");
+            }
+            if (!canvasPreparations.TryGet(
                     projectId,
-                    sourceAsset,
-                    request.MaskPngDataUrl,
-                    $"{sourceAsset.Label} mask",
-                    requireEditableArea: true,
-                    cancellationToken)
-                : await CreateEditSourceMaskEntityAsync(
+                    preparationId,
+                    EditCanvasPreparationTargetKinds.Asset,
+                    sourceAsset.Id,
+                    parentTargetId: null,
+                    PreparationRevision(sourceAsset.UpdatedAt, maskUpdatedAt),
+                    out var preparation,
+                    out var preparationError))
+            {
+                throw new InvalidOperationException(preparationError);
+            }
+            if (!string.Equals(normalizedBackground, preparation.Background, StringComparison.Ordinal))
+                throw new InvalidOperationException("The edit background conflicts with the canvas preview. Preview the intended background again.");
+
+            var prepared = preparation.Canvas;
+            canvasTransform = prepared.Transform;
+            sourceImage = new ImagePayload(
+                "image/png",
+                prepared.ProviderSourcePng,
+                prepared.Transform.ProviderWidth,
+                prepared.Transform.ProviderHeight);
+            if (prepared.ProviderMaskPng is not null)
+            {
+                storedMask = await StorePreparedEditMaskEntityAsync(
                     projectId,
                     sourceAsset,
                     batchId,
-                    request.MaskPngDataUrl,
-                    $"{sourceAsset.Label} edit mask",
+                    prepared.ProviderMaskPng,
                     sourceImage,
                     cancellationToken);
+            }
+            if (ProviderCanvasDiffersFromLogical(prepared.Transform))
+            {
+                logicalSourceSnapshot = prepared.LogicalSourcePng;
+                logicalMaskSnapshot = prepared.LogicalMaskPng;
+            }
+            preparationToRemove = preparationId;
         }
-
-        if (storedMask is not null)
+        else
         {
-            sourceImage = NormalizeMaskedEditSource(sourceImage);
-            ValidateEditImageAndMask(sourceImage, storedMask);
+            if (request.MaskId is not null && !string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
+                throw new InvalidOperationException("Use either an existing mask id or mask image data, not both.");
+            if (request.MaskId is Guid maskId)
+            {
+                storedMask = await db.ImageMasks.FirstOrDefaultAsync(mask =>
+                    mask.ProjectId == projectId
+                    && mask.Id == maskId
+                    && mask.AssetId == sourceAsset.Id
+                    && mask.OwnerKind == "asset", cancellationToken)
+                    ?? throw new InvalidOperationException("The selected edit mask was not found for the source asset.");
+                EnsurePngMaskHasAlpha(storedMask.Data, requireEditableArea: true);
+            }
+            else if (!string.IsNullOrWhiteSpace(request.MaskPngDataUrl))
+            {
+                storedMask = string.IsNullOrWhiteSpace(request.SourcePngDataUrl)
+                    ? await UpsertAssetMaskEntityAsync(
+                        projectId,
+                        sourceAsset,
+                        request.MaskPngDataUrl,
+                        $"{sourceAsset.Label} mask",
+                        requireEditableArea: true,
+                        cancellationToken)
+                    : await CreateEditSourceMaskEntityAsync(
+                        projectId,
+                        sourceAsset,
+                        batchId,
+                        request.MaskPngDataUrl,
+                        $"{sourceAsset.Label} edit mask",
+                        sourceImage,
+                        cancellationToken);
+            }
+
+            if (storedMask is not null)
+            {
+                sourceImage = NormalizeMaskedEditSource(sourceImage);
+                ValidateEditImageAndMask(sourceImage, storedMask);
+            }
+
+            if (storedMask is not null)
+            {
+                var originalMaskId = storedMask.Id;
+                var prepared = imageEditCanvas.Prepare(
+                    sourceImage.Data,
+                    storedMask.Data,
+                    normalizedBackground,
+                    canvasOptions,
+                    imageProvider.DescribeCapabilities());
+                sourceImage = new ImagePayload(
+                    "image/png",
+                    prepared.ProviderSourcePng,
+                    prepared.Transform.ProviderWidth,
+                    prepared.Transform.ProviderHeight);
+                canvasTransform = prepared.Transform with { OriginalMaskId = originalMaskId };
+                if (prepared.ProviderMaskPng is not null)
+                {
+                    storedMask = await StorePreparedEditMaskEntityAsync(
+                        projectId,
+                        sourceAsset,
+                        batchId,
+                        prepared.ProviderMaskPng,
+                        sourceImage,
+                        cancellationToken);
+                }
+                if (ProviderCanvasDiffersFromLogical(prepared.Transform))
+                {
+                    logicalSourceSnapshot = prepared.LogicalSourcePng;
+                    logicalMaskSnapshot = prepared.LogicalMaskPng;
+                }
+            }
         }
 
         var outputLabel = Clean(request.OutputLabel);
@@ -1414,8 +1591,8 @@ public sealed class ArtWorkflowService(
             MainlineModel = imageOptions.Value.DefaultMainlineModel,
             ImageModel = imageOptions.Value.DefaultImageModel,
             Prompt = prompt,
-            Size = NormalizeSize(request.Size),
-            Background = NormalizeBackground(request.Background),
+            Size = canvasTransform is null ? NormalizeSize(request.Size) : $"{canvasTransform.ProviderWidth}x{canvasTransform.ProviderHeight}",
+            Background = normalizedBackground,
             Count = count,
             InputAssetIdsJson = SerializeIds(new[] { sourceAsset.Id }.Concat(references.Select(a => a.Id))),
             InputMaskIdsJson = SerializeIds(storedMask is null ? Enumerable.Empty<Guid>() : new[] { storedMask.Id }),
@@ -1423,6 +1600,12 @@ public sealed class ArtWorkflowService(
             EditSourceData = sourceImage.Data,
             EditSourceWidth = sourceImage.Width,
             EditSourceHeight = sourceImage.Height,
+            EditLogicalSourceContentType = logicalSourceSnapshot is null ? null : "image/png",
+            EditLogicalSourceData = logicalSourceSnapshot,
+            EditLogicalSourceWidth = logicalSourceSnapshot is null ? null : canvasTransform?.LogicalWidth,
+            EditLogicalSourceHeight = logicalSourceSnapshot is null ? null : canvasTransform?.LogicalHeight,
+            EditLogicalMaskData = logicalMaskSnapshot,
+            EditCanvasTransformJson = canvasTransform is null ? string.Empty : JsonSerializer.Serialize(canvasTransform, JsonOptions),
             ParentBatchId = sourceAsset.SourceBatchId,
             PromptRecipeId = recipe?.Id,
             PromptRecipeVersion = promptRecipeVersion,
@@ -1435,6 +1618,8 @@ public sealed class ArtWorkflowService(
             project.ActiveWorkspaceMode = WorkspaceMode.Batches;
         project.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
+        if (preparationToRemove is Guid consumedPreparationId)
+            canvasPreparations.Remove(consumedPreparationId);
 
         logger.LogDebug(
             "Image edit batch created: projectId={ProjectId}, batchId={BatchId}, sourceAssetId={SourceAssetId}, count={Count}, size={Size}, mainlineModel={MainlineModel}, imageModel={ImageModel}, referenceImages={ReferenceImageCount}, hasMask={HasMask}, promptChars={PromptChars}",
@@ -1510,7 +1695,7 @@ public sealed class ArtWorkflowService(
                 new ImageProviderReference(sourceAsset.FileName, sourceImage.ContentType, sourceImage.Data),
                 storedMask is null ? null : new ImageProviderReference(storedMask.Label, storedMask.ContentType, storedMask.Data),
                 references.Select(ToProviderReference).ToList(),
-                imageOptions.Value.DefaultOutputFormat,
+                storedMask is null ? imageOptions.Value.DefaultOutputFormat : "png",
                 imageOptions.Value.DefaultQuality,
                 NormalizeBackground(batch.Background)), cancellationToken, progress);
         }
@@ -1535,14 +1720,36 @@ public sealed class ArtWorkflowService(
 
         var image = providerResult.Images.FirstOrDefault()
             ?? throw new InvalidOperationException("Image provider completed without returning an image.");
+        var canvasTransform = DeserializeEditCanvasTransform(batch.EditCanvasTransformJson);
+        var outputData = image.Data;
+        var outputContentType = image.ContentType;
+        EditCanvasFinalization? canvasFinalization = null;
+        if (canvasTransform is not null)
+        {
+            var logicalSourceData = batch.EditLogicalSourceData is { Length: > 0 }
+                ? batch.EditLogicalSourceData
+                : sourceImage.Data;
+            var logicalMaskData = batch.EditLogicalMaskData is { Length: > 0 }
+                ? batch.EditLogicalMaskData
+                : storedMask?.Data;
+            var finalized = imageEditCanvas.Finalize(
+                image.Data,
+                logicalSourceData,
+                logicalMaskData,
+                canvasTransform,
+                batch.Background);
+            outputData = finalized.Png;
+            canvasFinalization = finalized.Finalization;
+            outputContentType = "image/png";
+        }
         var fallbackLabel = $"{sourceAsset.Label} edit {LabelForIndex(outputIndex)}";
         var asset = CreateAsset(
             projectId,
             OutputAssetLabel(batch.Label, outputIndex, batch.Count, fallbackLabel),
-            $"edited-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(image.ContentType)}",
+            $"edited-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(outputContentType)}",
             ArtAssetKind.Edited,
-            image.ContentType,
-            image.Data,
+            outputContentType,
+            outputData,
             sourceAsset.Id,
             batch.Id,
             batch.PromptRecipeId,
@@ -1560,6 +1767,8 @@ public sealed class ArtWorkflowService(
                 image.OutputFormat,
                 SourceAssetId = sourceAsset.Id,
                 MaskId = storedMask?.Id,
+                EditCanvasTransform = canvasTransform,
+                EditCanvasFinalization = canvasFinalization,
                 References = references.Select(a => new { a.Id, a.Label, a.ContentType }),
             });
         asset.ReviewStatus = AssetReviewStatus.Pending;
@@ -2994,6 +3203,36 @@ public sealed class ArtWorkflowService(
         return mask;
     }
 
+    private async Task<ImageMask> StorePreparedEditMaskEntityAsync(
+        Guid projectId,
+        ArtAsset asset,
+        Guid batchId,
+        byte[] maskPng,
+        ImagePayload preparedSource,
+        CancellationToken cancellationToken)
+    {
+        var mask = new ImageMask
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            AssetId = asset.Id,
+            OwnerKind = "editBatch",
+            OwnerId = batchId,
+            CreatedAt = DateTime.UtcNow,
+        };
+        await db.ImageMasks.AddAsync(mask, cancellationToken);
+
+        mask.Label = $"{asset.Label} prepared edit mask";
+        mask.ContentType = "image/png";
+        mask.Data = maskPng;
+        mask.Width = preparedSource.Width;
+        mask.Height = preparedSource.Height;
+        mask.CoordinateSpace = "preparedEditSource";
+        mask.UpdatedAt = DateTime.UtcNow;
+        ValidateEditImageAndMask(preparedSource, mask);
+        return mask;
+    }
+
     private async Task<ImageMask> UpsertAssetMaskEntityAsync(
         Guid projectId,
         ArtAsset asset,
@@ -3154,6 +3393,34 @@ public sealed class ArtWorkflowService(
         if (sourceImage.Width != mask.Width || sourceImage.Height != mask.Height)
             throw new InvalidOperationException("Source image and mask dimensions must match.");
     }
+
+    private static EditCanvasTransform? DeserializeEditCanvasTransform(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize<EditCanvasTransform>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static long PreparationRevision(DateTime targetUpdatedAt, DateTime? maskUpdatedAt)
+    {
+        unchecked
+        {
+            return (targetUpdatedAt.Ticks * 397L) ^ (maskUpdatedAt?.Ticks ?? 0L);
+        }
+    }
+
+    private static bool ProviderCanvasDiffersFromLogical(EditCanvasTransform transform) =>
+        transform.ProviderWidth != transform.LogicalWidth
+        || transform.ProviderHeight != transform.LogicalHeight
+        || transform.ProviderLogicalWidth != transform.LogicalWidth
+        || transform.ProviderLogicalHeight != transform.LogicalHeight;
 
     private static void EnsurePngMaskHasAlpha(byte[] data, bool requireEditableArea)
     {
@@ -4913,6 +5180,7 @@ public sealed class ArtWorkflowService(
             batch.Count,
             DeserializeIds(batch.InputAssetIdsJson),
             DeserializeIds(batch.InputMaskIdsJson),
+            DeserializeEditCanvasTransform(batch.EditCanvasTransformJson),
             outputAssets.Select(a => a.Id).ToList(),
             batch.ParentBatchId,
             batch.PromptRecipeId,
@@ -5301,6 +5569,7 @@ public sealed class ArtWorkflowService(
             batch.Count,
             batch.InputAssetIdsJson,
             batch.InputMaskIdsJson,
+            batch.EditCanvasTransformJson,
             batch.ParentBatchId,
             batch.PromptRecipeId,
             batch.PromptRecipeVersion,
@@ -5600,6 +5869,7 @@ public sealed class ArtWorkflowService(
         int Count,
         string InputAssetIdsJson,
         string InputMaskIdsJson,
+        string EditCanvasTransformJson,
         Guid? ParentBatchId,
         Guid? PromptRecipeId,
         int? PromptRecipeVersion,
