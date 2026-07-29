@@ -232,6 +232,7 @@ else
     private string _recipeName = string.Empty;
     private string _recipePrompt = string.Empty;
     private string _recipeNotes = string.Empty;
+    private string _recipeBackgroundPreference = ImageBackgroundModes.Current;
     private readonly List<RecipeAttachmentDraft> _recipeAttachments = [];
     private string _newRecipeAttachmentAssetText = string.Empty;
     private string _newRecipeAttachmentRole = RecipeAssetAttachmentRoles.Example;
@@ -246,7 +247,6 @@ else
     private bool _animationRecipeEditorDirty;
     private string _editPrompt = string.Empty;
     private string _editSize = "auto";
-    private string _editBackground = "removable";
     private int _editCount = 1;
     private int _editPaddingTop;
     private int _editPaddingRight;
@@ -667,9 +667,9 @@ else
                     <label>
                         <span>Background</span>
                         <select class="form-select" @bind="_generateBackground">
-                            <option value="removable">Removable color</option>
-                            <option value="auto">Auto</option>
-                            <option value="opaque">Opaque</option>
+                            <option value="@ImageBackgroundModes.Removable">Removable magenta</option>
+                            <option value="@ImageBackgroundModes.Auto">Natural / model decides</option>
+                            <option value="@ImageBackgroundModes.Opaque">Opaque output</option>
                         </select>
                     </label>
                     <label>
@@ -1209,14 +1209,6 @@ else
                                 </select>
                             </label>
                             <label>
-                                <span>Background</span>
-                                <select class="form-select" @bind="_editBackground" @bind:after="InvalidateEditCanvasPreview">
-                                    <option value="removable">Removable color</option>
-                                    <option value="auto">Auto</option>
-                                    <option value="opaque">Opaque</option>
-                                </select>
-                            </label>
-                            <label>
                                 <span>Count</span>
                                 <input class="form-control" type="number" min="1" max="@ImageOptions.Value.MaxOutputs" @bind="_editCount" />
                             </label>
@@ -1350,6 +1342,15 @@ else
                                 <span>Notes</span>
                                 <textarea class="form-control" rows="4" @bind="_recipeNotes" @bind:event="oninput" @bind:after="MarkRecipeEditorDirty"></textarea>
                             </label>
+                            <label>
+                                <span>Generation background</span>
+                                <select class="form-select" @bind="_recipeBackgroundPreference" @bind:after="MarkRecipeEditorDirty">
+                                    <option value="@ImageBackgroundModes.Current">Use current Generate selection</option>
+                                    <option value="@ImageBackgroundModes.Auto">Natural / model decides</option>
+                                    <option value="@ImageBackgroundModes.Removable">Removable magenta</option>
+                                    <option value="@ImageBackgroundModes.Opaque">Opaque output</option>
+                                </select>
+                            </label>
                         </div>
 
                         @RenderRecipeAttachmentEditor(animation: false)
@@ -1394,6 +1395,7 @@ else
                                                     <strong>v@version.Version</strong>
                                                     <span class="recipe-version-date">@version.CreatedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)</span>
                                                     <span class="recipe-source-badge recipe-source-@version.Source">@version.Source</span>
+                                                    <span>@RecipeBackgroundPreferenceLabel(version.BackgroundPreference)</span>
                                                 </div>
                                                 <p>@(string.IsNullOrWhiteSpace(version.ChangeSummary) ? "Saved." : version.ChangeSummary)</p>
                                                 <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => RestoreRecipeVersionAsync(version.Version)">Restore</button>
@@ -2137,6 +2139,7 @@ else
     private void OnGenerateRecipeChanged(ChangeEventArgs args)
     {
         _generateRecipeText = args.Value?.ToString() ?? string.Empty;
+        ApplySelectedRecipeBackgroundToGenerate();
     }
 
     private void OnGenerateAnimationRecipeChanged(ChangeEventArgs args)
@@ -2157,7 +2160,8 @@ else
         var request = new SavePromptRecipeRequest(
             _recipeName,
             RecipePromptForSave(),
-            _recipeNotes);
+            _recipeNotes,
+            _recipeBackgroundPreference);
 
         await RunWorkflowAsync(_editingRecipeId is null ? "Saving recipe..." : "Updating recipe...", async () =>
         {
@@ -2167,7 +2171,8 @@ else
                 saved = await Workflow.UpdatePromptRecipeAsync(_workbench.Project.Id, recipeId, new UpdatePromptRecipeRequest(
                     request.Name,
                     request.Prompt,
-                    request.Notes));
+                    request.Notes,
+                    request.BackgroundPreference));
             }
             else
             {
@@ -2183,6 +2188,7 @@ else
     private void NewRecipeDraft()
     {
         ClearRecipeEditor();
+        _recipeBackgroundPreference = ImageBackgroundModes.NormalizeGeneration(_generateBackground);
         _recipePrompt = string.IsNullOrWhiteSpace(_generatePrompt) ? string.Empty : _generatePrompt;
         foreach (var assetId in CurrentReferenceAssetIds())
             _recipeAttachments.Add(new RecipeAttachmentDraft { AssetId = assetId, Role = RecipeAssetAttachmentRoles.Example });
@@ -2197,6 +2203,7 @@ else
         _recipeName = string.Empty;
         _recipePrompt = string.Empty;
         _recipeNotes = string.Empty;
+        _recipeBackgroundPreference = ImageBackgroundModes.Current;
         _recipeAttachments.Clear();
         _newRecipeAttachmentAssetText = string.Empty;
         _newRecipeAttachmentRole = RecipeAssetAttachmentRoles.Example;
@@ -2220,6 +2227,7 @@ else
         _recipeName = recipe.Name;
         _recipePrompt = recipe.Prompt;
         _recipeNotes = recipe.Notes;
+        _recipeBackgroundPreference = ImageBackgroundModes.NormalizeRecipePreference(recipe.BackgroundPreference);
         LoadRecipeAttachmentDrafts(_recipeAttachments, recipe.Attachments);
         _loadedRecipeSnapshot = RecipeSnapshot(recipe);
         _recipeEditorDirty = false;
@@ -2393,6 +2401,7 @@ else
     {
         await LoadRecipeEditorAsync(recipe);
         _generateRecipeText = recipe.Id.ToString();
+        ApplySelectedRecipeBackgroundToGenerate();
         await SetModeAsync(WorkspaceMode.Generate);
     }
 
@@ -2835,7 +2844,6 @@ else
                 _editPrompt,
                 _editSize,
                 _editCount,
-                _editBackground,
                 SelectedEditRecipeIdOrNull(),
                 _editCanvasPreparationId is null ? sourceDataUrl : null,
                 _editCanvasPreparationId is null ? maskDataUrl : null,
@@ -2888,7 +2896,6 @@ else
                 _workbench.Project.Id,
                 new PreviewAssetEditCanvasRequest(
                     asset.Id,
-                    _editBackground,
                     sourceDataUrl,
                     maskDataUrl,
                     CanvasOptions: CurrentEditCanvasOptions()));
@@ -3871,7 +3878,6 @@ else
             sourceAsset is null ? null : AssetSummary(sourceAsset),
             _editPrompt,
             _editSize,
-            _editBackground,
             _editCount,
             SelectedEditRecipeIdOrNull(),
             referenceAssets.Select(asset => asset.Id).ToList(),
@@ -4120,6 +4126,14 @@ else
             return null;
 
         return _workbench.Recipes.FirstOrDefault(recipe => recipe.Id == recipeId);
+    }
+
+    private void ApplySelectedRecipeBackgroundToGenerate()
+    {
+        var preference = ImageBackgroundModes.NormalizeRecipePreference(
+            SelectedRecipeForGenerate()?.BackgroundPreference);
+        if (preference != ImageBackgroundModes.Current)
+            _generateBackground = preference;
     }
 
     private AnimationRecipeView? SelectedAnimationRecipeForGenerate()
@@ -4598,6 +4612,7 @@ else
         string.Join('\u001f',
             recipe.Name,
             recipe.Prompt,
+            ImageBackgroundModes.NormalizeRecipePreference(recipe.BackgroundPreference),
             string.Join('\u001e', recipe.Attachments
                 .OrderBy(attachment => attachment.SortOrder)
                 .Select(attachment => string.Join('\u001d',
@@ -4655,9 +4670,18 @@ else
     private static string BackgroundLabel(string background) =>
         background.Trim().ToLowerInvariant() switch
         {
-            "removable" or "transparent" => "Removable color",
-            "opaque" => "Opaque background",
-            _ => "Auto background",
+            ImageBackgroundModes.Removable or "transparent" => "Removable magenta",
+            ImageBackgroundModes.Opaque => "Opaque output",
+            _ => "Natural / model decides",
+        };
+
+    private static string RecipeBackgroundPreferenceLabel(string background) =>
+        ImageBackgroundModes.NormalizeRecipePreference(background) switch
+        {
+            ImageBackgroundModes.Removable => "Removable magenta",
+            ImageBackgroundModes.Opaque => "Opaque output",
+            ImageBackgroundModes.Auto => "Natural / model decides",
+            _ => "Use current Generate selection",
         };
 
     private static string LabelForIndex(int index)

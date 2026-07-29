@@ -647,11 +647,10 @@ public sealed class OpenAIAccountImageProvider(
         };
 
     private static string NormalizeBackground(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
+        ImageBackgroundModes.NormalizeGeneration(value) switch
         {
-            "opaque" => "opaque",
-            "removable" or "removablecolor" or "removable-color" or "transparent" or "chroma" or "chromakey" or "chroma-key" => "opaque",
-            _ => "auto",
+            ImageBackgroundModes.Opaque or ImageBackgroundModes.Removable => ImageBackgroundModes.Opaque,
+            _ => ImageBackgroundModes.Auto,
         };
 
     private static string? ReadString(JsonElement element, string propertyName) =>

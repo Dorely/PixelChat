@@ -73,6 +73,7 @@
 | `ImageEditCanvasService.cs` | Shared edit/outpaint pipeline that prepares logical/provider canvases, masks, and previews; normalizes removable logical-source backgrounds; dilates semantic boundaries; restores noncanonical results; and composites protected pixels. |
 | `EditCanvasPreparationStore.cs` | Fifteen-minute bounded in-memory store for preview-locked asset/frame canvas preparations, limited to four entries per project and validated against source revisions. |
 | `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, parallelism, retry, timeout, partial previews, reference defaults, and OpenAI-account reliable edit pixel budget. |
+| `ImageBackgroundModes.cs` | Shared generation background modes and recipe-preference normalization/resolution for natural, opaque, and removable-magenta output. |
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 | `ImageRgbaDecoder.cs` | Shared RGBA decoder for PNG/JPEG source assets used by greenfield sprite region/frame operations and standalone region extraction. |
@@ -176,8 +177,8 @@
 | `BackgroundRemovalExportCache.cs` | EF entity for cached Local AI export PNGs keyed by source asset bytes, model, rembg version, and processing options. |
 | `ExportStepCache.cs` | EF entity for persisted applied export-step PNGs per source asset and source image hash. |
 | `GenerationBatch.cs` | EF entity for image generation/edit batches, provider metadata, outputs/errors, lineage, recipe versions, provider and logical edit snapshots, edit-canvas transform provenance, and user/assistant review completion provenance. |
-| `PromptRecipe.cs` | EF entity backing reusable art recipe prompts with private notes, version history, and ordered example/guide attachments. |
-| `PromptRecipeVersion.cs` | EF entity for append-only art recipe name/prompt/notes snapshots used by user/assistant saves and restore. |
+| `PromptRecipe.cs` | EF entity backing reusable art recipe prompts with a generation-background preference, private notes, version history, and ordered example/guide attachments. |
+| `PromptRecipeVersion.cs` | EF entity for append-only art recipe name/prompt/notes/background-preference snapshots used by user/assistant saves and restore. |
 | `RecipeAssetAttachment.cs` | EF entity for ordered art/animation recipe asset attachments with example or guide roles. |
 | `SpriteRegion.cs` | Greenfield EF entity for a source-image region (rect/polygon, type, order) that stays linked to source pixels and can be extracted as an asset or turned into frames. |
 | `StandaloneAsset.cs` | Greenfield EF entity linking an extracted region to its output `ArtAsset` (kind `Extracted`) with logical size, content offset, source link, and a deferred bitmap-revision pointer. |
@@ -247,6 +248,7 @@
 | `20260712000000_AssetReviewWorkflow.cs` | EF migration adding asset lifecycle/review decisions and batch review provenance while removing recipe items from curated Review sets. |
 | `20260715000000_OutpaintAwareImageEditing.cs` | EF migration adding edit-canvas transform provenance to batches/frames and persisted canvas options to pending sprite-edit sessions. |
 | `20260716002245_ReliableOutpaintFinalization.cs` / `.Designer.cs` | EF migration adding logical edit source/mask snapshots, frame finalization provenance, and pending sprite-edit canvas preparation identity/expiry. |
+| `20260727212737_GenerationOnlyBackgroundPreferences.cs` / `.Designer.cs` | EF migration adding versioned generation-background preferences to art recipes, defaulting existing recipes to the current Generate selection. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

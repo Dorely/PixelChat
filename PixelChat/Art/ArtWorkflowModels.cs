@@ -334,6 +334,7 @@ public sealed record PromptRecipeView(
     string Name,
     string Prompt,
     string Notes,
+    string BackgroundPreference,
     IReadOnlyList<RecipeAssetAttachmentView> Attachments,
     int CurrentVersion,
     DateTime CreatedAt);
@@ -416,7 +417,7 @@ public sealed record GenerateImagesRequest(
     string NegativePrompt,
     string Size,
     int Count,
-    string Background,
+    string? Background,
     Guid? PromptRecipeId,
     Guid? AnimationRecipeId,
     IReadOnlyList<Guid> ReferenceAssetIds,
@@ -429,7 +430,6 @@ public sealed record EditImageRequest(
     string Prompt,
     string Size,
     int Count,
-    string Background,
     Guid? PromptRecipeId,
     string? SourcePngDataUrl,
     string? MaskPngDataUrl,
@@ -442,7 +442,6 @@ public sealed record EditImageRequest(
 
 public sealed record PreviewAssetEditCanvasRequest(
     Guid SourceAssetId,
-    string Background,
     string? SourcePngDataUrl = null,
     string? MaskPngDataUrl = null,
     Guid? MaskId = null,
@@ -511,6 +510,7 @@ public sealed record SavePromptRecipeRequest(
     string Name,
     string Prompt,
     string Notes,
+    string? BackgroundPreference = null,
     string Source = "user",
     string ChangeSummary = "");
 
@@ -518,6 +518,7 @@ public sealed record UpdatePromptRecipeRequest(
     string Name,
     string Prompt,
     string Notes,
+    string? BackgroundPreference = null,
     string Source = "user",
     string ChangeSummary = "");
 
@@ -644,6 +645,7 @@ public sealed record PromptRecipeVersionView(
     int Version,
     string Name,
     string Notes,
+    string BackgroundPreference,
     string Source,
     string ChangeSummary,
     DateTime CreatedAt);

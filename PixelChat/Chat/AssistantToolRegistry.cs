@@ -120,10 +120,11 @@ public sealed class AssistantToolRegistry(
                 string prompt,
                 string changeSummary,
                 string? notes = null,
+                [Description("Generation-only background preference: current, auto, removable, or opaque. Use auto for concept/reference art and removable for export-ready sprite generation.")] string? backgroundPreference = null,
                 CancellationToken cancellationToken = default) =>
-                SavePromptRecipeToolAsync(projectId, recipeId, name, prompt, changeSummary, notes, cancellationToken),
+                SavePromptRecipeToolAsync(projectId, recipeId, name, prompt, changeSummary, notes, backgroundPreference, cancellationToken),
             name: "save_prompt_recipe",
-            description: "Create or update an art recipe. A recipe is a name, a reusable prompt for visual style and production guidance, private notes, and optional asset attachments. Keep the prompt broad, minimal, and composable for the repeatable use case, not a one-off subject. Always provide changeSummary. Every save is versioned and revertible."),
+            description: "Create or update an art recipe. A recipe is a name, reusable visual/production guidance, a generation-only background preference, private notes, and optional asset attachments. Keep the prompt broad, minimal, and composable for the repeatable use case, not a one-off subject. Always provide changeSummary. Every save is versioned and revertible."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId, RecipeAttachmentToolItem[]? attachments = null, CancellationToken cancellationToken = default) =>
@@ -220,7 +221,6 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (
                 Guid sourceAssetId,
-                string? background = null,
                 Guid? maskId = null,
                 SpriteSheetRect[]? maskRects = null,
                 SpriteSheetShapePath[]? maskPolygons = null,
@@ -232,7 +232,7 @@ public sealed class AssistantToolRegistry(
                 string resampleMode = "nearest",
                 int seamOverlapPixels = 32,
                 CancellationToken cancellationToken = default) =>
-                PreviewAssetEditCanvasAsync(projectId, sourceAssetId, background, maskId, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, cancellationToken),
+                PreviewAssetEditCanvasAsync(projectId, sourceAssetId, maskId, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, cancellationToken),
             name: "preview_asset_edit_canvas",
             description: "Deterministically prepare and inspect an asset edit canvas without generating an image, consuming a generation round, creating a batch, or creating a library asset. Use this immediately before every edit_asset call with nonzero padding. Pass the final intended padding and effective saved/drawn mask once; the result returns a 15-minute canvasPreparationId plus model-only prepared-source and editable-mask-overlay images. After inspecting them, call edit_asset with only that id for canvas/mask locking; do not repeat inline padding or mask arguments."),
 
@@ -242,7 +242,6 @@ public sealed class AssistantToolRegistry(
                 string prompt,
                 [Description("Required readable name for the edited asset(s) this round will save. Use a short production name, not Image A or a generic batch label.")] string assetName,
                 string? size = null,
-                string? background = null,
                 int count = 2,
                 Guid[]? referenceAssetIds = null,
                 Guid? recipeId = null,
@@ -258,9 +257,9 @@ public sealed class AssistantToolRegistry(
                 int seamOverlapPixels = 32,
                 Guid? canvasPreparationId = null,
                 CancellationToken cancellationToken = default) =>
-                EditAssetAsync(projectId, budget, sourceAssetId, prompt, assetName, size, background, count, referenceAssetIds, recipeId, maskId, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, canvasPreparationId, cancellationToken),
+                EditAssetAsync(projectId, budget, sourceAssetId, prompt, assetName, size, count, referenceAssetIds, recipeId, maskId, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, canvasPreparationId, cancellationToken),
             name: "edit_asset",
-            description: "Directly edit an existing image asset and wait for completion. Use this whenever the user asks to change, replace, repair, or refine an existing non-frame image; do not substitute new generation or UI instructions. Inspect the source first. For an ordinary zero-padding localized edit, pass maskRects/maskPolygons in full source pixels or maskId. For every padded/outpaint edit, first call preview_asset_edit_canvas with the final mask, padding, seam, and resampling; inspect both images, then call this tool with canvasPreparationId and no inline mask/canvas arguments. A preparation locks exact logical/provider canvases and expires after 15 minutes. Padding is deterministic and must never be its own generation round. Use recipeId for reusable guidance and keep the prompt focused on Change/Preserve/Constraints. Outputs are model-only images and enter Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
+            description: "Directly edit an existing image asset and wait for completion. Asset edits always infer and preserve the source background; background mode is generation-only and no background clause is injected. Use this whenever the user asks to change, replace, repair, or refine an existing non-frame image; do not substitute new generation or UI instructions. Inspect the source first. For an ordinary zero-padding localized edit, pass maskRects/maskPolygons in full source pixels or maskId. For every padded/outpaint edit, first call preview_asset_edit_canvas with the final mask, padding, seam, and resampling; inspect both images, then call this tool with canvasPreparationId and no inline mask/canvas arguments. A preparation locks exact logical/provider canvases and expires after 15 minutes. Padding is deterministic and must never be its own generation round. Use recipeId for reusable guidance and keep the prompt focused on Change/Preserve/Constraints. Outputs are model-only images and enter Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
 
         AIFunctionFactory.Create(
             method: (
@@ -775,6 +774,7 @@ public sealed class AssistantToolRegistry(
         string prompt,
         string changeSummary,
         string? notes,
+        string? backgroundPreference,
         CancellationToken cancellationToken)
     {
         PromptRecipeView saved;
@@ -784,15 +784,20 @@ public sealed class AssistantToolRegistry(
                 name,
                 prompt,
                 notes ?? string.Empty,
+                backgroundPreference,
                 "assistant",
                 changeSummary), cancellationToken);
         }
         else
         {
+            var capturedBackground = backgroundPreference
+                ?? visibleState.Get(projectId)?.Generate?.Background
+                ?? ImageBackgroundModes.Current;
             saved = await workflow.SavePromptRecipeAsync(projectId, new SavePromptRecipeRequest(
                 name,
                 prompt,
                 notes ?? string.Empty,
+                capturedBackground,
                 "assistant",
                 changeSummary), cancellationToken);
         }
@@ -802,6 +807,7 @@ public sealed class AssistantToolRegistry(
             recipeId = saved.Id,
             recipeName = saved.Name,
             version = saved.CurrentVersion,
+            backgroundPreference = saved.BackgroundPreference,
             attachmentCount = saved.Attachments.Count,
             message = "Prompt recipe saved and versioned.",
         }, JsonOptions);
@@ -1091,14 +1097,13 @@ public sealed class AssistantToolRegistry(
 
         var round = budget.Consume();
         var outputCount = ClampGenerationRoundCount(count);
-        var normalizedBackground = NormalizeBackground(background) ?? "auto";
         var references = referenceAssetIds ?? [];
         var batch = await imageRuntime.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
             specificRequest,
             negativePrompt ?? string.Empty,
             normalizedSize,
             outputCount,
-            normalizedBackground,
+            background,
             recipeId,
             animationRecipeId,
             references,
@@ -1110,7 +1115,6 @@ public sealed class AssistantToolRegistry(
     private async Task<string> PreviewAssetEditCanvasAsync(
         Guid projectId,
         Guid sourceAssetId,
-        string? background,
         Guid? maskId,
         SpriteSheetRect[]? maskRects,
         SpriteSheetShapePath[]? maskPolygons,
@@ -1160,7 +1164,6 @@ public sealed class AssistantToolRegistry(
 
         var preview = await workflow.PreviewAssetEditCanvasAsync(projectId, new PreviewAssetEditCanvasRequest(
             sourceAssetId,
-            NormalizeBackground(background) ?? "auto",
             MaskPngDataUrl: drawnMaskDataUrl,
             MaskId: maskId,
             CanvasOptions: canvasOptions), cancellationToken);
@@ -1174,7 +1177,6 @@ public sealed class AssistantToolRegistry(
         string prompt,
         string assetName,
         string? size,
-        string? background,
         int count,
         Guid[]? referenceAssetIds,
         Guid? recipeId,
@@ -1310,14 +1312,12 @@ public sealed class AssistantToolRegistry(
         }
 
         var outputCount = ClampGenerationRoundCount(count);
-        var normalizedBackground = NormalizeBackground(background) ?? "auto";
         var references = referenceAssetIds ?? [];
         var batch = await imageRuntime.StartEditImageAsync(projectId, new EditImageRequest(
             sourceAssetId,
             prompt,
             normalizedSize,
             outputCount,
-            normalizedBackground,
             recipeId,
             SourcePngDataUrl: null,
             MaskPngDataUrl: drawnMaskDataUrl,
@@ -2365,16 +2365,6 @@ public sealed class AssistantToolRegistry(
             },
             instruction = "Inspect both images. If placement and the effective editable region are correct, perform exactly one semantic edit using canvasPreparationId and no inline mask/canvas arguments.",
         }, JsonOptions);
-
-    private static string? NormalizeBackground(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
-        {
-            "removable" or "removablecolor" or "removable-color" or "transparent" or "chroma" or "chromakey" or "chroma-key" => "removable",
-            "opaque" => "opaque",
-            "auto" => "auto",
-            null or "" => null,
-            _ => "auto",
-        };
 
     private static EditCanvasResampleMode ParseResampleMode(string? value) =>
         string.Equals(value?.Trim(), "smooth", StringComparison.OrdinalIgnoreCase)

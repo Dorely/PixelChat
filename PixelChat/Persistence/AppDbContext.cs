@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using PixelChat.Art;
 using PixelChat.Models;
 
 namespace PixelChat.Persistence;
@@ -243,6 +244,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
         modelBuilder.Entity<PromptRecipe>(entity =>
         {
             entity.HasIndex(e => new { e.ProjectId, e.Name });
+            entity.Property(e => e.BackgroundPreference).HasDefaultValue(ImageBackgroundModes.Current);
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.PromptRecipes)
@@ -254,6 +256,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
         {
             entity.HasIndex(e => new { e.RecipeId, e.Version }).IsUnique();
             entity.HasIndex(e => new { e.ProjectId, e.RecipeId });
+            entity.Property(e => e.BackgroundPreference).HasDefaultValue(ImageBackgroundModes.Current);
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.PromptRecipeVersions)

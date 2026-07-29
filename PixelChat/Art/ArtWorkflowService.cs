@@ -941,6 +941,9 @@ public sealed class ArtWorkflowService(
         var references = await MergeGenerationReferencesAsync(projectId, recipe, animationRecipe, explicitReferences, excludedAssetId: null, cancellationToken);
 
         var outputLabel = Clean(request.OutputLabel);
+        var resolvedBackground = ImageBackgroundModes.ResolveGeneration(
+            request.Background,
+            recipe?.BackgroundPreference);
         var batch = new GenerationBatch
         {
             ProjectId = projectId,
@@ -955,7 +958,7 @@ public sealed class ArtWorkflowService(
             Prompt = prompt,
             NegativePrompt = Clean(request.NegativePrompt),
             Size = NormalizeSize(request.Size),
-            Background = NormalizeBackground(request.Background),
+            Background = resolvedBackground,
             Count = count,
             InputAssetIdsJson = SerializeIds(references.Select(a => a.Id)),
             ParentBatchId = request.ParentBatchId,
@@ -1015,7 +1018,7 @@ public sealed class ArtWorkflowService(
         try
         {
             providerResult = await imageProvider.GenerateAsync(new ImageProviderGenerateRequest(
-                BuildPrompt(batch.Prompt, batch.NegativePrompt, recipeGuidance, animationRecipeGuidance, batch.Background),
+                BuildGenerationPrompt(batch.Prompt, batch.NegativePrompt, recipeGuidance, animationRecipeGuidance, batch.Background),
                 Clean(batch.NegativePrompt),
                 batch.Size,
                 1,
@@ -1024,7 +1027,7 @@ public sealed class ArtWorkflowService(
                 references.Select(ToProviderReference).ToList(),
                 imageOptions.Value.DefaultOutputFormat,
                 imageOptions.Value.DefaultQuality,
-                NormalizeBackground(batch.Background)), cancellationToken, progress);
+                ImageBackgroundModes.NormalizeGeneration(batch.Background)), cancellationToken, progress);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1375,7 +1378,7 @@ public sealed class ArtWorkflowService(
         var options = request.CanvasOptions ?? new EditCanvasOptions();
         if (originalMaskPng is not null)
             sourceImage = NormalizeMaskedEditSource(sourceImage);
-        var background = NormalizeBackground(request.Background);
+        const string background = ImageBackgroundModes.Auto;
         var prepared = imageEditCanvas.Prepare(
             sourceImage.Data,
             originalMaskPng,
@@ -1434,7 +1437,7 @@ public sealed class ArtWorkflowService(
         var references = await MergeRecipeExampleReferenceAsync(projectId, recipe, explicitReferences, sourceAsset.Id, cancellationToken);
 
         var batchId = Guid.NewGuid();
-        var normalizedBackground = NormalizeBackground(request.Background);
+        const string normalizedBackground = ImageBackgroundModes.Auto;
         var canvasOptions = request.CanvasOptions ?? new EditCanvasOptions();
         if (request.CanvasPreparationId is null && canvasOptions.HasPadding)
             throw new InvalidOperationException("Padded edits require a current canvas preview. Preview the final padding and mask before generating.");
@@ -1687,7 +1690,7 @@ public sealed class ArtWorkflowService(
         try
         {
             providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
-                BuildPrompt(batch.Prompt, string.Empty, recipeGuidance, animationRecipe: null, background: batch.Background),
+                BuildEditPrompt(batch.Prompt, recipeGuidance),
                 batch.Size,
                 1,
                 batch.MainlineModel,
@@ -1697,7 +1700,7 @@ public sealed class ArtWorkflowService(
                 references.Select(ToProviderReference).ToList(),
                 storedMask is null ? imageOptions.Value.DefaultOutputFormat : "png",
                 imageOptions.Value.DefaultQuality,
-                NormalizeBackground(batch.Background)), cancellationToken, progress);
+                ImageBackgroundModes.Auto), cancellationToken, progress);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -2067,6 +2070,7 @@ public sealed class ArtWorkflowService(
             Name = string.IsNullOrWhiteSpace(name) ? $"{sourceRecipe.Name} Copy" : name.Trim(),
             Prompt = sourceRecipe.Prompt,
             Notes = sourceRecipe.Notes,
+            BackgroundPreference = ImageBackgroundModes.NormalizeRecipePreference(sourceRecipe.BackgroundPreference),
         };
         await db.PromptRecipes.AddAsync(duplicate, cancellationToken);
         foreach (var attachment in sourceRecipe.Attachments.OrderBy(a => a.SortOrder))
@@ -4436,7 +4440,7 @@ public sealed class ArtWorkflowService(
         };
     }
 
-    private static string BuildPrompt(
+    private static string BuildGenerationPrompt(
         string prompt,
         string negativePrompt,
         RecipePromptGuidance? recipe,
@@ -4461,7 +4465,7 @@ public sealed class ArtWorkflowService(
             : "Task:\n" + prompt.Trim());
 
         var constraints = BuildConstraintLines(negativePrompt);
-        if (NormalizeBackground(background) == "removable")
+        if (ImageBackgroundModes.IsRemovable(background))
         {
             constraints.Add("background must be flat, solid chroma-key magenta using exactly #ff00ff");
             constraints.Add("the same solid magenta must be visible through open holes, railings, gaps, cutouts, and transparent-looking interior spaces");
@@ -4472,6 +4476,17 @@ public sealed class ArtWorkflowService(
             parts.Add("Constraints:\n" + string.Join("\n", constraints));
 
         return string.Join("\n\n", parts);
+    }
+
+    private static string BuildEditPrompt(string prompt, RecipePromptGuidance? recipe)
+    {
+        if (recipe is null || string.IsNullOrWhiteSpace(recipe.Prompt))
+            return prompt.Trim();
+
+        return string.Join(
+            "\n\n",
+            "Style direction (reusable):\n" + recipe.Prompt.Trim(),
+            "Task:\n" + prompt.Trim());
     }
 
     private static List<string> BuildConstraintLines(string? negativePrompt)
@@ -4501,6 +4516,7 @@ public sealed class ArtWorkflowService(
         recipe.Name = CleanRequired(request.Name, "Recipe name is required.");
         recipe.Prompt = CleanRequired(request.Prompt, "Recipe prompt is required.");
         recipe.Notes = Clean(request.Notes);
+        recipe.BackgroundPreference = ImageBackgroundModes.NormalizeRecipePreference(request.BackgroundPreference);
     }
 
     private static void ApplyRecipeRequest(PromptRecipe recipe, UpdatePromptRecipeRequest request)
@@ -4508,6 +4524,8 @@ public sealed class ArtWorkflowService(
         recipe.Name = CleanRequired(request.Name, "Recipe name is required.");
         recipe.Prompt = CleanRequired(request.Prompt, "Recipe prompt is required.");
         recipe.Notes = Clean(request.Notes);
+        if (request.BackgroundPreference is not null)
+            recipe.BackgroundPreference = ImageBackgroundModes.NormalizeRecipePreference(request.BackgroundPreference);
     }
 
     private static void ApplyAnimationRecipeRequest(AnimationRecipe recipe, SaveAnimationRecipeRequest request)
@@ -4549,6 +4567,7 @@ public sealed class ArtWorkflowService(
             Name = recipe.Name,
             Prompt = recipe.Prompt,
             Notes = recipe.Notes,
+            BackgroundPreference = ImageBackgroundModes.NormalizeRecipePreference(recipe.BackgroundPreference),
             Source = normalizedSource,
             ChangeSummary = normalizedSummary,
             CreatedAt = DateTime.UtcNow,
@@ -4594,6 +4613,7 @@ public sealed class ArtWorkflowService(
         recipe.Name = snapshot.Name;
         recipe.Prompt = snapshot.Prompt;
         recipe.Notes = snapshot.Notes;
+        recipe.BackgroundPreference = ImageBackgroundModes.NormalizeRecipePreference(snapshot.BackgroundPreference);
     }
 
     private static void ApplyAnimationRecipeSnapshot(AnimationRecipe recipe, AnimationRecipeVersion snapshot)
@@ -4783,6 +4803,7 @@ public sealed class ArtWorkflowService(
         recipe.Id,
         recipe.Name,
         currentVersion,
+        backgroundPreference = ImageBackgroundModes.NormalizeRecipePreference(recipe.BackgroundPreference),
         promptPreview = Preview(recipe.Prompt, 320),
         attachmentCount = recipe.Attachments.Count,
         guideCount = recipe.Attachments.Count(a => NormalizeRecipeAttachmentRole(a.Role) == RecipeAssetAttachmentRoles.Guide),
@@ -4811,7 +4832,7 @@ public sealed class ArtWorkflowService(
         batch.Status,
         batch.ImageModel,
         batch.Size,
-        background = NormalizeBackground(batch.Background),
+        background = ImageBackgroundModes.NormalizeGeneration(batch.Background),
         batch.Count,
         inputAssetIds = DeserializeIds(batch.InputAssetIdsJson),
         inputMaskIds = DeserializeIds(batch.InputMaskIdsJson),
@@ -5176,7 +5197,7 @@ public sealed class ArtWorkflowService(
             batch.Prompt,
             batch.NegativePrompt,
             batch.Size,
-            NormalizeBackground(batch.Background),
+            ImageBackgroundModes.NormalizeGeneration(batch.Background),
             batch.Count,
             DeserializeIds(batch.InputAssetIdsJson),
             DeserializeIds(batch.InputMaskIdsJson),
@@ -5202,6 +5223,7 @@ public sealed class ArtWorkflowService(
             recipe.Name,
             recipe.Prompt,
             recipe.Notes,
+            ImageBackgroundModes.NormalizeRecipePreference(recipe.BackgroundPreference),
             recipe.Attachments
                 .OrderBy(attachment => attachment.SortOrder)
                 .ThenBy(attachment => attachment.CreatedAt)
@@ -5231,6 +5253,7 @@ public sealed class ArtWorkflowService(
             version.Version,
             version.Name,
             version.Notes,
+            ImageBackgroundModes.NormalizeRecipePreference(version.BackgroundPreference),
             version.Source,
             version.ChangeSummary,
             version.CreatedAt);
@@ -5313,15 +5336,6 @@ public sealed class ArtWorkflowService(
 
     private static string NormalizeSize(string value) =>
         string.IsNullOrWhiteSpace(value) ? "auto" : value.Trim();
-
-    private static string NormalizeBackground(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
-        {
-            "removable" or "removablecolor" or "removable-color" or "transparent" or "chroma" or "chromakey" or "chroma-key" => "removable",
-            "opaque" => "opaque",
-            "auto" => "auto",
-            _ => "auto",
-        };
 
     private static string Clean(string? value) => value?.Trim() ?? string.Empty;
 

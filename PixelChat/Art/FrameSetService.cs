@@ -2214,12 +2214,7 @@ public sealed class FrameSetService(
     }
 
     private static string NormalizeBackgroundMode(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
-        {
-            "removable" or "removablecolor" or "removable-color" or "transparent" or "chroma" or "chromakey" or "chroma-key" => "removable",
-            "auto" => "auto",
-            _ => "opaque",
-        };
+        ImageBackgroundModes.NormalizeGeneration(value, ImageBackgroundModes.Opaque);
 
     private static string NormalizeSize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "auto" : value.Trim();

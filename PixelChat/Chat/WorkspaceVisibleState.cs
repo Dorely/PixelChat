@@ -64,7 +64,6 @@ public sealed record WorkspaceEditVisibleState(
     WorkspaceAssetSummary? SourceAsset,
     string Prompt,
     string Size,
-    string Background,
     int Count,
     Guid? PromptRecipeId,
     IReadOnlyList<Guid> ReferenceAssetIds,

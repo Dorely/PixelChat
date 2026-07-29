@@ -14,6 +14,7 @@ public class PromptRecipeVersion
     public string Name { get; set; } = string.Empty;
     public string Prompt { get; set; } = string.Empty;
     public string Notes { get; set; } = string.Empty;
+    public string BackgroundPreference { get; set; } = "current";
     public string Source { get; set; } = "user";
     public string ChangeSummary { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
