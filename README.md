@@ -2,23 +2,16 @@
 
 PixelChat is a desktop-first, local Blazor/Electron application for building an AI-assisted 2D game art workbench. The long-term product vision is a workspace that helps game developers move from rough ideas to consistent, reusable, game-ready 2D assets.
 
-## First Slice Status
+See [VISION.md](VISION.md) for the product direction and [docs/architecture.md](docs/architecture.md) for the current technical boundaries and validation guidance.
 
-Implemented now:
+## Current Capabilities
 
-- .NET 10 Blazor Interactive Server app hosted by Electron.NET.
-- Local SQLite persistence using EF Core migrations.
-- Provider configuration for OpenAI account OAuth and arbitrary OpenAI-compatible chat endpoints.
-- SQLite-backed `ISecretStore` abstraction for API keys and OAuth tokens.
-- Persistent global chat transcript with streaming responses, stop/cancel, reset, and provider readiness gating.
-- PixelChat-specific chat prompt focused on 2D game art direction, prompt design, and asset planning.
-
-Not implemented yet:
-
-- Image generation or editing.
-- Asset import/export, sprite sheets, masks, selections, or editor tools.
-- Prompt recipe libraries, generation history, or project-specific style memory.
-- Automated tests.
+- Project-scoped assistant chat with streaming tool execution, visible intermediate results, persisted transcripts, and image context.
+- Image generation, imported-image editing, masks, outpainting-aware canvases, batch progress, visual review, and kept/rejected asset management.
+- Reusable versioned art and animation recipes with example and guide attachments.
+- A Source -> Frames -> Sheet sprite workflow with region extraction, frame ordering, alignment, cleanup, masked edits, animation preview, and deterministic sprite-sheet builds.
+- Procedural and GLB-backed animation guides plus PNG/JSON export workflows and optional local AI background removal.
+- OpenAI account OAuth and configurable OpenAI-compatible chat providers with local SQLite persistence.
 
 ## Requirements
 
@@ -76,4 +69,6 @@ Cross-platform package creation may require building on the target OS depending 
 
 ## Local Data
 
-The local SQLite database stores provider metadata, chat transcripts, OAuth token metadata, and first-slice secret values through `ISecretStore`. API keys and OAuth tokens are stored as secrets in the local database. Database files are ignored by git.
+The local SQLite database stores projects, assets and image data, generation batches, review decisions, recipes and versions, masks, frame sets and built sheets, export caches, assistant transcripts and visuals, provider metadata, OAuth metadata, and named secret values.
+
+API keys and OAuth token values are currently stored through the SQLite-backed `ISecretStore`; this is not an operating-system credential vault. Local database files are ignored by git.

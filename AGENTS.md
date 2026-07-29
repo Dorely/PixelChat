@@ -1,52 +1,147 @@
-# PixelChat - Project Guidelines
+# PixelChat - Agent Operating Guidelines
 
-## First Read
-- Read `VISION.md` immediately before doing any substantive work in this repo.
-- Read `FILEMAP.md` at the start of every session to understand the full codebase layout.
-- Treat `VISION.md` as the high-level direction for the project.
-- Do not assume everything in `VISION.md` is implemented or currently part of the implementation plan. Use the codebase to confirm current behavior.
-- Keep this file (`AGENTS.md`) stable and high level. Do not add notes here that are likely to become stale during normal development.
+## Required Context
 
-## File Map Maintenance
-- After adding, deleting, or renaming any source file, update `FILEMAP.md` to reflect the change.
-- When refactoring moves code between files or changes a file's responsibility, update the description in `FILEMAP.md`.
-- Keep `FILEMAP.md` entries concise - one to two lines per file maximum. If a file is doing more than can be reasonably construed within that limit, consider refactoring it.
+- At the start of every session, read `VISION.md`, `FILEMAP.md`, and
+  `docs/architecture.md` completely before doing substantive work.
+- Treat `VISION.md` as product direction, `docs/architecture.md` as the current
+  technical and product-constraint reference, and `FILEMAP.md` as a navigation
+  aid. None of them is proof that a feature is already implemented.
+- Confirm current behavior in code before planning or changing it.
+- Keep this file limited to durable agent behavior. Put product direction in
+  `VISION.md` and technical decisions, boundaries, and changing implementation
+  guidance in `docs/architecture.md`.
 
-## Tech Stack
-- .NET 10 Blazor Interactive Server for the application UI and local app host.
-- Electron.NET for the desktop shell on Windows, Linux, and macOS.
-- EF Core with SQLite for local persistence.
-- `Microsoft.Extensions.AI`, `Microsoft.Extensions.AI.OpenAI`, and the OpenAI .NET SDK for chat-provider abstraction and OpenAI-compatible endpoints.
-- Bootstrap is vendored by the Blazor template for first-slice UI styling.
+## Repository Readiness
 
-## Architectural Overview
-- PixelChat is desktop-first: normal user operation is through Electron, while browser-hosted development remains available for local startup and debugging when needed.
-- The app runs a local-only ASP.NET Core host and stores local state in SQLite.
+- Before beginning new work, inspect the current branch, working tree, index,
+  configured remotes, and upstream status.
+- Start feature work only from a clean working tree whose index matches `HEAD`.
+- If existing changes form coherent prior work, finish their verification and
+  documentation, then commit them before beginning a new feature. Never mix
+  unrelated unfinished work into a new change.
+- Inspect every existing diff before committing it. If changes are unfamiliar,
+  incomplete, unsafe to commit, or owned by another active effort, stop and ask
+  for direction instead of discarding, hiding, or overwriting them.
+- When an upstream exists, fetch its current state and ensure the working branch
+  has no unintegrated upstream commits before starting. Fast-forward when safe;
+  stop for direction if histories have diverged. Never rewrite published history
+  without explicit instruction.
+- When no remote or upstream exists, require a clean local `HEAD` and report that
+  remote synchronization could not be checked.
+
+## Research and Impact Analysis
+
+- Research the codebase before implementation. Use `rg` or an equivalent fast
+  search to find every use of the feature, concept, type, route, setting, and
+  terminology being changed.
+- Trace direct and indirect impact through domain models, EF persistence and
+  migrations, repositories, services, providers, dependency registration,
+  assistant tools and prompts, app-process runtimes, visible workspace state,
+  Razor UI, JavaScript, serialization, configuration, media endpoints,
+  documentation, and build tooling wherever applicable.
+- Read callers and consumers, not only the file named in the request. Treat the
+  requested location as a starting point rather than the full scope.
+- Before replacing a concept, identify all old names, registrations, stored
+  forms, and code paths that must disappear. Search for them again after
+  implementation.
+- For nontrivial work, form an impact plan before editing and keep it current as
+  new dependencies are discovered.
+
+## Implementation Standards
+
+- Deliver the smallest coherent change that fully completes the requested
+  behavior across every affected layer.
+- Reuse or extend existing code, components, contracts, and patterns wherever
+  possible. Search for an existing implementation before creating another one.
+- Treat future maintainability as a first-class requirement. Prefer clear
+  ownership, cohesive feature areas, explicit contracts, consistent naming, and
+  straightforward control flow over locally convenient shortcuts.
+- Add an abstraction only when it creates a clear boundary or removes meaningful
+  duplication. Do not create parallel helpers or generic dumping grounds.
+- Use dependency injection for services and repositories. Keep UI components
+  focused on interaction state; put persistence, provider resolution, image
+  workflow, sprite behavior, and chat behavior in their owning services.
+- Keep provider-specific transport details behind provider-neutral contracts.
+  Put configuration in `appsettings.json` and environment variables.
+- Do not store new secrets directly on feature entities. Add them through
+  `ISecretStore`, and never log credentials, OAuth codes, or tokens.
+- **Hard rule: never leave the runtime in an obsolete state.** When a feature,
+  concept, name, model, configuration, or code path becomes unused or is
+  superseded, delete it completely in the same change.
+- Do not retain dead branches, commented-out implementations, stale
+  registrations, duplicate paths, compatibility shims, legacy aliases, or
+  outdated documentation. If persisted data or an external boundary requires a
+  transition, complete the migration and remove the old runtime path as part of
+  the feature; otherwise stop and obtain an explicit migration plan.
+- Preserve applied EF Core migrations as immutable schema history. Represent
+  schema changes with forward migrations; historical migration files are not
+  runtime compatibility paths and must not be deleted merely because their
+  original model was later superseded.
+- Preserve unrelated user changes. If they prevent a clean starting state, stop
+  and resolve ownership before implementation. Never use a destructive reset or
+  checkout to simplify the task.
 
 ## Code Style
-- Use dependency injection for services and repositories.
-- Configuration belongs in `appsettings.json` and environment variables.
-- Keep UI components focused on interaction state; put persistence, provider resolution, and chat behavior in services.
-- Do not store new secrets directly on feature entities. Add them through `ISecretStore`.
 
-## Build & Run
-```bash
-dotnet build PixelChat.sln
-dotnet run --project PixelChat
-dotnet run --project PixelChat -- --electron
-```
+- Follow `.editorconfig` as the code-style and naming authority.
+- Use PascalCase for public members and `_camelCase` for private instance fields,
+  consistent with the configured naming rules.
+- Keep Electron-specific behavior in the desktop host path and provider-specific
+  behavior in the owning adapter. Shared workbench behavior belongs behind the
+  service contracts described in `docs/architecture.md`.
+
+## Documentation Maintenance
+
+- Update `FILEMAP.md` in the same change after adding, deleting, renaming, or
+  materially repurposing a tracked source or project-support file.
+- Keep each `FILEMAP.md` entry to one or two lines and never list generated build
+  output.
+- Update `docs/architecture.md` in the same change whenever work alters the
+  technology stack, project boundaries, component responsibilities, data flow,
+  persistence, provider behavior, platform support, security posture, or
+  validation commands.
+- Update `README.md` when user-facing capabilities, requirements, setup, run,
+  packaging, or local-data behavior changes.
+- Update `VISION.md` only when the product direction or scope has intentionally
+  changed.
+- Remove stale comments, examples, documentation, settings, and instructions as
+  part of the feature that makes them obsolete.
 
 ## Verification
-- Do not add test projects or automated tests unless the user explicitly requests them.
-- Verify normal changes with `dotnet build PixelChat.sln`.
-- After a successful build, run `dotnet run --project PixelChat`, confirm the app host starts without startup exceptions, and terminate it.
-- VS Code F5 is configured to build and debug the Electron desktop shell by default.
-- Do not run Playwright, screenshots, browser UI checks, Electron window checks, or manual UI validation unless the user explicitly requests them.
-- When Electron startup itself must be smoke-checked, start `dotnet run --project PixelChat -- --electron`, confirm startup, and terminate the app. Never leave the app running.
 
-## Conventions
-- When you need to understand current wiring, start with `FILEMAP.md`, then the relevant feature area.
-- Trace each requested change through its full impact area before considering the work complete. Changes to models, contracts, or core concepts should include all affected layers such as persistence, services, UI, and documentation.
-- Remove superseded code and concepts when replacing them. Do not leave deprecated pages, components, handlers, prompts, queries, or other logic in place just because the new path works; clean out obsolete implementations and reduce unnecessary complexity.
-- Before any work you must ALWAYS look to see how this code should be properly incorporated into the existing codebase to avoid code or concept duplication. Always think about how your maintainable and editable your implementation will be and aim for code that does not need to be refactored later.
-- This is a local development project. When a requested change replaces a concept, remove the superseded implementation outright; do not add or retain compatibility shims, legacy handlers/fallbacks, deprecated tool aliases, or dual paths unless the user explicitly asks for a transition path.
+- Verify changes in proportion to their impact using the relevant builds,
+  existing tests, static checks, and runtime checks documented in
+  `docs/architecture.md`.
+- Do not add test projects or automated tests unless the user explicitly
+  requests them. Run and maintain relevant tests when they already exist.
+- Verify normal source changes with `dotnet build PixelChat.sln`. After a
+  successful build, run `dotnet run --project PixelChat`, confirm the local host
+  starts without startup exceptions, and terminate it.
+- Never start a host, Electron shell, browser automation, or sidecar without a
+  plan to terminate it after validation.
+- Do not run Playwright, screenshots, browser UI checks, Electron window checks,
+  or manual UI validation unless the user explicitly requests them.
+- When Electron startup itself must be smoke-checked, start
+  `dotnet run --project PixelChat -- --electron`, confirm startup, and terminate
+  the app. Never leave the app running.
+- Do not claim OAuth, provider calls, image generation, local background removal,
+  packaging, or platform-specific Electron behavior works unless the relevant
+  integration and target platform have actually been exercised. Clearly report
+  any validation that remains unperformed.
+- Before completion, search for obsolete names and paths, inspect the complete
+  diff, and confirm that documentation matches the resulting code.
+
+## Completion and Commits
+
+- A feature is complete only when its full impact area is implemented, obsolete
+  runtime code is removed, documentation is current, and relevant verification
+  succeeds.
+- Once a feature is complete, inspect the final diff and status, stage only that
+  feature's files, and create a focused commit with a descriptive message.
+- Commit every completed feature before beginning another one. Do not combine
+  unrelated work in a single commit.
+- After committing, verify that the working tree is clean. Do not amend, squash,
+  force-push, or otherwise rewrite history unless explicitly requested.
+- If a required commit cannot be created, report the blocker and do not describe
+  the feature as completed.

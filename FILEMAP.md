@@ -10,8 +10,9 @@
 | File | Description |
 |------|-------------|
 | `VISION.md` | High-level product vision, durable product principles, and AI-assisted sprite-workbench goals. |
-| `README.md` | Project purpose, first-slice status, motion-guide asset note, requirements, build/run commands, packaging notes, and local-data notes. |
+| `README.md` | Project purpose, current capability overview, requirements, build/run commands, packaging notes, and local-data behavior. |
 | `AGENTS.md` | Stable project guidance for agents and contributors. |
+| `docs/architecture.md` | Current technical architecture, ownership boundaries, persistence/security constraints, platform scope, and validation commands. |
 | `FILEMAP.md` | This file - concise map of source files and project structure. |
 | `PixelChat.sln` | Solution file containing the `PixelChat` project. |
 | `global.json` | Pins the .NET SDK version (`10.0.100`). |
