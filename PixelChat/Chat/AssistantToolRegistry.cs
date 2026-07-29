@@ -569,13 +569,13 @@ public sealed class AssistantToolRegistry(
             method: (Guid batchId, BatchReviewToolDecision[] decisions, CancellationToken cancellationToken = default) =>
                 MarkBatchReviewOutputsToolAsync(projectId, batchId, decisions, cancellationToken),
             name: "mark_batch_review_outputs",
-            description: "Mark pending successful outputs from one completed generation/edit batch as Keep or Reject. Inspect every image before marking it. Every decision requires a concise visual reason. Marks remain visible in Review and may be overridden by the user. Do not re-mark an already-finished batch; a stale repeated call is reported as an already-completed no-op."),
+            description: "Mark pending successful outputs from one completed generation/edit batch as Keep or Reject. Inspect every image before marking it. Every assistant decision requires a concise visual reason. Active user Keep/Reject overrides are authoritative and will be preserved rather than overwritten. Do not re-mark an already-finished batch; a stale repeated call is reported as an already-completed no-op."),
 
         AIFunctionFactory.Create(
             method: (Guid batchId, CancellationToken cancellationToken = default) =>
                 FinishBatchReviewToolAsync(projectId, batchId, cancellationToken),
             name: "finish_batch_review",
-            description: "Finish one completed batch review using assistant marks. This fails unless every pending successful output currently has an explicit assistant Keep or Reject decision with a reason. Kept outputs enter the asset library, rejected outputs enter Rejected, and Review shows the latest agent result."),
+            description: "Finish one completed batch review using the current marks. This fails unless every pending successful output currently has Keep or Reject; assistant marks require reasons, while active user overrides are accepted and remain authoritative. Kept outputs enter the asset library, rejected outputs enter Rejected, and Review shows the latest agent result."),
 
         AIFunctionFactory.Create(
             method: (Guid itemId, CancellationToken cancellationToken = default) =>

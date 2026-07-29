@@ -2734,8 +2734,30 @@ public sealed class ArtWorkflowService(
             return FailedBatchReviewOperation(batchId, "Only pending batch outputs can be marked for review.");
         }
 
+        var latestDecisions = await db.AssetReviewDecisions
+            .AsNoTracking()
+            .Where(decision => decision.ProjectId == projectId && requestedIds.Contains(decision.AssetId))
+            .OrderBy(decision => decision.CreatedAt)
+            .ThenBy(decision => decision.Id)
+            .ToListAsync(cancellationToken);
+        var userOverrideAssetIds = actor == AssetReviewActor.Assistant
+            ? latestDecisions
+                .GroupBy(decision => decision.AssetId)
+                .Where(group =>
+                {
+                    var latest = group.Last();
+                    return latest.Actor == AssetReviewActor.User
+                        && latest.Decision is AssetReviewDecisionKind.Keep or AssetReviewDecisionKind.Reject;
+                })
+                .Select(group => group.Key)
+                .ToHashSet()
+            : [];
+        var decisionsToSave = requested
+            .Where(request => !userOverrideAssetIds.Contains(request.AssetId))
+            .ToList();
+
         var now = DateTime.UtcNow;
-        foreach (var request in requested)
+        foreach (var request in decisionsToSave)
         {
             var reason = request.Reason?.Trim() ?? string.Empty;
             await db.AssetReviewDecisions.AddAsync(new AssetReviewDecision
@@ -2758,10 +2780,12 @@ public sealed class ArtWorkflowService(
             batchId,
             Succeeded: true,
             AlreadyCompleted: false,
-            AffectedCount: requested.Count,
-            KeepCount: requested.Count(request => request.Decision == AssetReviewDecisionKind.Keep),
-            RejectCount: requested.Count(request => request.Decision == AssetReviewDecisionKind.Reject),
-            "Review marks were saved and are visible in Review.");
+            AffectedCount: decisionsToSave.Count,
+            KeepCount: decisionsToSave.Count(request => request.Decision == AssetReviewDecisionKind.Keep),
+            RejectCount: decisionsToSave.Count(request => request.Decision == AssetReviewDecisionKind.Reject),
+            userOverrideAssetIds.Count == 0
+                ? "Review marks were saved and are visible in Review."
+                : $"Review marks were saved; {userOverrideAssetIds.Count} active user override(s) were preserved.");
     }
 
     public async Task<BatchReviewOperationResult> FinishBatchReviewAsync(
@@ -2813,13 +2837,12 @@ public sealed class ArtWorkflowService(
         {
             var missingDecision = pendingAssets.FirstOrDefault(asset =>
                 !latestByAsset.TryGetValue(asset.Id, out var decision)
-                || decision.Actor != AssetReviewActor.Assistant
                 || decision.Decision is not (AssetReviewDecisionKind.Keep or AssetReviewDecisionKind.Reject)
-                || string.IsNullOrWhiteSpace(decision.Reason));
+                || (decision.Actor == AssetReviewActor.Assistant && string.IsNullOrWhiteSpace(decision.Reason)));
             if (missingDecision is not null)
                 return FailedBatchReviewOperation(
                     batchId,
-                    $"The assistant must explicitly mark every pending output Keep or Reject with a reason before finishing review. Asset {missingDecision.Id} is not ready.");
+                    $"Every pending output must have a current Keep or Reject decision before the assistant can finish review, and assistant decisions require a reason. Asset {missingDecision.Id} is not ready.");
         }
 
         var now = DateTime.UtcNow;
@@ -2880,12 +2903,29 @@ public sealed class ArtWorkflowService(
         if (assets.Count != ids.Count)
             throw new InvalidOperationException("One or more assets were not found.");
 
+        var pendingBatchIds = assets
+            .Where(asset => asset.ReviewStatus == AssetReviewStatus.Pending && asset.SourceBatchId is not null)
+            .Select(asset => asset.SourceBatchId!.Value)
+            .Distinct()
+            .ToList();
+        var completedPendingBatchIds = pendingBatchIds.Count == 0
+            ? []
+            : await db.GenerationBatches
+                .AsNoTracking()
+                .Where(batch => batch.ProjectId == projectId
+                    && pendingBatchIds.Contains(batch.Id)
+                    && batch.ReviewCompletedAt != null)
+                .Select(batch => batch.Id)
+                .ToHashSetAsync(cancellationToken);
+
         var now = DateTime.UtcNow;
         foreach (var asset in assets)
         {
-            if (asset.ReviewStatus == AssetReviewStatus.Pending)
-                throw new InvalidOperationException("Pending batch outputs must be finished through Review.");
-            asset.ReviewStatus = status;
+            var pendingReviewStillOpen = asset.ReviewStatus == AssetReviewStatus.Pending
+                && asset.SourceBatchId is Guid sourceBatchId
+                && !completedPendingBatchIds.Contains(sourceBatchId);
+            if (!pendingReviewStillOpen)
+                asset.ReviewStatus = status;
             asset.UpdatedAt = now;
             await db.AssetReviewDecisions.AddAsync(new AssetReviewDecision
             {
@@ -2894,7 +2934,9 @@ public sealed class ArtWorkflowService(
                 SourceBatchId = asset.SourceBatchId,
                 Decision = status == AssetReviewStatus.Kept ? AssetReviewDecisionKind.Keep : AssetReviewDecisionKind.Reject,
                 Actor = actor,
-                Reason = actor == AssetReviewActor.User ? "Moved by user." : "Moved by assistant.",
+                Reason = actor == AssetReviewActor.User
+                    ? pendingReviewStillOpen ? "Marked by user before batch review finished." : "Moved by user."
+                    : pendingReviewStillOpen ? "Marked by assistant before batch review finished." : "Moved by assistant.",
                 CreatedAt = now,
             }, cancellationToken);
         }
