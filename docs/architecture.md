@@ -78,6 +78,29 @@ specific prompt before provider submission, retry, asset creation, and review.
 The manual Generate form and edit tools create variant batches; the assistant
 uses concept batches for ideation and alternate directions.
 
+Recipes are maintained current creative guidance rather than cumulative project
+documentation. Their fields have distinct ownership:
+
+- The prompt is concise model-facing guidance that should apply to every future
+  use within the recipe's scope. Art prompts use only applicable visual
+  language, subject-family, composition, and production-use blocks; animation
+  prompts use only applicable motion, layout, continuity, and timing blocks.
+- Notes are model-excluded current working memory for active direction,
+  workflow preferences, reference-use instructions, and operational caveats.
+  They may change as work evolves and should not retain superseded chronology.
+- Attachments carry reusable visual evidence as ordered example or guide
+  references.
+- Version change summaries carry history. One-off subjects, candidate details,
+  experiments, constraints, and output diagnoses belong to generation prompts,
+  review state, or chat rather than the reusable recipe prompt.
+
+Assistant recipe updates rewrite the current prompt and notes as coherent
+snapshots: still-valid guidance is retained, changed rules are replaced, and
+conflicts, duplication, and abandoned directions are removed. A recipe
+revision is saved before a controlled generation test so batches retain exact
+version provenance; disproven revisions are replaced or reverted rather than
+extended with compatibility-style exceptions.
+
 Provider-neutral contracts isolate chat and image workflows from transports.
 Provider-specific OAuth, Responses streaming, tool-call parsing, readiness
 checks, and image requests belong in the `Llm`, `Auth`, and provider adapter

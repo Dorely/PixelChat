@@ -95,7 +95,7 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (Guid recipeId) => workflow.ReadPromptRecipeJsonAsync(projectId, recipeId),
             name: "read_recipe",
-            description: "Read a saved art recipe's reusable prompt, private notes, current version, and example/guide attachments. Notes are never sent to image generation. This is read-only."),
+            description: "Read a saved art recipe's reusable model-facing prompt, current working notes, current version, and example/guide attachments. Notes are never sent to image generation and should describe current state rather than history. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (string? query = null, int? limit = null) =>
@@ -106,7 +106,7 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (Guid recipeId) => workflow.ReadAnimationRecipeJsonAsync(projectId, recipeId),
             name: "read_animation_recipe",
-            description: "Read one animation recipe's reusable motion prompt, private notes, current version, and example/guide attachments. Notes are never sent to image generation. This is read-only."),
+            description: "Read one animation recipe's reusable model-facing motion prompt, current working notes, current version, and example/guide attachments. Notes are never sent to image generation and should describe current state rather than history. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (string? query = null, string? animationKind = null, bool? loop = null, int? limit = null, CancellationToken cancellationToken = default) =>
@@ -117,14 +117,14 @@ public sealed class AssistantToolRegistry(
         AIFunctionFactory.Create(
             method: (Guid? recipeId,
                 string name,
-                string prompt,
-                string changeSummary,
-                string? notes = null,
+                [Description("Complete current reusable model-facing guidance. Use short applicable labeled blocks: Visual language, Subject family, Composition, Production use. Rewrite the whole coherent snapshot; exclude chronology, current candidates, experiments, and one-off prohibitions.")] string prompt,
+                [Description("Concise effective rule change in this version, not a turn narrative or duplicate of the notes.")] string changeSummary,
+                [Description("Complete current working memory, never sent to image generation. May include active project direction, workflow preferences, reference-use instructions, and operational caveats. Replace superseded state and exclude chronology.")] string? notes = null,
                 [Description("Generation-only background preference: current, auto, removable, or opaque. Use auto for concept/reference art and removable for export-ready sprite generation.")] string? backgroundPreference = null,
                 CancellationToken cancellationToken = default) =>
                 SavePromptRecipeToolAsync(projectId, recipeId, name, prompt, changeSummary, notes, backgroundPreference, cancellationToken),
             name: "save_prompt_recipe",
-            description: "Create or update an art recipe. A recipe is a name, reusable visual/production guidance, a generation-only background preference, private notes, and optional asset attachments. Keep the prompt broad, minimal, and composable for the repeatable use case, not a one-off subject. Always provide changeSummary. Every save is versioned and revertible."),
+            description: "Create or update an art recipe as a maintained current snapshot. Update an existing recipe only for guidance that should apply to every future use in its scope. Rewrite rather than append: retain valid rules, replace changed rules, and remove conflicts, duplication, abandoned directions, current-candidate details, and chronology. Keep current working direction in notes, visual evidence in attachments, one-off details in the task prompt, and history in changeSummary. Every save is versioned and revertible."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId, RecipeAttachmentToolItem[]? attachments = null, CancellationToken cancellationToken = default) =>
@@ -146,13 +146,13 @@ public sealed class AssistantToolRegistry(
             method: (
                 Guid? recipeId,
                 string name,
-                string prompt,
-                string changeSummary,
-                string? notes = null,
+                [Description("Complete current reusable model-facing motion/layout guidance. Use short applicable labeled blocks: Motion, Layout, Continuity, Timing. Rewrite the whole coherent snapshot; exclude art style unless intentionally scoped, chronology, current candidates, experiments, and one-off prohibitions.")] string prompt,
+                [Description("Concise effective rule change in this version, not a turn narrative or duplicate of the notes.")] string changeSummary,
+                [Description("Complete current working memory, never sent to image generation. May include active project direction, workflow preferences, reference-use instructions, and operational caveats. Replace superseded state and exclude chronology.")] string? notes = null,
                 CancellationToken cancellationToken = default) =>
                 SaveAnimationRecipeToolAsync(projectId, recipeId, name, prompt, changeSummary, notes, cancellationToken),
             name: "save_animation_recipe",
-            description: "Create or update an animation recipe: a name, a reusable prompt for motion and layout guidance, private notes, and optional asset attachments. It is independent of art style unless intentionally style-specific. Keep it broad, minimal, and composable for reusable motion/layout behavior. Always provide changeSummary."),
+            description: "Create or update an animation recipe as a maintained current snapshot. Update an existing recipe only for motion/layout guidance that should apply to every future use in its scope. Rewrite rather than append: retain valid rules, replace changed rules, and remove conflicts, duplication, abandoned directions, current-candidate details, and chronology. Keep art style out unless intentionally scoped, current working direction in notes, visual evidence in attachments, one-off details in the task prompt, and history in changeSummary. Every save is versioned and revertible."),
 
         AIFunctionFactory.Create(
             method: (Guid recipeId, RecipeAttachmentToolItem[]? attachments = null, CancellationToken cancellationToken = default) =>
