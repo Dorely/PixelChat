@@ -69,6 +69,15 @@ progress, retries, completion, and interrupted-batch reconciliation. Do not move
 these lifetimes into a Razor component or make background work depend on a
 single UI circuit.
 
+Generation batches persist ordered prompt specifications rather than one
+batch-level prompt. A variant batch has one prompt specification with multiple
+outputs; a concept batch has multiple distinct prompt specifications with one
+output each. Shared references, recipes, size, background, Avoid constraints,
+and provider settings remain batch-wide. Runtime output indexes resolve to one
+specific prompt before provider submission, retry, asset creation, and review.
+The manual Generate form and edit tools create variant batches; the assistant
+uses concept batches for ideation and alternate directions.
+
 Provider-neutral contracts isolate chat and image workflows from transports.
 Provider-specific OAuth, Responses streaming, tool-call parsing, readiness
 checks, and image requests belong in the `Llm`, `Auth`, and provider adapter
@@ -84,11 +93,12 @@ server-side.
 ## Persistence, Configuration, and Security
 
 PixelChat uses a local SQLite database through `AppDbContext`. It stores
-projects, assets and image BLOBs, generation batches, review decisions, recipes
-and versions, masks, frame sets, frames and built sheets, export caches,
-assistant transcripts and visuals, provider metadata, OAuth metadata, and named
-secret values. The host applies EF Core migrations at startup and configures
-SQLite for a busy timeout and WAL mode.
+projects, assets and image BLOBs, generation batches with ordered prompt
+specifications, review decisions, recipes and versions, masks, frame sets,
+frames and built sheets, export caches, assistant transcripts and visuals,
+provider metadata, OAuth metadata, and named secret values. The host applies EF
+Core migrations at startup and configures SQLite for a busy timeout and WAL
+mode.
 
 Applied migration files are immutable schema history. Never edit, reorder, or
 delete an applied migration to make the migration directory resemble the

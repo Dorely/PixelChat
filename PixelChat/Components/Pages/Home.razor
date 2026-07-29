@@ -749,7 +749,7 @@ else
                     <button type="button" class="batch-row @(batch.Id == _workbench.Project.ActiveBatchId ? "is-active" : "")"
                             @onclick="() => SelectBatchAsync(batch.Id)">
                         <span>@batch.Label</span>
-                        <span>@batch.Status</span>
+                        <span>@($"{PromptModeLabel(batch.PromptMode)} · {batch.Status}")</span>
                     </button>
                 }
             </div>
@@ -804,9 +804,17 @@ else
             <span>@activeBatch.ImageModel</span>
             <span>@activeBatch.Size</span>
             <span>@BackgroundLabel(activeBatch.Background)</span>
+            <span>@PromptModeLabel(activeBatch.PromptMode)</span>
             <span>@activeBatch.Count image(s)</span>
         </div>
-        <p class="batch-prompt">@activeBatch.Prompt</p>
+        @if (activeBatch.PromptMode == GenerationBatchPromptMode.Variants && activeBatch.PromptSpecs.FirstOrDefault() is { } variantPrompt)
+        {
+            <p class="batch-prompt">@variantPrompt.Prompt</p>
+        }
+        else
+        {
+            <p class="batch-prompt">@($"{activeBatch.PromptSpecs.Count} distinct concept prompts")</p>
+        }
         @if (!string.IsNullOrWhiteSpace(activeBatch.Error))
         {
             <div class="provider-warning">@activeBatch.Error</div>
@@ -815,36 +823,37 @@ else
         <div class="compare-grid">
             @for (var index = 0; index < activeBatch.Count; index++)
             {
+                var promptSpec = PromptSpecForOutput(activeBatch, index);
                 @if (outputAssetsByIndex.TryGetValue(index, out var asset))
                 {
                     @RenderAssetCard(asset, compact: false)
                 }
                 else if (outputErrorsByIndex.TryGetValue(index, out var outputError))
                 {
-                    @RenderGenerationErrorCard(outputError)
+                    @RenderGenerationErrorCard(outputError, promptSpec, activeBatch.Label)
                 }
                 else
                 {
                     var outputState = ResolveOutputState(index, outputStatesByIndex, runtimeOutputsByIndex);
                     if (outputState.Status == GenerationOutputStatus.Deleted)
                     {
-                        @RenderGenerationDeletedCard(index)
+                        @RenderGenerationDeletedCard(index, promptSpec, activeBatch.Label)
                     }
                     else if (IsFailedOutputStatus(outputState.Status))
                     {
-                        @RenderGenerationErrorCard(OutputErrorFromState(outputState, runtimeOutputsByIndex.GetValueOrDefault(index)))
+                        @RenderGenerationErrorCard(OutputErrorFromState(outputState, runtimeOutputsByIndex.GetValueOrDefault(index)), promptSpec, activeBatch.Label)
                     }
                     else if (outputErrorsByIndex.TryGetValue(index, out var persistedOutputError))
                     {
-                        @RenderGenerationErrorCard(persistedOutputError)
+                        @RenderGenerationErrorCard(persistedOutputError, promptSpec, activeBatch.Label)
                     }
                     else if (IsTerminalGenerationStatus(activeBatch.Status))
                     {
-                        @RenderGenerationErrorCard(new GenerationOutputErrorView(index, MissingOutputError(activeBatch.Status)))
+                        @RenderGenerationErrorCard(new GenerationOutputErrorView(index, MissingOutputError(activeBatch.Status)), promptSpec, activeBatch.Label)
                     }
                     else
                     {
-                        @RenderGenerationPlaceholderCard(outputState, runtimeOutputsByIndex.GetValueOrDefault(index))
+                        @RenderGenerationPlaceholderCard(outputState, runtimeOutputsByIndex.GetValueOrDefault(index), promptSpec, activeBatch.Label)
                     }
                 }
             }
@@ -870,8 +879,7 @@ else
                     <div class="pending-review-batch-head">
                         <div>
                             <strong>@group.Batch.Label</strong>
-                            <span>@group.Batch.ImageModel · @group.Batch.Size · @group.Assets.Count output(s)</span>
-                            <p>@group.Batch.Prompt</p>
+                            <span>@group.Batch.ImageModel · @group.Batch.Size · @PromptModeLabel(group.Batch.PromptMode) · @group.Assets.Count output(s)</span>
                         </div>
                         <div class="pending-review-actions">
                             <button type="button" class="btn btn-sm btn-outline-success" @onclick="() => MarkAllPendingAsync(group, AssetReviewDecisionKind.Keep)">Mark All Keep</button>
@@ -916,6 +924,10 @@ else
                     <div class="user-review-mark">
                         @(current.Decision == AssetReviewDecisionKind.Clear ? "Your mark is cleared" : $"Your override: {DecisionLabel(current.Decision)}")
                     </div>
+                }
+                @if (!string.IsNullOrWhiteSpace(asset.Prompt))
+                {
+                    <p class="batch-prompt">@asset.Prompt</p>
                 }
                 <div class="asset-actions review-decision-actions">
                     <button type="button" class="btn btn-sm @(currentMark == AssetReviewDecisionKind.Keep ? "btn-success" : "btn-outline-success")" @onclick="() => MarkPendingAssetAsync(batch.Id, asset.Id, AssetReviewDecisionKind.Keep)">Keep</button>
@@ -1939,7 +1951,11 @@ else
         </div>
     };
 
-    private RenderFragment RenderGenerationPlaceholderCard(GenerationOutputStateView outputState, ImageGenerationOutputRuntimeView? runtimeOutput) => __builder =>
+    private RenderFragment RenderGenerationPlaceholderCard(
+        GenerationOutputStateView outputState,
+        ImageGenerationOutputRuntimeView? runtimeOutput,
+        GenerationPromptSpec? promptSpec,
+        string batchLabel) => __builder =>
     {
         var status = runtimeOutput?.Status ?? outputState.Status;
         var isGenerating = status is GenerationOutputStatus.Running or GenerationOutputStatus.Generating;
@@ -1982,23 +1998,34 @@ else
             }
             <div class="asset-card-body">
                 <div class="asset-title-row">
-                    <strong>Image @LabelForIndex(outputState.OutputIndex)</strong>
+                    <strong>@GenerationOutputLabel(promptSpec, batchLabel, outputState.OutputIndex)</strong>
                     <span>@label</span>
                 </div>
+                @if (!string.IsNullOrWhiteSpace(promptSpec?.Prompt))
+                {
+                    <p class="batch-prompt">@promptSpec.Prompt</p>
+                }
                 <p>@message</p>
             </div>
         </article>
     };
 
-    private RenderFragment RenderGenerationErrorCard(GenerationOutputErrorView outputError) => __builder =>
+    private RenderFragment RenderGenerationErrorCard(
+        GenerationOutputErrorView outputError,
+        GenerationPromptSpec? promptSpec,
+        string batchLabel) => __builder =>
     {
         <article class="asset-card generation-error-card">
             <div class="generation-error-mark">!</div>
             <div class="asset-card-body">
                 <div class="asset-title-row">
-                    <strong>Image @LabelForIndex(outputError.OutputIndex)</strong>
+                    <strong>@GenerationOutputLabel(promptSpec, batchLabel, outputError.OutputIndex)</strong>
                     <span>Failed</span>
                 </div>
+                @if (!string.IsNullOrWhiteSpace(promptSpec?.Prompt))
+                {
+                    <p class="batch-prompt">@promptSpec.Prompt</p>
+                }
                 <p>@outputError.Error</p>
                 @if (!string.IsNullOrWhiteSpace(GenerationErrorDetails(outputError)))
                 {
@@ -2008,15 +2035,19 @@ else
         </article>
     };
 
-    private RenderFragment RenderGenerationDeletedCard(int outputIndex) => __builder =>
+    private RenderFragment RenderGenerationDeletedCard(int outputIndex, GenerationPromptSpec? promptSpec, string batchLabel) => __builder =>
     {
         <article class="asset-card generation-deleted-card">
             <div class="generation-deleted-mark">×</div>
             <div class="asset-card-body">
                 <div class="asset-title-row">
-                    <strong>Image @LabelForIndex(outputIndex)</strong>
+                    <strong>@GenerationOutputLabel(promptSpec, batchLabel, outputIndex)</strong>
                     <span>Deleted</span>
                 </div>
+                @if (!string.IsNullOrWhiteSpace(promptSpec?.Prompt))
+                {
+                    <p class="batch-prompt">@promptSpec.Prompt</p>
+                }
                 <p>This output was removed from asset storage.</p>
             </div>
         </article>
@@ -2105,10 +2136,9 @@ else
         {
             var projectId = _workbench.Project.Id;
             var batch = await ImageRuntime.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
-                _generatePrompt,
+                [new GenerationPromptSpec(_generatePrompt, _generateCount)],
                 _negativePrompt,
                 _generateSize,
-                _generateCount,
                 _generateBackground,
                 SelectedGenerateRecipeIdOrNull(),
                 SelectedGenerateAnimationRecipeIdOrNull(),
@@ -4054,12 +4084,15 @@ else
             batch.Size,
             batch.Background,
             batch.Count,
+            batch.PromptMode,
+            batch.PromptSpecs
+                .Select(spec => new WorkspaceGenerationPromptSummary(spec.Count, spec.OutputName, Preview(spec.Prompt, 360)))
+                .ToList(),
             batch.PromptRecipeId,
             batch.PromptRecipeVersion,
             batch.InputAssetIds,
             batch.OutputAssetIds,
             batch.ParentBatchId,
-            Preview(batch.Prompt, 360),
             batch.Error,
             batch.CreatedAt);
 
@@ -4674,6 +4707,56 @@ else
             ImageBackgroundModes.Opaque => "Opaque output",
             _ => "Natural / model decides",
         };
+
+    private static string PromptModeLabel(GenerationBatchPromptMode mode) =>
+        mode == GenerationBatchPromptMode.Concepts ? "Concepts" : "Variants";
+
+    private static GenerationPromptSpec? PromptSpecForOutput(GenerationBatchView batch, int outputIndex)
+    {
+        var firstOutputIndex = 0;
+        foreach (var promptSpec in batch.PromptSpecs)
+        {
+            var nextOutputIndex = firstOutputIndex + Math.Max(0, promptSpec.Count);
+            if (outputIndex >= firstOutputIndex && outputIndex < nextOutputIndex)
+                return promptSpec;
+            firstOutputIndex = nextOutputIndex;
+        }
+
+        return null;
+    }
+
+    private static string GenerationOutputLabel(GenerationPromptSpec? promptSpec, string batchLabel, int outputIndex)
+    {
+        if (!string.IsNullOrWhiteSpace(promptSpec?.OutputName))
+        {
+            return promptSpec.Count > 1
+                ? $"{promptSpec.OutputName} {LabelForIndex(outputIndex)}"
+                : promptSpec.OutputName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(batchLabel) && !IsTimestampBatchLabel(batchLabel))
+        {
+            return $"{batchLabel} {LabelForIndex(outputIndex)}";
+        }
+
+        return $"Image {LabelForIndex(outputIndex)}";
+    }
+
+    private static bool IsTimestampBatchLabel(string label)
+    {
+        var prefix = label.StartsWith("Batch ", StringComparison.Ordinal)
+            ? "Batch "
+            : label.StartsWith("Edit ", StringComparison.Ordinal)
+                ? "Edit "
+                : string.Empty;
+        return prefix.Length > 0
+            && DateTime.TryParseExact(
+                label[prefix.Length..],
+                "yyyy-MM-dd HH:mm:ss",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out _);
+    }
 
     private static string RecipeBackgroundPreferenceLabel(string background) =>
         ImageBackgroundModes.NormalizeRecipePreference(background) switch

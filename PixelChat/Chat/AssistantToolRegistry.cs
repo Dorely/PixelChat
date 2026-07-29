@@ -220,6 +220,21 @@ public sealed class AssistantToolRegistry(
 
         AIFunctionFactory.Create(
             method: (
+                ConceptBatchToolItem[] concepts,
+                [Description("Required readable name for the concept batch. Concept outputs without their own assetName use this name with A/B/C suffixes.")] string batchName,
+                [Description("Shared hard prohibitions only, phrased as no X; phrase wanted states positively in each concept prompt.")] string? negativePrompt = null,
+                string? size = null,
+                string? background = null,
+                Guid[]? referenceAssetIds = null,
+                Guid? recipeId = null,
+                Guid? animationRecipeId = null,
+                CancellationToken cancellationToken = default) =>
+                RunConceptBatchAsync(projectId, budget, concepts, batchName, negativePrompt, size, background, referenceAssetIds, recipeId, animationRecipeId, cancellationToken),
+            name: "run_concept_batch",
+            description: "Generate one output for each distinct prompt in a single autonomous concept batch and wait for completion. Use this for ideation, exploration, or deliberately different visual directions; use run_generation_round for multiple variants of one prompt. Provide 2 or more concepts up to the configured per-round image limit. Each concept may include its own readable assetName, while recipes, references, size, background, and negativePrompt are shared. Outputs are returned as model-only images and appear automatically in Pending Generations for explicit Keep/Reject review. Counts as one generation round."),
+
+        AIFunctionFactory.Create(
+            method: (
                 Guid sourceAssetId,
                 Guid? maskId = null,
                 SpriteSheetRect[]? maskRects = null,
@@ -1099,14 +1114,139 @@ public sealed class AssistantToolRegistry(
         var outputCount = ClampGenerationRoundCount(count);
         var references = referenceAssetIds ?? [];
         var batch = await imageRuntime.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
-            specificRequest,
+            [new GenerationPromptSpec(specificRequest, outputCount)],
             negativePrompt ?? string.Empty,
             normalizedSize,
-            outputCount,
             background,
             recipeId,
             animationRecipeId,
             references,
+            ParentBatchId: null,
+            OutputLabel: outputLabel), cancellationToken);
+        return await AwaitGenerationRoundAsync(projectId, budget, round, batch, maskId: null, cancellationToken);
+    }
+
+    private async Task<string> RunConceptBatchAsync(
+        Guid projectId,
+        AssistantTurnGenerationBudget budget,
+        ConceptBatchToolItem[]? concepts,
+        string batchName,
+        string? negativePrompt,
+        string? size,
+        string? background,
+        Guid[]? referenceAssetIds,
+        Guid? recipeId,
+        Guid? animationRecipeId,
+        CancellationToken cancellationToken)
+    {
+        var outputLabel = CleanAssetName(batchName);
+        if (outputLabel is null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "batchName is required for an assistant-created concept batch.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            }, JsonOptions);
+        }
+
+        if (budget.IsExhausted)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                budgetExhausted = true,
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = 0,
+                message = "Stop iterating, present the best result so far, and summarize recipe changes.",
+            }, JsonOptions);
+        }
+
+        if (imageRuntime.HasRunningBatch(projectId))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "An image generation batch is already running for this project. Wait for it to finish before starting a concept batch.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+            }, JsonOptions);
+        }
+
+        var maxConcepts = MaxGenerationRoundImageCount();
+        if (concepts is null || concepts.Length < 2)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "A concept batch requires at least two distinct concept prompts.",
+                maxConcepts,
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            }, JsonOptions);
+        }
+        if (concepts.Length > maxConcepts)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = $"A concept batch supports no more than {maxConcepts} prompts in the current configuration.",
+                maxConcepts,
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            }, JsonOptions);
+        }
+
+        var promptSpecs = concepts
+            .Select(concept => new GenerationPromptSpec(
+                concept.Prompt?.Trim() ?? string.Empty,
+                1,
+                CleanAssetName(concept.AssetName)))
+            .ToList();
+        if (promptSpecs.Any(spec => string.IsNullOrWhiteSpace(spec.Prompt)))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "Every concept requires a nonblank prompt.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            }, JsonOptions);
+        }
+        if (promptSpecs.Select(spec => spec.Prompt).Distinct(StringComparer.OrdinalIgnoreCase).Count() != promptSpecs.Count)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "Every concept prompt must be distinct.",
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+            }, JsonOptions);
+        }
+
+        var normalizedSize = string.IsNullOrWhiteSpace(size) ? "auto" : size.Trim();
+        if (!ImageSizeValidator.TryValidate(normalizedSize, out var sizeError, out var suggestedSize))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = sizeError,
+                suggestedSize,
+                budget.RoundsUsed,
+                budget.MaxRounds,
+                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
+                message = "No generation round was consumed. Fix the size and run the concept batch again.",
+            }, JsonOptions);
+        }
+
+        var round = budget.Consume();
+        var batch = await imageRuntime.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
+            promptSpecs,
+            negativePrompt ?? string.Empty,
+            normalizedSize,
+            background,
+            recipeId,
+            animationRecipeId,
+            referenceAssetIds ?? [],
             ParentBatchId: null,
             OutputLabel: outputLabel), cancellationToken);
         return await AwaitGenerationRoundAsync(projectId, budget, round, batch, maskId: null, cancellationToken);
@@ -1353,6 +1493,7 @@ public sealed class AssistantToolRegistry(
             return JsonSerializer.Serialize(new { round, budget.RoundsUsed, budget.MaxRounds, maskId, cancelled = true }, JsonOptions);
         var batchJson = await workflow.ReadGenerationBatchJsonAsync(projectId, batch.Id, cancellationToken);
         using var document = JsonDocument.Parse(batchJson);
+        var completedBatch = document.RootElement.GetProperty("batch").Clone();
         return JsonSerializer.Serialize(new
         {
             round,
@@ -1361,7 +1502,7 @@ public sealed class AssistantToolRegistry(
             roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
             maskId,
             timedOut = !completed,
-            batch = document.RootElement.Clone(),
+            batch = completedBatch,
         }, JsonOptions);
     }
 
@@ -2289,11 +2430,16 @@ public sealed class AssistantToolRegistry(
 
     private int ClampGenerationRoundCount(int count)
     {
+        var max = MaxGenerationRoundImageCount();
+        return Math.Clamp(count <= 0 ? max : count, 1, max);
+    }
+
+    private int MaxGenerationRoundImageCount()
+    {
         var configuredMax = agentOptions.Value.MaxImagesPerGenerationRound <= 0
             ? imageOptions.Value.MaxOutputs
             : agentOptions.Value.MaxImagesPerGenerationRound;
-        var max = Math.Clamp(configuredMax, 1, Math.Max(1, imageOptions.Value.MaxOutputs));
-        return Math.Clamp(count <= 0 ? max : count, 1, max);
+        return Math.Clamp(configuredMax, 1, Math.Max(1, imageOptions.Value.MaxOutputs));
     }
 
     private static string? CleanAssetName(string? value)

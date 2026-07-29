@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace PixelChat.Chat;
 
 public sealed record PersistedToolCall(
@@ -17,6 +19,10 @@ public sealed record BatchReviewToolDecision(
     Guid AssetId,
     string Decision,
     string Reason);
+
+public sealed record ConceptBatchToolItem(
+    [property: Description("A distinct, concrete generation prompt for this concept.")] string Prompt,
+    [property: Description("Optional readable name for this saved concept asset.")] string? AssetName = null);
 
 public sealed record RecipeAttachmentToolItem(
     Guid AssetId,

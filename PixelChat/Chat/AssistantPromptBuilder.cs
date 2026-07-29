@@ -37,11 +37,12 @@ public static class AssistantPromptBuilder
         # Acting on generation and edit requests
 
         - Requests to generate, create, edit, replace, repair, refine, or save are action requests unless the user explicitly asks only for wording, a prompt, advice, or analysis. Execute action requests with tools rather than describing UI steps.
-        - run_generation_round creates new image assets. Never use it when the requested outcome is a change to an existing image.
+        - Choose the generation batch shape from the user's intent. For ideation, exploration, alternate directions, or concept work, use run_concept_batch with distinct prompts and one output per prompt. For variants, refinement, consistency tests, or repeated samples of one direction, use run_generation_round with one prompt and a count. Do not ask the user to choose when their intent already makes the distinction clear.
+        - run_generation_round and run_concept_batch create new image assets. Never use either when the requested outcome is a change to an existing image.
         - edit_asset changes an existing non-frame image. Prefer a source the user explicitly names or attaches, then the current visible selection. If at least one source is plausibly intended, choose the best-supported source, state the assumption briefly, and proceed. Ask only when no source image is available at all.
         - Before a localized asset edit, inspect the source with read_asset and choose a best-effort maskRects/maskPolygons selection in full source-image pixels. Use maskId when the user already prepared a saved mask. For a localized frame edit, choose maskRects/maskPolygons in logical-frame pixels. Omit masks only when the requested change genuinely applies to the whole image. For padded edits, supply the final mask to the preview tool, inspect its overlay, then pass only canvasPreparationId to the edit tool.
         - Never tell the user to select an asset, paint a mask, fill a form, or click Generate, Send Edit, or Save as a substitute for acting. The retired draft_generate_form, draft_edit_form, draft_prompt_recipe_form, and model-facing upsert_frame_mask tools no longer exist; never emulate them even if an older transcript entry mentions them.
-        - Autonomous rounds (run_generation_round, edit_asset, generate_sprite_sheet_candidates, edit_frame) spend your per-turn generation budget. When the budget runs out, stop, present the best completed result, and say what remains. Do not hand off a drafted form.
+        - Autonomous rounds (run_generation_round, run_concept_batch, edit_asset, generate_sprite_sheet_candidates, edit_frame) spend your per-turn generation budget. A complete concept batch is one round. When the budget runs out, stop, present the best completed result, and say what remains. Do not hand off a drafted form.
         - When the user explicitly asks to save or update reusable guidance, use the recipe save tools. When they ask only for recipe wording, answer in chat without mutating the project.
 
         # Recipes (reproducibility)
@@ -100,7 +101,7 @@ public static class AssistantPromptBuilder
 
         Set displayTitle on every nontrivial tool call (a short purpose label like "Align by torso detail"); it is UI metadata only. Use read tools to inspect state before acting.
         Per turn you have {options.MaxGenerationRoundsPerTurn} autonomous generation rounds (up to {options.MaxImagesPerGenerationRound} images each) and {options.MaxToolIterations} tool iterations. Plan batches around those limits, prefer one good experiment over many vague ones, and inspect results before spending more.
-        For every asset-creating generation tool call, set assetName to a short readable production name for the saved output, such as "Blue Crystal Pickup", "Goblin Scout Walk Sheet", or "Stone Gate Repair". Never use generic names like "Image A", "Generation", or "Candidate".
+        For variant and edit generation tools, set assetName to a short readable production name for the saved output, such as "Blue Crystal Pickup", "Goblin Scout Walk Sheet", or "Stone Gate Repair". For run_concept_batch, set a readable batchName and give each concept its own assetName when a concise distinct name is useful; unnamed concepts inherit the batch name plus A/B/C. Never use generic names like "Image A", "Generation", or "Candidate".
 
         # Response style
 

@@ -127,7 +127,7 @@ public sealed class ArtWorkflowService(
                 b.Provider,
                 b.MainlineModel,
                 b.ImageModel,
-                b.Prompt,
+                b.PromptSpecsJson,
                 b.NegativePrompt,
                 b.Size,
                 b.Background,
@@ -906,8 +906,8 @@ public sealed class ArtWorkflowService(
         CancellationToken cancellationToken = default)
     {
         var project = await GetProjectAsync(projectId, cancellationToken);
-        var prompt = CleanRequired(request.Prompt, "Prompt is required.");
-        var count = ClampCount(request.Count);
+        var promptSpecs = NormalizeGenerationPromptSpecs(request.PromptSpecs);
+        var count = promptSpecs.Sum(spec => spec.Count);
         var explicitReferences = await ResolveAssetsAsync(projectId, request.ReferenceAssetIds, cancellationToken);
         if (explicitReferences.Count > imageOptions.Value.MaxReferenceImages)
             throw new InvalidOperationException($"Select no more than {imageOptions.Value.MaxReferenceImages} reference images.");
@@ -955,7 +955,7 @@ public sealed class ArtWorkflowService(
             ImageModel = string.IsNullOrWhiteSpace(request.ImageModel)
                 ? imageOptions.Value.DefaultImageModel
                 : request.ImageModel.Trim(),
-            Prompt = prompt,
+            PromptSpecsJson = SerializePromptSpecs(promptSpecs),
             NegativePrompt = Clean(request.NegativePrompt),
             Size = NormalizeSize(request.Size),
             Background = resolvedBackground,
@@ -984,7 +984,7 @@ public sealed class ArtWorkflowService(
             batch.MainlineModel,
             batch.ImageModel,
             references.Count,
-            prompt.Length);
+            promptSpecs.Sum(spec => spec.Prompt.Length));
 
         var batchAssets = await db.ArtAssets.Where(a => a.ProjectId == projectId).ToListAsync(cancellationToken);
         return BatchView(batch, batchAssets);
@@ -999,6 +999,7 @@ public sealed class ArtWorkflowService(
     {
         var batch = await db.GenerationBatches.FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken)
             ?? throw new InvalidOperationException("Generation batch was not found.");
+        var resolvedPrompt = ResolvePromptSpec(batch.PromptSpecsJson, batch.Count, outputIndex);
         var references = await ResolveAssetsAsync(projectId, DeserializeIds(batch.InputAssetIdsJson), cancellationToken);
         var recipeGuidance = await LoadRecipePromptGuidanceForBatchAsync(projectId, batch, cancellationToken);
         var animationRecipeGuidance = await LoadAnimationRecipePromptGuidanceForBatchAsync(projectId, batch, cancellationToken);
@@ -1012,13 +1013,13 @@ public sealed class ArtWorkflowService(
             batch.MainlineModel,
             batch.ImageModel,
             references.Count,
-            batch.Prompt.Length);
+            resolvedPrompt.Spec.Prompt.Length);
 
         ImageProviderResult providerResult;
         try
         {
             providerResult = await imageProvider.GenerateAsync(new ImageProviderGenerateRequest(
-                BuildGenerationPrompt(batch.Prompt, batch.NegativePrompt, recipeGuidance, animationRecipeGuidance, batch.Background),
+                BuildGenerationPrompt(resolvedPrompt.Spec.Prompt, batch.NegativePrompt, recipeGuidance, animationRecipeGuidance, batch.Background),
                 Clean(batch.NegativePrompt),
                 batch.Size,
                 1,
@@ -1053,7 +1054,7 @@ public sealed class ArtWorkflowService(
         var fallbackLabel = $"Image {LabelForIndex(outputIndex)}";
         var asset = CreateAsset(
             projectId,
-            OutputAssetLabel(batch.Label, outputIndex, batch.Count, fallbackLabel),
+            OutputAssetLabel(batch.Label, resolvedPrompt, outputIndex, batch.Count, fallbackLabel),
             $"generated-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(image.ContentType)}",
             ArtAssetKind.Generated,
             image.ContentType,
@@ -1064,10 +1065,12 @@ public sealed class ArtWorkflowService(
             promptRecipeVersion: batch.PromptRecipeVersion,
             animationRecipeId: batch.AnimationRecipeId,
             animationRecipeVersion: batch.AnimationRecipeVersion,
-            prompt: batch.Prompt,
+            prompt: resolvedPrompt.Spec.Prompt,
             metadata: new
             {
                 OutputIndex = outputIndex,
+                PromptSpecIndex = resolvedPrompt.SpecIndex,
+                PromptSpecOutputIndex = resolvedPrompt.OutputIndexWithinSpec,
                 batch.PromptRecipeVersion,
                 batch.AnimationRecipeVersion,
                 image.RevisedPrompt,
@@ -1593,7 +1596,7 @@ public sealed class ArtWorkflowService(
             Provider = OpenAIAccountProvider.Name,
             MainlineModel = imageOptions.Value.DefaultMainlineModel,
             ImageModel = imageOptions.Value.DefaultImageModel,
-            Prompt = prompt,
+            PromptSpecsJson = SerializePromptSpecs([new GenerationPromptSpec(prompt, count)]),
             Size = canvasTransform is null ? NormalizeSize(request.Size) : $"{canvasTransform.ProviderWidth}x{canvasTransform.ProviderHeight}",
             Background = normalizedBackground,
             Count = count,
@@ -1652,6 +1655,7 @@ public sealed class ArtWorkflowService(
             ?? throw new InvalidOperationException("Generation batch was not found.");
         if (outputIndex < 0 || outputIndex >= batch.Count)
             throw new InvalidOperationException("Output index is outside the batch range.");
+        var resolvedPrompt = ResolvePromptSpec(batch.PromptSpecsJson, batch.Count, outputIndex);
 
         var inputAssetIds = DeserializeIds(batch.InputAssetIdsJson);
         var sourceAssetId = inputAssetIds.FirstOrDefault();
@@ -1684,13 +1688,13 @@ public sealed class ArtWorkflowService(
             batch.ImageModel,
             references.Count,
             storedMask is not null,
-            batch.Prompt.Length);
+            resolvedPrompt.Spec.Prompt.Length);
 
         ImageProviderResult providerResult;
         try
         {
             providerResult = await imageProvider.EditAsync(new ImageProviderEditRequest(
-                BuildEditPrompt(batch.Prompt, recipeGuidance),
+                BuildEditPrompt(resolvedPrompt.Spec.Prompt, recipeGuidance),
                 batch.Size,
                 1,
                 batch.MainlineModel,
@@ -1748,7 +1752,7 @@ public sealed class ArtWorkflowService(
         var fallbackLabel = $"{sourceAsset.Label} edit {LabelForIndex(outputIndex)}";
         var asset = CreateAsset(
             projectId,
-            OutputAssetLabel(batch.Label, outputIndex, batch.Count, fallbackLabel),
+            OutputAssetLabel(batch.Label, resolvedPrompt, outputIndex, batch.Count, fallbackLabel),
             $"edited-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(outputContentType)}",
             ArtAssetKind.Edited,
             outputContentType,
@@ -1759,10 +1763,12 @@ public sealed class ArtWorkflowService(
             batch.PromptRecipeVersion,
             batch.AnimationRecipeId,
             batch.AnimationRecipeVersion,
-            batch.Prompt,
+            resolvedPrompt.Spec.Prompt,
             new
             {
                 OutputIndex = outputIndex,
+                PromptSpecIndex = resolvedPrompt.SpecIndex,
+                PromptSpecOutputIndex = resolvedPrompt.OutputIndexWithinSpec,
                 batch.PromptRecipeVersion,
                 image.RevisedPrompt,
                 image.ResponseId,
@@ -4867,30 +4873,40 @@ public sealed class ArtWorkflowService(
         recipe.CreatedAt,
     };
 
-    private static object CompactBatch(GenerationBatch batch, IReadOnlyList<Guid> outputAssetIds) => new
+    private static object CompactBatch(GenerationBatch batch, IReadOnlyList<Guid> outputAssetIds)
     {
-        batch.Id,
-        batch.Label,
-        batch.Status,
-        batch.ImageModel,
-        batch.Size,
-        background = ImageBackgroundModes.NormalizeGeneration(batch.Background),
-        batch.Count,
-        inputAssetIds = DeserializeIds(batch.InputAssetIdsJson),
-        inputMaskIds = DeserializeIds(batch.InputMaskIdsJson),
-        outputAssetIds,
-        batch.ParentBatchId,
-        batch.PromptRecipeId,
-        batch.PromptRecipeVersion,
-        batch.AnimationRecipeId,
-        batch.AnimationRecipeVersion,
-        promptPreview = Preview(batch.Prompt, 360),
-        negativePromptPreview = Preview(batch.NegativePrompt, 220),
-        batch.Error,
-        batch.CreatedAt,
-        batch.ReviewCompletedBy,
-        batch.ReviewCompletedAt,
-    };
+        var promptSpecs = DeserializePromptSpecs(batch.PromptSpecsJson);
+        return new
+        {
+            batch.Id,
+            batch.Label,
+            batch.Status,
+            batch.ImageModel,
+            batch.Size,
+            background = ImageBackgroundModes.NormalizeGeneration(batch.Background),
+            batch.Count,
+            promptMode = PromptMode(promptSpecs).ToString(),
+            promptSpecs = promptSpecs.Select(spec => new
+            {
+                spec.Count,
+                spec.OutputName,
+                promptPreview = Preview(spec.Prompt, 360),
+            }),
+            inputAssetIds = DeserializeIds(batch.InputAssetIdsJson),
+            inputMaskIds = DeserializeIds(batch.InputMaskIdsJson),
+            outputAssetIds,
+            batch.ParentBatchId,
+            batch.PromptRecipeId,
+            batch.PromptRecipeVersion,
+            batch.AnimationRecipeId,
+            batch.AnimationRecipeVersion,
+            negativePromptPreview = Preview(batch.NegativePrompt, 220),
+            batch.Error,
+            batch.CreatedAt,
+            batch.ReviewCompletedBy,
+            batch.ReviewCompletedAt,
+        };
+    }
 
     private static object CompactAsset(ArtAssetView asset) => new
     {
@@ -5210,6 +5226,7 @@ public sealed class ArtWorkflowService(
 
     private static GenerationBatchView BatchView(GenerationBatchListItem batch, IReadOnlyList<ArtAssetListItem> assets)
     {
+        var promptSpecs = DeserializePromptSpecs(batch.PromptSpecsJson);
         var outputAssets = assets
             .Where(a => a.SourceBatchId == batch.Id)
             .OrderBy(a => ReadBatchOutputIndex(a) ?? int.MaxValue)
@@ -5236,7 +5253,8 @@ public sealed class ArtWorkflowService(
             batch.Provider,
             batch.MainlineModel,
             batch.ImageModel,
-            batch.Prompt,
+            PromptMode(promptSpecs),
+            promptSpecs,
             batch.NegativePrompt,
             batch.Size,
             ImageBackgroundModes.NormalizeGeneration(batch.Background),
@@ -5372,6 +5390,36 @@ public sealed class ArtWorkflowService(
 
     private int ClampCount(int count) =>
         Math.Clamp(count <= 0 ? 1 : count, 1, Math.Max(1, imageOptions.Value.MaxOutputs));
+
+    private IReadOnlyList<GenerationPromptSpec> NormalizeGenerationPromptSpecs(IReadOnlyList<GenerationPromptSpec>? promptSpecs)
+    {
+        if (promptSpecs is null || promptSpecs.Count == 0)
+            throw new InvalidOperationException("At least one generation prompt is required.");
+
+        var maxOutputs = Math.Max(1, imageOptions.Value.MaxOutputs);
+        var normalized = promptSpecs
+            .Select(spec => new GenerationPromptSpec(
+                CleanRequired(spec.Prompt, "Every generation prompt is required."),
+                promptSpecs.Count == 1 ? ClampCount(spec.Count) : spec.Count,
+                string.IsNullOrWhiteSpace(spec.OutputName) ? null : spec.OutputName.Trim()))
+            .ToList();
+
+        if (normalized.Count > 1)
+        {
+            if (normalized.Any(spec => spec.Count != 1))
+                throw new InvalidOperationException("Concept batches require exactly one output per prompt.");
+            if (normalized.Count > maxOutputs)
+                throw new InvalidOperationException($"Select no more than {maxOutputs} concept prompts.");
+            if (normalized.Select(spec => spec.Prompt).Distinct(StringComparer.OrdinalIgnoreCase).Count() != normalized.Count)
+                throw new InvalidOperationException("Concept batch prompts must be distinct.");
+        }
+
+        var totalCount = normalized.Sum(spec => spec.Count);
+        if (totalCount <= 0 || totalCount > maxOutputs)
+            throw new InvalidOperationException($"Generation batches support between 1 and {maxOutputs} outputs.");
+
+        return normalized;
+    }
 
     private static double FrameDuration(int fps) =>
         Math.Round(1d / Math.Clamp(fps, 1, 60), 6);
@@ -5523,8 +5571,21 @@ public sealed class ArtWorkflowService(
         return thumbnailData.Length > 0;
     }
 
-    private static string OutputAssetLabel(string batchLabel, int outputIndex, int outputCount, string fallback)
+    private static string OutputAssetLabel(
+        string batchLabel,
+        ResolvedGenerationPromptSpec prompt,
+        int outputIndex,
+        int outputCount,
+        string fallback)
     {
+        var outputName = Clean(prompt.Spec.OutputName);
+        if (!string.IsNullOrWhiteSpace(outputName))
+        {
+            return prompt.Spec.Count > 1
+                ? $"{outputName} {LabelForIndex(prompt.OutputIndexWithinSpec)}"
+                : outputName;
+        }
+
         var label = Clean(batchLabel);
         if (string.IsNullOrWhiteSpace(label) || IsDefaultBatchLabel(label))
             return fallback;
@@ -5556,6 +5617,9 @@ public sealed class ArtWorkflowService(
 
     private static string SerializeIds(IEnumerable<Guid> ids) =>
         JsonSerializer.Serialize(ids.ToList(), JsonOptions);
+
+    private static string SerializePromptSpecs(IEnumerable<GenerationPromptSpec> promptSpecs) =>
+        JsonSerializer.Serialize(promptSpecs.ToList(), JsonOptions);
 
     private static string SerializeStrings(IEnumerable<string> values) =>
         JsonSerializer.Serialize(values.Select(v => v.Trim()).Where(v => v.Length > 0).ToList(), JsonOptions);
@@ -5618,7 +5682,7 @@ public sealed class ArtWorkflowService(
             batch.Provider,
             batch.MainlineModel,
             batch.ImageModel,
-            batch.Prompt,
+            batch.PromptSpecsJson,
             batch.NegativePrompt,
             batch.Size,
             batch.Background,
@@ -5771,6 +5835,49 @@ public sealed class ArtWorkflowService(
         }
     }
 
+    private static IReadOnlyList<GenerationPromptSpec> DeserializePromptSpecs(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<GenerationPromptSpec>>(value, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static GenerationBatchPromptMode PromptMode(IReadOnlyList<GenerationPromptSpec> promptSpecs) =>
+        promptSpecs.Count > 1 ? GenerationBatchPromptMode.Concepts : GenerationBatchPromptMode.Variants;
+
+    private static ResolvedGenerationPromptSpec ResolvePromptSpec(string? value, int batchCount, int outputIndex)
+    {
+        if (outputIndex < 0 || outputIndex >= batchCount)
+            throw new InvalidOperationException("Output index is outside the batch range.");
+
+        var specs = DeserializePromptSpecs(value);
+        var firstOutputIndex = 0;
+        for (var specIndex = 0; specIndex < specs.Count; specIndex++)
+        {
+            var spec = specs[specIndex];
+            if (string.IsNullOrWhiteSpace(spec.Prompt) || spec.Count <= 0)
+                throw new InvalidOperationException("Generation batch prompt specifications are invalid.");
+
+            var nextOutputIndex = checked(firstOutputIndex + spec.Count);
+            if (outputIndex < nextOutputIndex)
+            {
+                if (specs.Sum(item => item.Count) != batchCount)
+                    throw new InvalidOperationException("Generation batch prompt specifications do not match the output count.");
+                return new ResolvedGenerationPromptSpec(spec, specIndex, outputIndex - firstOutputIndex);
+            }
+            firstOutputIndex = nextOutputIndex;
+        }
+
+        throw new InvalidOperationException("Generation batch prompt specifications do not cover the requested output.");
+    }
+
     private static List<string> DeserializeStrings(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -5918,7 +6025,7 @@ public sealed class ArtWorkflowService(
         string Provider,
         string MainlineModel,
         string ImageModel,
-        string Prompt,
+        string PromptSpecsJson,
         string NegativePrompt,
         string Size,
         string Background,
@@ -5938,6 +6045,11 @@ public sealed class ArtWorkflowService(
         DateTime CreatedAt,
         AssetReviewActor? ReviewCompletedBy,
         DateTime? ReviewCompletedAt);
+
+    private sealed record ResolvedGenerationPromptSpec(
+        GenerationPromptSpec Spec,
+        int SpecIndex,
+        int OutputIndexWithinSpec);
 
     private sealed record ImageMaskListItem(
         Guid Id,

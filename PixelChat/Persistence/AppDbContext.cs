@@ -216,6 +216,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.Property(e => e.Status).HasConversion<string>();
             entity.Property(e => e.ReviewCompletedBy).HasConversion<string>();
             entity.Property(e => e.Background).HasDefaultValue("auto");
+            entity.Property(e => e.PromptSpecsJson).HasDefaultValue("[]");
             entity.Property(e => e.OutputStatesJson).HasDefaultValue("[]");
             entity.Property(e => e.EditCanvasTransformJson).HasDefaultValue(string.Empty);
             entity.Property(e => e.EditLogicalSourceContentType).HasMaxLength(100);

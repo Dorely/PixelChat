@@ -1011,6 +1011,7 @@ public sealed class AssistantChatService(
                 return BuildCanvasPreviewModelOnlyContents(projectId, toolResult);
 
             if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal)
+                || string.Equals(pendingCall.Name, "run_concept_batch", StringComparison.Ordinal)
                 || string.Equals(pendingCall.Name, "edit_asset", StringComparison.Ordinal))
                 return await BuildGenerationRoundModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
@@ -1446,6 +1447,7 @@ public sealed class AssistantChatService(
             using var document = JsonDocument.Parse(toolResult);
             var root = document.RootElement;
             if ((string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal)
+                    || string.Equals(pendingCall.Name, "run_concept_batch", StringComparison.Ordinal)
                     || string.Equals(pendingCall.Name, "edit_asset", StringComparison.Ordinal))
                 && root.TryGetProperty("batch", out var batch)
                 && batch.TryGetProperty("outputAssetIds", out var outputAssetIds)

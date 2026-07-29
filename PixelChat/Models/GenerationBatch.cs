@@ -11,7 +11,7 @@ public class GenerationBatch
     public string Provider { get; set; } = string.Empty;
     public string MainlineModel { get; set; } = string.Empty;
     public string ImageModel { get; set; } = string.Empty;
-    public string Prompt { get; set; } = string.Empty;
+    public string PromptSpecsJson { get; set; } = "[]";
     public string NegativePrompt { get; set; } = string.Empty;
     public string Size { get; set; } = string.Empty;
     public string Background { get; set; } = "auto";

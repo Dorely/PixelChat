@@ -187,14 +187,20 @@ public sealed record WorkspaceBatchSummary(
     string Size,
     string Background,
     int Count,
+    GenerationBatchPromptMode PromptMode,
+    IReadOnlyList<WorkspaceGenerationPromptSummary> PromptSpecs,
     Guid? PromptRecipeId,
     int? PromptRecipeVersion,
     IReadOnlyList<Guid> InputAssetIds,
     IReadOnlyList<Guid> OutputAssetIds,
     Guid? ParentBatchId,
-    string PromptPreview,
     string Error,
     DateTime CreatedAt);
+
+public sealed record WorkspaceGenerationPromptSummary(
+    int Count,
+    string? OutputName,
+    string PromptPreview);
 
 public sealed record WorkspaceCompareReviewSetSummary(
     Guid Id,

@@ -255,7 +255,8 @@ public sealed record GenerationBatchView(
     string Provider,
     string MainlineModel,
     string ImageModel,
-    string Prompt,
+    GenerationBatchPromptMode PromptMode,
+    IReadOnlyList<GenerationPromptSpec> PromptSpecs,
     string NegativePrompt,
     string Size,
     string Background,
@@ -276,6 +277,17 @@ public sealed record GenerationBatchView(
     DateTime CreatedAt,
     AssetReviewActor? ReviewCompletedBy,
     DateTime? ReviewCompletedAt);
+
+public enum GenerationBatchPromptMode
+{
+    Variants,
+    Concepts
+}
+
+public sealed record GenerationPromptSpec(
+    string Prompt,
+    int Count,
+    string? OutputName = null);
 
 public sealed record GenerationOutputErrorView(
     int OutputIndex,
@@ -413,10 +425,9 @@ public sealed record ProviderStatusView(
     string Message);
 
 public sealed record GenerateImagesRequest(
-    string Prompt,
+    IReadOnlyList<GenerationPromptSpec> PromptSpecs,
     string NegativePrompt,
     string Size,
-    int Count,
     string? Background,
     Guid? PromptRecipeId,
     Guid? AnimationRecipeId,
