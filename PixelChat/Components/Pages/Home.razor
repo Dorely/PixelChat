@@ -21,6 +21,7 @@
 @inject IImageEditCanvasService ImageEditCanvas
 @inject ILlmProviderService ProviderService
 @inject IOptions<ImageGenerationOptions> ImageOptions
+@inject IOptions<AgentOptions> AgentOptions
 @inject ILogger<Home> Logger
 @inject IJSRuntime JS
 
@@ -78,9 +79,9 @@ else
                              PendingImages="@_pendingChatImages"
                              MaxPasteImageBytes="MaxChatPasteImageBytes"
                              Placeholder="Ask for image analysis, art direction, generation, or an edit..."
-                             Running="@_running"
-                             ComposerDisabled="@(_loadingChat || !_hasWorkingProvider)"
-                             SendDisabled="@(_loadingChat || _running || !_hasWorkingProvider || !CanSendChat)"
+                             Running="@(_running || _compacting)"
+                             ComposerDisabled="@(_loadingChat || _compacting || !_hasWorkingProvider)"
+                             SendDisabled="@(_loadingChat || _running || _compacting || !_hasWorkingProvider || !CanSendChat)"
                              CssClass="workbench-chat"
                              ForceScrollKey="@_forceScrollKey"
                              ScrollKey="@_scrollKey"
@@ -93,9 +94,22 @@ else
                              OnPendingImageRemoved="RemovePendingChatImage"
                              OnPasteError="ShowChatPasteError">
                     <HeaderActions>
-                        <button type="button" class="btn btn-sm btn-outline-danger" disabled="@_running" @onclick="ResetChatAsync">Reset</button>
+                        <button type="button"
+                                class="btn btn-sm btn-outline-secondary"
+                                disabled="@(_loadingChat || _running || _compacting)"
+                                @onclick="RequestCompactChat">
+                            @(_compacting ? "Compacting..." : "Compact")
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_running || _compacting)" @onclick="ResetChatAsync">Reset</button>
                     </HeaderActions>
                     <BeforeComposer>
+                        @if (!string.IsNullOrWhiteSpace(_compactionNotice))
+                        {
+                            <div class="chat-compaction-result">
+                                <span>@_compactionNotice</span>
+                                <button type="button" class="btn-close btn-close-sm" aria-label="Dismiss compaction status" @onclick="DismissCompactionNotice"></button>
+                            </div>
+                        }
                         @RenderChatAttachments()
                     </BeforeComposer>
                 </ChatSurface>
@@ -135,6 +149,7 @@ else
         </section>
 
         @RenderDeleteConfirmation()
+        @RenderChatCompactionConfirmation()
         @RenderExportModal()
         @RenderGuideBuilderModal()
         @RenderReviewPreviewModal()
@@ -201,7 +216,10 @@ else
     private TokenContextEstimate? _tokenCount;
     private bool _loadingChat = true;
     private bool _running;
+    private bool _compacting;
     private bool _hasWorkingProvider;
+    private bool _compactConfirmationOpen;
+    private string? _compactionNotice;
     private string? _pendingUserText;
     private Guid? _optimisticUserMessageId;
     private int _forceScrollKey;
@@ -295,6 +313,7 @@ else
         ChatRuntime.StateChanged += OnChatRuntimeStateChanged;
         ChatRuntime.WorkspaceChanged += OnChatRuntimeWorkspaceChanged;
         ChatRuntime.TurnFinished += OnChatRuntimeTurnFinished;
+        ChatRuntime.CompactionFinished += OnChatRuntimeCompactionFinished;
         ImageRuntime.StateChanged += OnImageGenerationRuntimeStateChanged;
         _generationRuntimeSnapshot = ImageRuntime.GetSnapshot();
         await ReloadAllAsync();
@@ -2072,6 +2091,31 @@ else
         </div>
     };
 
+    private RenderFragment RenderChatCompactionConfirmation() => __builder =>
+    {
+        if (!_compactConfirmationOpen)
+            return;
+
+        var threshold = Math.Max(1, AgentOptions.Value.CompactionThresholdTokens);
+        <div class="delete-confirm-backdrop">
+            <div class="delete-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="compact-chat-title">
+                <h2 id="compact-chat-title">Compact this chat?</h2>
+                <p>
+                    Completed tool calls, their results, and tool-linked chat previews will be permanently removed.
+                    The assistant will be told to look those details up again instead of relying on memory.
+                </p>
+                <p>
+                    If the remaining context is over @threshold.ToString("N0", CultureInfo.InvariantCulture) tokens,
+                    the transcript will be replaced by a structured summary. Active chat attachments will remain attached.
+                </p>
+                <div class="delete-confirm-actions">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CancelCompactChat">Cancel</button>
+                    <button type="button" class="btn btn-primary" @onclick="ConfirmCompactChatAsync">Compact</button>
+                </div>
+            </div>
+        </div>
+    };
+
     private RenderFragment RenderExportModal() => __builder =>
     {
         if (!_exportModalOpen || _workbench is null || _exportModalAssetId is not Guid assetId)
@@ -3371,6 +3415,24 @@ else
         });
     }
 
+    private void OnChatRuntimeCompactionFinished(WorkspaceChatCompactionFinished compaction)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            if (_workbench?.Project.Id != compaction.ProjectId)
+                return;
+
+            if (compaction.Result is { } result)
+            {
+                await ReloadChatAsync();
+                _compactionNotice = BuildCompactionNotice(result);
+            }
+
+            ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
+            StateHasChanged();
+        });
+    }
+
     private void OnChatRuntimeWorkspaceChanged()
     {
         _ = InvokeAsync(async () =>
@@ -3471,6 +3533,7 @@ else
     private void ApplyChatRuntimeSnapshot(WorkspaceChatRuntimeSnapshot snapshot)
     {
         _running = snapshot.Running;
+        _compacting = snapshot.Compacting;
         _live = snapshot.Live;
         _pendingUserText = snapshot.PendingUserText;
         if (snapshot.TokenCount is not null || snapshot.Running)
@@ -3482,6 +3545,38 @@ else
     {
         var prefix = estimate.IsExact ? string.Empty : "~";
         return $"{prefix}{estimate.TokenCount.ToString("N0", CultureInfo.InvariantCulture)} tokens";
+    }
+
+    private string BuildCompactionNotice(AssistantConversationCompactionResult result)
+    {
+        string notice;
+        if (!result.Changed)
+        {
+            notice = $"Chat is already compact at {FormatTokenCount(result.After)}.";
+        }
+        else if (result.SummaryCreated)
+        {
+            var toolPrefix = result.RemovedToolCallCount > 0
+                ? $"Removed {result.RemovedToolCallCount:N0} tool call(s) and started"
+                : "Started";
+            notice = $"{toolPrefix} a fresh chat from a structured summary. Context is now {FormatTokenCount(result.After)}.";
+        }
+        else if (result.RemovedToolCallCount > 0)
+        {
+            notice = $"Removed {result.RemovedToolCallCount:N0} tool call(s) and added a lookup notice for the assistant. "
+                + $"Context is now {FormatTokenCount(result.After)}.";
+        }
+        else
+        {
+            notice = $"Normalized the compacted chat context. Context is now {FormatTokenCount(result.After)}.";
+        }
+
+        var threshold = Math.Max(1, AgentOptions.Value.CompactionThresholdTokens);
+        if (result.After.TokenCount > threshold)
+        {
+            notice += " Active chat attachments remain attached and keep the estimated context above the configured compaction threshold.";
+        }
+        return notice;
     }
 
     private void CommitFinishedTurn(WorkspaceChatTurnFinished turn)
@@ -3638,10 +3733,11 @@ else
 
     private async Task SendAsync()
     {
-        if (_workbench is null || _running || !CanSendChat)
+        if (_workbench is null || _running || _compacting || !CanSendChat)
             return;
 
         PublishVisibleState();
+        _compactionNotice = null;
         var text = _input.Trim();
         var pastedImages = _pendingChatImages.ToList();
         var imageInputs = pastedImages.Select(ToAssistantChatImageInput).ToList();
@@ -3696,15 +3792,41 @@ else
             : label.Trim();
     }
 
-    private Task StopAsync() => ChatRuntime.StopTurnAsync();
+    private Task StopAsync() => ChatRuntime.StopAsync();
+
+    private void RequestCompactChat()
+    {
+        if (_workbench is null || _loadingChat || _running || _compacting)
+            return;
+
+        _compactConfirmationOpen = true;
+    }
+
+    private void CancelCompactChat() => _compactConfirmationOpen = false;
+
+    private async Task ConfirmCompactChatAsync()
+    {
+        if (_workbench is null || _running || _compacting)
+            return;
+
+        _compactConfirmationOpen = false;
+        _compactionNotice = null;
+        _error = null;
+        await ChatRuntime.StartCompactionAsync(_workbench.Project.Id);
+        ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
+    }
+
+    private void DismissCompactionNotice() => _compactionNotice = null;
 
     private async Task ResetChatAsync()
     {
-        if (_workbench is null || _running)
+        if (_workbench is null || _running || _compacting)
             return;
 
         await ChatRuntime.ResetConversationAsync(_workbench.Project.Id);
         _error = null;
+        _compactionNotice = null;
+        _compactConfirmationOpen = false;
         _input = string.Empty;
         _pendingChatImages.Clear();
         _pendingUserText = null;
@@ -3737,7 +3859,8 @@ else
                 message.Id,
                 ToChatRole(message.Role),
                 ToChatStatus(message.Status),
-                BuildMessageParts(message, toolRowsByCallId, projectId)));
+                BuildMessageParts(message, toolRowsByCallId, projectId),
+                ToChatPresentation(message.Role)));
         }
 
         return renderable;
@@ -3853,6 +3976,13 @@ else
 
     private static ChatMessageRole ToChatRole(AssistantMessageRole role) =>
         role == AssistantMessageRole.User ? ChatMessageRole.User : ChatMessageRole.Assistant;
+
+    private static ChatMessagePresentation ToChatPresentation(AssistantMessageRole role) => role switch
+    {
+        AssistantMessageRole.CompactionNotice => ChatMessagePresentation.CompactionNotice,
+        AssistantMessageRole.Summary => ChatMessagePresentation.Summary,
+        _ => ChatMessagePresentation.Normal,
+    };
 
     private static ChatMessageStatus ToChatStatus(AssistantMessageStatus status) => status switch
     {
@@ -4875,6 +5005,7 @@ else
         ChatRuntime.StateChanged -= OnChatRuntimeStateChanged;
         ChatRuntime.WorkspaceChanged -= OnChatRuntimeWorkspaceChanged;
         ChatRuntime.TurnFinished -= OnChatRuntimeTurnFinished;
+        ChatRuntime.CompactionFinished -= OnChatRuntimeCompactionFinished;
         ImageRuntime.StateChanged -= OnImageGenerationRuntimeStateChanged;
         if (_editorModule is not null)
         {

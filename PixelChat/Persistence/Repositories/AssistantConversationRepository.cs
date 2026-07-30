@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+
 using PixelChat.Models;
 
 namespace PixelChat.Persistence.Repositories;
@@ -43,6 +44,9 @@ public class AssistantConversationRepository(AppDbContext db) : IAssistantConver
 
     public async Task AddMessageVisualsAsync(IEnumerable<AssistantMessageVisual> visuals, CancellationToken cancellationToken = default) =>
         await db.AssistantMessageVisuals.AddRangeAsync(visuals, cancellationToken);
+
+    public void RemoveMessages(IEnumerable<AssistantMessage> messages) =>
+        db.AssistantMessages.RemoveRange(messages);
 
     public void UpdateMessage(AssistantMessage message) => db.AssistantMessages.Update(message);
 

@@ -27,7 +27,7 @@
 |------|-------------|
 | `PixelChat.csproj` | `net10.0` Blazor Web project with Electron.NET, EF Core SQLite, Microsoft.Extensions.AI, OpenAI SDK, ImageSharp image decoding, SharpGLTF motion-guide support, SQLitePCLRaw bundle pin, runtime IDs, and warnings-as-errors. |
 | `Program.cs` | App host setup: Electron mode detection/window launch, Blazor Interactive Server, DI wiring, art/sprite services, EF migrations, static files/assets, OAuth/media endpoints, and routing. |
-| `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OAuth redirect URI, SQLite, Blazor hub size, agent/tool limits including candidate image visibility, image-generation defaults, sprite-animation defaults, and local background-removal sidecar/model defaults. |
+| `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OAuth redirect URI, SQLite, Blazor hub size, agent/tool and chat-compaction limits, image-generation defaults, sprite-animation defaults, and local background-removal sidecar/model defaults. |
 | `Properties/launchSettings.json` | Local launch profiles for browser-hosted HTTP and Electron desktop mode on `localhost:1455`. |
 | `Properties/electron-builder.json` | Electron/electron-builder packaging metadata for Windows, Linux, and macOS targets. |
 
@@ -41,8 +41,8 @@
 
 | File | Description |
 |------|-------------|
-| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, chat-visual persistence, autonomous generation/edit budget wiring, model-only outputs including prepared edit-canvas previews, rebuilt sheets, frame inspection, sprite diagnostics, tool streaming/execution, and transcript replay. |
-| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns alive across renderer reloads, throttles streaming state notifications, commits finished turns with visuals, and broadcasts workspace side effects. |
+| `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, chat-visual persistence, tool streaming/execution and replay, lookup-safe tool-history pruning, threshold-based hierarchical summaries, and model-only visual outputs. |
+| `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns and cancellable compaction alive across renderer reloads, throttles state notifications, commits finished turns with visuals, and broadcasts workspace side effects. |
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact workspace records for Review, live sprite focus/agent status, asset, and recipe context used by assistant tools. |
 | `AssistantPromptBuilder.cs` | Builds the assistant system prompt from `AgentOptions` budget limits, including living-recipe maintenance, intent-based concept-vs-variant generation, model-vs-user visibility, direct generation/edit execution, outpaint guidance, Review presentation, Keep/Reject triage, and greenfield sprite workflows. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records, concept-batch prompt items, explicit display titles, animation frame mark payloads, and per-turn autonomous generation budget state. |
@@ -114,8 +114,8 @@
 
 | File | Description |
 |------|-------------|
-| `ChatModels.cs` | UI-only ordered chat text/tool/image parts, compact tool chip state with explicit display titles and visuals, live-turn state, and persisted tool-call helpers used by chat components. |
-| `ChatSurface.razor` / `.razor.css` / `.razor.js` | Reusable chat shell for ordered text/tool/image transcript rendering, visual preview clicks, streaming state, composer autosize, enter-to-send, and scroll-follow behavior. |
+| `ChatModels.cs` | UI-only ordered chat text/tool/image parts, compaction notice and summary presentation, compact tool chip state with explicit display titles and visuals, live-turn state, and persisted tool-call helpers. |
+| `ChatSurface.razor` / `.razor.css` / `.razor.js` | Reusable chat shell for ordered text/tool/image/context transcript rendering, visual preview clicks, streaming state, composer autosize, enter-to-send, and scroll-follow behavior. |
 | `ChatToolChipView.razor` / `.razor.css` | Expandable compact tool-call chip used for live and persisted assistant tool timeline entries. |
 
 ### Components/Layout/
@@ -145,7 +145,7 @@
 
 | File | Description |
 |------|-------------|
-| `AgentOptions.cs` | Configurable agent/chat options for OpenAI account timeout, tool-loop iterations, model-facing tool result limits, and autonomous generation-round budgets. |
+| `AgentOptions.cs` | Configurable agent/chat options for OpenAI account timeout, tool-loop iterations, model-facing tool result limits, autonomous generation-round budgets, and the conversation-compaction token threshold. |
 | `ChatClientFactory.cs` / `IChatClientFactory.cs` | Creates and tests Microsoft.Extensions.AI chat clients from persisted providers, credentials, and provider thinking-mode defaults. |
 | `OpenAIAccountAuthService.cs` / `IOpenAIAccountAuthService.cs` | OpenAI account OAuth PKCE flow, token refresh, revocation, and token secret persistence. |
 | `OpenAIAccountChatClient.cs` | Streaming `IChatClient` bridge to the OpenAI account Responses SSE endpoint with image inputs and function-call events. |
@@ -194,7 +194,7 @@
 | `ChatContextAttachment.cs` | EF entity for persistent visible chat attachments referencing assets, masks, crops, recipes, or batches. |
 | `CompareReviewSet.cs` | EF entities backing the project-scoped curated visual Review set with assets, greenfield frames, and FrameSet animations. |
 | `AssistantConversation.cs` | EF entity for project-scoped persistent assistant conversations. |
-| `AssistantMessage.cs` | EF entity and enums for transcript messages, tool roles, tool-call manifests, visual attachments, roles, statuses, and errors. |
+| `AssistantMessage.cs` | EF entity and enums for transcript messages, tool calls, authoritative compaction notices, structured summaries, visual attachments, statuses, and errors. |
 | `AssistantMessageVisual.cs` | EF entity for transcript-linked user/tool visuals with source references, optional image bytes/thumbnails, metadata, and ordering. |
 | `AuthType.cs` | Enum for provider authentication modes: none, API key, or OAuth. |
 | `LlmProvider.cs` | EF entity for chat endpoint/model rows, thinking mode, default selection, child model credential inheritance, and readiness snapshots. |

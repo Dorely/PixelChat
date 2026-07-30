@@ -13,6 +13,7 @@ public interface IAssistantConversationRepository
     Task<int> GetMaxOrderAsync(Guid conversationId, CancellationToken cancellationToken = default);
     Task AddMessageAsync(AssistantMessage message, CancellationToken cancellationToken = default);
     Task AddMessageVisualsAsync(IEnumerable<AssistantMessageVisual> visuals, CancellationToken cancellationToken = default);
+    void RemoveMessages(IEnumerable<AssistantMessage> messages);
     void UpdateMessage(AssistantMessage message);
     Task SaveChangesAsync(CancellationToken cancellationToken = default);
 }

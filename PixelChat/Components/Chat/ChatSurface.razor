@@ -257,10 +257,22 @@
 
     private RenderFragment RenderMessage(ChatRenderableMessage message) => __builder =>
     {
-        var bubbleClass = message.Role == ChatMessageRole.User
-            ? "chat-msg chat-msg-user"
-            : "chat-msg chat-msg-asst";
+        var bubbleClass = message.Presentation switch
+        {
+            ChatMessagePresentation.CompactionNotice => "chat-msg chat-msg-context chat-msg-compaction",
+            ChatMessagePresentation.Summary => "chat-msg chat-msg-asst chat-msg-summary",
+            _ when message.Role == ChatMessageRole.User => "chat-msg chat-msg-user",
+            _ => "chat-msg chat-msg-asst",
+        };
         <div class="@bubbleClass">
+            @if (message.Presentation == ChatMessagePresentation.CompactionNotice)
+            {
+                <div class="chat-msg-context-label">Compacted tool history</div>
+            }
+            else if (message.Presentation == ChatMessagePresentation.Summary)
+            {
+                <div class="chat-msg-context-label">Compacted conversation summary</div>
+            }
             @RenderParts(message.Parts)
             @if (message.Status == ChatMessageStatus.Failed)
             {

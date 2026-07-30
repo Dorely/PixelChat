@@ -11,16 +11,19 @@ public sealed class WorkspaceChatRuntime(
     private readonly object _gate = new();
     private ChatLiveTurn? _live;
     private CancellationTokenSource? _turnCts;
+    private CancellationTokenSource? _compactionCts;
     private string? _pendingUserText;
     private TokenContextEstimate? _tokenCount;
     private string? _error;
     private bool _running;
+    private bool _compacting;
     private bool _stateChangedPending;
     private DateTime _lastStateChangedAt = DateTime.MinValue;
 
     public event Action? StateChanged;
     public event Action? WorkspaceChanged;
     public event Action<WorkspaceChatTurnFinished>? TurnFinished;
+    public event Action<WorkspaceChatCompactionFinished>? CompactionFinished;
 
     public bool IsRunning
     {
@@ -31,12 +34,22 @@ public sealed class WorkspaceChatRuntime(
         }
     }
 
+    public bool IsCompacting
+    {
+        get
+        {
+            lock (_gate)
+                return _compacting;
+        }
+    }
+
     public WorkspaceChatRuntimeSnapshot GetSnapshot()
     {
         lock (_gate)
         {
             return new WorkspaceChatRuntimeSnapshot(
                 _running,
+                _compacting,
                 _live?.Clone(),
                 _pendingUserText,
                 _tokenCount,
@@ -59,7 +72,7 @@ public sealed class WorkspaceChatRuntime(
         CancellationTokenSource turnCts;
         lock (_gate)
         {
-            if (_running)
+            if (_running || _compacting)
                 return;
 
             _running = true;
@@ -77,13 +90,39 @@ public sealed class WorkspaceChatRuntime(
         await persisted.Task;
     }
 
-    public Task StopTurnAsync()
+    public Task StartCompactionAsync(Guid projectId)
     {
-        CancellationTokenSource? cts;
+        CancellationTokenSource compactionCts;
         lock (_gate)
-            cts = _turnCts;
+        {
+            if (_running || _compacting)
+                return Task.CompletedTask;
 
-        cts?.Cancel();
+            _compacting = true;
+            _error = null;
+            _compactionCts = new CancellationTokenSource();
+            compactionCts = _compactionCts;
+            _ = Task.Run(
+                () => RunCompactionAsync(projectId, compactionCts),
+                CancellationToken.None);
+        }
+
+        NotifyStateChanged(immediate: true);
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync()
+    {
+        CancellationTokenSource? turnCts;
+        CancellationTokenSource? compactionCts;
+        lock (_gate)
+        {
+            turnCts = _turnCts;
+            compactionCts = _compactionCts;
+        }
+
+        turnCts?.Cancel();
+        compactionCts?.Cancel();
         return Task.CompletedTask;
     }
 
@@ -91,7 +130,7 @@ public sealed class WorkspaceChatRuntime(
     {
         lock (_gate)
         {
-            if (_running)
+            if (_running || _compacting)
                 return;
 
             _live = null;
@@ -104,6 +143,56 @@ public sealed class WorkspaceChatRuntime(
         var chat = scope.ServiceProvider.GetRequiredService<IAssistantChatService>();
         await chat.ResetAsync(projectId, cancellationToken);
         NotifyStateChanged(immediate: true);
+    }
+
+    private async Task RunCompactionAsync(
+        Guid projectId,
+        CancellationTokenSource compactionCts)
+    {
+        AssistantConversationCompactionResult? result = null;
+        string? error = null;
+        var cancelled = false;
+
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var chat = scope.ServiceProvider.GetRequiredService<IAssistantChatService>();
+            result = await chat.CompactAsync(projectId, compactionCts.Token);
+            lock (_gate)
+                _tokenCount = result.After;
+        }
+        catch (OperationCanceledException) when (compactionCts.IsCancellationRequested)
+        {
+            cancelled = true;
+            error = "Compaction cancelled.";
+            SetError(error);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            logger.LogError(ex, "Workspace chat compaction failed.");
+            SetError(error);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(_compactionCts, compactionCts))
+                {
+                    _compacting = false;
+                    _compactionCts = null;
+                }
+            }
+
+            NotifyCompactionFinished(new WorkspaceChatCompactionFinished(
+                projectId,
+                result,
+                cancelled,
+                error));
+
+            compactionCts.Dispose();
+            NotifyStateChanged(immediate: true);
+        }
     }
 
     public void ClearError()
@@ -342,6 +431,24 @@ public sealed class WorkspaceChatRuntime(
             catch (Exception ex)
             {
                 logger.LogDebug(ex, "Workspace chat turn-finished subscriber failed.");
+            }
+        }
+    }
+
+    private void NotifyCompactionFinished(WorkspaceChatCompactionFinished compaction)
+    {
+        if (CompactionFinished is null)
+            return;
+
+        foreach (Action<WorkspaceChatCompactionFinished> handler in CompactionFinished.GetInvocationList())
+        {
+            try
+            {
+                handler(compaction);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Workspace chat compaction-finished subscriber failed.");
             }
         }
     }

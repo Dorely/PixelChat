@@ -17,11 +17,19 @@ public enum ChatMessageStatus
     Cancelled
 }
 
+public enum ChatMessagePresentation
+{
+    Normal,
+    CompactionNotice,
+    Summary
+}
+
 public sealed record ChatRenderableMessage(
     Guid Id,
     ChatMessageRole Role,
     ChatMessageStatus Status,
-    List<ChatMessagePart> Parts);
+    List<ChatMessagePart> Parts,
+    ChatMessagePresentation Presentation = ChatMessagePresentation.Normal);
 
 public abstract class ChatMessagePart;
 

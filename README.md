@@ -6,7 +6,7 @@ See [VISION.md](VISION.md) for the product direction and [docs/architecture.md](
 
 ## Current Capabilities
 
-- Project-scoped assistant chat with streaming tool execution, visible intermediate results, persisted transcripts, image context, and intent-aware concept batches that generate one distinct prompt per output.
+- Project-scoped assistant chat with streaming tool execution, visible intermediate results, persisted transcripts, image context, confirmed tool-history compaction with lookup-safe context notices and threshold-based summaries, and intent-aware concept batches that generate one distinct prompt per output.
 - Image generation with same-prompt variant or multi-prompt concept batches, imported-image editing, masks, outpainting-aware canvases, batch progress, visual review, and kept/rejected asset management.
 - Reusable versioned art and animation recipes with example and guide attachments.
 - A Source -> Frames -> Sheet sprite workflow with region extraction, frame ordering, alignment, cleanup, masked edits, animation preview, and deterministic sprite-sheet builds.

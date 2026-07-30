@@ -10,4 +10,5 @@ public sealed class AgentOptions
     public int MaxGenerationRoundsPerTurn { get; set; } = 5;
     public int MaxImagesPerGenerationRound { get; set; } = 2;
     public int GenerationRoundWaitTimeoutSeconds { get; set; } = 600;
+    public int CompactionThresholdTokens { get; set; } = 50_000;
 }

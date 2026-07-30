@@ -259,6 +259,19 @@
     height: 100%;
 }
 
+.chat-compaction-result {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.65rem 0.85rem;
+    border-bottom: 1px solid #b2ccff;
+    background: #eff4ff;
+    color: #1849a9;
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
+
 .workspace-center {
     position: relative;
     padding: 0.85rem;

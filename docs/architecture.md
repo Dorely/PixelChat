@@ -63,7 +63,17 @@ and workspace synchronization must accompany the underlying mutation.
 
 `IAssistantChatService` owns a scoped assistant turn and tool loop.
 `IWorkspaceChatRuntime` is app-process state that allows a turn to continue
-across renderer reloads and broadcasts completed workspace effects.
+across renderer reloads, owns cancellable conversation compaction, and
+broadcasts completed workspace effects. Compaction first removes persisted
+assistant tool-call manifests, tool-result messages, and tool-linked chat
+visuals. It adds an authoritative visible context notice that tells the model
+to re-read current workspace state rather than infer removed tool results.
+When the resulting next-request estimate remains above the configured
+threshold, the default chat provider hierarchically summarizes token-bounded
+text chunks and atomically replaces the old conversation with one structured
+summary. Provider failure or cancellation leaves the original conversation
+unchanged. Active chat attachments remain attached and continue to count
+toward the estimate.
 `IImageGenerationRuntime` similarly owns app-process generation/edit batches,
 progress, retries, completion, and interrupted-batch reconciliation. Do not move
 these lifetimes into a Razor component or make background work depend on a
@@ -131,10 +141,10 @@ migrations that create structures later dropped by another migration are
 expected and are not compatibility shims.
 
 Configuration belongs in `appsettings.json`, environment-specific settings, and
-environment-variable overrides. Options records own the agent, image
-generation, sprite animation, background removal, token counting, desktop host,
-OAuth redirect, and persistence settings. Avoid hard-coding configuration in
-components or feature entities.
+environment-variable overrides. Options records own the agent, chat-compaction
+token threshold, image generation, sprite animation, background removal, token
+counting, desktop host, OAuth redirect, and persistence settings. Avoid
+hard-coding configuration in components or feature entities.
 
 Credentials, API keys, and OAuth token values must pass through `ISecretStore`.
 The current `SqliteSecretStore` implementation stores those values in the local

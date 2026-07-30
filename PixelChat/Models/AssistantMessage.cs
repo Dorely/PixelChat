@@ -23,7 +23,9 @@ public enum AssistantMessageRole
     System,
     User,
     Assistant,
-    Tool
+    Tool,
+    CompactionNotice,
+    Summary
 }
 
 public enum AssistantMessageStatus
