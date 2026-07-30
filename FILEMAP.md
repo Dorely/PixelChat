@@ -44,16 +44,16 @@
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, chat-visual persistence, tool streaming/execution and replay, lookup-safe tool-history pruning, threshold-based hierarchical summaries, and model-only visual outputs. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns and cancellable compaction alive across renderer reloads, throttles state notifications, commits finished turns with visuals, and broadcasts workspace side effects. |
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact workspace records for Review, live sprite focus/agent status, asset, and recipe context used by assistant tools. |
-| `AssistantPromptBuilder.cs` | Builds the assistant system prompt from `AgentOptions` budget limits, including living-recipe maintenance, intent-based concept-vs-variant generation, model-vs-user visibility, direct generation/edit execution, outpaint guidance, Review presentation, Keep/Reject triage, and greenfield sprite workflows. |
+| `AssistantPromptBuilder.cs` | Builds the assistant system prompt from `AgentOptions` budget limits, including living-recipe maintenance, intent-based concept-vs-variant generation, model-vs-user visibility, direct generation/edit execution, provider-guided mask/outpaint guidance, Review presentation, Keep/Reject triage, and greenfield sprite workflows. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records, concept-batch prompt items, explicit display titles, animation frame mark payloads, and per-turn autonomous generation budget state. |
-| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, same-prompt generation rounds, distinct-prompt concept batches, preview-locked directional edits, greenfield Source/Frames/Sheet tools, visual Review sets, batch triage/finalization, exports, and `displayTitle` metadata. |
+| `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, same-prompt generation rounds, distinct-prompt concept batches, provider-guided preview-locked directional edits, greenfield Source/Frames/Sheet tools, visual Review sets, batch triage/finalization, exports, and `displayTitle` metadata. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, explicit display title metadata, visual metadata, completions, workspace mutations, and errors. |
 
 ### Art/
 
 | File | Description |
 |------|-------------|
-| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, asset lifecycle/review decisions, visual Review sets, media, generation, transient canvas previews, logical/provider-aware preservation-composited edits, sprite work, exports, recipes, masks, import, and crop. |
+| `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, asset lifecycle/review decisions, visual Review sets, media, generation, transient canvas previews, logical/provider-aware edits with authoritative provider output, sprite work, exports, recipes, masks, import, and crop. |
 | `ArtWorkflowModels.cs` | Request/result/view records for the workbench, ordered generation prompt specifications and batch modes, edit-canvas options/transforms/finalization/previews, lazy media, animation guides, sprite-sheet metadata, region extraction, recipes, and assistant tools. |
 | `IFrameSetService.cs` / `FrameSetService.cs` | Greenfield deterministic Source -> Frames -> Sheet service over SpriteRegion/FrameSet/Frame/Anchor/SheetLayout/BuiltSheet: detect/save regions, create/compose/edit/order/align/scale-normalize frames, inspect frame cells, deterministic erase/keep, preview-locked masked/reference AI frame edits with expanded logical cells and logical-space finalization, frame masks, build sheets, and animation-quality review. |
 | `ISpriteWorkspaceActionService.cs` / `SpriteWorkspaceActionService.cs` | Shared Sprites action layer used by UI clicks and assistant tools to wrap greenfield mutations including scale normalization, update persisted sprite focus, and keep the visible workspace synchronized. |
@@ -71,7 +71,7 @@
 | `BackgroundRemovalOptions.cs` | Configurable local background-removal sidecar defaults for uv, Python, rembg, model list, acceleration, cache paths, alpha matting, and timeout. |
 | `ImageProviderModels.cs` | Provider abstraction plus generation/edit request, result, streaming progress, structured errors, public size constraints, optional transport-specific reliable edit budgets, and pre-submit validation. |
 | `OpenAIAccountImageProvider.cs` | OpenAI account Responses image provider using Codex-style auth headers, SSE parsing, partial image progress, references, masked edit payloads, and its configurable reliable edit pixel budget. |
-| `ImageEditCanvasService.cs` | Shared edit/outpaint pipeline that prepares logical/provider canvases, masks, and previews; normalizes removable logical-source backgrounds; dilates semantic boundaries; restores noncanonical results; and composites protected pixels. |
+| `ImageEditCanvasService.cs` | Shared edit/outpaint pipeline that prepares logical/provider canvases, masks, and previews; normalizes removable logical-source backgrounds; dilates semantic boundaries; and restores provider output to logical dimensions without overwriting returned pixels from the source. |
 | `EditCanvasPreparationStore.cs` | Fifteen-minute bounded in-memory store for preview-locked asset/frame canvas preparations, limited to four entries per project and validated against source revisions. |
 | `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, parallelism, retry, timeout, partial previews, reference defaults, and OpenAI-account reliable edit pixel budget. |
 | `ImageBackgroundModes.cs` | Shared generation background modes and recipe-preference normalization/resolution for natural, opaque, and removable-magenta output. |
@@ -251,6 +251,7 @@
 | `20260716002245_ReliableOutpaintFinalization.cs` / `.Designer.cs` | EF migration adding logical edit source/mask snapshots, frame finalization provenance, and pending sprite-edit canvas preparation identity/expiry. |
 | `20260727212737_GenerationOnlyBackgroundPreferences.cs` / `.Designer.cs` | EF migration adding versioned generation-background preferences to art recipes, defaulting existing recipes to the current Generate selection. |
 | `20260729043245_MultiPromptGenerationBatches.cs` / `.Designer.cs` | EF migration replacing the batch-level prompt with ordered prompt specifications and backfilling existing generation/edit batches as same-prompt variants. |
+| `20260730010111_RemoveProtectedPixelPasteback.cs` / `.Designer.cs` | EF migration removing obsolete logical-source snapshots after edit finalization stopped pasting protected source pixels over provider output. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

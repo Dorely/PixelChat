@@ -22,10 +22,6 @@ public class GenerationBatch
     public byte[]? EditSourceData { get; set; }
     public int? EditSourceWidth { get; set; }
     public int? EditSourceHeight { get; set; }
-    public string? EditLogicalSourceContentType { get; set; }
-    public byte[]? EditLogicalSourceData { get; set; }
-    public int? EditLogicalSourceWidth { get; set; }
-    public int? EditLogicalSourceHeight { get; set; }
     public byte[]? EditLogicalMaskData { get; set; }
     public string EditCanvasTransformJson { get; set; } = string.Empty;
     public Guid? ParentBatchId { get; set; }

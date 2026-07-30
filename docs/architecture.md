@@ -117,6 +117,14 @@ checks, and image requests belong in the `Llm`, `Auth`, and provider adapter
 implementations. New providers should extend those boundaries rather than add
 provider conditionals throughout the UI or art services.
 
+Asset and frame edit masks are provider guidance, not a local pixel lock.
+Canvas preparation may create or transform a mask for localized edits and
+outpainting, and the provider receives that mask when supported. After the
+provider returns an image, canvas finalization may normalize provider
+dimensions, restore logical scale, crop provider padding, and normalize
+editable removable-background pixels. The complete provider result remains
+authoritative: PixelChat never pastes protected source pixels back over it.
+
 Local media endpoints serve persisted and transient images, masks, sprite
 frames, chat visuals, and motion assets to the local workbench. JavaScript
 modules are used for browser-only canvas, scrolling, lazy-image, animation, and

@@ -219,7 +219,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.Property(e => e.PromptSpecsJson).HasDefaultValue("[]");
             entity.Property(e => e.OutputStatesJson).HasDefaultValue("[]");
             entity.Property(e => e.EditCanvasTransformJson).HasDefaultValue(string.Empty);
-            entity.Property(e => e.EditLogicalSourceContentType).HasMaxLength(100);
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.GenerationBatches)

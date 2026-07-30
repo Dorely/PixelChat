@@ -727,7 +727,6 @@ public sealed class FrameSetService(
         {
             var finalized = imageEditCanvas.Finalize(
                 image.Data,
-                prepared.LogicalSourcePng,
                 prepared.LogicalMaskPng,
                 prepared.Transform,
                 backgroundMode);

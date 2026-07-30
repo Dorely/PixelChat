@@ -1448,7 +1448,6 @@ public sealed class ArtWorkflowService(
         var sourceImage = ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl);
         ImageMask? storedMask = null;
         EditCanvasTransform? canvasTransform = null;
-        byte[]? logicalSourceSnapshot = null;
         byte[]? logicalMaskSnapshot = null;
         Guid? preparationToRemove = null;
 
@@ -1506,10 +1505,7 @@ public sealed class ArtWorkflowService(
                     cancellationToken);
             }
             if (ProviderCanvasDiffersFromLogical(prepared.Transform))
-            {
-                logicalSourceSnapshot = prepared.LogicalSourcePng;
                 logicalMaskSnapshot = prepared.LogicalMaskPng;
-            }
             preparationToRemove = preparationId;
         }
         else
@@ -1578,10 +1574,7 @@ public sealed class ArtWorkflowService(
                         cancellationToken);
                 }
                 if (ProviderCanvasDiffersFromLogical(prepared.Transform))
-                {
-                    logicalSourceSnapshot = prepared.LogicalSourcePng;
                     logicalMaskSnapshot = prepared.LogicalMaskPng;
-                }
             }
         }
 
@@ -1606,10 +1599,6 @@ public sealed class ArtWorkflowService(
             EditSourceData = sourceImage.Data,
             EditSourceWidth = sourceImage.Width,
             EditSourceHeight = sourceImage.Height,
-            EditLogicalSourceContentType = logicalSourceSnapshot is null ? null : "image/png",
-            EditLogicalSourceData = logicalSourceSnapshot,
-            EditLogicalSourceWidth = logicalSourceSnapshot is null ? null : canvasTransform?.LogicalWidth,
-            EditLogicalSourceHeight = logicalSourceSnapshot is null ? null : canvasTransform?.LogicalHeight,
             EditLogicalMaskData = logicalMaskSnapshot,
             EditCanvasTransformJson = canvasTransform is null ? string.Empty : JsonSerializer.Serialize(canvasTransform, JsonOptions),
             ParentBatchId = sourceAsset.SourceBatchId,
@@ -1733,15 +1722,11 @@ public sealed class ArtWorkflowService(
         EditCanvasFinalization? canvasFinalization = null;
         if (canvasTransform is not null)
         {
-            var logicalSourceData = batch.EditLogicalSourceData is { Length: > 0 }
-                ? batch.EditLogicalSourceData
-                : sourceImage.Data;
             var logicalMaskData = batch.EditLogicalMaskData is { Length: > 0 }
                 ? batch.EditLogicalMaskData
                 : storedMask?.Data;
             var finalized = imageEditCanvas.Finalize(
                 image.Data,
-                logicalSourceData,
                 logicalMaskData,
                 canvasTransform,
                 batch.Background);

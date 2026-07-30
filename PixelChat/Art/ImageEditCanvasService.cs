@@ -85,7 +85,6 @@ public interface IImageEditCanvasService
 
     FinalizedEditCanvas Finalize(
         byte[] generatedData,
-        byte[] logicalSourcePng,
         byte[]? logicalMaskPng,
         EditCanvasTransform transform,
         string background);
@@ -287,19 +286,12 @@ public sealed class ImageEditCanvasService : IImageEditCanvasService
 
     public FinalizedEditCanvas Finalize(
         byte[] generatedData,
-        byte[] logicalSourcePng,
         byte[]? logicalMaskPng,
         EditCanvasTransform transform,
         string background)
     {
         if (!ImageRgbaDecoder.TryReadRgba(generatedData, out var observedWidth, out var observedHeight, out var generated))
             throw new InvalidOperationException("Generated edit output could not be decoded for canvas finalization.");
-        if (!ImageRgbaDecoder.TryReadRgba(logicalSourcePng, out var sourceWidth, out var sourceHeight, out var logicalSource)
-            || sourceWidth != transform.LogicalWidth
-            || sourceHeight != transform.LogicalHeight)
-        {
-            throw new InvalidOperationException("The logical edit source snapshot is missing or does not match its canvas transform.");
-        }
 
         byte[]? logicalMask = null;
         if (logicalMaskPng is not null)
@@ -344,9 +336,6 @@ public sealed class ImageEditCanvasService : IImageEditCanvasService
                     transform.LogicalHeight,
                     transform.ResampleMode,
                     isMask: false);
-
-        if (logicalMask is not null)
-            CompositePreservedLogicalPixels(logicalGenerated, logicalSource, logicalMask);
 
         var normalizedBackgroundPixels = string.Equals(background?.Trim(), "removable", StringComparison.OrdinalIgnoreCase)
             ? FloodNormalizeEditableMagenta(logicalGenerated, logicalMask, transform.LogicalWidth, transform.LogicalHeight)
@@ -651,25 +640,6 @@ public sealed class ImageEditCanvasService : IImageEditCanvasService
 
     private static byte Blend(byte original, int overlay, int overlayWeight) =>
         (byte)((original * (255 - overlayWeight) + overlay * overlayWeight + 127) / 255);
-
-    private static void CompositePreservedLogicalPixels(byte[] generated, byte[] source, byte[] mask)
-    {
-        for (var offset = 0; offset < generated.Length; offset += 4)
-        {
-            var preserve = mask[offset + 3];
-            if (preserve == 0)
-                continue;
-            if (preserve == byte.MaxValue)
-            {
-                Buffer.BlockCopy(source, offset, generated, offset, 4);
-                continue;
-            }
-
-            var generate = byte.MaxValue - preserve;
-            for (var channel = 0; channel < 4; channel++)
-                generated[offset + channel] = (byte)((source[offset + channel] * preserve + generated[offset + channel] * generate + 127) / 255);
-        }
-    }
 
     private static int FloodNormalizeEditableMagenta(byte[] rgba, byte[]? mask, int width, int height)
     {
