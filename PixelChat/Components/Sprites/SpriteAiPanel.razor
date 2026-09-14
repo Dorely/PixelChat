@@ -1,0 +1,97 @@
+@using System.Text.Json
+@using PixelChat.Sprites
+@using PixelChat.Art
+@implements IDisposable
+@inject IServiceScopeFactory Scopes
+@inject IImageGenerationRuntime Runtime
+
+<details class="sprite-ai">
+    <summary>AI candidates and validation</summary>
+    <p>Target: frame @FrameId · layer @LayerId · revision @Revision. Selected pixels become an advisory edit mask.</p>
+    <textarea aria-label="Sprite AI prompt" @bind="_prompt" placeholder="Change… Preserve… Motion or pose…"></textarea>
+    <div class="controls">
+        <select aria-label="Sprite generation kind" @bind="_kind"><option value="edit">Edit layer</option><option value="pose">Pose proposal</option><option value="reference">Reference artwork</option></select>
+        <label>Candidates <input type="number" min="1" max="4" @bind="_count" /></label>
+        <label>Model <select @bind="_model"><option value="">Current selection</option>@foreach (var model in ImageModelCatalog.Models) { <option value="@model">@model</option> }</select></label>
+        <label>Background <select @bind="_background"><option value="auto">From source / auto</option><option value="transparent">Transparent</option><option value="opaque">Opaque</option><option value="removable">Removable</option></select></label>
+    </div>
+    <label>References: one asset ID | role | preserve scope per line<textarea aria-label="Sprite references" @bind="_references" placeholder="asset-id | character identity | outfit, palette, proportions"></textarea></label>
+    <div class="controls">
+        <label>Art recipe ID <input @bind="_recipe" /></label><label>Animation recipe ID <input @bind="_animation" /></label>
+        <label>Padding L <input type="number" min="0" @bind="_left" /></label><label>T <input type="number" min="0" @bind="_top" /></label><label>R <input type="number" min="0" @bind="_right" /></label><label>B <input type="number" min="0" @bind="_bottom" /></label>
+    </div>
+    <div class="controls">
+        <button disabled="@_busy" @onclick="PrepareAsync">Preview preparation</button>
+        <button disabled="@(_busy || string.IsNullOrWhiteSpace(_prompt))" @onclick="GenerateAsync">Generate candidates</button>
+        <button disabled="@_busy" @onclick="ValidateAsync">Validate every frame</button>
+        <button disabled="@_busy" @onclick="RefreshAsync">Refresh jobs</button>
+    </div>
+    @if (_error is not null) { <p role="alert">@_error</p> }
+    @foreach (var artifact in _artifacts) { <figure><img src="@artifact.Url" alt="@artifact.Label" /><figcaption>@artifact.Label</figcaption></figure> }
+    @if (_validation is { } validation)
+    {
+        <p>@validation.Frames.Count frames measured at r@(validation.Revision) · structural checks @(validation.StructurallyValid ? "passed" : "need attention").</p>
+        @foreach (var finding in validation.Findings) { <p><strong>@finding.Kind · @finding.Code</strong>: @finding.Message <small>@string.Join(", ", finding.FrameIds)</small></p> }
+    }
+    @foreach (var job in _jobs)
+    {
+        <section class="job" data-job-id="@job.JobId">
+            <strong>@job.Target.Kind · @job.Status · submitted r@(job.Target.Revision)</strong>
+            @if (job.Stale) { <p>Target has changed. Candidates are retained; application requires a new job from the current revision.</p> }
+            <div class="controls"><button disabled="@_busy" @onclick='() => JobAsync(job.JobId, "cancel")'>Stop job</button><button disabled="@_busy" @onclick='() => JobAsync(job.JobId, "resume")'>Resume</button><button disabled="@_busy" @onclick='() => JobAsync(job.JobId, "retry")'>Retry failed</button></div>
+            @foreach (var output in job.Outputs) { <p>Output @(output.OutputIndex + 1): @output.Status · @output.Message @output.Error</p> }
+            <div class="candidates">@foreach (var candidate in job.Candidates)
+            {
+                <figure><img src="@candidate.Url" alt="@candidate.Label" /><figcaption>@candidate.Label · @candidate.Width×@candidate.Height</figcaption>
+                    <button disabled="@_busy" @onclick='() => JobAsync(job.JobId, "inspect", candidate.AssetId)'>Compare before / after</button>
+                    <button disabled="@(_busy || job.Stale)" @onclick='() => JobAsync(job.JobId, "apply", candidate.AssetId)'>Apply candidate</button>
+                    @if (candidate.HasRawProviderData) { <a href="/media/projects/@ProjectId/assets/@candidate.AssetId/raw-provider" download>Raw provider image</a> }
+                </figure>
+            }</div>
+        </section>
+    }
+</details>
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+    [Parameter] public Guid DocumentId { get; set; }
+    [Parameter] public Guid FrameId { get; set; }
+    [Parameter] public Guid LayerId { get; set; }
+    [Parameter] public long Revision { get; set; }
+    [Parameter] public string ArtMode { get; set; } = "painted";
+    private string _prompt = "", _references = "", _kind = "edit", _model = "", _background = "auto", _recipe = "", _animation = "";
+    private int _count = 1, _left, _top, _right, _bottom;
+    private Guid? _preparation;
+    private string? _preparationKey, _error;
+    private bool _busy, _disposed;
+    private IReadOnlyList<SpriteJobView> _jobs = [];
+    private IReadOnlyList<SpriteArtifactView> _artifacts = [];
+    private SpriteValidationResult? _validation;
+    private Guid _loadedDocument;
+    protected override void OnInitialized() => Runtime.StateChanged += RuntimeChanged;
+    protected override async Task OnParametersSetAsync() { if (_loadedDocument != DocumentId) { _loadedDocument = DocumentId; _preparation = null; _artifacts = []; _validation = null; await RefreshAsync(); } }
+    private string PreparationKey => $"{DocumentId}:{Revision}:{FrameId}:{LayerId}:{_left}:{_top}:{_right}:{_bottom}:{_background}";
+    private SpriteGenerationRequest Request(bool prepared = false)
+    {
+        var refs = _references.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => { var parts = line.Split('|', 3); if (parts.Length != 3 || !Guid.TryParse(parts[0].Trim(), out var id)) throw new InvalidOperationException("References need asset ID | role | preserve scope."); return new SpriteReference(id, parts[1].Trim(), parts[2].Trim()); }).ToList();
+        return new(DocumentId, Revision, FrameId, LayerId, _prompt, _kind, _count, refs,
+            prepared && _preparationKey == PreparationKey ? _preparation : null,
+            prepared && _preparationKey == PreparationKey ? null : new(_top, _right, _bottom, _left, ResampleMode: ArtMode == "pixel" ? EditCanvasResampleMode.NearestNeighbor : EditCanvasResampleMode.Smooth), ImageModel: string.IsNullOrEmpty(_model) ? null : _model,
+            Background: _background, RecipeId: Guid.TryParse(_recipe, out var recipe) ? recipe : null, AnimationRecipeId: Guid.TryParse(_animation, out var animation) ? animation : null);
+    }
+    private Task PrepareAsync() => RunAsync(async services => { var result = JsonSerializer.SerializeToElement(await services.GetRequiredService<SpriteGenerationService>().PrepareAsync(ProjectId, Request()), SpriteDocument.JsonOptions); _preparation = result.GetProperty("canvasPreparationId").GetGuid(); _preparationKey = PreparationKey; ReadArtifacts(result); });
+    private Task GenerateAsync() => RunAsync(async services => { await services.GetRequiredService<SpriteGenerationService>().StartAsync(ProjectId, Request(true)); _preparation = null; _preparationKey = null; });
+    private Task JobAsync(Guid id, string action, Guid? candidate = null) => RunAsync(async services => { var result = await services.GetRequiredService<SpriteGenerationService>().OperateAsync(ProjectId, id, action, candidate, source: "user"); ReadArtifacts(JsonSerializer.SerializeToElement(result, SpriteDocument.JsonOptions)); });
+    private Task ValidateAsync() => RunAsync(async services => _validation = await services.GetRequiredService<SpriteValidationService>().ValidateAsync(ProjectId, DocumentId, Revision));
+    private Task RefreshAsync() => RunAsync(_ => Task.CompletedTask);
+    private void ReadArtifacts(JsonElement result) { if (result.TryGetProperty("artifacts", out var images)) _artifacts = images.Deserialize<List<SpriteArtifactView>>(SpriteDocument.JsonOptions) ?? []; }
+    private async Task RunAsync(Func<IServiceProvider, Task> action)
+    {
+        if (_busy || _disposed) return; _busy = true; _error = null;
+        try { await using var scope = Scopes.CreateAsyncScope(); await action(scope.ServiceProvider); _jobs = await scope.ServiceProvider.GetRequiredService<SpriteGenerationService>().ListAsync(ProjectId, DocumentId); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; if (!_disposed) await InvokeAsync(StateHasChanged); }
+    }
+    private void RuntimeChanged(object? sender, EventArgs e) { if (!_disposed) _ = InvokeAsync(RefreshAsync); }
+    public void Dispose() { _disposed = true; Runtime.StateChanged -= RuntimeChanged; }
+}

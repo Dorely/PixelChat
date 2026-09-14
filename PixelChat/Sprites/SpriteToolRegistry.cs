@@ -6,7 +6,7 @@ using PixelChat.Models;
 namespace PixelChat.Sprites;
 
 public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteScriptService scripts, SpriteInspectionService inspections,
-    IArtWorkflowService workflow, IFrameSetService frameSets)
+    IArtWorkflowService workflow, IFrameSetService frameSets, SpriteValidationService? validation = null, SpriteGenerationService? generation = null)
 {
     public async Task<IReadOnlyList<AIContent>> ImageContentsAsync(Guid projectId, string result, CancellationToken cancellationToken)
     {
@@ -24,12 +24,28 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
         return images;
     }
 
-    public AITool[] Build(Guid projectId) =>
+    public AITool[] Build(Guid projectId, PixelChat.Chat.AssistantTurnGenerationBudget? budget = null) =>
     [
         AIFunctionFactory.Create((Guid documentId, long? revision = null, int offset = 0, int limit = 24, Guid? frameId = null, Guid? layerId = null, SpriteRect? pixelRect = null, CancellationToken cancellationToken = default) =>
             ReadAsync(projectId, documentId, revision, offset, limit, frameId, layerId, pixelRect, cancellationToken),
             "sprite_read", "Read native sprite revision, production rules, layers, clips, selection, and a page of frame metadata. Optional pixelRect (at most 32x32) reads exact RGBA pixels for frameId; omit layerId to read the visible composite. No mutation."),
         AIFunctionFactory.Create((string topic = "overview") => Help(topic), "sprite_help", "Load one compact native sprite reference: overview, commands, scripting, drawing, poses, animation, or export. Load the relevant reference before using an unfamiliar command."),
+        AIFunctionFactory.Create(async (Guid documentId, long revision, long? compareRevision = null, SpriteFinding[]? judgments = null, CancellationToken cancellationToken = default) =>
+            Json(await validation!.ValidateAsync(projectId, documentId, revision, compareRevision, judgments, cancellationToken)),
+            "sprite_validate", "Measure EVERY frame, clips/timing/order, dimensions, alpha, palette, clipping, duplicate frames, pivots, selections, silhouette changes and loop seams. Facts and heuristic warnings are separate; motion warnings never modify pixels. Optional frame-addressed artistic judgments are stored explicitly as judgments."),
+        AIFunctionFactory.Create(async (SpriteGenerationRequest request, bool prepareOnly = false, CancellationToken cancellationToken = default) =>
+        {
+            if (prepareOnly) return Json(await generation!.PrepareAsync(projectId, request, cancellationToken));
+            if (budget?.IsExhausted == true) throw new InvalidOperationException("Generation round budget exhausted.");
+            budget?.Consume();
+            return Json(await generation!.StartAsync(projectId, request, cancellationToken));
+        }, "sprite_generate", "Start a native reference/pose/edit candidate job against a captured document revision and target layer. Explicit reference roles, model choice, recipes, and masks are supported. prepareOnly returns source/mask PNGs without generation; padded edits require inspecting that preparation first. Candidates never automatically replace pixels; inspect and apply with sprite_job."),
+        AIFunctionFactory.Create(async (Guid jobId, string action = "read", Guid? candidateId = null, int waitSeconds = 20, CancellationToken cancellationToken = default) =>
+        {
+            if (action is "retry" or "resume") { if (budget?.IsExhausted == true) throw new InvalidOperationException("Generation round budget exhausted."); budget?.Consume(); }
+            return Json(await generation!.OperateAsync(projectId, jobId, action, candidateId, waitSeconds, token: cancellationToken));
+        },
+            "sprite_job", "Read/wait/cancel/resume/retry a persisted sprite job, inspect a candidate with before/after/difference PNGs, or apply a candidate atomically against the job's captured revision. Stale results remain available but cannot overwrite manual work. Strict pixel conversion is explicit; provider masks remain advisory."),
         AIFunctionFactory.Create((string name, int width = 64, int height = 64, string artMode = "pixel", Guid[]? assetIds = null, Guid? sourceAssetId = null, Guid[]? regionIds = null, CancellationToken cancellationToken = default) =>
             CreateAsync(projectId, name, width, height, artMode, assetIds, sourceAssetId, regionIds, cancellationToken),
             "sprite_create", "Create a blank native sprite, import assets as frames, or import selected source regions. Imports preserve pixels and use painted mode; explicit conversion is required for strict pixel art. Returns stable document/layer/frame IDs."),

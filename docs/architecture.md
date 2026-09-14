@@ -57,7 +57,7 @@ The main runtime flow is:
 
 `IArtWorkflowService` owns project, asset, generation, review, recipe, mask,
 import, edit, and export workflows. `IFrameSetService` owns the deterministic
-source regions, frame preparation, and derived sheets. `ISpriteDocumentService`
+source regions, deterministic frame operations, and derived sheets. `ISpriteDocumentService`
 owns native FrameSet revisions, shared immutable PNG content, atomic command
 transactions, and persisted undo/redo. `SpriteCommandEngine` edits temporary
 snapshots with layer locks, selection, palette, and allocation constraints.
@@ -103,7 +103,7 @@ retained per asset. A downgrade requires restoring a database backup.
 
 The app-process image runtime owns one active batch per project. It creates a
 bounded worker set instead of a task for every prompt/output. `ImageRequestScheduler`
-limits actual image provider requests across projects and direct frame edits to
+limits actual image provider requests across project image jobs to
 `Images:MaxParallelRequests` (default four). Only awaited lifecycle transitions
 write output state; live progress updates are serialized in memory and cannot
 supersede saved success. Saving an output asset and its successful queue row is
@@ -301,3 +301,11 @@ Native agent editing and inspection
 `SpriteToolRegistry` exposes native document reads, creation, command batches, scripts, renders, history, and progressively loaded embedded references through the existing function registry. `AssistantChatService` attaches actual PNG content from persisted `SpriteInspection` records to tool results; transcript visuals use the existing persistence path. Inspection renders are cached by document revision and request. Contact-sheet pagination does not imply numerical validation coverage. Color selections store a fixed mask resolved from the visible composite, so changing layers or pixels does not change selection membership.
 
 Scripts run in a dedicated invocation of the application with `--sprite-script-worker`. Jint 4.16 exposes only pure JavaScript document data and an operation-queue API; CLR access and module loading are not enabled. Worker limits include two seconds of interpreter time, 250,000 statements, recursion depth 64, 32 MB interpreter allocation, 10,000 commands, and bounded input/output. The parent enforces an eight-second deadline, a 256 MB working-set ceiling, cancellation, and process-tree termination. The worker receives a scrubbed environment and no application services. Jint is not an operating-system security boundary. Commands are applied through the shared engine only after successful worker completion and a fresh revision check; scripts read the starting snapshot, not intermediate queued results.
+
+Native AI jobs and diagnostics
+
+`SpriteGenerationService` captures document revision, frame, layer, source pixels, selection/mask, and prepared logical/provider canvases. Preparations are bound to the actual native revision and layer. The existing app-process `IImageGenerationRuntime` starts and controls native jobs through `ArtWorkflowService.Sprites`; there is no second background runner or source-asset surrogate. GenerationBatch snapshots target metadata, reference roles and guide metadata, model/quality, recipe versions, and mask/canvas bytes. Provider output uses the existing authoritative finalizer and retains raw bytes on candidate assets. Applying a candidate sends a revision-checked command batch; source pixels are never pasted back over provider output. Strict palette/alpha violations are rejected instead of silently quantized. Stale candidates stay inspectable and require a new current-revision job. Native jobs keep the Sprites workspace visible when resumed.
+
+`SpriteAiPanel` provides the same preparation/candidate/control loop manually using short-lived service scopes. `SpriteValidationService` measures every frame and actual clip sequence, including late frames, reverse/ping-pong timing, one-shots and loop seams. Alpha, palette, dimensions, duplication and pixel counts are facts; edge contact, centroid/area changes, palette drift and pixel discontinuities are heuristics. Artistic findings are stored explicitly as judgments with revision/frame references. Validation never changes pixels. Assessment and inspection records survive chat compaction.
+
+The fixed sheet-first/normalize/center/single-row prompt itinerary and direct AI frame-edit route are removed. Operational references remain separate from art and animation recipes. The old SpriteEditSession runtime/table is retired; its target-linked provenance is migrated to assessments or source asset metadata while candidate assets and image batches remain intact. Unused generation-round/candidate-sheet/repair/snapshot animation settings are removed; active image runtime limits remain in Images configuration.

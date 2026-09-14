@@ -32,6 +32,9 @@ public class GenerationBatch
     public int? EditSourceHeight { get; set; }
     public byte[]? EditLogicalMaskData { get; set; }
     public string EditCanvasTransformJson { get; set; } = string.Empty;
+    public string SpriteTargetJson { get; set; } = string.Empty;
+    public byte[]? SpriteLogicalSourceData { get; set; }
+    public byte[]? SpriteProviderMaskData { get; set; }
     public Guid? ParentBatchId { get; set; }
     public GenerationBatch? ParentBatch { get; set; }
     public ICollection<GenerationBatch> ChildBatches { get; set; } = [];

@@ -82,43 +82,6 @@ public sealed record SpriteSheetBackground(
     byte B,
     byte A);
 
-public sealed record SpriteAnimationMetricsView(
-    IReadOnlyList<SpriteAnimationFrameMetricView> Frames,
-    IReadOnlyList<SpriteAnimationFramePairMetricsView> FramePairs,
-    double MeanCentroidDrift,
-    double MaxCentroidDrift,
-    double AreaVariancePercent);
-
-public sealed record SpriteAnimationFrameMetricView(
-    int FrameIndex,
-    int ForegroundPixelCount,
-    SpriteSheetRect ForegroundBounds,
-    int ForegroundWidth,
-    int ForegroundHeight,
-    double HeightDeviationFromMedianPercent);
-
-public sealed record SpriteAnimationFramePairMetricsView(
-    int FromFrame,
-    int ToFrame,
-    bool LoopSeam,
-    double CentroidDeltaX,
-    double CentroidDeltaY,
-    double CentroidDistance,
-    int BoundingBoxWidthDelta,
-    int BoundingBoxHeightDelta,
-    double SilhouetteAreaChangePercent,
-    double ForegroundPixelDiffPercent);
-
-public sealed record SpriteAnimationReviewImageView(
-    string Label,
-    string FileName,
-    string ContentType,
-    string DataUrl,
-    string Kind,
-    int? FrameIndex,
-    int? FromFrame,
-    int? ToFrame);
-
 public sealed record SpriteSheetFrameView(
     int Index,
     string Label,

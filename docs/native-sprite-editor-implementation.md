@@ -12,4 +12,4 @@ Impact crosses Models, Persistence and forward migrations, Art and sprite servic
 
 Verification uses `dotnet test PixelChat.Tests/PixelChat.Tests.csproj`, `dotnet build PixelChat.sln`, and a bounded host startup check. Migration fixtures run against old schema boundaries before destructive column removal. Browser and live provider checks must be recorded separately; a successful build is not evidence of either.
 
-Stages 1 and 2 are committed. Stage 3 adds the native agent surface, persisted PNG inspections, and the bounded script worker. The AI job/diagnostic and export stages remain required before release completion.
+Stages 1–3 are committed. Stage 4 unifies native AI jobs and all-frame diagnostics and retires obsolete edit ownership. Stage 5 exports and release verification remain required.

@@ -16,7 +16,7 @@ See [VISION.md](VISION.md) for the product direction and [docs/architecture.md](
 - Recipe bulk generation: paste one prompt per line, edit/remove preview rows, and request 1â€“4 images per prompt with shared settings/references. Order and duplicates are preserved, with paginated output/review and no fixed prompt-count cap. Stop, Resume, and Retry failed preserve saved successes; interrupted queues require manual resume.
 - Image generation with same-prompt variant or multi-prompt concept batches, imported-image editing, provider-guidance masks, outpainting-aware canvases whose complete provider output remains authoritative, batch progress, visual review, and kept/rejected asset management.
 - Reusable versioned art and animation recipes with example and guide attachments.
-- A Source -> Frames -> Sheet sprite workflow with region extraction, frame ordering, alignment, cleanup, masked edits, animation preview, and deterministic sprite-sheet builds.
+- A native sprite workflow with source-region import, drawing, layers, saved frame timing, clips, AI candidates, reversible edits, and complete animation diagnostics.
 - Procedural and GLB-backed animation guides plus PNG/JSON export workflows and optional local AI background removal.
 - OpenAI account OAuth with Sol, Terra, Luna, and Astra chat selections and low through max effort; new account connections default to Sol / medium. Built-in models use a 272,000-token context and a 258,400-token input budget, including tools and images, with automatic safe compaction.
 - Persistent app-wide chat/effort and image/quality selectors. Image choices are Image 2, Image 2.5 Flare, and Image 2.5 Sunburst (default); Sol independently orchestrates images.

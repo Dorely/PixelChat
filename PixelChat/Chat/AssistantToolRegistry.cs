@@ -28,7 +28,7 @@ public sealed class AssistantToolRegistry(
 
     private static readonly HashSet<string> WorkspaceMutationTools = new(StringComparer.Ordinal)
     {
-        "sprite_create", "sprite_apply", "sprite_script", "sprite_history",
+        "sprite_create", "sprite_apply", "sprite_script", "sprite_history", "sprite_generate", "sprite_job",
         "set_compare_review_set",
         "add_compare_review_items",
         "remove_compare_review_item",
@@ -44,7 +44,6 @@ public sealed class AssistantToolRegistry(
         "revert_recipe_version",
         "revert_animation_recipe_version",
         "generate_animation_guide",
-        "generate_sprite_sheet_candidates",
         "extract_region_as_asset",
         "detect_source_regions",
         "save_source_regions",
@@ -65,14 +64,13 @@ public sealed class AssistantToolRegistry(
         "normalize_frame_scale",
         "clear_frame_mask",
         "erase_frame_regions",
-        "edit_frame",
         "build_sheet",
     };
 
     public IList<AITool> Build(Guid projectId, AssistantTurnGenerationBudget budget) =>
         WithDisplayTitleParameters(
         [
-        .. spriteTools.Build(projectId),
+        .. spriteTools.Build(projectId, budget),
         AIFunctionFactory.Create(
             method: () => ListWorkspaceStateAsync(projectId),
             name: "list_workspace_state",
@@ -192,7 +190,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 GenerateAnimationGuideToolAsync(projectId, motionClipId, frameCount, fps, rows, columns, guideCanvasSize, guideCellSize, label, guideCameraYawDegrees, guideCameraPitchDegrees, loop, safeMarginPercent, cancellationToken),
             name: "generate_animation_guide",
-            description: "Render and save a reusable guide as SpriteGuide assets. Omit motionClipId to create a layout-only labeled box guide; use mannequin vs layout-only as an iteration lever when one over-constrains or underspecifies motion. For GLTF-backed humanoid motion, first call list_motion_clips, then pass the chosen motionClipId plus explicit grid/layout controls. UI-equivalent defaults are frameCount 8, rows 2, columns 4, guideCanvasSize 1024x1024, guideCellSize 256x512, fps 8, loop true, and safeMarginPercent 12. guideCameraYawDegrees controls horizontal angle and guideCameraPitchDegrees controls camera elevation only when motionClipId is supplied. Use this before generate_sprite_sheet_candidates for guide-driven sprite-sheet work. The returned guideAssetId must be first in referenceAssetIds; do not use old SpriteSheet or Generated assets as guides."),
+            description: "Render and save a reusable guide as SpriteGuide assets. Omit motionClipId to create a layout-only labeled box guide; use mannequin vs layout-only as an iteration lever when one over-constrains or underspecifies motion. For GLTF-backed humanoid motion, first call list_motion_clips, then pass the chosen motionClipId plus explicit grid/layout controls. UI-equivalent defaults are frameCount 8, rows 2, columns 4, guideCanvasSize 1024x1024, guideCellSize 256x512, fps 8, loop true, and safeMarginPercent 12. guideCameraYawDegrees controls horizontal angle and guideCameraPitchDegrees controls camera elevation only when motionClipId is supplied. Use the returned guide only when it helps the requested motion. Pass it to sprite_generate with a motion/layout role; guides are optional."),
 
         AIFunctionFactory.Create(
             method: (string? status = null, int? limit = null) =>
@@ -281,21 +279,6 @@ public sealed class AssistantToolRegistry(
             name: "edit_asset",
             description: "Directly edit an existing image asset and wait for completion. Background defaults to preserving source treatment. Use the selected-model system guidance for native-alpha requests. Recipe background preferences apply only to generation. Use the same background for canvas preparation and editing. Use this whenever the user asks to change, replace, repair, or refine an existing non-frame image; do not substitute new generation or UI instructions. Inspect the source first. For an ordinary zero-padding localized edit, pass maskRects/maskPolygons in full source pixels or maskId. For every padded/outpaint edit, first call preview_asset_edit_canvas with the final mask, padding, seam, and resampling; inspect both images, then call this tool with canvasPreparationId and no inline mask/canvas arguments. A preparation locks the exact submitted logical/provider canvases and expires after 15 minutes, but its mask only guides the provider and does not pixel-lock the result. Inspect the complete output for unintended changes. Padding is deterministic and must never be its own generation round. Use recipeId for reusable guidance and keep the prompt focused on Change/Preserve/Constraints. Outputs are model-only images and enter Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
 
-        AIFunctionFactory.Create(
-            method: (
-                string prompt,
-                [Description("Required readable base name for the saved sprite-sheet candidate asset(s). Use a short production name, not Image A or a generic batch label.")] string assetName,
-                Guid[]? referenceAssetIds = null,
-                Guid? artRecipeId = null,
-                Guid? animationRecipeId = null,
-                [Description("Hard prohibitions only, phrased as no X; phrase wanted states positively in the main prompt.")] string? negativePrompt = null,
-                string? size = null,
-                string? background = null,
-                int count = 2,
-                CancellationToken cancellationToken = default) =>
-                RunGenerationRoundAsync(projectId, budget, prompt, assetName, negativePrompt, size, background, count, referenceAssetIds, artRecipeId, animationRecipeId, cancellationToken),
-            name: "generate_sprite_sheet_candidates",
-            description: "Generate sprite-sheet candidates from a concise labeled-slot prompt plus ordered references whose roles are indexed in the prompt. Requires assetName, a readable saved asset base name. Pass artRecipeId and/or animationRecipeId when saved reusable guidance applies; do not paste recipe prompts into the one-off prompt. For new guide-driven sprite sheets, first call generate_animation_guide, then attach the returned guide asset to an animation recipe or put it first manually in referenceAssetIds. Put hard prohibitions in negativePrompt. Returns model-only candidate images; outputs appear automatically in Pending Generations, where you can explicitly mark and finish their batch review."),
 
         AIFunctionFactory.Create(
             method: (
@@ -374,25 +357,6 @@ public sealed class AssistantToolRegistry(
             name: "set_active_frame_set",
             description: "Greenfield Frames pipeline: set the active FrameSet used by the visible Sprites workspace, assistant state, and subsequent frame/sheet operations."),
 
-        AIFunctionFactory.Create(
-            method: (
-                Guid frameSetId,
-                Guid frameId,
-                string? background = null,
-                bool useFrameMask = true,
-                SpriteSheetRect[]? maskRects = null,
-                SpriteSheetShapePath[]? maskPolygons = null,
-                int canvasPaddingTop = 0,
-                int canvasPaddingRight = 0,
-                int canvasPaddingBottom = 0,
-                int canvasPaddingLeft = 0,
-                bool allowScaleDown = true,
-                string resampleMode = "nearest",
-                int seamOverlapPixels = 32,
-                CancellationToken cancellationToken = default) =>
-                PreviewFrameEditCanvasAsync(projectId, frameSetId, frameId, background, useFrameMask, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, cancellationToken),
-            name: "preview_frame_edit_canvas",
-            description: "Deterministically prepare and inspect a frame edit canvas without generating an image, consuming a generation round, creating a batch, or creating a library asset. Use this immediately before every edit_frame call with nonzero padding. Pass the final intended padding and effective saved/drawn mask once; the result returns a 15-minute canvasPreparationId plus model-only prepared-source and editable-mask-overlay images. After inspecting them, call edit_frame with only that id to lock the submitted source, mask, and canvas inputs; do not repeat inline padding or mask arguments. The mask guides the provider and does not pixel-lock the returned frame."),
 
         AIFunctionFactory.Create(
             method: (
@@ -548,7 +512,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 NormalizeFrameScaleAsync(projectId, frameSetId, targetHeight, tolerancePercent, anchor, cancellationToken),
             name: "normalize_frame_scale",
-            description: "Greenfield Frames pipeline: deterministic cross-frame character scale normalization. Run before alignment when review reports scale deviation. targetHeight 0 uses the median foreground height; anchor is bottom or center. Does not consume generation budget. Follow with review_frame_set_animation."),
+            description: "Greenfield Frames pipeline: deterministic cross-frame character scale normalization. Use only when scale changes violate the task; preserve intentional squash/stretch and travel. targetHeight 0 uses the median foreground height; anchor is bottom or center. Does not consume generation budget. Follow with sprite_validate and sprite_render."),
 
         AIFunctionFactory.Create(
             method: (
@@ -567,11 +531,6 @@ public sealed class AssistantToolRegistry(
             name: "compose_frame_set_from_assets",
             description: "Greenfield Frames pipeline: compose a FrameSet from ordered individual PNG assets by laying them into one equal-cell row, then update the visible Sprites workspace. Use when frames already exist as separate PNG assets. The result stays opaque."),
 
-        AIFunctionFactory.Create(
-            method: (Guid? frameSetId = null, int maxFrames = 12, CancellationToken cancellationToken = default) =>
-                ReviewFrameSetAnimationAsync(projectId, frameSetId, maxFrames, cancellationToken),
-            name: "review_frame_set_animation",
-            description: "Greenfield animation-quality review for a FrameSet. Renders the frames into a one-row strip and returns motion metrics, scaleStability, and visualChecklist in JSON plus labeled frame images, an annotated sheet view, pairwise diffs, onion-skin, and filmstrip images as model-only content. Answer every visualChecklist item individually before declaring the animation clean. For frames with edited/erased working images it also returns removed-vs-source overlays where red marks pixels erased from the source foreground; inspect these for clipped owned silhouette before declaring an animation clean. Omit frameSetId to use the active FrameSet. This is read-only."),
 
         AIFunctionFactory.Create(
             method: (string? title = null, string? summary = null, CompareReviewToolItem[]? items = null, bool switchToReview = true, CancellationToken cancellationToken = default) =>
@@ -621,29 +580,6 @@ public sealed class AssistantToolRegistry(
             name: "erase_frame_regions",
             description: "Greenfield Frames pipeline: deterministically clean one frame's logical cell using rects or polygons, store the result as the frame's working image, and update the visible Sprites workspace. mode 'erase' (default) fills the selected regions with the sheet background; mode 'keep' inverts the selection, keeping only the selected regions and filling everything else with background. Use keep to isolate the owned sprite and discard neighbor bleed in one call. Coordinates are in the logical cell; out-of-bounds coordinates are clamped. Does not consume generation budget."),
 
-        AIFunctionFactory.Create(
-            method: (
-                Guid frameSetId,
-                Guid frameId,
-                string prompt,
-                string? background = null,
-                Guid[]? referenceAssetIds = null,
-                bool includeAdjacentFrames = true,
-                bool useFrameMask = true,
-                SpriteSheetRect[]? maskRects = null,
-                SpriteSheetShapePath[]? maskPolygons = null,
-                int canvasPaddingTop = 0,
-                int canvasPaddingRight = 0,
-                int canvasPaddingBottom = 0,
-                int canvasPaddingLeft = 0,
-                bool allowScaleDown = true,
-                string resampleMode = "nearest",
-                int seamOverlapPixels = 32,
-                Guid? canvasPreparationId = null,
-                CancellationToken cancellationToken = default) =>
-                EditFrameAsync(projectId, budget, frameSetId, frameId, prompt, background, referenceAssetIds, includeAdjacentFrames, useFrameMask, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, canvasPreparationId, cancellationToken),
-            name: "edit_frame",
-            description: "Greenfield Frames pipeline: AI-edit one frame's logical cell with a Change/Preserve/Constraints prompt, store the logical result as the frame's working image, and update the visible Sprites workspace. Consumes one autonomous generation round. Use only when deterministic crop/cell/offset/align/erase cannot fix the frame. For an ordinary zero-padding surgical edit, pass maskRects/maskPolygons in logical-frame pixels. For every padded/outpaint edit, first call preview_frame_edit_canvas with the final mask, padding, seam, and resampling; inspect both images, then call this tool with canvasPreparationId and no inline mask/canvas arguments. Masks guide the provider and do not pixel-lock the result, so inspect the complete edited frame for unintended changes. The accepted result expands the logical cell and is never squashed into the old one. Padding is deterministic and must never be its own generation round or a reason to construct a temporary frame set. background defaults to preserving source treatment. Use the selected-model system guidance for native-alpha requests."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId) => ExportAssetAsync(projectId, assetId),
@@ -1013,7 +949,7 @@ public sealed class AssistantToolRegistry(
             guide.MotionSourceLicense,
             guide.MotionSourceUrl,
             guide.Message,
-            nextStep = "Call generate_sprite_sheet_candidates with referenceAssetIds ordered as [guideAssetId, subjectAssetId, optionalStyleAssetId].",
+            nextStep = "Optionally use sprite_generate with explicit guide, identity, and style reference roles.",
         }, JsonOptions);
     }
 
@@ -1871,7 +1807,7 @@ public sealed class AssistantToolRegistry(
             result.Anchor,
             result.Frames,
             result.Warnings,
-            message = "Run review_frame_set_animation next to verify scale stability before final alignment/build.",
+            message = "Run sprite_validate and sprite_render next to verify scale stability before final alignment/build.",
         }, JsonOptions);
     }
 
@@ -1998,39 +1934,6 @@ public sealed class AssistantToolRegistry(
         return SerializeFrameSet(view, "Frame set composed from individual image assets.");
     }
 
-    private async Task<Guid?> ResolveFrameSetIdAsync(Guid projectId, Guid? frameSetId, CancellationToken cancellationToken)
-    {
-        if (frameSetId is Guid id && id != Guid.Empty)
-            return id;
-        var active = await frameSets.GetActiveFrameSetAsync(projectId, cancellationToken);
-        return active?.Id;
-    }
-
-    private async Task<string> ReviewFrameSetAnimationAsync(
-        Guid projectId,
-        Guid? frameSetId,
-        int maxFrames,
-        CancellationToken cancellationToken)
-    {
-        var resolved = await ResolveFrameSetIdAsync(projectId, frameSetId, cancellationToken);
-        if (resolved is null)
-            return JsonSerializer.Serialize(new { error = "No FrameSet was found to review. Create or select a frame set first." }, JsonOptions);
-
-        var review = await frameSets.BuildAnimationReviewAsync(projectId, resolved.Value, maxFrames, cancellationToken);
-        return JsonSerializer.Serialize(new
-        {
-            frameSetId = review.FrameSetId,
-            review.FrameCount,
-            review.Rows,
-            review.Columns,
-            review.Fps,
-            review.Loop,
-            review.Metrics,
-            qualityGate = BuildAnimationQualityGate(review.Metrics),
-            modelOnlyImages = review.Images.Select(image => new { image.Label, image.FileName, image.ContentType, image.Kind, image.FrameIndex, image.FromFrame, image.ToFrame }).ToList(),
-        }, JsonOptions);
-    }
-
     private async Task<string> EraseFrameRegionsAsync(
         Guid projectId,
         Guid frameSetId,
@@ -2052,310 +1955,8 @@ public sealed class AssistantToolRegistry(
             : "Frame regions erased.");
     }
 
-    private async Task<string> PreviewFrameEditCanvasAsync(
-        Guid projectId,
-        Guid frameSetId,
-        Guid frameId,
-        string? background,
-        bool useFrameMask,
-        SpriteSheetRect[]? maskRects,
-        SpriteSheetShapePath[]? maskPolygons,
-        int canvasPaddingTop,
-        int canvasPaddingRight,
-        int canvasPaddingBottom,
-        int canvasPaddingLeft,
-        bool allowScaleDown,
-        string resampleMode,
-        int seamOverlapPixels,
-        CancellationToken cancellationToken)
-    {
-        if (!TryCreateCanvasOptions(
-                canvasPaddingTop,
-                canvasPaddingRight,
-                canvasPaddingBottom,
-                canvasPaddingLeft,
-                allowScaleDown,
-                resampleMode,
-                seamOverlapPixels,
-                out var canvasOptions,
-                out var canvasError))
-        {
-            return JsonSerializer.Serialize(new { error = canvasError, generationRoundConsumed = false }, JsonOptions);
-        }
-
-        var preview = await frameSets.PreviewFrameEditCanvasAsync(projectId, new PreviewFrameEditCanvasRequest(
-            frameSetId,
-            frameId,
-            background,
-            useFrameMask,
-            maskRects,
-            maskPolygons,
-            canvasOptions), cancellationToken);
-        return SerializeCanvasPreview(preview, "frame");
-    }
-
-    private async Task<string> EditFrameAsync(
-        Guid projectId,
-        AssistantTurnGenerationBudget budget,
-        Guid frameSetId,
-        Guid frameId,
-        string prompt,
-        string? background,
-        Guid[]? referenceAssetIds,
-        bool includeAdjacentFrames,
-        bool useFrameMask,
-        SpriteSheetRect[]? maskRects,
-        SpriteSheetShapePath[]? maskPolygons,
-        int canvasPaddingTop,
-        int canvasPaddingRight,
-        int canvasPaddingBottom,
-        int canvasPaddingLeft,
-        bool allowScaleDown,
-        string resampleMode,
-        int seamOverlapPixels,
-        Guid? canvasPreparationId,
-        CancellationToken cancellationToken)
-    {
-        if (budget.IsExhausted)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                budgetExhausted = true,
-                budget.RoundsUsed,
-                budget.MaxRounds,
-                roundsRemaining = 0,
-                message = "Stop editing frames with AI for this turn; deterministic erase and alignment are still available.",
-            }, JsonOptions);
-        }
-
-        if (imageRuntime.HasRunningBatch(projectId))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                error = "An image generation batch is already running for this project. Wait for it to finish before editing a frame.",
-                budget.RoundsUsed,
-                budget.MaxRounds,
-            }, JsonOptions);
-        }
-
-        if (!TryCreateCanvasOptions(
-                canvasPaddingTop,
-                canvasPaddingRight,
-                canvasPaddingBottom,
-                canvasPaddingLeft,
-                allowScaleDown,
-                resampleMode,
-                seamOverlapPixels,
-                out var canvasOptions,
-                out var canvasError))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                error = canvasError,
-                budget.RoundsUsed,
-                budget.MaxRounds,
-                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
-                message = "No generation round was consumed. Fix the canvas options and run the frame edit again.",
-            }, JsonOptions);
-        }
-
-        var hasInlineCanvasArguments = canvasOptions.HasPadding
-            || !canvasOptions.AllowScaleDown
-            || canvasOptions.ResampleMode != EditCanvasResampleMode.NearestNeighbor
-            || canvasOptions.SeamOverlapPixels != 32;
-        var hasDrawnMask = (maskRects?.Length ?? 0) > 0 || (maskPolygons?.Length ?? 0) > 0;
-        if (canvasPreparationId is not null && (hasDrawnMask || hasInlineCanvasArguments))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                error = "canvasPreparationId already locks the frame source, mask, padding, seam, and resampling. Remove inline mask/canvas arguments.",
-                budget.RoundsUsed,
-                budget.MaxRounds,
-                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
-                message = "No generation round was consumed.",
-            }, JsonOptions);
-        }
-        if (canvasOptions.HasPadding && canvasPreparationId is null)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                error = "canvas_preview_required",
-                message = "Call preview_frame_edit_canvas with the final padding and mask, inspect its images, then call edit_frame with the returned canvasPreparationId. No generation round was consumed.",
-                budget.RoundsUsed,
-                budget.MaxRounds,
-                roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
-            }, JsonOptions);
-        }
-
-        ImageMaskView? savedMask = null;
-        var effectiveUseFrameMask = useFrameMask;
-        if (hasDrawnMask)
-        {
-            var frameSet = await frameSets.GetFrameSetAsync(projectId, frameSetId, cancellationToken);
-            var frame = frameSet.Frames.FirstOrDefault(item => item.Id == frameId)
-                ?? throw new InvalidOperationException("Frame was not found in the requested frame set.");
-            var maskPng = ImageEditMaskRenderer.RenderPng(
-                frame.LogicalWidth,
-                frame.LogicalHeight,
-                maskRects,
-                maskPolygons);
-            savedMask = await spriteActions.UpsertFrameMaskAsync(projectId, new UpsertFrameMaskRequest(
-                frameId,
-                DataUrl.ToDataUrl("image/png", maskPng),
-                $"{frame.Name} agent mask",
-                "logicalFrame"), cancellationToken);
-            effectiveUseFrameMask = true;
-        }
-
-        var view = await spriteActions.EditFrameAsync(projectId, new EditFrameRequest(
-            frameSetId,
-            frameId,
-            prompt,
-            background,
-            referenceAssetIds?.Where(id => id != Guid.Empty).Distinct().ToList(),
-            includeAdjacentFrames,
-            effectiveUseFrameMask,
-            canvasPreparationId is null ? canvasOptions : null,
-            canvasPreparationId), cancellationToken);
-        var round = budget.Consume();
-        using var document = JsonDocument.Parse(SerializeFrameSet(view, "Frame AI edit completed."));
-        return JsonSerializer.Serialize(new
-        {
-            round,
-            budget.RoundsUsed,
-            budget.MaxRounds,
-            roundsRemaining = Math.Max(0, budget.MaxRounds - budget.RoundsUsed),
-            maskId = savedMask?.Id,
-            frameSet = document.RootElement.Clone(),
-        }, JsonOptions);
-    }
-
-    private static object BuildAnimationQualityGate(SpriteAnimationMetricsView metrics)
-    {
-        var pairs = metrics.FramePairs.ToList();
-        var frameMetrics = metrics.Frames.ToList();
-        var foregroundHeights = frameMetrics
-            .Select(frame => new
-            {
-                frame.FrameIndex,
-                frame.ForegroundHeight,
-                frame.ForegroundWidth,
-                frame.HeightDeviationFromMedianPercent,
-                frame.ForegroundBounds,
-            })
-            .ToList();
-        var medianForegroundHeight = Median(frameMetrics
-            .Where(frame => frame.ForegroundHeight > 0)
-            .Select(frame => frame.ForegroundHeight)
-            .ToList());
-        var scalableFrames = frameMetrics.Where(frame => frame.ForegroundHeight > 0).ToList();
-        var maxHeightDeviationPercent = scalableFrames.Count == 0
-            ? 0
-            : scalableFrames.Max(frame => frame.HeightDeviationFromMedianPercent);
-        var needsScaleNormalization = maxHeightDeviationPercent > 6d;
-        var majorOutliers = pairs
-            .Where(pair =>
-                pair.CentroidDistance > Math.Max(32d, metrics.MeanCentroidDrift * 2.25d)
-                || Math.Abs(pair.BoundingBoxWidthDelta) > 64
-                || Math.Abs(pair.BoundingBoxHeightDelta) > 64
-                || Math.Abs(pair.SilhouetteAreaChangePercent) > 45d
-                || pair.ForegroundPixelDiffPercent > 42d)
-            .Select(pair => new
-            {
-                fromFrame = pair.FromFrame,
-                toFrame = pair.ToFrame,
-                pair.LoopSeam,
-                pair.CentroidDistance,
-                pair.ForegroundPixelDiffPercent,
-                pair.SilhouetteAreaChangePercent,
-                pair.BoundingBoxWidthDelta,
-                pair.BoundingBoxHeightDelta,
-            })
-            .ToList();
-        var repeatedPosePairs = pairs
-            .Where(pair => !pair.LoopSeam && pair.CentroidDistance < 4d && pair.ForegroundPixelDiffPercent < 8d)
-            .Select(pair => new { fromFrame = pair.FromFrame, toFrame = pair.ToFrame })
-            .ToList();
-        var warnings = new List<string>();
-        if (majorOutliers.Count > 0)
-            warnings.Add("Major motion, scale, silhouette, or foreground-diff outliers detected.");
-        if (repeatedPosePairs.Count > 0)
-            warnings.Add("Adjacent frames may repeat the same pose.");
-        if (needsScaleNormalization)
-            warnings.Add("Cross-frame foreground height deviation is high; normalize frame scale before alignment or rebuild.");
-        if (metrics.AreaVariancePercent > 30d)
-            warnings.Add("Frame silhouette area variance is high; check for distortions, crop errors, or wrong boxes.");
-        warnings.Add("Wrong pose order and action semantics require visual review against the requested animation/guide.");
-
-        var status = needsScaleNormalization
-            ? "needs_scale_normalization"
-            : majorOutliers.Count > 0 || repeatedPosePairs.Count > 0 || metrics.AreaVariancePercent > 30d
-            ? "needs_motion_or_pose_review"
-            : "pass_with_visual_review";
-        var recommendedAction = needsScaleNormalization
-            ? "normalize_frame_scale"
-            : majorOutliers.Count > 0 || repeatedPosePairs.Count > 0
-            ? "regenerate_or_full_strip_edit_bad_pose_sequence_before_cleanup"
-            : metrics.AreaVariancePercent > 30d
-                ? "check_boxes_then_regenerate_or_edit_distorted_frames"
-                : "continue_only_if_visual_pose_review_passes";
-
-        return new
-        {
-            status,
-            recommendedAction,
-            warnings,
-            majorOutliers,
-            repeatedPosePairs,
-            scaleStability = new
-            {
-                foregroundHeights,
-                medianForegroundHeight,
-                maxDeviationPercent = Math.Round(maxHeightDeviationPercent, 3, MidpointRounding.AwayFromZero),
-                needsScaleNormalization,
-                recommendedAction = needsScaleNormalization ? "normalize_frame_scale" : "none",
-            },
-            visualChecklist = BuildVisualChecklist(),
-            cleanupRule = "Use deterministic erase/keep only for guide marks, edge bleed, or background artifacts after boxes and poses are acceptable.",
-        };
-    }
-
-    private static object[] BuildVisualChecklist() =>
-    [
-        new { name = "facingConsistent", question = "Does every frame face the requested direction without accidental flips?", lookAt = "frame images; call inspect_frame for ambiguous head/torso direction" },
-        new { name = "limbCountCorrect", question = "Does each frame have the correct number of arms, legs, hands, feet, weapons, or held objects?", lookAt = "frame images and inspect_frame zooms on hands/feet" },
-        new { name = "anatomyOrientation", question = "Are hands and feet oriented correctly for the facing, especially back-facing sprites?", lookAt = "inspect_frame before passing this check" },
-        new { name = "characterScaleStable", question = "Does the character maintain stable height and proportions across frames?", lookAt = "scaleStability plus frame images and onion skin" },
-        new { name = "feetGrounded", question = "Do grounded frames share the intended baseline or contact point?", lookAt = "frame images and onion skin" },
-        new { name = "guideMarksGone", question = "Are guide lines, labels, boxes, numbers, mannequins, and construction marks absent?", lookAt = "frame images and removed-vs-source overlays" },
-        new { name = "silhouetteClean", question = "Is the owned silhouette clean without clipped limbs, neighbor bleed, or accidental erasures?", lookAt = "frame images and removed-vs-source overlays" },
-        new { name = "motionArcMatchesRequest", question = "Does the pose sequence match the requested action and timing?", lookAt = "filmstrip, onion skin, and pairwise diffs" },
-        new { name = "identityConsistent", question = "Does every frame preserve the same palette, outfit, proportions, and head-to-body ratio?", lookAt = "frame images; call inspect_frame for small-scale identity details" },
-    ];
-
-    private static double Median(IReadOnlyList<int> values)
-    {
-        if (values.Count == 0)
-            return 0;
-
-        var sorted = values.OrderBy(value => value).ToList();
-        var middle = sorted.Count / 2;
-        return sorted.Count % 2 == 1
-            ? sorted[middle]
-            : (sorted[middle - 1] + sorted[middle]) / 2d;
-    }
-
-    private static bool HasShapePaths(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
-        ShapePathCount(shapePaths) > 0;
-
     private static int ShapePathCount(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
         shapePaths.Count(path => path.Points.Count >= 3);
-
-    private static int ShapePointCount(IReadOnlyList<SpriteSheetShapePath> shapePaths) =>
-        shapePaths
-            .Where(path => path.Points.Count >= 3)
-            .Sum(path => path.Points.Count);
-
 
     private static Task<string> ExportAssetAsync(Guid projectId, Guid assetId) =>
         Task.FromResult(JsonSerializer.Serialize(new
@@ -2454,32 +2055,6 @@ public sealed class AssistantToolRegistry(
         var trimmed = value?.Trim();
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
-
-    private static int CeilDiv(int value, int divisor) =>
-        (Math.Max(0, value) + Math.Max(1, divisor) - 1) / Math.Max(1, divisor);
-
-    private static int MaxFrameWidth(IReadOnlyList<SpriteSheetFrameDetectionView> frames, int fallback) =>
-        frames.Count == 0 ? fallback : Math.Max(1, frames.Max(frame => frame.SourceRect.Width));
-
-    private static int MaxFrameHeight(IReadOnlyList<SpriteSheetFrameDetectionView> frames, int fallback) =>
-        frames.Count == 0 ? fallback : Math.Max(1, frames.Max(frame => frame.SourceRect.Height));
-
-    private static string NormalizeHorizontalAnchor(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
-        {
-            "left" => "left",
-            "right" => "right",
-            _ => "center",
-        };
-
-    private static string NormalizeVerticalAnchor(string? value) =>
-        value?.Trim().ToLowerInvariant() switch
-        {
-            "top" => "top",
-            "middle" or "center" => "middle",
-            "bottom" => "bottom",
-            _ => "middle",
-        };
 
     private static string SerializeCanvasPreview(EditCanvasPreviewView preview, string targetKind) =>
         JsonSerializer.Serialize(new

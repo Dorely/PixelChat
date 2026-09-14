@@ -55,7 +55,7 @@
 |------|-------------|
 | `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, asset lifecycle/review decisions, visual Review sets, media, generation, transient canvas previews, logical/provider-aware edits with authoritative provider output, sprite work, exports, recipes, masks, import, and crop. |
 | `ArtWorkflowModels.cs` | Request/result/view records for the workbench, ordered generation prompt specifications and batch modes, edit-canvas options/transforms/finalization/previews, lazy media, animation guides, sprite-sheet metadata, region extraction, recipes, and assistant tools. |
-| `IFrameSetService.cs` / `FrameSetService.cs` | Greenfield deterministic Source -> Frames -> Sheet service over SpriteRegion/FrameSet/Frame/Anchor/SheetLayout/BuiltSheet: detect/save regions, create/compose/edit/order/align/scale-normalize frames, inspect frame cells, deterministic erase/keep, preview-locked masked/reference AI frame edits with expanded logical cells and logical-space finalization, frame masks, build sheets, and animation-quality review. |
+| `IFrameSetService.cs` / `FrameSetService.cs` | Source regions/import, deterministic frame cleanup/alignment, native frame projections, masks, and derived sheets; AI jobs use the native generation service. |
 | `ISpriteWorkspaceActionService.cs` / `SpriteWorkspaceActionService.cs` | Shared Sprites action layer used by UI clicks and assistant tools to wrap greenfield mutations including scale normalization, update persisted sprite focus, and keep the visible workspace synchronized. |
 | `FrameSetModels.cs` | View/request/result records for the greenfield source-region, frame-set, preview-locked outpaint edit/reference/mask, logical finalization, scale-normalization, inspection, sprite-edit sessions, and build-sheet pipeline. |
 | `AnimationGuideModels.cs` | Shared guide-rendering records for animation specs, frame specs, guide layouts, and per-frame slots without restoring the old animation job pipeline. |
@@ -82,9 +82,9 @@
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 | `ImageRgbaDecoder.cs` | Shared RGBA decoder for PNG/JPEG source assets used by greenfield sprite region/frame operations and standalone region extraction. |
 | `ImageEditMaskRenderer.cs` | Rasterizes assistant rectangle/polygon selections into full-size PNG edit masks with opaque-preserve and transparent-edit semantics. |
-| `SpriteSheetImageAnalyzer.cs` | Server-side PNG analyzer for background-aware foreground bounds, connected sprite boxes/shape outlines, per-frame foreground scale metrics, and animation motion metrics. |
+| `SpriteSheetImageAnalyzer.cs` | Background-aware foreground bounds, connected source-region detection, shape outlines, and extraction-quality measurements. |
 | `SpriteSheetPngCodec.cs` | Minimal PNG RGBA decoder/encoder used by server-side sprite-sheet rendering. |
-| `SpriteSheetServerRenderer.cs` | Server-side sprite-sheet preview/normalization/review renderer with irregular frame isolation, erase/keep cleanup, coordinate-grid and upscaled model-facing removed-vs-source overlays, working-frame stabilization diagnostics, reassembly, annotated sheet views, diffs, onion skins, and filmstrips. |
+| `SpriteSheetServerRenderer.cs` | Deterministic source-sheet rendering, frame isolation, cleanup, annotated views, and reassembly. Native revision inspections own animation views. |
 
 ### Assets/MotionClips/
 
@@ -198,7 +198,6 @@
 | `SheetLayout.cs` | Greenfield EF entity for deterministic sheet geometry (rows/columns/cell/padding/gutter/outer-margin/ordering) and playback/background defaults for a frame set. |
 | `BuiltSheet.cs` | Greenfield EF entity for a reassembled RGBA sheet asset retaining a per-frame placement manifest and links to the frames used, so the sheet stays rebuildable. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets or greenfield frames, including owner and coordinate-space metadata. |
-| `SpriteEditSession.cs` | EF entity for one pending project-scoped Sprites edit modal session, including target, batch/candidate ownership, prompt/count, edit-canvas options, transient preparation provenance/expiry, crop transform, and overlay selection state. |
 | `ChatContextAttachment.cs` | EF entity for persistent visible chat attachments referencing assets, masks, crops, recipes, or batches. |
 | `CompareReviewSet.cs` | EF entities backing the project-scoped curated visual Review set with assets, greenfield frames, and FrameSet animations. |
 | `AssistantConversation.cs` | EF entity for project-scoped persistent assistant conversations. |
@@ -320,3 +319,9 @@
 | `PixelChat/Sprites/Skills/*.md` | Embedded, progressively loaded command references and drawing, pose, animation, and export workflows. |
 | `PixelChat.Tests/SpriteScriptTests.cs` / `SpriteToolTests.cs` | Real worker isolation/failure tests and native tool image-content checks. |
 | `20260914213826_SpriteInspectionArtifacts.cs` / `.Designer.cs` | Persists revision-addressed inspection artifacts with shared bitmap content. |
+| `PixelChat/Sprites/SpriteGenerationService.cs` | Revision/layer-bound preparations and candidate inspection/application over persisted image jobs. |
+| `PixelChat/Art/ArtWorkflowService.Sprites.cs` | Native generation batch submission with captured references, model/recipe selections, provider canvases, and source-independent edits. |
+| `PixelChat/Sprites/SpriteValidationService.cs` / `PixelChat/Models/SpriteAssessment.cs` | Every-frame measurements, clip/pair diagnostics, and separate persisted artistic judgments. |
+| `PixelChat/Components/Sprites/SpriteAiPanel.razor` / `.razor.css` | Manual preparation, candidate comparison, job controls, and numerical validation. |
+| `PixelChat.Tests/SpriteWorkflowTests.cs` | Late-frame diagnostics, intended motion, target preparation, stale AI results, reversible application, and a fixture provider pipeline. |
+| `20260914220038_NativeSpriteJobsAndAssessments.cs` / `.Designer.cs` | Adds native job snapshots/assessments and preserves edit-session provenance before retiring the obsolete session table. |

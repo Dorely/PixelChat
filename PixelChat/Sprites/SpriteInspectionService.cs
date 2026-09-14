@@ -15,6 +15,18 @@ public sealed record SpriteRenderResult(Guid DocumentId, long Revision, int Tota
 
 public sealed class SpriteInspectionService(AppDbContext db, ISpriteDocumentService documents)
 {
+    public async Task<SpriteArtifactView> StoreAsync(Guid projectId, Guid documentId, long revision, string label, byte[] image, CancellationToken token = default)
+    {
+        _ = await documents.ReadAsync(projectId, documentId, revision, token);
+        var raster = SpriteRaster.Decode(image); var bitmap = raster.Encode();
+        if (!db.SpriteBitmaps.Local.Any(b => b.Hash == bitmap.Hash) && !await db.SpriteBitmaps.AnyAsync(b => b.Hash == bitmap.Hash, token)) db.SpriteBitmaps.Add(bitmap);
+        var key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(label + bitmap.Hash)));
+        var artifact = await db.SpriteInspections.FirstOrDefaultAsync(a => a.FrameSetId == documentId && a.Revision == revision && a.CacheKey == key, token);
+        if (artifact is null) { artifact = new() { FrameSetId = documentId, Revision = revision, CacheKey = key, Label = label, BitmapHash = bitmap.Hash }; db.SpriteInspections.Add(artifact); }
+        await db.SaveChangesAsync(token);
+        return new(artifact.Id, label, $"/media/projects/{projectId}/sprite-inspections/{artifact.Id}", bitmap.Width, bitmap.Height, revision);
+    }
+
     public async Task<SpriteRenderResult> RenderAsync(Guid projectId, SpriteRenderRequest request, CancellationToken cancellationToken = default)
     {
         if (request.Kind is not ("frame" or "contact" or "onion" or "difference")) throw new InvalidOperationException("Render kind must be frame, contact, onion, or difference.");

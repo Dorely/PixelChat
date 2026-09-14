@@ -44,6 +44,12 @@ async function main() {
         await revision(6); assert.equal(await editor.locator('.frame-card').count(), 2);
         await page.waitForFunction(() => document.querySelector('.native-editor canvas')?.dataset.renderRevision === '6');
         assert.deepEqual(await pixel(2, 3), [255,128,64,255]);
+        await editor.locator('.sprite-ai summary').click();
+        await editor.getByRole('button', { name: 'Validate every frame', exact: true }).click();
+        await editor.getByText('2 frames measured at r6', { exact: false }).waitFor();
+        await editor.getByRole('button', { name: 'Preview preparation', exact: true }).click();
+        await editor.locator('.sprite-ai figure').nth(1).waitFor();
+        assert.equal(await editor.locator('.sprite-ai [role=alert]').count(), 0);
         if (process.env.PIXELCHAT_TEST_SCREENSHOT) await page.screenshot({ path: process.env.PIXELCHAT_TEST_SCREENSHOT, fullPage: true });
         assert.deepEqual(errors, []);
         console.log('PASS: drawing coordinates, visible pixels, undo/redo, layers, frame duplication, timing, history, reopen.');

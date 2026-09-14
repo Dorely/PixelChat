@@ -1545,8 +1545,7 @@ public sealed class AssistantChatService(
                 ];
             }
 
-            if (string.Equals(pendingCall.Name, "preview_asset_edit_canvas", StringComparison.Ordinal)
-                || string.Equals(pendingCall.Name, "preview_frame_edit_canvas", StringComparison.Ordinal))
+            if (string.Equals(pendingCall.Name, "preview_asset_edit_canvas", StringComparison.Ordinal))
                 return BuildCanvasPreviewModelOnlyContents(projectId, toolResult);
 
             if (string.Equals(pendingCall.Name, "run_generation_round", StringComparison.Ordinal)
@@ -1557,9 +1556,6 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "generate_animation_guide", StringComparison.Ordinal))
                 return await BuildAnimationGuideModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
-            if (string.Equals(pendingCall.Name, "review_frame_set_animation", StringComparison.Ordinal))
-                return await BuildFrameSetAnimationReviewModelOnlyContentsAsync(pendingCall, projectId, cancellationToken);
-
             if (string.Equals(pendingCall.Name, "build_sheet", StringComparison.Ordinal))
                 return await BuildBuiltSheetModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
@@ -1569,8 +1565,7 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "inspect_frame", StringComparison.Ordinal))
                 return await BuildInspectFrameModelOnlyContentsAsync(pendingCall, projectId, cancellationToken);
 
-            if (string.Equals(pendingCall.Name, "edit_frame", StringComparison.Ordinal)
-                || string.Equals(pendingCall.Name, "erase_frame_regions", StringComparison.Ordinal))
+            if (string.Equals(pendingCall.Name, "erase_frame_regions", StringComparison.Ordinal))
                 return await BuildEditedFrameModelOnlyContentsAsync(pendingCall, projectId, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1661,40 +1656,6 @@ public sealed class AssistantChatService(
         }
 
         return contents.Count > 1 ? contents : Array.Empty<AIContent>();
-    }
-
-    private async Task<IReadOnlyList<AIContent>> BuildFrameSetAnimationReviewModelOnlyContentsAsync(
-        PendingToolCall pendingCall,
-        Guid projectId,
-        CancellationToken cancellationToken)
-    {
-        Guid resolved;
-        if (ReadGuidArgument(pendingCall, "frameSetId") is Guid frameSetId && frameSetId != Guid.Empty)
-        {
-            resolved = frameSetId;
-        }
-        else
-        {
-            var active = await frameSets.GetActiveFrameSetAsync(projectId, cancellationToken);
-            if (active is null)
-                return Array.Empty<AIContent>();
-            resolved = active.Id;
-        }
-
-        var review = await frameSets.BuildAnimationReviewAsync(projectId, resolved, ReadIntArgument(pendingCall, "maxFrames") ?? 12, cancellationToken);
-        var contents = new List<AIContent>
-        {
-            new TextContent($"Model-only images: animation-quality review for FrameSet {resolved}. Filenames identify the sheet view, ordered frames, pairwise diffs, onion-skin, filmstrip, and removed-vs-source overlays for edited/erased frames (red marks pixels erased from the source foreground - check them for clipped owned silhouette before declaring the animation clean). These images are not attached to visible chat context."),
-        };
-        foreach (var image in review.Images)
-        {
-            contents.Add(new DataContent(image.DataUrl, image.ContentType)
-            {
-                Name = image.FileName,
-            });
-        }
-
-        return contents;
     }
 
     private async Task<IReadOnlyList<AIContent>> BuildBuiltSheetModelOnlyContentsAsync(

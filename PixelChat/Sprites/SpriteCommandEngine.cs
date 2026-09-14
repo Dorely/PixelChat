@@ -63,6 +63,12 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
         var name = Text(op, "op");
         switch (name)
         {
+            case "setProvenance":
+            {
+                var key = Text(op, "key"); var value = Text(op, "value");
+                if (key.Length is < 1 or > 200 || value.Length > 100000) throw new InvalidOperationException("Provenance key/value exceeds limits.");
+                document.Provenance[key] = value; return;
+            }
             case "addLayer":
                 document.Layers.Add(new() { Id = Id(op, "id", Guid.NewGuid()), Name = Text(op, "name", "Layer") }); return;
             case "setLayer":

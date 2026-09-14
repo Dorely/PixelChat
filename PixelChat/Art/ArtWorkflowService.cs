@@ -12,12 +12,13 @@ using PixelChat.Persistence;
 
 namespace PixelChat.Art;
 
-public sealed class ArtWorkflowService(
+public sealed partial class ArtWorkflowService(
     AppDbContext db,
     IImageProvider imageProvider,
     ImageModelSelectionService imageSelection,
     IImageEditCanvasService imageEditCanvas,
     IEditCanvasPreparationStore canvasPreparations,
+    PixelChat.Sprites.ISpriteDocumentService spriteDocuments,
     ILlmProviderService providerService,
     IOptions<ImageGenerationOptions> imageOptions,
     IOptions<SpriteAnimationOptions> animationOptions,
@@ -1492,13 +1493,15 @@ public sealed class ArtWorkflowService(
 
         var inputAssetIds = DeserializeIds(batch.InputAssetIdsJson);
         var sourceAssetId = inputAssetIds.FirstOrDefault();
-        if (sourceAssetId == Guid.Empty)
+        if (sourceAssetId == Guid.Empty && string.IsNullOrEmpty(batch.SpriteTargetJson))
             throw new InvalidOperationException("Edit batch source asset was not found.");
 
-        var sourceAsset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == sourceAssetId, cancellationToken)
-            ?? throw new InvalidOperationException("Source asset was not found.");
+        var sourceAsset = string.IsNullOrEmpty(batch.SpriteTargetJson)
+            ? await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == sourceAssetId, cancellationToken) ?? throw new InvalidOperationException("Source asset was not found.")
+            : null;
         var references = await LoadBatchReferencesAsync(batchId, cancellationToken);
-        var sourceImage = ResolveStoredEditSourceImage(batch, sourceAsset);
+        var sourceImage = sourceAsset is not null ? ResolveStoredEditSourceImage(batch, sourceAsset)
+            : new ImagePayload(batch.EditSourceContentType ?? "image/png", batch.EditSourceData ?? throw new InvalidOperationException("Captured sprite source missing."), batch.EditSourceWidth ?? 0, batch.EditSourceHeight ?? 0);
         var recipeGuidance = string.IsNullOrWhiteSpace(batch.RecipePromptSnapshot) ? null : new RecipePromptGuidance(batch.RecipePromptSnapshot);
 
         ImageMask? storedMask = null;
@@ -1515,7 +1518,7 @@ public sealed class ArtWorkflowService(
             projectId,
             batchId,
             outputIndex,
-            sourceAsset.Id,
+            sourceAsset?.Id,
             batch.Size,
             batch.MainlineModel,
             batch.ImageModel,
@@ -1532,8 +1535,9 @@ public sealed class ArtWorkflowService(
                 1,
                 batch.MainlineModel,
                 batch.ImageModel,
-                new ImageProviderReference(sourceAsset.FileName, sourceImage.ContentType, sourceImage.Data),
-                storedMask is null ? null : new ImageProviderReference(storedMask.Label, storedMask.ContentType, storedMask.Data),
+                new ImageProviderReference(sourceAsset?.FileName ?? "sprite-target.png", sourceImage.ContentType, sourceImage.Data),
+                batch.SpriteProviderMaskData is { } spriteMask ? new ImageProviderReference("sprite-mask.png", "image/png", spriteMask)
+                    : storedMask is null ? null : new ImageProviderReference(storedMask.Label, storedMask.ContentType, storedMask.Data),
                 references.Select(ToProviderReference).ToList(),
                 batch.OutputFormat,
                 batch.Quality,
@@ -1572,7 +1576,7 @@ public sealed class ArtWorkflowService(
             canvasFinalization = finalized.Finalization;
             outputContentType = "image/png";
         }
-        var fallbackLabel = $"{sourceAsset.Label} edit {LabelForIndex(outputIndex)}";
+        var fallbackLabel = $"{sourceAsset?.Label ?? batch.Label} edit {LabelForIndex(outputIndex)}";
         var asset = CreateAsset(
             projectId,
             OutputAssetLabel(batch.Label, resolvedPrompt, outputIndex, batch.Count, fallbackLabel),
@@ -1580,7 +1584,7 @@ public sealed class ArtWorkflowService(
             ArtAssetKind.Edited,
             outputContentType,
             outputData,
-            sourceAsset.Id,
+            sourceAsset?.Id,
             batch.Id,
             batch.PromptRecipeId,
             batch.PromptRecipeVersion,
@@ -1601,7 +1605,8 @@ public sealed class ArtWorkflowService(
                 image.ResponseId,
                 image.CallId,
                 image.OutputFormat,
-                SourceAssetId = sourceAsset.Id,
+                SourceAssetId = sourceAsset?.Id,
+                batch.SpriteTargetJson,
                 MaskId = storedMask?.Id,
                 EditCanvasTransform = canvasTransform,
                 EditCanvasFinalization = canvasFinalization,
@@ -2502,8 +2507,8 @@ public sealed class ArtWorkflowService(
             draft.MotionRender?.Metadata.SourceLicense ?? draft.Spec.GuideSourceLicense,
             draft.MotionRender?.Metadata.SourceUrl,
             draft.Renderer == "layout_box_guide"
-                ? "Layout guide assets saved as SpriteGuide. Use guideAssetId first in generate_sprite_sheet_candidates references."
-                : "Animation guide assets saved as SpriteGuide. Use guideAssetId first in generate_sprite_sheet_candidates references.");
+                ? "Layout guide assets saved as SpriteGuide. Pass guideAssetId to sprite_generate with an explicit motion/layout reference role."
+                : "Animation guide assets saved as SpriteGuide. Pass guideAssetId to sprite_generate with an explicit motion/layout reference role.");
     }
 
     public async Task MarkAssetAsync(Guid projectId, Guid assetId, bool? favorite, string? notes, CancellationToken cancellationToken = default)

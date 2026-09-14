@@ -57,6 +57,8 @@ public sealed class SpriteMigrationTests
         }
         var mask = new ImageMask { ProjectId = project.Id, AssetId = asset.Id, Label = "Mask", OwnerKind = "frame", OwnerId = frameId, Width = 4, Height = 4, Data = source.Encode().Data };
         db.ImageMasks.Add(mask); await db.SaveChangesAsync();
+        var sessionId = Guid.NewGuid();
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO SpriteEditSessions (Id, ProjectId, TargetFrameSetId, TargetFrameId, TargetSourceAssetId, Prompt, Count, ModalOpen, PreviewOverlayActive, CreatedAt, UpdatedAt) VALUES ({sessionId}, {project.Id}, {set.Id}, {frameId}, {asset.Id}, {"Preserve this draft provenance"}, 1, 1, 0, {DateTime.UtcNow}, {DateTime.UtcNow})");
         db.ChangeTracker.Clear();
         await DatabaseMigrationBootstrapper.MigrateAsync(db);
         var service = new SpriteDocumentService(db);
@@ -72,6 +74,8 @@ public sealed class SpriteMigrationTests
         for (var y = 0; y < (edited ? contentHeight : 2); y++) for (var x = 0; x < (edited ? contentWidth : 2); x++) expected.Put(x + (whole ? 0 : 1), y + (whole ? 0 : 1), content.Get(x, y));
         Assert.Equal(expected.Pixels, rendered.Pixels);
         Assert.Equal(mask.Id, (await db.ImageMasks.SingleAsync()).Id);
+        Assert.Contains("Preserve this draft provenance", (await db.SpriteAssessments.SingleAsync(a => a.Kind == "imported-session-provenance")).ResultJson);
+        Assert.Contains("importedEditSessions", (await db.ArtAssets.AsNoTracking().SingleAsync(a => a.Id == asset.Id)).SourceMetadataJson);
         Assert.Single(await service.ListHistoryAsync(project.Id, set.Id));
         await DatabaseMigrationBootstrapper.MigrateAsync(db);
         Assert.Single(await service.ListHistoryAsync(project.Id, set.Id));

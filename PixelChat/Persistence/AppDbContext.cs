@@ -34,10 +34,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<SpriteBitmap> SpriteBitmaps => Set<SpriteBitmap>();
     public DbSet<SpriteRevision> SpriteRevisions => Set<SpriteRevision>();
     public DbSet<SpriteInspection> SpriteInspections => Set<SpriteInspection>();
+    public DbSet<SpriteAssessment> SpriteAssessments => Set<SpriteAssessment>();
     public DbSet<Anchor> Anchors => Set<Anchor>();
     public DbSet<SheetLayout> SheetLayouts => Set<SheetLayout>();
     public DbSet<BuiltSheet> BuiltSheets => Set<BuiltSheet>();
-    public DbSet<SpriteEditSession> SpriteEditSessions => Set<SpriteEditSession>();
     public DbSet<ImageMask> ImageMasks => Set<ImageMask>();
     public DbSet<ChatContextAttachment> ChatContextAttachments => Set<ChatContextAttachment>();
     public DbSet<CompareReviewSet> CompareReviewSets => Set<CompareReviewSet>();
@@ -90,6 +90,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<SpriteBitmap>(entity => entity.HasKey(e => e.Hash));
+        modelBuilder.Entity<SpriteAssessment>(entity =>
+        {
+            entity.HasIndex(e => new { e.FrameSetId, e.Revision });
+            entity.HasOne<FrameSet>().WithMany().HasForeignKey(e => e.FrameSetId).OnDelete(DeleteBehavior.Cascade);
+        });
         modelBuilder.Entity<SpriteInspection>(entity =>
         {
             entity.HasIndex(e => new { e.FrameSetId, e.Revision, e.CacheKey });
@@ -512,56 +517,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
-        modelBuilder.Entity<SpriteEditSession>(entity =>
-        {
-            entity.HasIndex(e => e.ProjectId).IsUnique().HasFilter("Status = 'pending'");
-            entity.HasIndex(e => e.BatchId);
-            entity.HasIndex(e => e.TargetSourceAssetId);
-            entity.HasIndex(e => e.TargetFrameId);
-            entity.Property(e => e.Status).HasDefaultValue("pending");
-            entity.Property(e => e.TargetKind).HasDefaultValue("source");
-            entity.Property(e => e.Background).HasDefaultValue("preserve");
-            entity.Property(e => e.CropJson).HasDefaultValue("{}");
-            entity.Property(e => e.CanvasOptionsJson).HasDefaultValue("{}");
-            entity.Property(e => e.CanvasPreparationTransformJson).HasDefaultValue(string.Empty);
-            entity.Property(e => e.CandidateAssetIdsJson).HasDefaultValue("[]");
-            entity.Property(e => e.OutputStatesJson).HasDefaultValue("[]");
-
-            entity.HasOne(e => e.Project)
-                .WithMany(p => p.SpriteEditSessions)
-                .HasForeignKey(e => e.ProjectId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            entity.HasOne<ArtAsset>()
-                .WithMany()
-                .HasForeignKey(e => e.TargetSourceAssetId)
-                .OnDelete(DeleteBehavior.SetNull);
-
-            entity.HasOne<FrameSet>()
-                .WithMany()
-                .HasForeignKey(e => e.TargetFrameSetId)
-                .OnDelete(DeleteBehavior.SetNull);
-
-            entity.HasOne<Frame>()
-                .WithMany()
-                .HasForeignKey(e => e.TargetFrameId)
-                .OnDelete(DeleteBehavior.SetNull);
-
-            entity.HasOne<GenerationBatch>()
-                .WithMany()
-                .HasForeignKey(e => e.BatchId)
-                .OnDelete(DeleteBehavior.SetNull);
-
-            entity.HasOne<ImageMask>()
-                .WithMany()
-                .HasForeignKey(e => e.MaskId)
-                .OnDelete(DeleteBehavior.SetNull);
-
-            entity.HasOne<ArtAsset>()
-                .WithMany()
-                .HasForeignKey(e => e.SelectedCandidateAssetId)
-                .OnDelete(DeleteBehavior.SetNull);
-        });
 
         modelBuilder.Entity<ImageMask>(entity =>
         {

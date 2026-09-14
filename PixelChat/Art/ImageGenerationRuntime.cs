@@ -104,6 +104,31 @@ public sealed class ImageGenerationRuntime(
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
+        return await WaitForCompletionAsync(batchId, timeout, cancellationToken);
+    }
+
+    public async Task<GenerationBatchView> StartSpriteGenerationAsync(Guid projectId, PixelChat.Sprites.SpriteGenerationRequest request, CancellationToken cancellationToken = default)
+    {
+        ReserveProjectStart(projectId);
+        GenerationBatchView batch;
+        try
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            batch = await scope.ServiceProvider.GetRequiredService<IArtWorkflowService>().StartSpriteGenerationAsync(projectId, request, cancellationToken);
+            RegisterStartedBatch(projectId, batch, followInBatches: false);
+        }
+        catch { ReleaseProjectStart(projectId); throw; }
+        NotifyStateChanged();
+        var kind = request.Kind == "reference" ? RuntimeBatchKind.Generate : RuntimeBatchKind.Edit;
+        _ = Task.Run(() => RunGenerationBatchAsync(projectId, batch.Id, Enumerable.Range(0, batch.Count).ToArray(), kind));
+        return batch;
+    }
+
+    private async Task<bool> WaitForCompletionAsync(
+        Guid batchId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
         TaskCompletionSource<bool>? completion;
         lock (_lock)
         {
@@ -217,11 +242,11 @@ public sealed class ImageGenerationRuntime(
             batch.ReviewCompletedAt = null;
             var project = await db.Projects.SingleAsync(p => p.Id == projectId, cancellationToken);
             project.ActiveBatchId = batchId;
-            project.ActiveWorkspaceMode = WorkspaceMode.Batches;
+            if (string.IsNullOrEmpty(batch.SpriteTargetJson)) project.ActiveWorkspaceMode = WorkspaceMode.Batches;
             project.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
             var workbench = await scope.ServiceProvider.GetRequiredService<IArtWorkflowService>().GetWorkbenchAsync(projectId, cancellationToken);
-            RegisterStartedBatch(projectId, workbench.Batches.Single(b => b.Id == batchId), true);
+            RegisterStartedBatch(projectId, workbench.Batches.Single(b => b.Id == batchId), string.IsNullOrEmpty(batch.SpriteTargetJson));
             var kind = batch.EditSourceData is { Length: > 0 } ? RuntimeBatchKind.Edit : RuntimeBatchKind.Generate;
             _ = Task.Run(() => RunGenerationBatchAsync(projectId, batchId, targets.Select(o => o.OutputIndex).ToArray(), kind));
             NotifyStateChanged();

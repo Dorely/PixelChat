@@ -28,7 +28,6 @@ public class Project
     public ICollection<Anchor> Anchors { get; set; } = [];
     public ICollection<SheetLayout> SheetLayouts { get; set; } = [];
     public ICollection<BuiltSheet> BuiltSheets { get; set; } = [];
-    public ICollection<SpriteEditSession> SpriteEditSessions { get; set; } = [];
     public ICollection<ImageMask> Masks { get; set; } = [];
     public ICollection<ChatContextAttachment> ChatContextAttachments { get; set; } = [];
     public ICollection<CompareReviewSet> CompareReviewSets { get; set; } = [];

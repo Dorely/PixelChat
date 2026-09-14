@@ -155,20 +155,6 @@ public sealed class SpriteWorkspaceActionService(
         return view;
     }
 
-    public async Task<FrameSetView> ApplyFrameEditCandidateAsync(Guid projectId, ApplyFrameEditCandidateRequest request, CancellationToken cancellationToken = default)
-    {
-        var view = await frameSets.ApplyFrameEditCandidateAsync(projectId, request, cancellationToken);
-        await FocusFrameSetAsync(projectId, view, request.FrameId, cancellationToken);
-        return view;
-    }
-
-    public async Task<FrameSetView> EditFrameAsync(Guid projectId, EditFrameRequest request, CancellationToken cancellationToken = default)
-    {
-        var view = await frameSets.EditFrameAsync(projectId, request, cancellationToken);
-        await FocusFrameSetAsync(projectId, view, request.FrameId, cancellationToken);
-        return view;
-    }
-
     public async Task<FrameSetView> EraseFrameRegionsAsync(Guid projectId, EraseFrameRegionsRequest request, CancellationToken cancellationToken = default)
     {
         var view = await frameSets.EraseFrameRegionsAsync(projectId, request, cancellationToken);

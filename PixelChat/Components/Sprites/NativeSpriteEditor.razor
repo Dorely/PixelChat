@@ -124,7 +124,7 @@
             <section class="history"><h3>Operation history</h3>
                 @foreach (var item in _history)
                 {
-                    <details><summary>r@item.Number · @item.Source · @item.Label · @item.CreatedAt.ToLocalTime()</summary>
+                    <details><summary>r@(item.Number) · @item.Source · @item.Label · @item.CreatedAt.ToLocalTime()</summary>
                         @if (item.Script is not null) { <pre>@item.Script</pre> }
                         <pre>@item.OperationsJson</pre>
                         <img src="@FrameUrl(SpriteDocument.Deserialize(item.DocumentJson).Frames[0].Id, item.Number)" alt="Revision preview" />
@@ -134,6 +134,7 @@
             </section>
         }
         @if (_error is not null) { <p role="alert" class="error">@_error</p> }
+        <SpriteAiPanel ProjectId="ProjectId" DocumentId="DocumentId" FrameId="_frameId" LayerId="_layerId" Revision="snapshot.Revision" ArtMode="snapshot.Document.Specification.ArtMode" />
     </div>
 }
 

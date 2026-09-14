@@ -459,104 +459,6 @@ internal static class SpriteSheetServerRenderer
             warnings.Distinct(StringComparer.Ordinal).ToList());
     }
 
-    internal static SpriteSheetReviewRenderResult BuildAnimationReview(
-        byte[] sourceRgba,
-        int sourceWidth,
-        int sourceHeight,
-        int rows,
-        int columns,
-        int cellWidth,
-        int cellHeight,
-        int padding,
-        int gutter,
-        string? horizontalAnchor,
-        string? verticalAnchor,
-        SpriteSheetBackground background,
-        IReadOnlyList<SpriteSheetFrameUpdateView> inputFrames,
-        bool loop,
-        int maxFrames)
-    {
-        var frames = NormalizeFrames(inputFrames, rows, columns, sourceWidth, sourceHeight)
-            .Take(Math.Clamp(maxFrames <= 0 ? 12 : maxFrames, 1, 24))
-            .ToList();
-        if (frames.Count == 0)
-            throw new InvalidOperationException("At least one sprite frame is required.");
-        if (sourceRgba.Length < sourceWidth * (long)sourceHeight * 4)
-            throw new InvalidOperationException("Sprite animation review source pixels are incomplete.");
-
-        cellWidth = Math.Clamp(cellWidth, 1, 8192);
-        cellHeight = Math.Clamp(cellHeight, 1, 8192);
-        padding = Math.Clamp(padding, 0, 4096);
-        gutter = Math.Clamp(gutter, 0, 4096);
-        ValidateCanvasSize(cellWidth, cellHeight, "Sprite animation review images are too large.");
-
-        var metricFrames = new List<SpriteAnimationFramePixels>();
-        var images = new List<SpriteSheetReviewImage>();
-        var reviewScale = ReviewPresentationScale(cellWidth, cellHeight);
-        foreach (var frame in frames)
-        {
-            var cellRgba = NewFilledCanvas(cellWidth, cellHeight, background);
-            var cell = new SpriteSheetRect(0, 0, cellWidth, cellHeight);
-            var (destX, destY) = AlignedDestination(cell, frame.SourceRect, padding, horizontalAnchor, verticalAnchor);
-            CopyFrame(sourceRgba, sourceWidth, sourceHeight, frame, frames, background, cellRgba, cellWidth, cellHeight, destX, destY);
-            var label = string.IsNullOrWhiteSpace(frame.Label) ? $"Frame {frame.Index + 1}" : frame.Label;
-            metricFrames.Add(new SpriteAnimationFramePixels(frame.Index, label, cellWidth, cellHeight, cellRgba));
-
-            var labeled = (byte[])cellRgba.Clone();
-            DrawIndexLabel(labeled, cellWidth, cellHeight, frame.Index, 0, 0);
-            images.Add(new SpriteSheetReviewImage(
-                label,
-                $"sprite-frame-{frame.Index + 1}.png",
-                "frame",
-                frame.Index,
-                null,
-                null,
-                EncodeReviewRgba(labeled, cellWidth, cellHeight, reviewScale)));
-        }
-
-        images.Insert(0, BuildAnnotatedSheetView(
-            sourceRgba,
-            sourceWidth,
-            sourceHeight,
-            rows,
-            columns,
-            cellWidth,
-            cellHeight,
-            gutter,
-            background,
-            frames,
-            "Sprite sheet view",
-            "sprite-sheet-view.png"));
-
-        for (var index = 0; index < metricFrames.Count - 1; index++)
-            images.Add(BuildPairDiff(metricFrames[index], metricFrames[index + 1], background, reviewScale));
-        if (loop && metricFrames.Count > 1)
-            images.Add(BuildPairDiff(metricFrames[^1], metricFrames[0], background, reviewScale));
-
-        var onion = BuildOnionSkin(metricFrames, cellWidth, cellHeight, background);
-        DrawIndexSequence(onion, cellWidth, cellHeight, metricFrames.Select(frame => frame.Index).ToList());
-        images.Add(new SpriteSheetReviewImage(
-            "Onion-skin overlay",
-            "sprite-animation-onion-skin.png",
-            "onion-skin",
-            null,
-            null,
-            null,
-            EncodeReviewRgba(onion, cellWidth, cellHeight, reviewScale)));
-
-        var filmstrip = BuildFilmstrip(metricFrames, cellWidth, cellHeight, background);
-        images.Add(new SpriteSheetReviewImage(
-            "Filmstrip, left-to-right frames 1..N",
-            "sprite-animation-filmstrip.png",
-            "filmstrip",
-            null,
-            null,
-            null,
-            SpriteSheetPngCodec.EncodeRgba(checked((cellWidth * metricFrames.Count) + Math.Max(0, metricFrames.Count - 1)), cellHeight, filmstrip)));
-
-        return new SpriteSheetReviewRenderResult(metricFrames, images);
-    }
-
     private static int ReviewPresentationScale(int width, int height)
     {
         var longEdge = Math.Max(width, height);
@@ -730,106 +632,6 @@ internal static class SpriteSheetServerRenderer
             null,
             null,
             SpriteSheetPngCodec.EncodeRgba(sourceWidth, sourceHeight, output));
-    }
-
-    private static SpriteSheetReviewImage BuildPairDiff(
-        SpriteAnimationFramePixels from,
-        SpriteAnimationFramePixels to,
-        SpriteSheetBackground background,
-        int reviewScale)
-    {
-        var width = Math.Max(from.Width, to.Width);
-        var height = Math.Max(from.Height, to.Height);
-        ValidateCanvasSize(width, height, "Sprite animation diff image is too large.");
-        var output = NewFilledCanvas(width, height, background);
-        for (var y = 0; y < height; y++)
-        {
-            for (var x = 0; x < width; x++)
-            {
-                var fromPixel = TryGetPixel(from, x, y, out var fr, out var fg, out var fb, out var fa)
-                    && SpriteSheetImageAnalyzer.IsForeground(fr, fg, fb, fa, background);
-                var toPixel = TryGetPixel(to, x, y, out var tr, out var tg, out var tb, out var ta)
-                    && SpriteSheetImageAnalyzer.IsForeground(tr, tg, tb, ta, background);
-                if (!fromPixel && !toPixel)
-                    continue;
-
-                var targetIndex = ((y * width) + x) * 4;
-                if (fromPixel && toPixel)
-                    SetPixel(output, targetIndex, 190, 190, 190, 210);
-                else if (fromPixel)
-                    SetPixel(output, targetIndex, 230, 65, 80, 220);
-                else
-                    SetPixel(output, targetIndex, 35, 190, 220, 220);
-            }
-        }
-
-        DrawIndexLabel(output, width, height, from.Index, 0, 0);
-        DrawIndexLabel(output, width, height, to.Index, Math.Max(0, width / 2), 0);
-        return new SpriteSheetReviewImage(
-            $"Frame {from.Index + 1} vs {to.Index + 1}",
-            $"sprite-diff-{from.Index + 1}-vs-{to.Index + 1}.png",
-            "pair-diff",
-            null,
-            from.Index,
-            to.Index,
-            EncodeReviewRgba(output, width, height, reviewScale));
-    }
-
-    private static byte[] BuildOnionSkin(IReadOnlyList<SpriteAnimationFramePixels> frames, int width, int height, SpriteSheetBackground background)
-    {
-        var output = NewFilledCanvas(width, height, background);
-        var overlayAlpha = Math.Clamp(180 / Math.Max(1, frames.Count), 28, 96);
-        foreach (var frame in frames)
-        {
-            for (var y = 0; y < Math.Min(height, frame.Height); y++)
-            {
-                for (var x = 0; x < Math.Min(width, frame.Width); x++)
-                {
-                    var sourceIndex = ((y * frame.Width) + x) * 4;
-                    if (!SpriteSheetImageAnalyzer.IsForeground(frame.Rgba[sourceIndex], frame.Rgba[sourceIndex + 1], frame.Rgba[sourceIndex + 2], frame.Rgba[sourceIndex + 3], background))
-                        continue;
-
-                    var alpha = Math.Min(frame.Rgba[sourceIndex + 3], overlayAlpha);
-                    BlendPixel(output, ((y * width) + x) * 4, frame.Rgba[sourceIndex], frame.Rgba[sourceIndex + 1], frame.Rgba[sourceIndex + 2], (byte)alpha);
-                }
-            }
-        }
-
-        return output;
-    }
-
-    private static byte[] BuildFilmstrip(IReadOnlyList<SpriteAnimationFramePixels> frames, int frameWidth, int frameHeight, SpriteSheetBackground background)
-    {
-        var outputWidth = checked((frameWidth * frames.Count) + Math.Max(0, frames.Count - 1));
-        var output = NewFilledCanvas(outputWidth, frameHeight, background);
-        for (var separator = 1; separator < frames.Count; separator++)
-        {
-            var x = (separator * frameWidth) + separator - 1;
-            for (var y = 0; y < frameHeight; y++)
-                SetPixel(output, ((y * outputWidth) + x) * 4, 160, 160, 160, byte.MaxValue);
-        }
-
-        for (var frameIndex = 0; frameIndex < frames.Count; frameIndex++)
-        {
-            var frame = frames[frameIndex];
-            var destX = frameIndex * (frameWidth + 1);
-            for (var y = 0; y < Math.Min(frameHeight, frame.Height); y++)
-            {
-                for (var x = 0; x < Math.Min(frameWidth, frame.Width); x++)
-                {
-                    var sourceIndex = ((y * frame.Width) + x) * 4;
-                    var targetIndex = ((y * outputWidth) + destX + x) * 4;
-                    output[targetIndex] = frame.Rgba[sourceIndex];
-                    output[targetIndex + 1] = frame.Rgba[sourceIndex + 1];
-                    output[targetIndex + 2] = frame.Rgba[sourceIndex + 2];
-                    output[targetIndex + 3] = frame.Rgba[sourceIndex + 3];
-                }
-            }
-
-            DrawIndexLabel(output, outputWidth, frameHeight, frame.Index, destX, 0);
-        }
-
-        return output;
     }
 
     private static void CopyFrame(
@@ -1244,14 +1046,6 @@ internal static class SpriteSheetServerRenderer
         target[index + 3] = background.Mode.Equals("alpha", StringComparison.OrdinalIgnoreCase) ? (byte)0 : background.A;
     }
 
-    private static void SetPixel(byte[] target, int index, byte r, byte g, byte b, byte a)
-    {
-        target[index] = r;
-        target[index + 1] = g;
-        target[index + 2] = b;
-        target[index + 3] = a;
-    }
-
     private static void BlendPixel(byte[] target, int targetIndex, byte r, byte g, byte b, byte a)
     {
         var sourceAlpha = a / 255d;
@@ -1264,23 +1058,6 @@ internal static class SpriteSheetServerRenderer
         target[targetIndex + 1] = (byte)Math.Round(((g * sourceAlpha) + (target[targetIndex + 1] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
         target[targetIndex + 2] = (byte)Math.Round(((b * sourceAlpha) + (target[targetIndex + 2] * targetAlpha * (1 - sourceAlpha))) / outputAlpha);
         target[targetIndex + 3] = (byte)Math.Round(outputAlpha * 255);
-    }
-
-    private static bool TryGetPixel(SpriteAnimationFramePixels frame, int x, int y, out byte r, out byte g, out byte b, out byte a)
-    {
-        r = 0;
-        g = 0;
-        b = 0;
-        a = 0;
-        if (x < 0 || y < 0 || x >= frame.Width || y >= frame.Height)
-            return false;
-
-        var index = ((y * frame.Width) + x) * 4;
-        r = frame.Rgba[index];
-        g = frame.Rgba[index + 1];
-        b = frame.Rgba[index + 2];
-        a = frame.Rgba[index + 3];
-        return true;
     }
 
     private static void DrawGrid(byte[] rgba, int width, int height, int rows, int columns, int cellWidth, int cellHeight, int gutter)
@@ -1381,18 +1158,6 @@ internal static class SpriteSheetServerRenderer
         {
             for (var px = startX; px < endX; px++)
                 BlendPixel(rgba, ((py * width) + px) * 4, r, g, b, a);
-        }
-    }
-
-    private static void DrawIndexSequence(byte[] rgba, int width, int height, IReadOnlyList<int> indexes)
-    {
-        var x = 0;
-        foreach (var index in indexes)
-        {
-            DrawIndexLabel(rgba, width, height, index, x, 0);
-            x += 24;
-            if (x >= width)
-                break;
         }
     }
 
@@ -1535,10 +1300,6 @@ internal sealed record SpriteSheetServerRenderResult(
 
 internal sealed record SpriteSheetServerPreviewResult(
     IReadOnlyList<SpriteSheetFrameView> Frames);
-
-internal sealed record SpriteSheetReviewRenderResult(
-    IReadOnlyList<SpriteAnimationFramePixels> MetricFrames,
-    IReadOnlyList<SpriteSheetReviewImage> Images);
 
 internal sealed record SpriteSheetReviewImage(
     string Label,

@@ -38,8 +38,10 @@ public sealed class SpriteScriptService(ISpriteDocumentService documents)
             while (!process.HasExited)
             {
                 deadline.Token.ThrowIfCancellationRequested();
-                process.Refresh();
-                if (process.WorkingSet64 > 256_000_000) throw new InvalidOperationException("Script worker memory budget exceeded.");
+                long workingSet;
+                try { process.Refresh(); workingSet = process.WorkingSet64; }
+                catch (InvalidOperationException) when (process.HasExited) { break; }
+                if (workingSet > 256_000_000) throw new InvalidOperationException("Script worker memory budget exceeded.");
                 if (stdout.IsFaulted) await stdout;
                 if (stderr.IsFaulted) await stderr;
                 await Task.WhenAny(process.WaitForExitAsync(deadline.Token), Task.Delay(100, deadline.Token));

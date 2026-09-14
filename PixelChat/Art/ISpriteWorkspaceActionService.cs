@@ -39,8 +39,6 @@ public interface ISpriteWorkspaceActionService
     Task<FrameSetView> SetFrameLogicalCellAsync(Guid projectId, SetFrameLogicalCellRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> UpdateFrameSourceBoundsAsync(Guid projectId, UpdateFrameSourceBoundsRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> TranslateFrameContentAsync(Guid projectId, TranslateFrameContentRequest request, CancellationToken cancellationToken = default);
-    Task<FrameSetView> ApplyFrameEditCandidateAsync(Guid projectId, ApplyFrameEditCandidateRequest request, CancellationToken cancellationToken = default);
-    Task<FrameSetView> EditFrameAsync(Guid projectId, EditFrameRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> EraseFrameRegionsAsync(Guid projectId, EraseFrameRegionsRequest request, CancellationToken cancellationToken = default);
     Task<FrameSetView> ComposeFrameSetFromAssetsAsync(Guid projectId, ComposeFrameSetFromAssetsRequest request, CancellationToken cancellationToken = default);
     Task<NormalizeFrameScaleResult> NormalizeFrameScaleAsync(Guid projectId, NormalizeFrameScaleRequest request, CancellationToken cancellationToken = default);

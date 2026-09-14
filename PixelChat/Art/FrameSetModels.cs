@@ -133,18 +133,6 @@ public sealed record TranslateFrameContentRequest(
     int ContentOffsetX,
     int ContentOffsetY);
 
-public sealed record ApplyFrameEditCandidateRequest(
-    Guid FrameSetId,
-    Guid FrameId,
-    Guid CandidateAssetId,
-    int EditSourceWidth,
-    int EditSourceHeight,
-    int CropX,
-    int CropY,
-    int CropWidth,
-    int CropHeight,
-    EditCanvasTransform? CanvasTransform = null);
-
 public sealed record UpsertFrameMaskRequest(
     Guid FrameId,
     string MaskDataUrl,
@@ -219,26 +207,6 @@ public sealed record EraseFrameRegionsRequest(
     IReadOnlyList<SpriteSheetShapePath>? Polygons = null,
     bool KeepSelection = false);
 
-public sealed record EditFrameRequest(
-    Guid FrameSetId,
-    Guid FrameId,
-    string Prompt,
-    string? Background = null,
-    IReadOnlyList<Guid>? ReferenceAssetIds = null,
-    bool IncludeAdjacentFrames = true,
-    bool UseFrameMask = true,
-    EditCanvasOptions? CanvasOptions = null,
-    Guid? CanvasPreparationId = null);
-
-public sealed record PreviewFrameEditCanvasRequest(
-    Guid FrameSetId,
-    Guid FrameId,
-    string? Background = null,
-    bool UseFrameMask = true,
-    IReadOnlyList<SpriteSheetRect>? MaskRects = null,
-    IReadOnlyList<SpriteSheetShapePath>? MaskPolygons = null,
-    EditCanvasOptions? CanvasOptions = null);
-
 public sealed record NormalizeFrameScaleRequest(
     Guid FrameSetId,
     int TargetHeight = 0,
@@ -270,70 +238,3 @@ public sealed record NormalizeFrameScaleFrameResult(
 public sealed record ComposeFrameSetFromAssetsRequest(
     IReadOnlyList<Guid> AssetIds,
     string? Name = null);
-
-// Greenfield animation-quality review over a FrameSet's built one-row sheet. Reuses the
-// shared SpriteAnimationMetricsView/SpriteAnimationReviewImageView review records.
-public sealed record FrameSetAnimationReviewView(
-    Guid FrameSetId,
-    int FrameCount,
-    int Rows,
-    int Columns,
-    int Fps,
-    bool Loop,
-    SpriteAnimationMetricsView Metrics,
-    IReadOnlyList<SpriteAnimationReviewImageView> Images);
-
-public sealed record SpriteEditSessionCrop(
-    int EditSourceWidth,
-    int EditSourceHeight,
-    int CropX,
-    int CropY,
-    int CropWidth,
-    int CropHeight);
-
-public sealed record SpriteEditSessionView(
-    Guid Id,
-    string Status,
-    bool ModalOpen,
-    string TargetKind,
-    Guid? TargetSourceAssetId,
-    Guid? TargetFrameSetId,
-    Guid? TargetFrameId,
-    Guid? BatchId,
-    Guid? MaskId,
-    Guid? SelectedCandidateAssetId,
-    int? SelectedOutputIndex,
-    bool PreviewOverlayActive,
-    string Prompt,
-    int Count,
-    EditCanvasOptions CanvasOptions,
-    Guid? CanvasPreparationId,
-    EditCanvasTransform? CanvasPreparationTransform,
-    DateTime? CanvasPreparationExpiresAt,
-    SpriteEditSessionCrop? Crop,
-    IReadOnlyList<Guid> CandidateAssetIds,
-    IReadOnlyList<GenerationOutputStateView> OutputStates,
-    DateTime UpdatedAt,
-    string Background = "preserve");
-
-public sealed record SaveSpriteEditSessionRequest(
-    bool ModalOpen,
-    string TargetKind,
-    Guid? TargetSourceAssetId,
-    Guid? TargetFrameSetId,
-    Guid? TargetFrameId,
-    Guid? BatchId,
-    Guid? MaskId,
-    Guid? SelectedCandidateAssetId,
-    int? SelectedOutputIndex,
-    bool PreviewOverlayActive,
-    string Prompt,
-    int Count,
-    EditCanvasOptions CanvasOptions,
-    Guid? CanvasPreparationId,
-    EditCanvasTransform? CanvasPreparationTransform,
-    DateTime? CanvasPreparationExpiresAt,
-    SpriteEditSessionCrop? Crop,
-    IReadOnlyList<Guid> CandidateAssetIds,
-    IReadOnlyList<GenerationOutputStateView> OutputStates,
-    string Background = "preserve");
