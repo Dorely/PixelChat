@@ -25,14 +25,14 @@ public sealed record FrameView(
     int ContentOffsetX,
     int ContentOffsetY,
     int DurationMs,
-    string WorkingState,
-    int WorkingWidth,
-    int WorkingHeight,
+    string ContentState,
+    int ContentWidth,
+    int ContentHeight,
     bool HideFromOnionSkin,
     bool HasMask,
     Guid? MaskId,
-    EditCanvasTransform? WorkingCanvasTransform,
-    EditCanvasFinalization? WorkingCanvasFinalization);
+    EditCanvasTransform? CanvasTransform,
+    EditCanvasFinalization? CanvasFinalization);
 
 public sealed record FrameSetView(
     Guid Id,

@@ -1,15 +1,6 @@
 namespace PixelChat.Models;
 
-/// <summary>
-/// A single animation frame. Coordinate spaces are kept explicit to avoid the legacy
-/// ambiguity between source crops, logical cells, and content offsets:
-/// <list type="bullet">
-/// <item><c>Source*</c> — source-image space (which pixels are extracted).</item>
-/// <item><c>Logical*</c> — the equal logical cell size for the frame.</item>
-/// <item><c>ContentOffset*</c> — content position within its logical cell.</item>
-/// </list>
-/// Replaces the legacy <c>SpriteSheetFrameRecord</c>.
-/// </summary>
+/// <summary>Relational identity and geometry projected from a native sprite document.</summary>
 public class Frame
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -46,26 +37,7 @@ public class Frame
     /// <summary>Optional polygon outline of the source region (JSON array of points).</summary>
     public string ShapeJson { get; set; } = "[]";
 
-    // Working bitmap (isolated/edited/aligned image for this frame).
-    public string WorkingState { get; set; } = "none";
-    public string WorkingContentType { get; set; } = "image/png";
-    public byte[] WorkingData { get; set; } = [];
-    public int WorkingWidth { get; set; }
-    public int WorkingHeight { get; set; }
-    public int WorkingMargin { get; set; }
-    public string WorkingCanvasTransformJson { get; set; } = string.Empty;
-    public string WorkingCanvasFinalizationJson { get; set; } = string.Empty;
-    public DateTime? WorkingUpdatedAt { get; set; }
-
-    // Cached preview rendered from the source region.
-    public string PreviewContentType { get; set; } = "image/png";
-    public byte[] PreviewData { get; set; } = [];
-    public int PreviewWidth { get; set; }
-    public int PreviewHeight { get; set; }
-
-    /// <summary>Pointer into the (future) bitmap-revision store; null until history lands.</summary>
-    public Guid? BitmapRevisionAssetId { get; set; }
-    public ArtAsset? BitmapRevisionAsset { get; set; }
+    public bool IsDeleted { get; set; }
 
     public ICollection<Anchor> Anchors { get; set; } = [];
 

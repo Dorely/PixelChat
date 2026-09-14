@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using PixelChat.Persistence;
 
@@ -10,9 +11,11 @@ using PixelChat.Persistence;
 namespace PixelChat.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260914205804_RetireMutableFrameBitmaps")]
+    partial class RetireMutableFrameBitmaps
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
@@ -1120,6 +1123,53 @@ namespace PixelChat.Persistence.Migrations
                     b.HasKey("BatchId", "Index");
 
                     b.ToTable("GenerationReferences");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.HistoryTask", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CheckpointId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OperationsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("user");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("running");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "StartedAt");
+
+                    b.ToTable("HistoryTasks");
                 });
 
             modelBuilder.Entity("PixelChat.Models.ImageMask", b =>
@@ -2257,6 +2307,17 @@ namespace PixelChat.Persistence.Migrations
                     b.Navigation("Batch");
                 });
 
+            modelBuilder.Entity("PixelChat.Models.HistoryTask", b =>
+                {
+                    b.HasOne("PixelChat.Models.Project", "Project")
+                        .WithMany("HistoryTasks")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Project");
+                });
+
             modelBuilder.Entity("PixelChat.Models.ImageMask", b =>
                 {
                     b.HasOne("PixelChat.Models.ArtAsset", "Asset")
@@ -2569,6 +2630,8 @@ namespace PixelChat.Persistence.Migrations
                     b.Navigation("Frames");
 
                     b.Navigation("GenerationBatches");
+
+                    b.Navigation("HistoryTasks");
 
                     b.Navigation("Masks");
 

@@ -192,12 +192,11 @@
 | `RecipeAssetAttachment.cs` | EF entity for ordered art/animation recipe asset attachments with example or guide roles. |
 | `SpriteRegion.cs` | Greenfield EF entity for a source-image region (rect/polygon, type, order) that stays linked to source pixels and can be extracted as an asset or turned into frames. |
 | `StandaloneAsset.cs` | Greenfield EF entity linking an extracted region to its output `ArtAsset` (kind `Extracted`) with logical size, content offset, source link, and a deferred bitmap-revision pointer. |
-| `FrameSet.cs` | Greenfield EF entity (replaces `SpriteSheetDefinition` as the frame owner) holding ordered frames, default cell size, playback/alignment settings, and child sheet layouts. |
-| `Frame.cs` | Greenfield EF entity (replaces `SpriteSheetFrameRecord`) with explicit coordinate spaces, duration, onion-skin visibility, working/preview bitmaps, edit-canvas transform/finalization provenance, and anchors. |
+| `FrameSet.cs` | Greenfield EF entity (replaces `SpriteSheetDefinition` as the frame owner) owning versioned document state, revision number, undo/redo stacks, frame projections, and derived sheet layouts. |
+| `Frame.cs` | Greenfield EF entity (replaces `SpriteSheetFrameRecord`) with explicit coordinate spaces, duration, onion-skin visibility, relational source geometry projected from the native document and retained identities for undo. |
 | `Anchor.cs` | Greenfield EF entity for a named per-frame alignment point (feet/root/center/custom) with confidence and detected/manual source. |
 | `SheetLayout.cs` | Greenfield EF entity for deterministic sheet geometry (rows/columns/cell/padding/gutter/outer-margin/ordering) and playback/background defaults for a frame set. |
 | `BuiltSheet.cs` | Greenfield EF entity for a reassembled RGBA sheet asset retaining a per-frame placement manifest and links to the frames used, so the sheet stays rebuildable. |
-| `HistoryTask.cs` | Greenfield EF entity (schema only; backend deferred) grouping a user/agent instruction's operations into one undoable task for the planned history system. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets or greenfield frames, including owner and coordinate-space metadata. |
 | `SpriteEditSession.cs` | EF entity for one pending project-scoped Sprites edit modal session, including target, batch/candidate ownership, prompt/count, edit-canvas options, transient preparation provenance/expiry, crop transform, and overlay selection state. |
 | `ChatContextAttachment.cs` | EF entity for persistent visible chat attachments referencing assets, masks, crops, recipes, or batches. |
@@ -290,3 +289,21 @@
 | `js/animation-guide-builder.js` | Stable static ES module for the animation guide builder's Three.js GLB viewer and yaw/pitch drag interaction. |
 | `lib/bootstrap/` | Vendored Bootstrap distribution used by first-slice UI. |
 | `lib/three/` | Vendored Three.js runtime modules, including split `three.module.js`/`three.core.js`, used by the animation guide builder's local GLB viewer. |
+
+## Native sprite documents
+
+| Path | Responsibility |
+| --- | --- |
+| `PixelChat/Sprites/SpriteDocument.cs` | Versioned document, layer/cel/frame/clip/specification contracts and revision conflicts. |
+| `PixelChat/Sprites/SpriteRaster.cs` | Bounded RGBA operations, compositing, resampling, and content-addressed PNGs. |
+| `PixelChat/Sprites/SpriteCommandEngine.cs` | Typed operations on temporary state with selection, locking, palette, and allocation constraints. |
+| `PixelChat/Sprites/SpriteDocumentService.cs` | Atomic persistence, revision checks, frame identity projections, and durable undo/redo. |
+| `PixelChat/Art/FrameSetService.Native.cs` | Source import and native revision integration for existing frame workflows. |
+| `PixelChat/Models/SpriteBitmap.cs` / `SpriteRevision.cs` | Shared immutable PNG content and independent document history records. |
+| `PixelChat/Persistence/NativeSpriteDataMigration.cs` | Rendered-cell materialization between additive and destructive schema migrations. |
+| `PixelChat.Tests/SpriteDocumentTests.cs` / `SpriteMigrationTests.cs` | Pixel, transaction, history, conflict, and migration regression fixtures. |
+| `PixelChat.Tests/PixelChat.Tests.csproj` | Authorized xUnit test project. |
+| `docs/native-sprite-editor-implementation.md` | Release stages and cross-layer impact plan. |
+| `20260914205129_NativeSpriteDocuments.cs` / `.Designer.cs` | Forward native document schema transition. |
+| `20260914205804_RetireMutableFrameBitmaps.cs` / `.Designer.cs` | Forward native document schema transition. |
+| `20260914210308_RemoveDeferredSpriteHistory.cs` / `.Designer.cs` | Forward native document schema transition. |

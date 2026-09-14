@@ -18,6 +18,11 @@ public class FrameSet
 
     public required string Name { get; set; }
 
+    public long Revision { get; set; }
+    public string DocumentJson { get; set; } = "";
+    public string UndoStackJson { get; set; } = "[0]";
+    public string RedoStackJson { get; set; } = "[]";
+
     /// <summary>Explicit playback/sheet ordering of frame ids (JSON array of GUIDs).</summary>
     public string OrderedFrameIdsJson { get; set; } = "[]";
 

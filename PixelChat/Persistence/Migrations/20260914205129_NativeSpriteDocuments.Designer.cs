@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using PixelChat.Persistence;
 
@@ -10,9 +11,11 @@ using PixelChat.Persistence;
 namespace PixelChat.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260914205129_NativeSpriteDocuments")]
+    partial class NativeSpriteDocuments
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
@@ -733,6 +736,9 @@ namespace PixelChat.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid?>("BitmapRevisionAssetId")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("ContentOffsetX")
                         .HasColumnType("INTEGER");
 
@@ -756,9 +762,6 @@ namespace PixelChat.Persistence.Migrations
                     b.Property<int>("Index")
                         .HasColumnType("INTEGER");
 
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("INTEGER");
-
                     b.Property<int>("LogicalHeight")
                         .HasColumnType("INTEGER");
 
@@ -768,6 +771,20 @@ namespace PixelChat.Persistence.Migrations
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("PreviewContentType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<byte[]>("PreviewData")
+                        .IsRequired()
+                        .HasColumnType("BLOB");
+
+                    b.Property<int>("PreviewHeight")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("PreviewWidth")
+                        .HasColumnType("INTEGER");
 
                     b.Property<Guid>("ProjectId")
                         .HasColumnType("TEXT");
@@ -796,13 +813,56 @@ namespace PixelChat.Persistence.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("WorkingCanvasFinalizationJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("");
+
+                    b.Property<string>("WorkingCanvasTransformJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("");
+
+                    b.Property<string>("WorkingContentType")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("image/png");
+
+                    b.Property<byte[]>("WorkingData")
+                        .IsRequired()
+                        .HasColumnType("BLOB");
+
+                    b.Property<int>("WorkingHeight")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("WorkingMargin")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("WorkingState")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("none");
+
+                    b.Property<DateTime?>("WorkingUpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("WorkingWidth")
+                        .HasColumnType("INTEGER");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("BitmapRevisionAssetId");
 
                     b.HasIndex("FrameSetId");
 
                     b.HasIndex("SourceRegionId");
 
-                    b.HasIndex("ProjectId", "FrameSetId", "Index");
+                    b.HasIndex("ProjectId", "FrameSetId", "Index")
+                        .IsUnique();
 
                     b.ToTable("Frames");
                 });
@@ -1120,6 +1180,53 @@ namespace PixelChat.Persistence.Migrations
                     b.HasKey("BatchId", "Index");
 
                     b.ToTable("GenerationReferences");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.HistoryTask", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CheckpointId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OperationsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("[]");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("user");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("running");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "StartedAt");
+
+                    b.ToTable("HistoryTasks");
                 });
 
             modelBuilder.Entity("PixelChat.Models.ImageMask", b =>
@@ -2150,6 +2257,11 @@ namespace PixelChat.Persistence.Migrations
 
             modelBuilder.Entity("PixelChat.Models.Frame", b =>
                 {
+                    b.HasOne("PixelChat.Models.ArtAsset", "BitmapRevisionAsset")
+                        .WithMany()
+                        .HasForeignKey("BitmapRevisionAssetId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("PixelChat.Models.FrameSet", "FrameSet")
                         .WithMany("Frames")
                         .HasForeignKey("FrameSetId")
@@ -2166,6 +2278,8 @@ namespace PixelChat.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("SourceRegionId")
                         .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("BitmapRevisionAsset");
 
                     b.Navigation("FrameSet");
 
@@ -2255,6 +2369,17 @@ namespace PixelChat.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("Batch");
+                });
+
+            modelBuilder.Entity("PixelChat.Models.HistoryTask", b =>
+                {
+                    b.HasOne("PixelChat.Models.Project", "Project")
+                        .WithMany("HistoryTasks")
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Project");
                 });
 
             modelBuilder.Entity("PixelChat.Models.ImageMask", b =>
@@ -2569,6 +2694,8 @@ namespace PixelChat.Persistence.Migrations
                     b.Navigation("Frames");
 
                     b.Navigation("GenerationBatches");
+
+                    b.Navigation("HistoryTasks");
 
                     b.Navigation("Masks");
 

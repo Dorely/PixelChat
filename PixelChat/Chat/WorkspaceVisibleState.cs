@@ -248,7 +248,7 @@ public sealed record WorkspaceFrameSummary(
     int ContentOffsetX,
     int ContentOffsetY,
     int DurationMs,
-    string WorkingState,
+    string ContentState,
     bool HideFromOnionSkin,
     bool HasMask);
 

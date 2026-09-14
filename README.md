@@ -1,5 +1,11 @@
 # PixelChat
 
+Native sprite documents now store content-addressed cels and persistent revisions
+on FrameSet. Existing frames migrate from rendered pixels into painted-mode
+documents. The full editor release is tracked in
+[the implementation plan](docs/native-sprite-editor-implementation.md).
+Run its regression suite with `dotnet test PixelChat.Tests/PixelChat.Tests.csproj`.
+
 PixelChat is a desktop-first, local Blazor/Electron application for building an AI-assisted 2D game art workbench. The long-term product vision is a workspace that helps game developers move from rough ideas to consistent, reusable, game-ready 2D assets.
 
 See [VISION.md](VISION.md) for the product direction and [docs/architecture.md](docs/architecture.md) for the current technical boundaries and validation guidance.

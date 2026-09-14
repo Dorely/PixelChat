@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using System.Data;
 
 namespace PixelChat.Persistence;
@@ -13,6 +15,12 @@ public static class DatabaseMigrationBootstrapper
 
         await ClearStaleMigrationLockAsync(db, cancellationToken);
 
+        const string additive = "20260914205129_NativeSpriteDocuments";
+        var retirement = pending.FirstOrDefault(m => m.EndsWith("_RetireMutableFrameBitmaps", StringComparison.Ordinal));
+        if (pending.Contains(additive))
+            await db.GetService<IMigrator>().MigrateAsync(additive, cancellationToken);
+        if (retirement is not null)
+            await NativeSpriteDataMigration.MaterializeAsync(db, cancellationToken);
         await db.Database.MigrateAsync(cancellationToken);
     }
 

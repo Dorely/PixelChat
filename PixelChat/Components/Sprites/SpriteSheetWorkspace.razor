@@ -2258,7 +2258,7 @@
             ActiveFrameSet: _frameSet is null ? null : new WorkspaceFrameSetSummary(_frameSet.Id, _frameSet.Name, _frameSet.SourceAssetId, _frameSet.DefaultCellWidth, _frameSet.DefaultCellHeight, _frameSet.FrameCount),
             SourceAsset: SelectedSourceAsset(),
             SelectedRegions: _regions.Where(region => _selectedRegionIds.Contains(region.Id)).Select(region => new WorkspaceSpriteRegionSummary(region.Id, region.Name, region.X, region.Y, region.Width, region.Height, region.RegionType, region.Order)).ToList(),
-            SelectedFrames: SelectedFrame() is { } frame ? [new WorkspaceFrameSummary(frame.Id, frame.Index, frame.Name, frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight, frame.LogicalWidth, frame.LogicalHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.DurationMs, frame.WorkingState, frame.HideFromOnionSkin, frame.HasMask)] : [],
+            SelectedFrames: SelectedFrame() is { } frame ? [new WorkspaceFrameSummary(frame.Id, frame.Index, frame.Name, frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight, frame.LogicalWidth, frame.LogicalHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.DurationMs, frame.ContentState, frame.HideFromOnionSkin, frame.HasMask)] : [],
             SelectedMaskId: SelectedFrame()?.MaskId,
             BuiltSheet: BuiltSheetAssetId() is Guid built ? new WorkspaceBuiltSheetSummary(built, BuiltSheetManifest() ?? string.Empty) : null,
             Mode: ModeLabel(_mode),
@@ -2531,10 +2531,10 @@
     };
 
     private static string WorkingLabel(FrameView frame) =>
-        string.IsNullOrWhiteSpace(frame.WorkingState) || frame.WorkingState == "none" ? "Source" : Capitalize(frame.WorkingState);
+        string.IsNullOrWhiteSpace(frame.ContentState) || frame.ContentState == "none" ? "Source" : Capitalize(frame.ContentState);
 
     private static string WorkingBadgeClass(FrameView frame) =>
-        string.IsNullOrWhiteSpace(frame.WorkingState) || frame.WorkingState == "none" ? "frame-work-badge is-empty" : "frame-work-badge";
+        string.IsNullOrWhiteSpace(frame.ContentState) || frame.ContentState == "none" ? "frame-work-badge is-empty" : "frame-work-badge";
 
     private string EditModalTitle() => _editTargetKind == SpriteEditTargetKind.Frame ? "Edit Frame" : "Edit Source";
 
@@ -2637,14 +2637,14 @@
         int LogicalHeight,
         int SourceWidth,
         int SourceHeight,
-        int WorkingWidth,
-        int WorkingHeight,
+        int ContentWidth,
+        int ContentHeight,
         int ContentOffsetX,
         int ContentOffsetY,
         bool HasMask)
     {
         public static CanvasFrame From(FrameView frame) =>
-            new(frame.Id.ToString(), frame.Index, frame.Name, frame.LogicalWidth, frame.LogicalHeight, frame.SourceWidth, frame.SourceHeight, frame.WorkingWidth, frame.WorkingHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.HasMask);
+            new(frame.Id.ToString(), frame.Index, frame.Name, frame.LogicalWidth, frame.LogicalHeight, frame.SourceWidth, frame.SourceHeight, frame.ContentWidth, frame.ContentHeight, frame.ContentOffsetX, frame.ContentOffsetY, frame.HasMask);
     }
 
     private sealed record SpriteEditCandidateOutput(

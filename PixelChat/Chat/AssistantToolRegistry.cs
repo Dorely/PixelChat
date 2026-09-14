@@ -1962,7 +1962,7 @@ public sealed class AssistantToolRegistry(
                 logical = new { f.LogicalWidth, f.LogicalHeight },
                 content = new { f.ContentOffsetX, f.ContentOffsetY },
                 f.DurationMs,
-                f.WorkingState,
+                f.ContentState,
                 f.HideFromOnionSkin,
                 f.HasMask,
                 f.MaskId,

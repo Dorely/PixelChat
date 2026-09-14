@@ -1,3 +1,4 @@
+using PixelChat.Sprites;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
@@ -11,8 +12,9 @@ using SixLabors.ImageSharp.Processing;
 namespace PixelChat.Art;
 
 /// <inheritdoc />
-public sealed class FrameSetService(
+public sealed partial class FrameSetService(
     AppDbContext db,
+    PixelChat.Sprites.ISpriteDocumentService documents,
     IImageProvider imageProvider,
     ImageModelSelectionService imageSelection,
     IImageEditCanvasService imageEditCanvas,
@@ -168,67 +170,15 @@ public sealed class FrameSetService(
         CancellationToken cancellationToken = default)
     {
         var source = await LoadSourceAssetAsync(projectId, request.SourceAssetId, cancellationToken);
-        var (_, _, sourceRgba) = DecodeSource(source);
-
-        var regions = await db.SpriteRegions
-            .Where(r => r.ProjectId == projectId && r.SourceAssetId == source.Id && request.RegionIds.Contains(r.Id))
-            .OrderBy(r => r.Order)
-            .ThenBy(r => r.CreatedAt)
-            .ToListAsync(cancellationToken);
-        if (regions.Count == 0)
-            throw new InvalidOperationException("Select at least one source region before creating frames.");
-
-        var maxWidth = regions.Max(region => Math.Max(1, region.Width));
-        var maxHeight = regions.Max(region => Math.Max(1, region.Height));
-        var frameSet = new FrameSet
-        {
-            ProjectId = projectId,
-            Name = string.IsNullOrWhiteSpace(request.Name) ? $"{source.Label} frames" : request.Name.Trim(),
-            SourceAssetId = source.Id,
-            DefaultCellWidth = maxWidth,
-            DefaultCellHeight = maxHeight,
-        };
-        await db.FrameSets.AddAsync(frameSet, cancellationToken);
-
-        var frames = new List<Frame>();
-        var index = 0;
-        foreach (var region in regions)
-        {
-            var rect = new SpriteSheetRect(region.X, region.Y, region.Width, region.Height);
-            var (png, previewW, previewH) = CropToPng(sourceRgba, source.Width ?? 1, source.Height ?? 1, rect);
-            frames.Add(new Frame
-            {
-                ProjectId = projectId,
-                FrameSetId = frameSet.Id,
-                SourceRegionId = region.Id,
-                Index = index,
-                Name = string.IsNullOrWhiteSpace(region.Name) ? $"Frame {index + 1}" : region.Name,
-                SourceX = region.X,
-                SourceY = region.Y,
-                SourceWidth = region.Width,
-                SourceHeight = region.Height,
-                LogicalWidth = maxWidth,
-                LogicalHeight = maxHeight,
-                ContentOffsetX = Math.Max(0, (maxWidth - region.Width) / 2),
-                ContentOffsetY = Math.Max(0, maxHeight - region.Height),
-                DurationMs = 125,
-                ShapeJson = region.ShapeJson,
-                PreviewContentType = "image/png",
-                PreviewData = png,
-                PreviewWidth = previewW,
-                PreviewHeight = previewH,
-            });
-            index++;
-        }
-
-        await db.Frames.AddRangeAsync(frames, cancellationToken);
-        frameSet.OrderedFrameIdsJson = JsonSerializer.Serialize(frames.Select(frame => frame.Id), JsonOptions);
-        var project = await GetProjectAsync(projectId, cancellationToken);
-        project.ActiveFrameSetId = frameSet.Id;
-        project.ActiveWorkspaceMode = WorkspaceMode.Sprites;
-        project.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        var regions = await db.SpriteRegions.Where(r => r.ProjectId == projectId && r.SourceAssetId == source.Id && request.RegionIds.Contains(r.Id)).OrderBy(r => r.Order).ToListAsync(cancellationToken);
+        if (regions.Count == 0) throw new InvalidOperationException("Select at least one region.");
+        var doc = new SpriteDocument { Name = request.Name ?? $"{source.Label} frames", Specification = new() { Width = regions.Max(r => r.Width), Height = regions.Max(r => r.Height) }, Layers = [new() { Name = "Artwork" }] };
+        doc.Frames = regions.Select(r => ImportRegion(r, doc, source)).ToList();
+        doc.Provenance["sourceAssetId"] = source.Id.ToString();
+        doc.Clips.Add(new() { FrameIds = doc.Frames.Select(f => f.Id).ToList() });
+        var created = await documents.ImportAsync(projectId, source.Id, doc, _pendingBitmaps.Values.ToList(), cancellationToken);
+        _pendingBitmaps.Clear();
+        return await SetActiveFrameSetAsync(projectId, created.DocumentId, cancellationToken);
     }
 
     public async Task<FrameSetView> SetCommonCellSizeAsync(
@@ -236,41 +186,13 @@ public sealed class FrameSetService(
         SetCommonCellSizeRequest request,
         CancellationToken cancellationToken = default)
     {
-        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
-        var frames = await LoadFramesAsync(projectId, frameSet.Id, cancellationToken);
-
-        var width = request.Width;
-        var height = request.Height;
-        if (width <= 0 || height <= 0)
-        {
-            width = frames.Count > 0 ? frames.Max(f => Math.Max(1, f.SourceWidth)) : frameSet.DefaultCellWidth;
-            height = frames.Count > 0 ? frames.Max(f => Math.Max(1, f.SourceHeight)) : frameSet.DefaultCellHeight;
-        }
-
-        width = Math.Clamp(width, 1, 8192);
-        height = Math.Clamp(height, 1, 8192);
-
-        var now = DateTime.UtcNow;
-        frameSet.DefaultCellWidth = width;
-        frameSet.DefaultCellHeight = height;
-        frameSet.UpdatedAt = now;
-        foreach (var frame in frames)
-        {
-            frame.LogicalWidth = width;
-            frame.LogicalHeight = height;
-            frame.ContentOffsetX = Math.Clamp(frame.ContentOffsetX, -width, width);
-            frame.ContentOffsetY = Math.Clamp(frame.ContentOffsetY, -height, height);
-            if (frame.WorkingState == "none")
-            {
-                frame.ContentOffsetX = Math.Max(0, (width - frame.SourceWidth) / 2);
-                frame.ContentOffsetY = Math.Max(0, height - frame.SourceHeight);
-            }
-            frame.UpdatedAt = now;
-        }
-
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        var snapshot = await documents.ReadAsync(projectId, request.FrameSetId, cancellationToken: cancellationToken);
+        var width = request.Width > 0 ? request.Width : snapshot.Document.Frames.Max(f => f.Width);
+        var height = request.Height > 0 ? request.Height : snapshot.Document.Frames.Max(f => f.Height);
+        var layerId = snapshot.Document.Layers[0].Id;
+        var operations = snapshot.Document.Frames.Select(f => JsonSerializer.SerializeToElement(new { op = "crop", frameId = f.Id, layerId, x = 0, y = 0, width, height }, JsonOptions)).ToList();
+        await documents.ApplyAsync(projectId, new(request.FrameSetId, snapshot.Revision, "Set common canvas size", operations), cancellationToken);
+        return await BuildFrameSetViewAsync(projectId, request.FrameSetId, cancellationToken);
     }
 
     public async Task<FrameSetView> AddFrameFromRegionAsync(
@@ -278,51 +200,15 @@ public sealed class FrameSetService(
         AddFrameFromRegionRequest request,
         CancellationToken cancellationToken = default)
     {
-        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
-        var sourceAssetId = frameSet.SourceAssetId
-            ?? throw new InvalidOperationException("Frame set has no source asset.");
-        var region = await db.SpriteRegions.FirstOrDefaultAsync(
-                r => r.ProjectId == projectId && r.SourceAssetId == sourceAssetId && r.Id == request.SourceRegionId,
-                cancellationToken)
-            ?? throw new InvalidOperationException("Source region was not found.");
-        var source = await LoadSourceAssetAsync(projectId, sourceAssetId, cancellationToken);
-        var (_, _, sourceRgba) = DecodeSource(source);
-        var rect = new SpriteSheetRect(region.X, region.Y, region.Width, region.Height);
-        var (png, previewW, previewH) = CropToPng(sourceRgba, source.Width ?? 1, source.Height ?? 1, rect);
-        var logicalWidth = Math.Max(frameSet.DefaultCellWidth, Math.Max(1, region.Width));
-        var logicalHeight = Math.Max(frameSet.DefaultCellHeight, Math.Max(1, region.Height));
-
-        var frames = await LoadFramesAsync(projectId, frameSet.Id, cancellationToken);
-        var frame = new Frame
-        {
-            ProjectId = projectId,
-            FrameSetId = frameSet.Id,
-            SourceRegionId = region.Id,
-            Name = string.IsNullOrWhiteSpace(request.Name) ? region.Name : request.Name.Trim(),
-            SourceX = region.X,
-            SourceY = region.Y,
-            SourceWidth = Math.Max(1, region.Width),
-            SourceHeight = Math.Max(1, region.Height),
-            LogicalWidth = logicalWidth,
-            LogicalHeight = logicalHeight,
-            ContentOffsetX = Math.Max(0, (logicalWidth - region.Width) / 2),
-            ContentOffsetY = Math.Max(0, logicalHeight - region.Height),
-            DurationMs = 125,
-            ShapeJson = region.ShapeJson,
-            PreviewContentType = "image/png",
-            PreviewData = png,
-            PreviewWidth = previewW,
-            PreviewHeight = previewH,
-        };
-
-        await db.Frames.AddAsync(frame, cancellationToken);
-        frames.Insert(Math.Clamp(request.InsertAt ?? frames.Count, 0, frames.Count), frame);
-        frameSet.DefaultCellWidth = Math.Max(frameSet.DefaultCellWidth, logicalWidth);
-        frameSet.DefaultCellHeight = Math.Max(frameSet.DefaultCellHeight, logicalHeight);
-        ReindexAndPersistOrder(frameSet, frames);
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        var set = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
+        var region = await db.SpriteRegions.SingleAsync(r => r.ProjectId == projectId && r.Id == request.SourceRegionId, cancellationToken);
+        var source = await LoadSourceAssetAsync(projectId, region.SourceAssetId, cancellationToken);
+        var doc = Document(set);
+        var frame = ImportRegion(region, doc, source);
+        frame.Name = request.Name ?? frame.Name;
+        doc.Frames.Insert(Math.Clamp(request.InsertAt ?? doc.Frames.Count, 0, doc.Frames.Count), frame);
+        await SaveNativeAsync(set, "Import frame", cancellationToken);
+        return await BuildFrameSetViewAsync(projectId, set.Id, cancellationToken);
     }
 
     public async Task<FrameSetView> DuplicateFrameAsync(
@@ -330,69 +216,7 @@ public sealed class FrameSetService(
         DuplicateFrameRequest request,
         CancellationToken cancellationToken = default)
     {
-        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
-        var frames = await LoadFramesAsync(projectId, frameSet.Id, cancellationToken);
-        var source = frames.FirstOrDefault(frame => frame.Id == request.FrameId)
-            ?? throw new InvalidOperationException("Frame was not found.");
-        var copy = new Frame
-        {
-            ProjectId = projectId,
-            FrameSetId = frameSet.Id,
-            SourceRegionId = source.SourceRegionId,
-            Name = string.IsNullOrWhiteSpace(request.Name) ? $"{source.Name} copy" : request.Name.Trim(),
-            SourceX = source.SourceX,
-            SourceY = source.SourceY,
-            SourceWidth = source.SourceWidth,
-            SourceHeight = source.SourceHeight,
-            LogicalWidth = source.LogicalWidth,
-            LogicalHeight = source.LogicalHeight,
-            ContentOffsetX = source.ContentOffsetX,
-            ContentOffsetY = source.ContentOffsetY,
-            DurationMs = source.DurationMs,
-            ShapeJson = source.ShapeJson,
-            WorkingState = source.WorkingState,
-            WorkingCanvasTransformJson = source.WorkingCanvasTransformJson,
-            WorkingCanvasFinalizationJson = source.WorkingCanvasFinalizationJson,
-            WorkingContentType = source.WorkingContentType,
-            WorkingData = source.WorkingData.ToArray(),
-            WorkingWidth = source.WorkingWidth,
-            WorkingHeight = source.WorkingHeight,
-            WorkingMargin = source.WorkingMargin,
-            WorkingUpdatedAt = source.WorkingUpdatedAt,
-            PreviewContentType = source.PreviewContentType,
-            PreviewData = source.PreviewData.ToArray(),
-            PreviewWidth = source.PreviewWidth,
-            PreviewHeight = source.PreviewHeight,
-        };
-
-        await db.Frames.AddAsync(copy, cancellationToken);
-        var sourceIndex = frames.FindIndex(frame => frame.Id == source.Id);
-        frames.Insert(Math.Clamp(request.InsertAt ?? sourceIndex + 1, 0, frames.Count), copy);
-        ReindexAndPersistOrder(frameSet, frames);
-
-        var masks = await db.ImageMasks
-            .Where(mask => mask.ProjectId == projectId && mask.OwnerKind == "frame" && mask.OwnerId == source.Id)
-            .ToListAsync(cancellationToken);
-        foreach (var mask in masks)
-        {
-            await db.ImageMasks.AddAsync(new ImageMask
-            {
-                ProjectId = projectId,
-                AssetId = mask.AssetId,
-                Label = string.IsNullOrWhiteSpace(mask.Label) ? $"{copy.Name} mask" : $"{mask.Label} copy",
-                ContentType = mask.ContentType,
-                Data = mask.Data.ToArray(),
-                Width = mask.Width,
-                Height = mask.Height,
-                OwnerKind = "frame",
-                OwnerId = copy.Id,
-                CoordinateSpace = mask.CoordinateSpace,
-            }, cancellationToken);
-        }
-
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        return await ApplyNativeAsync(projectId, request.FrameSetId, "Duplicate frame", new { op = "duplicateFrame", frameId = request.FrameId, name = request.Name }, cancellationToken);
     }
 
     public async Task<FrameSetView> SetFrameLogicalCellAsync(
@@ -400,18 +224,8 @@ public sealed class FrameSetService(
         SetFrameLogicalCellRequest request,
         CancellationToken cancellationToken = default)
     {
-        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
-        var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == request.FrameId, cancellationToken)
-            ?? throw new InvalidOperationException("Frame was not found.");
-        frame.LogicalWidth = Math.Clamp(request.Width, 1, 8192);
-        frame.LogicalHeight = Math.Clamp(request.Height, 1, 8192);
-        frameSet.DefaultCellWidth = Math.Max(frameSet.DefaultCellWidth, frame.LogicalWidth);
-        frameSet.DefaultCellHeight = Math.Max(frameSet.DefaultCellHeight, frame.LogicalHeight);
-        frame.UpdatedAt = DateTime.UtcNow;
-        frameSet.UpdatedAt = frame.UpdatedAt;
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        var snapshot = await documents.ReadAsync(projectId, request.FrameSetId, cancellationToken: cancellationToken);
+        return await ApplyNativeAsync(projectId, request.FrameSetId, "Change canvas size", new { op = "crop", frameId = request.FrameId, layerId = snapshot.Document.Layers[0].Id, x = 0, y = 0, width = request.Width, height = request.Height }, cancellationToken);
     }
 
     public async Task<FrameSetView> UpdateFrameSourceBoundsAsync(
@@ -419,49 +233,15 @@ public sealed class FrameSetService(
         UpdateFrameSourceBoundsRequest request,
         CancellationToken cancellationToken = default)
     {
-        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
-        var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == request.FrameId, cancellationToken)
-            ?? throw new InvalidOperationException("Frame was not found.");
-        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var rect = ClampRect(request.X, request.Y, request.Width, request.Height, sourceWidth, sourceHeight);
-        var shapePaths = NormalizeShapePaths(request.ShapePaths, sourceWidth, sourceHeight);
-        var (preview, previewW, previewH) = CropToPng(sourceRgba, sourceWidth, sourceHeight, rect);
-        var now = DateTime.UtcNow;
-
-        frame.SourceX = rect.X;
-        frame.SourceY = rect.Y;
-        frame.SourceWidth = rect.Width;
-        frame.SourceHeight = rect.Height;
-        frame.ShapeJson = JsonSerializer.Serialize(shapePaths, JsonOptions);
-        frame.PreviewData = preview;
-        frame.PreviewContentType = "image/png";
-        frame.PreviewWidth = previewW;
-        frame.PreviewHeight = previewH;
-        frame.WorkingData = [];
-        frame.WorkingState = "none";
-        frame.WorkingCanvasTransformJson = string.Empty;
-        frame.WorkingCanvasFinalizationJson = string.Empty;
-        frame.WorkingWidth = 0;
-        frame.WorkingHeight = 0;
-        frame.WorkingUpdatedAt = null;
-        frame.UpdatedAt = now;
-
-        if (frame.SourceRegionId is Guid regionId
-            && await db.SpriteRegions.FirstOrDefaultAsync(r => r.ProjectId == projectId && r.Id == regionId, cancellationToken) is { } region)
-        {
-            region.X = rect.X;
-            region.Y = rect.Y;
-            region.Width = rect.Width;
-            region.Height = rect.Height;
-            region.ShapeJson = frame.ShapeJson;
-            region.UpdatedAt = now;
-        }
-
-        frameSet.UpdatedAt = now;
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        var set = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
+        var source = await LoadSourceAssetAsync(projectId, set.SourceAssetId ?? Guid.Empty, cancellationToken);
+        var target = Document(set).Frames.Single(f => f.Id == request.FrameId);
+        var region = new SpriteRegion { Name = target.Name, X = request.X, Y = request.Y, Width = request.Width, Height = request.Height };
+        var replacement = ImportRegion(region, Document(set), source);
+        replacement.Id = target.Id; replacement.SourceRegionId = target.SourceRegionId; replacement.DurationMs = target.DurationMs;
+        Document(set).Frames[Document(set).Frames.IndexOf(target)] = replacement;
+        await SaveNativeAsync(set, "Reimport source bounds", cancellationToken);
+        return await BuildFrameSetViewAsync(projectId, set.Id, cancellationToken);
     }
 
     public async Task<FrameSetView> TranslateFrameContentAsync(
@@ -469,16 +249,12 @@ public sealed class FrameSetService(
         TranslateFrameContentRequest request,
         CancellationToken cancellationToken = default)
     {
-        var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
-        var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == request.FrameId, cancellationToken)
-            ?? throw new InvalidOperationException("Frame was not found.");
-        frame.ContentOffsetX = Math.Clamp(request.ContentOffsetX, -8192, 8192);
-        frame.ContentOffsetY = Math.Clamp(request.ContentOffsetY, -8192, 8192);
-        frame.UpdatedAt = DateTime.UtcNow;
-        frameSet.UpdatedAt = frame.UpdatedAt;
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        var snapshot = await documents.ReadAsync(projectId, request.FrameSetId, cancellationToken: cancellationToken);
+        var frame = snapshot.Document.Frames.Single(f => f.Id == request.FrameId);
+        var dx = request.ContentOffsetX - frame.ImportOffset.X; var dy = request.ContentOffsetY - frame.ImportOffset.Y;
+        var operations = snapshot.Document.Layers.Select(l => JsonSerializer.SerializeToElement(new { op = "translate", frameId = frame.Id, layerId = l.Id, dx, dy }, JsonOptions)).ToList();
+        await documents.ApplyAsync(projectId, new(request.FrameSetId, snapshot.Revision, "Translate frame", operations), cancellationToken);
+        return await BuildFrameSetViewAsync(projectId, request.FrameSetId, cancellationToken);
     }
 
     public async Task<FrameSetView> ApplyFrameEditCandidateAsync(
@@ -519,33 +295,10 @@ public sealed class FrameSetService(
             cropHeight = cellHeight;
         }
 
-        var cellBackground = SpriteSheetImageAnalyzer.ResolveBackground(cropped, cropWidth, cropHeight);
-        var bounds = SpriteSheetImageAnalyzer.ForegroundBounds(cropped, cropWidth, cropHeight, cellBackground)
-            ?? new SpriteSheetRect(0, 0, cropWidth, cropHeight);
-        bounds = ClampRect(bounds.X, bounds.Y, bounds.Width, bounds.Height, cropWidth, cropHeight);
-        var (workingRgba, workingWidth, workingHeight) = CropToRgba(cropped, cropWidth, cropHeight, bounds.X, bounds.Y, bounds.Width, bounds.Height);
-        var now = DateTime.UtcNow;
-
-        frame.WorkingData = SpriteSheetPngCodec.EncodeRgba(workingWidth, workingHeight, workingRgba);
-        frame.WorkingContentType = "image/png";
-        frame.WorkingWidth = workingWidth;
-        frame.WorkingHeight = workingHeight;
-        frame.WorkingMargin = 0;
-        frame.WorkingState = "edited";
-        frame.WorkingCanvasTransformJson = request.CanvasTransform is null ? string.Empty : JsonSerializer.Serialize(request.CanvasTransform, JsonOptions);
-        frame.WorkingCanvasFinalizationJson = request.CanvasTransform is null ? string.Empty : ReadCanvasFinalizationJson(candidate.SourceMetadataJson);
-        frame.WorkingUpdatedAt = now;
-        frame.ContentOffsetX = bounds.X;
-        frame.ContentOffsetY = bounds.Y;
-        frame.LogicalWidth = cellWidth;
-        frame.LogicalHeight = cellHeight;
-        frame.UpdatedAt = now;
-        frameSet.DefaultCellWidth = Math.Max(frameSet.DefaultCellWidth, cellWidth);
-        frameSet.DefaultCellHeight = Math.Max(frameSet.DefaultCellHeight, cellHeight);
-        frameSet.UpdatedAt = now;
-
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
+        StageCell(frame, cropped, cellWidth, cellHeight);
+        NativeFrame(frame).CanvasTransformJson = request.CanvasTransform is null ? "" : JsonSerializer.Serialize(request.CanvasTransform, JsonOptions);
+        NativeFrame(frame).CanvasFinalizationJson = ReadCanvasFinalizationJson(candidate.SourceMetadataJson);
+        await SaveNativeAsync(frameSet, "Apply image candidate", cancellationToken);
         return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
     }
 
@@ -559,12 +312,10 @@ public sealed class FrameSetService(
             item => item.ProjectId == projectId && item.FrameSetId == frameSet.Id && item.Id == request.FrameId,
             cancellationToken)
             ?? throw new InvalidOperationException("Frame was not found.");
-        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var sourceBackground = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var sourceBackground = new SpriteSheetBackground("transparent", 0, 0, 0, 0);
         var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
         var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
-        var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, sourceBackground, cellWidth, cellHeight);
+        var cellRgba = RenderFrameCell(frame, cellWidth, cellHeight);
         var cellPng = SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, cellRgba);
 
         var hasDrawnMask = (request.MaskRects?.Count ?? 0) > 0 || (request.MaskPolygons?.Count ?? 0) > 0;
@@ -629,12 +380,10 @@ public sealed class FrameSetService(
         var frames = OrderFrames(frameSet, await LoadFramesAsync(projectId, frameSet.Id, cancellationToken)).ToList();
         var frame = frames.FirstOrDefault(f => f.Id == request.FrameId)
             ?? throw new InvalidOperationException("Frame was not found.");
-        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var background = new SpriteSheetBackground("transparent", 0, 0, 0, 0);
         var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
         var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
-        var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+        var cellRgba = RenderFrameCell(frame, cellWidth, cellHeight);
         var cellPng = SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, cellRgba);
         var (references, referenceRoleLines) = await BuildEditFrameReferenceImagesAsync(
             projectId,
@@ -642,10 +391,6 @@ public sealed class FrameSetService(
             frames,
             frame,
             frameSet,
-            sourceRgba,
-            sourceWidth,
-            sourceHeight,
-            background,
             cancellationToken);
         var editPrompt = BuildEditFramePrompt(prompt, referenceRoleLines);
         var options = imageOptions.Value;
@@ -742,7 +487,7 @@ public sealed class FrameSetService(
         var now = DateTime.UtcNow;
         var targetWidth = prepared?.Transform.LogicalWidth ?? cellWidth;
         var targetHeight = prepared?.Transform.LogicalHeight ?? cellHeight;
-        StoreEditedCellWorkingImage(
+        StageEditedCell(
             frame,
             editedRgba,
             editedWidth,
@@ -756,22 +501,22 @@ public sealed class FrameSetService(
             ProjectId = projectId, Label = $"{frame.Name} edit", FileName = $"frame-{frame.Id}-edit.png",
             Kind = ArtAssetKind.Edited, ContentType = "image/png", Data = outputData,
             RawProviderData = image.Data, RawProviderContentType = image.ContentType,
-            Width = editedWidth, Height = editedHeight, ParentAssetId = source.Id,
+            Width = editedWidth, Height = editedHeight, ParentAssetId = frameSet.SourceAssetId,
             Prompt = request.Prompt ?? string.Empty, ReviewStatus = AssetReviewStatus.Kept,
             SourceMetadataJson = JsonSerializer.Serialize(new { RequestedBackground = backgroundMode,
                 selection.Model, selection.Quality, image.RevisedPrompt, providerResult.RawMetadataJson }, JsonOptions),
         };
         db.ArtAssets.Add(revision);
-        frame.BitmapRevisionAssetId = revision.Id;
-        frame.WorkingCanvasTransformJson = prepared is null ? string.Empty : JsonSerializer.Serialize(prepared.Transform, JsonOptions);
-        frame.WorkingCanvasFinalizationJson = finalization is null ? string.Empty : JsonSerializer.Serialize(finalization, JsonOptions);
+        Document(frameSet).Provenance[$"frame:{frame.Id}:providerAssetId"] = revision.Id.ToString();
+        NativeFrame(frame).CanvasTransformJson = prepared is null ? string.Empty : JsonSerializer.Serialize(prepared.Transform, JsonOptions);
+        NativeFrame(frame).CanvasFinalizationJson = finalization is null ? string.Empty : JsonSerializer.Serialize(finalization, JsonOptions);
         frame.LogicalWidth = targetWidth;
         frame.LogicalHeight = targetHeight;
         frameSet.DefaultCellWidth = Math.Max(frameSet.DefaultCellWidth, targetWidth);
         frameSet.DefaultCellHeight = Math.Max(frameSet.DefaultCellHeight, targetHeight);
         frameSet.UpdatedAt = now;
         await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
+        await SaveNativeAsync(frameSet, "EditFrame", cancellationToken);
         if (preparationToRemove is Guid consumedPreparationId)
             canvasPreparations.Remove(consumedPreparationId);
         return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
@@ -785,12 +530,10 @@ public sealed class FrameSetService(
         var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
         var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == request.FrameId, cancellationToken)
             ?? throw new InvalidOperationException("Frame was not found.");
-        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var background = new SpriteSheetBackground("transparent", 0, 0, 0, 0);
         var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
         var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
-        var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+        var cellRgba = RenderFrameCell(frame, cellWidth, cellHeight);
 
         var result = SpriteSheetServerRenderer.EraseRegions(
             cellRgba,
@@ -804,10 +547,10 @@ public sealed class FrameSetService(
             throw new InvalidOperationException("Frame erase produced an unreadable image.");
 
         var now = DateTime.UtcNow;
-        StoreEditedCellWorkingImage(frame, erasedRgba, erasedWidth, erasedHeight, cellWidth, cellHeight, EditCanvasResampleMode.NearestNeighbor, now);
+        StageEditedCell(frame, erasedRgba, erasedWidth, erasedHeight, cellWidth, cellHeight, EditCanvasResampleMode.NearestNeighbor, now);
         frameSet.UpdatedAt = now;
         await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
+        await SaveNativeAsync(frameSet, "EraseFrameRegions", cancellationToken);
         return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
     }
 
@@ -909,15 +652,13 @@ public sealed class FrameSetService(
         if (frames.Count == 0)
             throw new InvalidOperationException("The frame set has no frames to normalize.");
 
-        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var background = new SpriteSheetBackground("transparent", 0, 0, 0, 0);
         var measurements = frames
             .Select(frame =>
             {
                 var cellWidth = Math.Clamp(frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
                 var cellHeight = Math.Clamp(frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
-                var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+                var cellRgba = RenderFrameCell(frame, cellWidth, cellHeight);
                 var bounds = SpriteSheetImageAnalyzer.ForegroundBounds(cellRgba, cellWidth, cellHeight, background);
                 (double X, double Y)? centroid = bounds is null
                     ? null
@@ -999,7 +740,7 @@ public sealed class FrameSetService(
             var scaledWidth = Math.Clamp((int)Math.Round(contentWidth * scaleFactor, MidpointRounding.AwayFromZero), 1, 8192);
             var scaledHeight = Math.Clamp((int)Math.Round(contentHeight * scaleFactor, MidpointRounding.AwayFromZero), 1, 8192);
             ValidateCanvasSize(scaledWidth, scaledHeight, "Scaled frame content is too large.");
-            var scaledRgba = ResizeSmoothRgba(contentRgba, contentWidth, contentHeight, scaledWidth, scaledHeight);
+            var scaledRgba = Document(frameSet).Specification.ArtMode == "pixel" ? ResizeNearest(contentRgba, contentWidth, contentHeight, scaledWidth, scaledHeight) : ResizeSmoothRgba(contentRgba, contentWidth, contentHeight, scaledWidth, scaledHeight);
             var (newOffsetX, newOffsetY) = ScalePlacementOffset(bounds, measurement.Centroid, scaledWidth, scaledHeight, anchor);
             newOffsetX = Math.Clamp(newOffsetX, -8192, 8192);
             newOffsetY = Math.Clamp(newOffsetY, -8192, 8192);
@@ -1008,16 +749,7 @@ public sealed class FrameSetService(
             BlitInto(previewCell, measurement.CellWidth, measurement.CellHeight, scaledRgba, scaledWidth, scaledHeight, newOffsetX, newOffsetY);
             var newBounds = SpriteSheetImageAnalyzer.ForegroundBounds(previewCell, measurement.CellWidth, measurement.CellHeight, background);
 
-            frame.WorkingData = SpriteSheetPngCodec.EncodeRgba(scaledWidth, scaledHeight, scaledRgba);
-            frame.WorkingContentType = "image/png";
-            frame.WorkingWidth = scaledWidth;
-            frame.WorkingHeight = scaledHeight;
-            frame.WorkingMargin = 0;
-            frame.WorkingState = "scaled";
-            frame.WorkingUpdatedAt = now;
-            frame.ContentOffsetX = newOffsetX;
-            frame.ContentOffsetY = newOffsetY;
-            frame.UpdatedAt = now;
+            StageCell(frame, previewCell, measurement.CellWidth, measurement.CellHeight);
 
             results.Add(new NormalizeFrameScaleFrameResult(
                 frame.Id,
@@ -1039,7 +771,7 @@ public sealed class FrameSetService(
 
         frameSet.UpdatedAt = now;
         await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
+        await SaveNativeAsync(frameSet, "NormalizeFrameScale", cancellationToken);
         var view = await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
         return new NormalizeFrameScaleResult(view, targetHeight, tolerancePercent, anchor, results, warnings);
     }
@@ -1057,9 +789,7 @@ public sealed class FrameSetService(
 
         var frameLimit = Math.Clamp(maxFrames <= 0 ? 12 : maxFrames, 1, 24);
         var limited = frames.Take(frameLimit).ToList();
-        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var background = new SpriteSheetBackground("transparent", 0, 0, 0, 0);
 
         var cellWidth = Math.Max(1, limited.Max(frame => frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth));
         var cellHeight = Math.Max(1, limited.Max(frame => frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight));
@@ -1073,7 +803,7 @@ public sealed class FrameSetService(
         for (var index = 0; index < limited.Count; index++)
         {
             var frame = limited[index];
-            var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+            var cellRgba = RenderFrameCell(frame, cellWidth, cellHeight);
             BlitInto(sheetRgba, sheetWidth, sheetHeight, cellRgba, cellWidth, cellHeight, index * cellWidth, 0);
             updates.Add(new SpriteSheetFrameUpdateView(
                 index,
@@ -1114,26 +844,6 @@ public sealed class FrameSetService(
                 image.ToFrame))
             .ToList();
 
-        for (var index = 0; index < limited.Count; index++)
-        {
-            var frame = limited[index];
-            if (frame.WorkingData.Length == 0)
-                continue;
-
-            var sourceCell = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight, ignoreWorking: true);
-            var workingCell = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
-            var overlay = SpriteSheetServerRenderer.RenderRemovedPixelsOverlay(sourceCell, background, workingCell, background, cellWidth, cellHeight);
-            images.Add(new SpriteAnimationReviewImageView(
-                $"Frame {index + 1} removed pixels vs source (red = erased from source foreground)",
-                $"frame-{index + 1}-removed-vs-source.png",
-                "image/png",
-                DataUrl.ToDataUrl("image/png", overlay.PngData),
-                "sourceDiff",
-                index,
-                null,
-                null));
-        }
-
         var averageDuration = limited.Average(frame => Math.Max(1, frame.DurationMs));
         var fps = Math.Clamp((int)Math.Round(1000d / averageDuration, MidpointRounding.AwayFromZero), 1, 60);
         return new FrameSetAnimationReviewView(frameSet.Id, limited.Count, 1, columns, fps, loop, metrics, images);
@@ -1151,9 +861,7 @@ public sealed class FrameSetService(
 
         var reference = frames.FirstOrDefault(frame => frame.Id == request.ReferenceFrameId)
             ?? throw new InvalidOperationException("Reference frame was not found.");
-        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var referenceContent = FrameContentPixels(reference, sourceRgba, sourceWidth, sourceHeight);
+        var referenceContent = FrameContentPixels(reference);
         var anchor = NormalizeAnchorRect(request.AnchorRect, referenceContent.Width, referenceContent.Height);
         var background = SpriteSheetImageAnalyzer.ResolveBackground(referenceContent.Rgba, referenceContent.Width, referenceContent.Height);
         var template = BuildAnchorTemplate(referenceContent.Rgba, referenceContent.Width, referenceContent.Height, anchor, background);
@@ -1165,18 +873,11 @@ public sealed class FrameSetService(
         var matches = new List<AnchorAlignmentMatchView>();
         var now = DateTime.UtcNow;
 
-        if (request.Apply)
-        {
-            var frameIds = frames.Select(frame => frame.Id).ToList();
-            var existingAnchors = await db.Anchors
-                .Where(anchorEntity => anchorEntity.ProjectId == projectId && anchorEntity.Name == "template" && frameIds.Contains(anchorEntity.FrameId))
-                .ToListAsync(cancellationToken);
-            db.Anchors.RemoveRange(existingAnchors);
-        }
+        var operations = new List<JsonElement>();
 
         foreach (var frame in frames)
         {
-            var content = FrameContentPixels(frame, sourceRgba, sourceWidth, sourceHeight);
+            var content = FrameContentPixels(frame);
             var match = frame.Id == reference.Id
                 ? new AnchorMatch(anchor, 1d, LowConfidence: false, [])
                 : MatchAnchor(content.Rgba, content.Width, content.Height, template, anchor.X, anchor.Y, searchPadding, minScore);
@@ -1191,26 +892,8 @@ public sealed class FrameSetService(
             var deltaY = nextOffsetY - frame.ContentOffsetY;
 
             if (request.Apply)
-            {
-                if (request.AxisX)
-                    frame.ContentOffsetX = Math.Clamp(nextOffsetX, -8192, 8192);
-                if (request.AxisY)
-                    frame.ContentOffsetY = Math.Clamp(nextOffsetY, -8192, 8192);
-                frame.UpdatedAt = now;
-
-                await db.Anchors.AddAsync(new Anchor
-                {
-                    ProjectId = projectId,
-                    FrameId = frame.Id,
-                    Name = "template",
-                    X = frame.ContentOffsetX + matchCenterX,
-                    Y = frame.ContentOffsetY + matchCenterY,
-                    Confidence = Math.Clamp(match.Score, -1d, 1d),
-                    Source = match.LowConfidence ? "matched-low-confidence" : "matched",
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                }, cancellationToken);
-            }
+                foreach (var layer in Document(frameSet).Layers)
+                    operations.Add(JsonSerializer.SerializeToElement(new { op = "translate", frameId = frame.Id, layerId = layer.Id, dx = request.AxisX ? deltaX : 0, dy = request.AxisY ? deltaY : 0 }, JsonOptions));
 
             matches.Add(new AnchorAlignmentMatchView(
                 frame.Id,
@@ -1225,11 +908,7 @@ public sealed class FrameSetService(
         }
 
         if (request.Apply)
-        {
-            frameSet.UpdatedAt = now;
-            await TouchProjectAsync(projectId, cancellationToken);
-            await db.SaveChangesAsync(cancellationToken);
-        }
+            await documents.ApplyAsync(projectId, new(frameSet.Id, _documents[frameSet.Id].Revision, "Align frames", operations), cancellationToken);
 
         return new AnchorAlignmentResult(
             await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken),
@@ -1255,9 +934,7 @@ public sealed class FrameSetService(
         if (frames.Count == 0)
             throw new InvalidOperationException("The frame set has no frames to build.");
 
-        var source = await LoadSourceAssetAsync(projectId, frameSet.SourceAssetId ?? Guid.Empty, cancellationToken);
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var background = new SpriteSheetBackground("transparent", 0, 0, 0, 0);
         var ordered = OrderFrames(frameSet, frames);
         var rows = Math.Clamp(request.Rows, 1, 32);
         var columns = request.Columns > 0
@@ -1287,7 +964,7 @@ public sealed class FrameSetService(
             var (row, column) = SheetSlot(ordinal, rows, columns, ordering);
             var destX = outer + (column * (cellWidth + gutter));
             var destY = outer + (row * (cellHeight + gutter));
-            var cellRgba = RenderFrameCell(frame, frameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+            var cellRgba = RenderFrameCell(frame, cellWidth, cellHeight);
             BlitInto(outputRgba, outputWidth, outputHeight, cellRgba, cellWidth, cellHeight, destX, destY);
 
             if (frame.ContentOffsetX < 0
@@ -1326,8 +1003,8 @@ public sealed class FrameSetService(
             Data = png,
             Width = outputWidth,
             Height = outputHeight,
-            ParentAssetId = source.Id,
-            Prompt = source.Prompt,
+            ParentAssetId = frameSet.SourceAssetId,
+            Prompt = "",
             SourceMetadataJson = "{}",
             CreatedAt = now,
             UpdatedAt = now,
@@ -1449,47 +1126,17 @@ public sealed class FrameSetService(
 
     public async Task<FrameSetView> ReorderFrameAsync(Guid projectId, Guid frameSetId, Guid frameId, int targetIndex, CancellationToken cancellationToken = default)
     {
-        var frameSet = await LoadFrameSetAsync(projectId, frameSetId, cancellationToken);
-        var frames = await LoadFramesAsync(projectId, frameSetId, cancellationToken);
-        var moving = frames.FirstOrDefault(f => f.Id == frameId)
-            ?? throw new InvalidOperationException("Frame was not found.");
-        frames.Remove(moving);
-        frames.Insert(Math.Clamp(targetIndex, 0, frames.Count), moving);
-        ReindexAndPersistOrder(frameSet, frames);
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        return await ApplyNativeAsync(projectId, frameSetId, "ReorderFrame", new { op = "reorderFrame", frameId, index = targetIndex }, cancellationToken);
     }
 
     public async Task<FrameSetView> DeleteFrameAsync(Guid projectId, Guid frameSetId, Guid frameId, CancellationToken cancellationToken = default)
     {
-        var frameSet = await LoadFrameSetAsync(projectId, frameSetId, cancellationToken);
-        var frames = await LoadFramesAsync(projectId, frameSetId, cancellationToken);
-        var target = frames.FirstOrDefault(f => f.Id == frameId)
-            ?? throw new InvalidOperationException("Frame was not found.");
-        frames.Remove(target);
-        var masks = await db.ImageMasks
-            .Where(mask => mask.ProjectId == projectId && mask.OwnerKind == "frame" && mask.OwnerId == target.Id)
-            .ToListAsync(cancellationToken);
-        db.ImageMasks.RemoveRange(masks);
-        db.Frames.Remove(target);
-        ReindexAndPersistOrder(frameSet, frames);
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        return await ApplyNativeAsync(projectId, frameSetId, "DeleteFrame", new { op = "deleteFrame", frameId }, cancellationToken);
     }
 
     public async Task<FrameSetView> SetFrameDurationAsync(Guid projectId, Guid frameSetId, Guid frameId, int durationMs, CancellationToken cancellationToken = default)
     {
-        var frameSet = await LoadFrameSetAsync(projectId, frameSetId, cancellationToken);
-        var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == frameId, cancellationToken)
-            ?? throw new InvalidOperationException("Frame was not found.");
-        frame.DurationMs = Math.Clamp(durationMs, 1, 10000);
-        frame.UpdatedAt = DateTime.UtcNow;
-        frameSet.UpdatedAt = frame.UpdatedAt;
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        return await ApplyNativeAsync(projectId, frameSetId, "SetFrameDuration", new { op = "setDuration", frameId, durationMs }, cancellationToken);
     }
 
     public async Task<FrameSetView> SetFrameOnionSkinVisibilityAsync(
@@ -1499,15 +1146,7 @@ public sealed class FrameSetService(
         bool hideFromOnionSkin,
         CancellationToken cancellationToken = default)
     {
-        var frameSet = await LoadFrameSetAsync(projectId, frameSetId, cancellationToken);
-        var frame = await db.Frames.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.FrameSetId == frameSet.Id && f.Id == frameId, cancellationToken)
-            ?? throw new InvalidOperationException("Frame was not found.");
-        frame.HideFromOnionSkin = hideFromOnionSkin;
-        frame.UpdatedAt = DateTime.UtcNow;
-        frameSet.UpdatedAt = frame.UpdatedAt;
-        await TouchProjectAsync(projectId, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, frameSet.Id, cancellationToken);
+        return await ApplyNativeAsync(projectId, frameSetId, "SetFrameOnionSkinVisibility", new { op = "setFrame", frameId, hideFromOnionSkin }, cancellationToken);
     }
 
     public async Task<ImageMaskView> UpsertFrameMaskAsync(
@@ -1678,41 +1317,13 @@ public sealed class FrameSetService(
 
     public async Task<(byte[] Data, string ContentType)?> GetFrameContentImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default)
     {
-        var frame = await db.Frames.Include(f => f.FrameSet).FirstOrDefaultAsync(f => f.ProjectId == projectId && f.Id == frameId, cancellationToken);
-        if (frame is null)
-            return null;
-        if (frame.WorkingData.Length > 0)
-            return (frame.WorkingData, string.IsNullOrWhiteSpace(frame.WorkingContentType) ? "image/png" : frame.WorkingContentType);
-        if (frame.PreviewData.Length > 0)
-            return (frame.PreviewData, string.IsNullOrWhiteSpace(frame.PreviewContentType) ? "image/png" : frame.PreviewContentType);
-
-        var source = frame.FrameSet.SourceAssetId is Guid sourceId
-            ? await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == sourceId, cancellationToken)
-            : null;
-        if (source is null)
-            return null;
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var rect = ClampRect(frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight, sourceWidth, sourceHeight);
-        var (png, _, _) = CropToPng(sourceRgba, sourceWidth, sourceHeight, rect);
-        return (png, "image/png");
+        var frame = await db.Frames.AsNoTracking().FirstOrDefaultAsync(f => f.ProjectId == projectId && f.Id == frameId, cancellationToken);
+        return frame is null ? null : (await documents.RenderAsync(projectId, frame.FrameSetId, frameId, cancellationToken: cancellationToken), "image/png");
     }
 
     public async Task<(byte[] Data, string ContentType)?> GetFramePreviewImageAsync(Guid projectId, Guid frameId, CancellationToken cancellationToken = default)
     {
-        var frame = await db.Frames.Include(f => f.FrameSet).FirstOrDefaultAsync(f => f.ProjectId == projectId && f.Id == frameId, cancellationToken);
-        if (frame is null)
-            return null;
-        var source = frame.FrameSet.SourceAssetId is Guid sourceId
-            ? await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == sourceId, cancellationToken)
-            : null;
-        if (source is null)
-            return frame.PreviewData.Length > 0 ? (frame.PreviewData, frame.PreviewContentType) : null;
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
-        var width = Math.Max(1, frame.LogicalWidth > 0 ? frame.LogicalWidth : frame.FrameSet.DefaultCellWidth);
-        var height = Math.Max(1, frame.LogicalHeight > 0 ? frame.LogicalHeight : frame.FrameSet.DefaultCellHeight);
-        var rgba = RenderFrameCell(frame, frame.FrameSet, sourceRgba, sourceWidth, sourceHeight, background, width, height);
-        return (SpriteSheetPngCodec.EncodeRgba(width, height, rgba), "image/png");
+        return await GetFrameContentImageAsync(projectId, frameId, cancellationToken);
     }
 
     public async Task<(byte[] Data, string ContentType)?> InspectFrameAsync(
@@ -1725,17 +1336,9 @@ public sealed class FrameSetService(
         var frame = await db.Frames.Include(f => f.FrameSet).FirstOrDefaultAsync(f => f.ProjectId == projectId && f.Id == frameId, cancellationToken);
         if (frame is null)
             return null;
-        var source = frame.FrameSet.SourceAssetId is Guid sourceId
-            ? await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == sourceId, cancellationToken)
-            : null;
-        if (source is null)
-            return null;
-
-        var (sourceWidth, sourceHeight, sourceRgba) = DecodeSource(source);
-        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
-        var cellWidth = Math.Max(1, frame.LogicalWidth > 0 ? frame.LogicalWidth : frame.FrameSet.DefaultCellWidth);
-        var cellHeight = Math.Max(1, frame.LogicalHeight > 0 ? frame.LogicalHeight : frame.FrameSet.DefaultCellHeight);
-        var cellRgba = RenderFrameCell(frame, frame.FrameSet, sourceRgba, sourceWidth, sourceHeight, background, cellWidth, cellHeight);
+        var png = await documents.RenderAsync(projectId, frame.FrameSetId, frameId, cancellationToken: cancellationToken);
+        var raster = SpriteRaster.Decode(png);
+        var cellWidth = raster.Width; var cellHeight = raster.Height; var cellRgba = raster.Pixels;
         var crop = rect is null
             ? new SpriteSheetRect(0, 0, cellWidth, cellHeight)
             : ClampRect(rect.X, rect.Y, rect.Width, rect.Height, cellWidth, cellHeight);
@@ -1801,14 +1404,14 @@ public sealed class FrameSetService(
                         frame.ContentOffsetX,
                         frame.ContentOffsetY,
                         frame.DurationMs,
-                        string.IsNullOrWhiteSpace(frame.WorkingState) ? "none" : frame.WorkingState,
-                        frame.WorkingWidth,
-                        frame.WorkingHeight,
+                        "document",
+                        frame.LogicalWidth,
+                        frame.LogicalHeight,
                         frame.HideFromOnionSkin,
                         mask is not null,
                         mask?.Id,
-                        DeserializeCanvasTransform(frame.WorkingCanvasTransformJson),
-                        DeserializeCanvasFinalization(frame.WorkingCanvasFinalizationJson));
+                        DeserializeCanvasTransform(NativeFrame(frame).CanvasTransformJson),
+                        DeserializeCanvasFinalization(NativeFrame(frame).CanvasFinalizationJson));
                 })
                 .ToList());
     }
@@ -1820,18 +1423,6 @@ public sealed class FrameSetService(
         var ordered = orderedIds.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
         ordered.AddRange(frames.Where(frame => !orderedIds.Contains(frame.Id)).OrderBy(frame => frame.Index));
         return ordered;
-    }
-
-    private void ReindexAndPersistOrder(FrameSet frameSet, List<Frame> frames)
-    {
-        for (var i = 0; i < frames.Count; i++)
-        {
-            frames[i].Index = i;
-            frames[i].UpdatedAt = DateTime.UtcNow;
-        }
-
-        frameSet.OrderedFrameIdsJson = JsonSerializer.Serialize(frames.Select(frame => frame.Id), JsonOptions);
-        frameSet.UpdatedAt = DateTime.UtcNow;
     }
 
     private async Task<Project> GetProjectAsync(Guid projectId, CancellationToken cancellationToken) =>
@@ -1852,9 +1443,13 @@ public sealed class FrameSetService(
             ?? throw new InvalidOperationException("Source asset was not found.");
     }
 
-    private async Task<FrameSet> LoadFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken) =>
-        await db.FrameSets.FirstOrDefaultAsync(f => f.ProjectId == projectId && f.Id == frameSetId, cancellationToken)
+    private async Task<FrameSet> LoadFrameSetAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken)
+    {
+        var set = await db.FrameSets.SingleOrDefaultAsync(f => f.ProjectId == projectId && f.Id == frameSetId, cancellationToken)
             ?? throw new InvalidOperationException("Frame set was not found.");
+        await LoadDocumentAsync(set, cancellationToken);
+        return set;
+    }
 
     private async Task<List<Frame>> LoadFramesAsync(Guid projectId, Guid frameSetId, CancellationToken cancellationToken) =>
         await db.Frames
@@ -2038,10 +1633,6 @@ public sealed class FrameSetService(
         IReadOnlyList<Frame> frames,
         Frame frame,
         FrameSet frameSet,
-        byte[] sourceRgba,
-        int sourceWidth,
-        int sourceHeight,
-        SpriteSheetBackground background,
         CancellationToken cancellationToken)
     {
         var maxReferences = Math.Max(0, imageOptions.Value.MaxReferenceImages);
@@ -2101,7 +1692,7 @@ public sealed class FrameSetService(
 
             var adjacentWidth = Math.Clamp(adjacent.LogicalWidth > 0 ? adjacent.LogicalWidth : frameSet.DefaultCellWidth, 1, 8192);
             var adjacentHeight = Math.Clamp(adjacent.LogicalHeight > 0 ? adjacent.LogicalHeight : frameSet.DefaultCellHeight, 1, 8192);
-            var adjacentRgba = RenderFrameCell(adjacent, frameSet, sourceRgba, sourceWidth, sourceHeight, background, adjacentWidth, adjacentHeight);
+            var adjacentRgba = RenderFrameCell(adjacent, adjacentWidth, adjacentHeight);
             var adjacentPng = SpriteSheetPngCodec.EncodeRgba(adjacentWidth, adjacentHeight, adjacentRgba);
             AddReference(
                 new ImageProviderReference($"{role.Replace(' ', '-')}-{adjacent.Index + 1}.png", "image/png", adjacentPng),
@@ -2158,52 +1749,24 @@ public sealed class FrameSetService(
         return string.Join("\n", lines);
     }
 
-    private static (byte[] Rgba, int Width, int Height) FrameContentPixels(
-        Frame frame,
-        byte[] sourceRgba,
-        int sourceWidth,
-        int sourceHeight,
-        bool ignoreWorking = false)
+    private (byte[] Rgba, int Width, int Height) FrameContentPixels(Frame frame)
     {
-        if (!ignoreWorking
-            && frame.WorkingData.Length > 0
-            && SpriteSheetPngCodec.TryReadRgba(frame.WorkingData, out var workingW, out var workingH, out var workingRgba))
-        {
-            return (workingRgba, workingW, workingH);
-        }
-
-        return CropToRgba(sourceRgba, sourceWidth, sourceHeight, frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight);
+        var doc = _documents[frame.FrameSetId].Document;
+        var native = NativeFrame(frame);
+        var raster = SpriteRaster.Composite(doc, native, hash => _bitmapContent[hash]);
+        return (raster.Pixels, raster.Width, raster.Height);
     }
 
-    private static byte[] RenderFrameCell(
-        Frame frame,
-        FrameSet frameSet,
-        byte[] sourceRgba,
-        int sourceWidth,
-        int sourceHeight,
-        SpriteSheetBackground background,
-        int? forcedWidth = null,
-        int? forcedHeight = null,
-        bool ignoreWorking = false)
+    private byte[] RenderFrameCell(Frame frame, int? forcedWidth = null, int? forcedHeight = null)
     {
-        var cellWidth = Math.Max(1, forcedWidth ?? (frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth));
-        var cellHeight = Math.Max(1, forcedHeight ?? (frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight));
-        var cell = BuildBackgroundCell(cellWidth, cellHeight, background);
-        var (contentRgba, contentWidth, contentHeight) = FrameContentPixels(frame, sourceRgba, sourceWidth, sourceHeight, ignoreWorking);
-        var copyWholeCell = !ignoreWorking && frame.WorkingData.Length > 0 && contentWidth == cellWidth && contentHeight == cellHeight;
-        BlitInto(
-            cell,
-            cellWidth,
-            cellHeight,
-            contentRgba,
-            contentWidth,
-            contentHeight,
-            copyWholeCell ? 0 : frame.ContentOffsetX,
-            copyWholeCell ? 0 : frame.ContentOffsetY);
+        var content = FrameContentPixels(frame);
+        var width = forcedWidth ?? content.Width; var height = forcedHeight ?? content.Height;
+        var cell = new byte[checked(width * height * 4)];
+        BlitInto(cell, width, height, content.Rgba, content.Width, content.Height, 0, 0);
         return cell;
     }
 
-    private static void StoreEditedCellWorkingImage(
+    private void StageEditedCell(
         Frame frame,
         byte[] rgba,
         int width,
@@ -2213,21 +1776,9 @@ public sealed class FrameSetService(
         EditCanvasResampleMode resampleMode,
         DateTime now)
     {
-        var cell = (width == cellWidth && height == cellHeight)
-            ? rgba
-            : resampleMode == EditCanvasResampleMode.Smooth
-                ? ResizeSmoothRgba(rgba, width, height, cellWidth, cellHeight)
-                : ResizeNearest(rgba, width, height, cellWidth, cellHeight);
-        frame.WorkingData = SpriteSheetPngCodec.EncodeRgba(cellWidth, cellHeight, cell);
-        frame.WorkingContentType = "image/png";
-        frame.WorkingWidth = cellWidth;
-        frame.WorkingHeight = cellHeight;
-        frame.WorkingMargin = 0;
-        frame.WorkingState = "edited";
-        frame.WorkingUpdatedAt = now;
-        frame.ContentOffsetX = 0;
-        frame.ContentOffsetY = 0;
-        frame.UpdatedAt = now;
+        var cell = width == cellWidth && height == cellHeight ? rgba : resampleMode == EditCanvasResampleMode.Smooth
+            ? ResizeSmoothRgba(rgba, width, height, cellWidth, cellHeight) : ResizeNearest(rgba, width, height, cellWidth, cellHeight);
+        StageCell(frame, cell, cellWidth, cellHeight);
     }
 
     private static string ResolveFrameEditBackground(string? requested, byte[] rgba)
@@ -2345,12 +1896,6 @@ public sealed class FrameSetService(
                 destRgba[destIndex + 3] = srcRgba[srcIndex + 3];
             }
         }
-    }
-
-    private static (byte[] Png, int Width, int Height) CropToPng(byte[] sourceRgba, int sourceWidth, int sourceHeight, SpriteSheetRect rect)
-    {
-        var (rgba, width, height) = CropToRgba(sourceRgba, sourceWidth, sourceHeight, rect.X, rect.Y, rect.Width, rect.Height);
-        return (SpriteSheetPngCodec.EncodeRgba(width, height, rgba), width, height);
     }
 
     private static (byte[] Rgba, int Width, int Height) CropToRgba(byte[] sourceRgba, int sourceWidth, int sourceHeight, int rectX, int rectY, int rectWidth, int rectHeight)

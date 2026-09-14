@@ -31,10 +31,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<StandaloneAsset> StandaloneAssets => Set<StandaloneAsset>();
     public DbSet<FrameSet> FrameSets => Set<FrameSet>();
     public DbSet<Frame> Frames => Set<Frame>();
+    public DbSet<SpriteBitmap> SpriteBitmaps => Set<SpriteBitmap>();
+    public DbSet<SpriteRevision> SpriteRevisions => Set<SpriteRevision>();
     public DbSet<Anchor> Anchors => Set<Anchor>();
     public DbSet<SheetLayout> SheetLayouts => Set<SheetLayout>();
     public DbSet<BuiltSheet> BuiltSheets => Set<BuiltSheet>();
-    public DbSet<HistoryTask> HistoryTasks => Set<HistoryTask>();
     public DbSet<SpriteEditSession> SpriteEditSessions => Set<SpriteEditSession>();
     public DbSet<ImageMask> ImageMasks => Set<ImageMask>();
     public DbSet<ChatContextAttachment> ChatContextAttachments => Set<ChatContextAttachment>();
@@ -87,6 +88,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<SpriteBitmap>(entity => entity.HasKey(e => e.Hash));
+        modelBuilder.Entity<SpriteRevision>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.FrameSetId, e.Number }).IsUnique();
+            entity.HasOne<FrameSet>().WithMany().HasForeignKey(e => e.FrameSetId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<FrameSet>().Property(e => e.Revision).IsConcurrencyToken();
         modelBuilder.Entity<LlmProvider>(entity =>
         {
             entity.HasIndex(e => e.Name).IsUnique();
@@ -415,15 +424,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
 
         modelBuilder.Entity<Frame>(entity =>
         {
-            entity.HasIndex(e => new { e.ProjectId, e.FrameSetId, e.Index }).IsUnique();
+            entity.HasIndex(e => new { e.ProjectId, e.FrameSetId, e.Index });
+            entity.HasQueryFilter(e => !e.IsDeleted);
             entity.HasIndex(e => e.FrameSetId);
             entity.HasIndex(e => e.SourceRegionId);
             entity.Property(e => e.HideFromOnionSkin).HasDefaultValue(false);
             entity.Property(e => e.ShapeJson).HasDefaultValue("[]");
-            entity.Property(e => e.WorkingState).HasDefaultValue("none");
-            entity.Property(e => e.WorkingContentType).HasDefaultValue("image/png");
-            entity.Property(e => e.WorkingCanvasTransformJson).HasDefaultValue(string.Empty);
-            entity.Property(e => e.WorkingCanvasFinalizationJson).HasDefaultValue(string.Empty);
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.Frames)
@@ -440,14 +446,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .HasForeignKey(e => e.SourceRegionId)
                 .OnDelete(DeleteBehavior.SetNull);
 
-            entity.HasOne(e => e.BitmapRevisionAsset)
-                .WithMany()
-                .HasForeignKey(e => e.BitmapRevisionAssetId)
-                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<Anchor>(entity =>
         {
+            entity.HasQueryFilter(e => !e.Frame.IsDeleted);
             entity.HasIndex(e => new { e.FrameId, e.Name });
             entity.Property(e => e.Source).HasDefaultValue("manual");
 
@@ -502,19 +505,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .WithMany()
                 .HasForeignKey(e => e.OutputAssetId)
                 .OnDelete(DeleteBehavior.SetNull);
-        });
-
-        modelBuilder.Entity<HistoryTask>(entity =>
-        {
-            entity.HasIndex(e => new { e.ProjectId, e.StartedAt });
-            entity.Property(e => e.Source).HasDefaultValue("user");
-            entity.Property(e => e.OperationsJson).HasDefaultValue("[]");
-            entity.Property(e => e.Status).HasDefaultValue("running");
-
-            entity.HasOne(e => e.Project)
-                .WithMany(p => p.HistoryTasks)
-                .HasForeignKey(e => e.ProjectId)
-                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<SpriteEditSession>(entity =>

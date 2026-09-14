@@ -57,7 +57,14 @@ The main runtime flow is:
 
 `IArtWorkflowService` owns project, asset, generation, review, recipe, mask,
 import, edit, and export workflows. `IFrameSetService` owns the deterministic
-Source -> Frames -> Sheet model and bitmap operations. UI and assistant sprite
+source regions, frame preparation, and derived sheets. `ISpriteDocumentService`
+owns native FrameSet revisions, shared immutable PNG content, atomic command
+transactions, and persisted undo/redo. `SpriteCommandEngine` edits temporary
+snapshots with layer locks, selection, palette, and allocation constraints.
+Frame rows project document metadata and retain deleted identities and masks
+for undo. Versioned document manifests contain layers, cels, clips, pivots,
+selection, production specifications, and provenance. Stale expected revisions
+fail without overwriting newer work. UI and assistant sprite
 mutations should pass through `ISpriteWorkspaceActionService` when visible focus
 and workspace synchronization must accompany the underlying mutation.
 
@@ -271,8 +278,12 @@ requested. Documentation-only work should still validate every referenced path
 and command and should run broader checks when the documentation asserts that
 those checks work.
 
-There are currently no automated test projects. Do not add one without explicit
-user direction. Cross-platform runtime identifiers and successful compilation
+The user authorized automated tests and browser checks for the native sprite
+release. Run `dotnet test PixelChat.Tests/PixelChat.Tests.csproj` for raster,
+transaction, history, conflict, and migration fixtures. Native migration first
+adds the document tables, materializes existing rendered cells, and only then
+drops mutable bitmap columns. Failed materialization leaves those columns intact.
+Cross-platform runtime identifiers and successful compilation
 do not validate Electron packaging, OAuth, provider calls, image generation,
 rembg provisioning or acceleration, or OS-specific behavior. Exercise the
 relevant integration on the relevant platform before claiming it works, and
