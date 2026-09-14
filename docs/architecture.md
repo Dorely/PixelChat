@@ -79,14 +79,38 @@ progress, retries, completion, and interrupted-batch reconciliation. Do not move
 these lifetimes into a Razor component or make background work depend on a
 single UI circuit.
 
-Generation batches persist ordered prompt specifications rather than one
-batch-level prompt. A variant batch has one prompt specification with multiple
-outputs; a concept batch has multiple distinct prompt specifications with one
-output each. Shared references, recipes, size, background, Avoid constraints,
-and provider settings remain batch-wide. Runtime output indexes resolve to one
-specific prompt before provider submission, retry, asset creation, and review.
-The manual Generate form and edit tools create variant batches; the assistant
-uses concept batches for ideation and alternate directions.
+Generation batches persist ordered `GenerationPrompt` and `GenerationOutput` rows.
+Variants have one prompt with several outputs; assistant concept batches have
+several distinct prompts with one output each. Recipe bulk batches accept ordered,
+duplicate-preserving prompts, each with 1–4 outputs, without a fixed prompt-count
+cap. The Generate workspace has Single/Bulk modes and art recipes offer Bulk
+generate. Prompt entry, output cards, and pending review use pagination.
+
+Submission captures recipe guidance/version, reference bytes/order, image model,
+quality, format, and background. Recipe notes remain excluded. A forward migration
+expands historical prompt/state/error JSON arrays into rows, preserves output
+indexes and asset links, and snapshots available recipe/reference data. It removes
+the superseded batch-array columns; per-output state/error payloads retain provider
+diagnostics. Historical batch provider metadata remains readable; new metadata is
+retained per asset. A downgrade requires restoring a database backup.
+
+The app-process image runtime owns one active batch per project. It creates a
+bounded worker set instead of a task for every prompt/output. `ImageRequestScheduler`
+limits actual image provider requests across projects and direct frame edits to
+`Images:MaxParallelRequests` (default four). Only awaited lifecycle transitions
+write output state; live progress updates are serialized in memory and cannot
+supersede saved success. Saving an output asset and its successful queue row is
+one EF transaction. Completion reads asset metadata without loading image BLOBs;
+queue collection reads use split queries to avoid prompt/output cross products.
+
+Stop cancels in-flight work and leaves pending outputs for manual Resume. Resume
+runs queued/cancelled slots; Retry failed runs only failures. Successful and deleted
+outputs are never regenerated. Shutdown reconciliation marks unfinished work stopped
+without dispatching requests. Transient transport/rate/timeout errors use bounded
+retries, exponential backoff, and HTTP Retry-After; invalid requests, account access,
+and quota failures remain actionable errors. Timeout covers response streaming as
+well as headers. Partial preview images remain transient and are released when an
+output finishes. UI generation refreshes are coalesced and reloads serialized.
 
 Recipes are maintained current creative guidance rather than cumulative project
 documentation. Their fields have distinct ownership:
@@ -158,7 +182,10 @@ Opaque requested-alpha results show a warning and remain available for inspectio
 mixed alpha is explicitly not proof that the entire background is transparent.
 The September 14, 2026 account endpoint rejected native-alpha generation and editing for both
 2.5 IDs with HTTP 400; this failure is surfaced, with no silent model/background
-fallback. Deterministic alpha processing and diagnostics were checked separately.
+fallback. Separate `background: auto` plus alpha-prompt diagnostics produced real
+alpha on both models for generation, while edits of those sources returned fully
+opaque pixels. This diagnostic route is not an automatic fallback. Deterministic
+alpha processing and diagnostics were checked separately.
 
 Local media endpoints serve persisted and transient images, masks, sprite
 frames, chat visuals, and motion assets to the local workbench. JavaScript

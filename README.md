@@ -7,6 +7,7 @@ See [VISION.md](VISION.md) for the product direction and [docs/architecture.md](
 ## Current Capabilities
 
 - Project-scoped assistant chat with streaming tool execution, visible intermediate results, persisted transcripts, image context, confirmed tool-history compaction with lookup-safe context notices and threshold-based summaries, and intent-aware concept batches that generate one distinct prompt per output.
+- Recipe bulk generation: paste one prompt per line, edit/remove preview rows, and request 1‚Äì4 images per prompt with shared settings/references. Order and duplicates are preserved, with paginated output/review and no fixed prompt-count cap. Stop, Resume, and Retry failed preserve saved successes; interrupted queues require manual resume.
 - Image generation with same-prompt variant or multi-prompt concept batches, imported-image editing, provider-guidance masks, outpainting-aware canvases whose complete provider output remains authoritative, batch progress, visual review, and kept/rejected asset management.
 - Reusable versioned art and animation recipes with example and guide attachments.
 - A Source -> Frames -> Sheet sprite workflow with region extraction, frame ordering, alignment, cleanup, masked edits, animation preview, and deterministic sprite-sheet builds.
@@ -16,7 +17,7 @@ See [VISION.md](VISION.md) for the product direction and [docs/architecture.md](
 - Native-alpha requests for the two 2.5 image models, source-preserving edit backgrounds, and image inspection with switchable preview backgrounds, decoded alpha statistics, opaque-output warnings, and pixel RGBA values. A painted checkerboard is never treated as transparency.
 - Configurable OpenAI-compatible chat providers and local SQLite persistence.
 
-Native transparency sends the documented Responses image tool settings (`background: "transparent"`, `output_format: "png"`). On September 14, 2026, live account-endpoint generation and edit checks of both 2.5 models returned HTTP 400, ìTransparent background is not supported for this model.î PixelChat surfaces this access/capability failure without a fallback. Native-alpha generation and editing therefore remain unverified on that endpoint; imported alpha and deterministic processing can still be inspected.
+Native transparency sends the documented Responses image tool settings (`background: "transparent"`, `output_format: "png"`). On September 14, 2026, live account-endpoint generation and edit checks of both 2.5 models returned HTTP 400, ‚ÄúTransparent background is not supported for this model.‚Äù PixelChat surfaces this access/capability failure without a fallback. Separate diagnostics using `background: "auto"` and explicit alpha prompts returned genuine decoded alpha for generation on both models, but edits of those alpha images returned fully opaque pixels. The app retains the explicit parameter above; it does not silently substitute the diagnostic route. Imported alpha and deterministic processing can still be inspected.
 
 ## Requirements
 

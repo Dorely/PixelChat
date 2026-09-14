@@ -213,6 +213,9 @@ else
     private ElementReference _assetGridMeasureEl;
     private Guid? _loadedEditorAssetId;
     private CancellationTokenSource? _maskAutosaveCts;
+    private readonly SemaphoreSlim _workbenchReloadLock = new(1, 1);
+    private bool _generationRefreshInProgress;
+    private bool _generationRefreshPending;
     private readonly SemaphoreSlim _maskAutosaveLock = new(1, 1);
     private long _maskAutosaveVersion;
     private bool _maskAutosaveDirty;
@@ -265,6 +268,13 @@ else
     }
 
     private int _generateCount = 1;
+    private bool _bulkGenerate;
+    private IReadOnlyList<string> _bulkPrompts = [];
+    private readonly Dictionary<Guid, int> _batchPages = [];
+    private readonly Dictionary<Guid, int> _pendingPages = [];
+    private const int BatchPageSize = 24;
+    private int _batchHistoryPage;
+
     private string _generateRecipeText = string.Empty;
     private string _generateAnimationRecipeText = string.Empty;
     private string _editRecipeText = string.Empty;
@@ -429,49 +439,55 @@ else
 
     private async Task ReloadWorkbenchAsync(bool acceptBackendMode = false)
     {
-        _workbench = await Workflow.GetWorkbenchAsync(ParseProjectIdOrNull(_projectIdText));
-        _projectIdText = _workbench.Project.Id.ToString();
-        if (_activeWorkspaceProjectId != _workbench.Project.Id)
+        await _workbenchReloadLock.WaitAsync();
+        try
         {
-            _activeWorkspaceProjectId = _workbench.Project.Id;
-            _activeWorkspaceMode = _workbench.Project.ActiveWorkspaceMode;
-            _workspaceModePersistRequestVersion = 0;
-            _workspaceModePersistCompleteVersion = 0;
-        }
-        else if (acceptBackendMode)
-        {
-            AcceptBackendWorkspaceMode(_workbench.Project.ActiveWorkspaceMode);
-        }
-        else if (_workspaceModePersistRequestVersion == _workspaceModePersistCompleteVersion)
-        {
-            _activeWorkspaceMode = _workbench.Project.ActiveWorkspaceMode;
-        }
-        if (_activeWorkspaceMode != WorkspaceMode.Assets)
-            ResetAssetDeleteMode();
+            _workbench = await Workflow.GetWorkbenchAsync(ParseProjectIdOrNull(_projectIdText));
+            _batchHistoryPage = Math.Clamp(_batchHistoryPage, 0, Math.Max(0, (_workbench.Batches.Count - 1) / 20));
+            _projectIdText = _workbench.Project.Id.ToString();
+            if (_activeWorkspaceProjectId != _workbench.Project.Id)
+            {
+                _activeWorkspaceProjectId = _workbench.Project.Id;
+                _activeWorkspaceMode = _workbench.Project.ActiveWorkspaceMode;
+                _workspaceModePersistRequestVersion = 0;
+                _workspaceModePersistCompleteVersion = 0;
+            }
+            else if (acceptBackendMode)
+            {
+                AcceptBackendWorkspaceMode(_workbench.Project.ActiveWorkspaceMode);
+            }
+            else if (_workspaceModePersistRequestVersion == _workspaceModePersistCompleteVersion)
+            {
+                _activeWorkspaceMode = _workbench.Project.ActiveWorkspaceMode;
+            }
+            if (_activeWorkspaceMode != WorkspaceMode.Assets)
+                ResetAssetDeleteMode();
 
-        _loadedEditorAssetId = _activeWorkspaceMode == WorkspaceMode.Edit ? _loadedEditorAssetId : null;
-        if (_editAssetId is Guid editAssetId && !_workbench.Assets.Any(asset => asset.Id == editAssetId))
-            _editAssetId = null;
-        if (_spriteEditorSourceAssetId is Guid spriteSourceAssetId && !_workbench.Assets.Any(asset => asset.Id == spriteSourceAssetId))
-            _spriteEditorSourceAssetId = null;
-        if (_workbench.Project.ActiveSpriteSourceAssetId is Guid activeSpriteSourceAssetId
-            && _workbench.Assets.Any(asset => asset.Id == activeSpriteSourceAssetId))
-        {
-            _spriteEditorSourceAssetId = activeSpriteSourceAssetId;
+            _loadedEditorAssetId = _activeWorkspaceMode == WorkspaceMode.Edit ? _loadedEditorAssetId : null;
+            if (_editAssetId is Guid editAssetId && !_workbench.Assets.Any(asset => asset.Id == editAssetId))
+                _editAssetId = null;
+            if (_spriteEditorSourceAssetId is Guid spriteSourceAssetId && !_workbench.Assets.Any(asset => asset.Id == spriteSourceAssetId))
+                _spriteEditorSourceAssetId = null;
+            if (_workbench.Project.ActiveSpriteSourceAssetId is Guid activeSpriteSourceAssetId
+                && _workbench.Assets.Any(asset => asset.Id == activeSpriteSourceAssetId))
+            {
+                _spriteEditorSourceAssetId = activeSpriteSourceAssetId;
+            }
+            if (_exportModalAssetId is Guid exportModalAssetId && !_workbench.Assets.Any(asset => asset.Id == exportModalAssetId))
+                ResetExportModal();
+            if (_renamingAssetId is Guid renamingAssetId && !_workbench.Assets.Any(asset => asset.Id == renamingAssetId))
+                CancelRenameAsset();
+            _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
+            var allAssetIds = AllWorkbenchAssets().Select(asset => asset.Id).ToHashSet();
+            _recipeAttachments.RemoveAll(attachment => !allAssetIds.Contains(attachment.AssetId));
+            _animationRecipeAttachments.RemoveAll(attachment => !allAssetIds.Contains(attachment.AssetId));
+            _selectedRejectedAssetIds.RemoveWhere(assetId => !_workbench.RejectedAssets.Any(asset => asset.Id == assetId));
+            _bulkDeleteCandidateIds.RemoveWhere(assetId => !_workbench.RejectedAssets.Any(asset => asset.Id == assetId));
+            await RefreshRecipeEditorAfterWorkbenchReloadAsync();
+            await LoadReviewFrameSetsAsync();
+            PublishVisibleState();
         }
-        if (_exportModalAssetId is Guid exportModalAssetId && !_workbench.Assets.Any(asset => asset.Id == exportModalAssetId))
-            ResetExportModal();
-        if (_renamingAssetId is Guid renamingAssetId && !_workbench.Assets.Any(asset => asset.Id == renamingAssetId))
-            CancelRenameAsset();
-        _draftReferenceAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
-        var allAssetIds = AllWorkbenchAssets().Select(asset => asset.Id).ToHashSet();
-        _recipeAttachments.RemoveAll(attachment => !allAssetIds.Contains(attachment.AssetId));
-        _animationRecipeAttachments.RemoveAll(attachment => !allAssetIds.Contains(attachment.AssetId));
-        _selectedRejectedAssetIds.RemoveWhere(assetId => !_workbench.RejectedAssets.Any(asset => asset.Id == assetId));
-        _bulkDeleteCandidateIds.RemoveWhere(assetId => !_workbench.RejectedAssets.Any(asset => asset.Id == assetId));
-        await RefreshRecipeEditorAfterWorkbenchReloadAsync();
-        await LoadReviewFrameSetsAsync();
-        PublishVisibleState();
+        finally { _workbenchReloadLock.Release(); }
     }
 
     private void AcceptBackendWorkspaceMode(WorkspaceMode mode)
@@ -678,10 +694,21 @@ else
             }
 
             <div class="form-stack">
-                <label>
-                    <span>Prompt</span>
-                    <textarea class="form-control prompt-box" rows="8" @bind="_generatePrompt"></textarea>
+                <label>Generation mode
+                    <select class="form-select" @bind="_bulkGenerate">
+                        <option value="false">Single prompt</option>
+                        <option value="true">Bulk — one recipe, multiple prompts</option>
+                    </select>
                 </label>
+                @if (_bulkGenerate)
+                {
+                    <BulkPromptEditor Prompts="@_bulkPrompts" Changed="@(prompts => _bulkPrompts = prompts)" />
+                    <p>Select one art recipe. Shared settings and references apply to every prompt.</p>
+                }
+                else
+                {
+                    <label><span>Prompt</span><textarea class="form-control prompt-box" rows="8" @bind="_generatePrompt"></textarea></label>
+                }
 
                 <div class="form-grid">
                     <label>
@@ -723,8 +750,8 @@ else
                         </select>
                     </label>
                     <label>
-                        <span>Count</span>
-                        <input class="form-control" type="number" min="1" max="@ImageOptions.Value.MaxOutputs" @bind="_generateCount" />
+                        <span>@(_bulkGenerate ? "Images per prompt" : "Count")</span>
+                        <input class="form-control" type="number" min="1" max="@(_bulkGenerate ? 4 : ImageOptions.Value.MaxOutputs)" @bind="_generateCount" />
                     </label>
                 </div>
 
@@ -792,9 +819,17 @@ else
                 @RenderBatchOutputs(activeBatch)
             }
 
-            <div class="section-title">Recent Batches</div>
+            <div class="section-title">Saved Batches</div>
+            @if (_workbench.Batches.Count > 20)
+            {
+                <div class="d-flex gap-2 my-2">
+                    <button type="button" class="btn btn-outline-secondary" disabled="@(_batchHistoryPage == 0)" @onclick="() => _batchHistoryPage--">Previous batches</button>
+                    <span>Page @(_batchHistoryPage + 1)</span>
+                    <button type="button" class="btn btn-outline-secondary" disabled="@((_batchHistoryPage + 1) * 20 >= _workbench.Batches.Count)" @onclick="() => _batchHistoryPage++">Next batches</button>
+                </div>
+            }
             <div class="batch-list">
-                @foreach (var batch in _workbench.Batches.Take(20))
+                @foreach (var batch in _workbench.Batches.Skip(_batchHistoryPage * 20).Take(20))
                 {
                     <button type="button" class="batch-row @(batch.Id == _workbench.Project.ActiveBatchId ? "is-active" : "")"
                             @onclick="() => SelectBatchAsync(batch.Id)">
@@ -849,6 +884,14 @@ else
             .ToDictionary(group => group.Key, group => group.Last())
             ?? [];
 
+        var page = Math.Clamp(_batchPages.GetValueOrDefault(activeBatch.Id), 0, Math.Max(0, (activeBatch.Count - 1) / BatchPageSize));
+        var running = _generationRuntimeSnapshot.Batches.Any(b => b.BatchId == activeBatch.Id && b.IsRunning);
+        <div class="d-flex gap-2 mb-2">
+            <button type="button" class="btn btn-outline-danger" disabled="@(!running || !string.IsNullOrWhiteSpace(_busyText))" @onclick='() => ControlBatchAsync(activeBatch.Id, "stop")'>Stop</button>
+            <button type="button" class="btn btn-outline-primary" disabled="@(running || !string.IsNullOrWhiteSpace(_busyText) || !activeBatch.OutputStates.Any(o => o.Status is GenerationOutputStatus.Queued or GenerationOutputStatus.Cancelled))" @onclick='() => ControlBatchAsync(activeBatch.Id, "resume")'>Resume</button>
+            <button type="button" class="btn btn-outline-primary" disabled="@(running || !string.IsNullOrWhiteSpace(_busyText) || !activeBatch.OutputStates.Any(o => o.Status == GenerationOutputStatus.Failed))" @onclick='() => ControlBatchAsync(activeBatch.Id, "retry")'>Retry failed</button>
+            <span>@activeBatch.OutputStates.Count(o => o.Status is GenerationOutputStatus.Succeeded or GenerationOutputStatus.Deleted) / @activeBatch.Count completed</span>
+        </div>
         <div class="batch-summary">
             <span>@activeBatch.Status</span>
             <span>@activeBatch.ImageModel</span>
@@ -863,15 +906,23 @@ else
         }
         else
         {
-            <p class="batch-prompt">@($"{activeBatch.PromptSpecs.Count} distinct concept prompts")</p>
+            <p class="batch-prompt">@($"{activeBatch.PromptSpecs.Count} ordered prompts")</p>
         }
         @if (!string.IsNullOrWhiteSpace(activeBatch.Error))
         {
             <div class="provider-warning">@activeBatch.Error</div>
         }
 
+        @if (activeBatch.Count > BatchPageSize)
+        {
+            <div class="d-flex gap-2 my-2">
+                <button type="button" class="btn btn-outline-secondary" disabled="@(page == 0)" @onclick="() => _batchPages[activeBatch.Id] = page - 1">Previous</button>
+                <span>Outputs @(page * BatchPageSize + 1)–@Math.Min(activeBatch.Count, (page + 1) * BatchPageSize) of @activeBatch.Count</span>
+                <button type="button" class="btn btn-outline-secondary" disabled="@((page + 1) * BatchPageSize >= activeBatch.Count)" @onclick="() => _batchPages[activeBatch.Id] = page + 1">Next</button>
+            </div>
+        }
         <div class="compare-grid">
-            @for (var index = 0; index < activeBatch.Count; index++)
+            @for (var index = page * BatchPageSize; index < Math.Min(activeBatch.Count, (page + 1) * BatchPageSize); index++)
             {
                 var promptSpec = PromptSpecForOutput(activeBatch, index);
                 @if (outputAssetsByIndex.TryGetValue(index, out var asset))
@@ -923,6 +974,7 @@ else
 
             @foreach (var group in groups)
             {
+                var page = Math.Clamp(_pendingPages.GetValueOrDefault(group.Batch.Id), 0, Math.Max(0, (group.Assets.Count - 1) / BatchPageSize));
                 var keepCount = group.Assets.Count(asset => CurrentReviewMark(asset) == AssetReviewDecisionKind.Keep);
                 var rejectCount = group.Assets.Count - keepCount;
                 <article class="pending-review-batch" @key="group.Batch.Id">
@@ -937,8 +989,16 @@ else
                             <button type="button" class="btn btn-sm btn-primary" @onclick="() => FinishPendingBatchReviewAsync(group.Batch.Id)">Finish: Keep @keepCount, Reject @rejectCount</button>
                         </div>
                     </div>
+                    @if (group.Assets.Count > BatchPageSize)
+                    {
+                        <div class="d-flex gap-2 my-2">
+                            <button type="button" class="btn btn-outline-secondary" disabled="@(page == 0)" @onclick="() => _pendingPages[group.Batch.Id] = page - 1">Previous</button>
+                            <span>Page @(page + 1) / @((group.Assets.Count + BatchPageSize - 1) / BatchPageSize)</span>
+                            <button type="button" class="btn btn-outline-secondary" disabled="@((page + 1) * BatchPageSize >= group.Assets.Count)" @onclick="() => _pendingPages[group.Batch.Id] = page + 1">Next</button>
+                        </div>
+                    }
                     <div class="review-grid pending-review-grid">
-                        @foreach (var asset in group.Assets)
+                        @foreach (var asset in group.Assets.Skip(page * BatchPageSize).Take(BatchPageSize))
                         {
                             @RenderPendingReviewCard(group.Batch, asset)
                         }
@@ -1437,6 +1497,7 @@ else
                             @if (selectedRecipe is not null)
                             {
                                 <button type="button" class="btn btn-outline-secondary" @onclick="() => UseRecipeInGenerate(selectedRecipe)">Use in Generate</button>
+                                <button type="button" class="btn btn-outline-primary" @onclick="async () => { _bulkGenerate = true; _generateCount = 1; await UseRecipeInGenerate(selectedRecipe); }">Bulk generate</button>
                                 <button type="button" class="btn btn-outline-secondary" @onclick="() => AttachRecipeAsync(selectedRecipe)">Attach To Chat</button>
                             }
                         </div>
@@ -2024,6 +2085,7 @@ else
         {
             GenerationOutputStatus.Generating => "Generating",
             GenerationOutputStatus.Running => "Running",
+            GenerationOutputStatus.Cancelled => "Stopped",
             _ => "Queued",
         };
         var message = !string.IsNullOrWhiteSpace(runtimeOutput?.Message)
@@ -2217,9 +2279,24 @@ else
         </div>
     };
 
+    private async Task ControlBatchAsync(Guid batchId, string action)
+    {
+        if (_workbench is null) return;
+        _busyText = action == "stop" ? "Stopping image requests…" : "Starting saved queue…";
+        _error = null;
+        try
+        {
+            if (action == "stop") await ImageRuntime.StopAsync(_workbench.Project.Id, batchId);
+            else await ImageRuntime.ResumeAsync(_workbench.Project.Id, batchId, retryFailed: action == "retry");
+            await ReloadWorkbenchAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busyText = string.Empty; }
+    }
+
     private async Task GenerateAsync()
     {
-        if (_workbench is null || string.IsNullOrWhiteSpace(_generatePrompt))
+        if (_workbench is null || !CanGenerate)
             return;
 
         _busyText = "Starting generation...";
@@ -2229,14 +2306,14 @@ else
         {
             var projectId = _workbench.Project.Id;
             var batch = await ImageRuntime.StartGenerateImagesAsync(projectId, new GenerateImagesRequest(
-                [new GenerationPromptSpec(_generatePrompt, _generateCount)],
+                _bulkGenerate ? _bulkPrompts.Select(prompt => new GenerationPromptSpec(prompt, _generateCount)).ToList() : [new GenerationPromptSpec(_generatePrompt, _generateCount)],
                 _negativePrompt,
                 _generateSize,
                 _generateBackground,
                 SelectedGenerateRecipeIdOrNull(),
                 SelectedGenerateAnimationRecipeIdOrNull(),
                 CurrentReferenceAssetIds(),
-                _workbench.Project.ActiveBatchId));
+                _workbench.Project.ActiveBatchId, IsBulk: _bulkGenerate));
             await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Batches);
             Logger.LogDebug(
                 "Image generation background batch scheduled: projectId={ProjectId}, batchId={BatchId}, count={Count}, size={Size}, promptChars={PromptChars}, referenceImages={ReferenceImageCount}",
@@ -2631,7 +2708,7 @@ else
         if (_workbench is null) return null;
         var asset = _workbench.Assets.Concat(_workbench.PendingReviewAssets).Concat(_workbench.RejectedAssets)
             .FirstOrDefault(item => item.FullImageUrl == imageUrl);
-        return asset?.SourceBatchId is Guid id ? _workbench.Batches.FirstOrDefault(batch => batch.Id == id)?.Background : null;
+        return asset?.RequestedBackground ?? (asset?.SourceBatchId is Guid id ? _workbench.Batches.FirstOrDefault(batch => batch.Id == id)?.Background : null);
     }
 
     private void OpenImageReviewPreview(string title, string imageUrl, string subtitle)
@@ -3510,52 +3587,68 @@ else
     {
         _ = InvokeAsync(async () =>
         {
-            var previousSnapshot = _generationRuntimeSnapshot;
-            var projectId = _workbench?.Project.Id;
-            var previousRunningBatchIds = previousSnapshot.Batches
-                .Where(batch => batch.IsRunning && (projectId is null || batch.ProjectId == projectId.Value))
-                .Select(batch => batch.BatchId)
-                .ToHashSet();
-            var snapshot = ImageRuntime.GetSnapshot();
-            _generationRuntimeSnapshot = snapshot;
-            var startedFollowedBatch = projectId is Guid startedProjectId
-                && snapshot.Batches.Any(batch =>
-                    batch.ProjectId == startedProjectId
-                    && batch.IsRunning
-                    && batch.FollowInBatches
-                    && !previousRunningBatchIds.Contains(batch.BatchId));
-            var completedFollowedBatchIds = previousSnapshot.Batches
-                .Where(batch => batch.IsRunning
-                    && batch.FollowInBatches
-                    && (projectId is null || batch.ProjectId == projectId.Value)
-                    && snapshot.Batches.Any(current => current.BatchId == batch.BatchId && !current.IsRunning))
-                .Select(batch => batch.BatchId)
-                .ToHashSet();
-            var completedBatch = previousRunningBatchIds.Any(batchId =>
-                snapshot.Batches.Any(batch => batch.BatchId == batchId && !batch.IsRunning));
-            var completedOutput = projectId is Guid currentProjectId
-                && HasNewTerminalGenerationOutput(previousSnapshot, snapshot, currentProjectId);
-            var showProgress = WorkspaceShowsGenerationProgress(_activeWorkspaceMode);
-            if (startedFollowedBatch && projectId is Guid runningProjectId)
+            if (_generationRefreshInProgress) { _generationRefreshPending = true; return; }
+            _generationRefreshInProgress = true;
+            try
             {
-                await Workflow.SetWorkspaceModeAsync(runningProjectId, WorkspaceMode.Batches);
-                await ReloadWorkbenchAsync(acceptBackendMode: true);
-            }
-            else if (completedBatch || completedOutput)
-            {
-                await ReloadWorkbenchAsync();
-                if (completedFollowedBatchIds.Count > 0
-                    && _activeWorkspaceMode == WorkspaceMode.Batches
-                    && _workbench is not null
-                    && _workbench.PendingReviewAssets.Any(asset =>
-                        asset.SourceBatchId is Guid batchId && completedFollowedBatchIds.Contains(batchId)))
+                var previousSnapshot = _generationRuntimeSnapshot;
+                var projectId = _workbench?.Project.Id;
+                var previousRunningBatchIds = previousSnapshot.Batches
+                    .Where(batch => batch.IsRunning && (projectId is null || batch.ProjectId == projectId.Value))
+                    .Select(batch => batch.BatchId)
+                    .ToHashSet();
+                var snapshot = ImageRuntime.GetSnapshot();
+                _generationRuntimeSnapshot = snapshot;
+                var startedFollowedBatch = projectId is Guid startedProjectId
+                    && snapshot.Batches.Any(batch =>
+                        batch.ProjectId == startedProjectId
+                        && batch.IsRunning
+                        && batch.FollowInBatches
+                        && !previousRunningBatchIds.Contains(batch.BatchId));
+                var completedFollowedBatchIds = previousSnapshot.Batches
+                    .Where(batch => batch.IsRunning
+                        && batch.FollowInBatches
+                        && (projectId is null || batch.ProjectId == projectId.Value)
+                        && snapshot.Batches.Any(current => current.BatchId == batch.BatchId && !current.IsRunning))
+                    .Select(batch => batch.BatchId)
+                    .ToHashSet();
+                var completedBatch = previousRunningBatchIds.Any(batchId =>
+                    snapshot.Batches.Any(batch => batch.BatchId == batchId && !batch.IsRunning));
+                var completedOutput = projectId is Guid currentProjectId
+                    && HasNewTerminalGenerationOutput(previousSnapshot, snapshot, currentProjectId);
+                var showProgress = WorkspaceShowsGenerationProgress(_activeWorkspaceMode);
+                if (startedFollowedBatch && projectId is Guid runningProjectId)
                 {
-                    await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Review);
+                    await Workflow.SetWorkspaceModeAsync(runningProjectId, WorkspaceMode.Batches);
                     await ReloadWorkbenchAsync(acceptBackendMode: true);
                 }
+                else if (completedBatch || completedOutput)
+                {
+                    await ReloadWorkbenchAsync();
+                    if (completedFollowedBatchIds.Count > 0
+                        && _activeWorkspaceMode == WorkspaceMode.Batches
+                        && _workbench is not null
+                        && _workbench.Batches.Any(batch => completedFollowedBatchIds.Contains(batch.Id) && IsTerminalGenerationStatus(batch.Status))
+                        && _workbench.PendingReviewAssets.Any(asset =>
+                            asset.SourceBatchId is Guid batchId && completedFollowedBatchIds.Contains(batchId)))
+                    {
+                        await Workflow.SetWorkspaceModeAsync(_workbench.Project.Id, WorkspaceMode.Review);
+                        await ReloadWorkbenchAsync(acceptBackendMode: true);
+                    }
+                }
+                if (startedFollowedBatch || completedBatch || completedOutput || showProgress)
+                    StateHasChanged();
             }
-            if (startedFollowedBatch || completedBatch || completedOutput || showProgress)
-                StateHasChanged();
+            catch (Exception ex) { Logger.LogWarning(ex, "Could not refresh image queue progress."); _error = ex.Message; }
+            finally
+            {
+                _generationRefreshInProgress = false;
+                if (_generationRefreshPending)
+                {
+                    _generationRefreshPending = false;
+                    OnImageGenerationRuntimeStateChanged(this, EventArgs.Empty);
+                }
+            }
         });
     }
 
@@ -4567,7 +4660,7 @@ else
     }
 
     private bool CanGenerate =>
-        !string.IsNullOrWhiteSpace(_generatePrompt)
+        (_bulkGenerate ? _bulkPrompts.Count > 0 && SelectedGenerateRecipeIdOrNull() is not null && _generateCount is >= 1 and <= 4 : !string.IsNullOrWhiteSpace(_generatePrompt))
         && string.IsNullOrWhiteSpace(_busyText)
         && _workbench is not null
         && SelectedGenerateAnimationRecipeIsValid()
@@ -4904,7 +4997,7 @@ else
         };
 
     private static string PromptModeLabel(GenerationBatchPromptMode mode) =>
-        mode == GenerationBatchPromptMode.Concepts ? "Concepts" : "Variants";
+        mode switch { GenerationBatchPromptMode.Bulk => "Recipe bulk", GenerationBatchPromptMode.Concepts => "Concepts", _ => "Variants" };
 
     private static GenerationPromptSpec? PromptSpecForOutput(GenerationBatchView batch, int outputIndex)
     {
@@ -4975,7 +5068,7 @@ else
         status is GenerationBatchStatus.Succeeded or GenerationBatchStatus.CompletedWithErrors or GenerationBatchStatus.Failed;
 
     private static bool IsFailedOutputStatus(GenerationOutputStatus status) =>
-        status is GenerationOutputStatus.Failed or GenerationOutputStatus.Cancelled;
+        status == GenerationOutputStatus.Failed;
 
     private static GenerationOutputStateView ResolveOutputState(
         int outputIndex,

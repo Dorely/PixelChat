@@ -66,7 +66,7 @@
 | `MotionClipCatalog.cs` | Motion clip manifest loader/resolver with shared defaults, discovery metadata, and GLTF-backed animation guide validation. |
 | `GltfMotionGuideRenderer.cs` | GLB sampler/renderer that produces yaw/pitch-adjustable mannequin motion guide sheets from cataloged Quaternius clips. |
 | `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, chat visual previews/full images, asset/frame masks, motion-clip GLB assets, legacy sprite-frame previews, and greenfield frame-set frame content/previews. |
-| `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, ordered output execution across variant or concept prompts, awaitable completion, retries, per-output state, partial previews, and interrupted-batch reconciliation. |
+| `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, bounded variant/concept/bulk workers, Stop/Resume/Retry failed, awaitable completion, serialized state, transient previews, and manual shutdown recovery. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
 | `BackgroundRemovalOptions.cs` | Configurable local background-removal sidecar defaults for uv, Python, rembg, model list, acceleration, cache paths, alpha matting, and timeout. |
 | `ImageProviderModels.cs` | Provider abstraction plus generation/edit request, result, streaming progress, structured errors, public size constraints, optional transport-specific reliable edit budgets, and pre-submit validation. |
@@ -74,6 +74,8 @@
 | `ImageEditCanvasService.cs` | Shared edit/outpaint pipeline that prepares logical/provider canvases, masks, and previews; normalizes removable logical-source backgrounds; dilates semantic boundaries; and restores provider output to logical dimensions without overwriting returned pixels from the source. |
 | `EditCanvasPreparationStore.cs` | Fifteen-minute bounded in-memory store for preview-locked asset/frame canvas preparations, limited to four entries per project and validated against source revisions. |
 | `ImageModelSelectionService.cs` | App-wide persisted image model/quality selection and model capability validation. |
+| `GenerationQueueState.cs` | Builds ordered persisted prompt/output/reference snapshots and maps per-output lifecycle state and errors. |
+| `ImageRequestScheduler.cs` | App-wide provider request semaphore, shared by batch workers and direct frame edits. |
 | `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, parallelism, retry, timeout, partial previews, reference defaults, and OpenAI-account reliable edit pixel budget. |
 | `ImageBackgroundModes.cs` | Shared generation background modes and recipe-preference normalization/resolution for natural, opaque, removable-magenta, and distinct native-alpha output. |
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
@@ -106,6 +108,7 @@
 
 | File | Description |
 |------|-------------|
+| `BulkPromptEditor.razor` | Paginated editable one-prompt-per-line bulk input preserving order and duplicates. |
 | `ImageTransparencyInspector.razor` / `.razor.css` / `.razor.js` | Shared preview backgrounds, full-raster alpha statistics, requested-alpha warnings, and pixel inspection. |
 | `ExportPanel.razor` / `.razor.css` | Shared export workflow panel used inline by Sprites and as the Assets export modal, including cleanup steps, local AI removal, preview backgrounds, reset, and PNG/JSON downloads. |
 | `AnimationGuideBuilderModal.razor` / `.razor.css` | Shared Assets > Guides modal for configuring guide grids, previewing GLB motion clips in 3D with yaw/pitch drag, rendering guide previews, and saving SpriteGuide assets. |
@@ -182,7 +185,8 @@
 | `BackgroundRemovalExportCache.cs` | EF entity for cached Local AI export PNGs keyed by source asset bytes, model, rembg version, and processing options. |
 | `ExportStepCache.cs` | EF entity for persisted applied export-step PNGs per source asset and source image hash. |
 | `WorkbenchPreferences.cs` | Singleton persisted app-wide image model/quality preferences. |
-| `GenerationBatch.cs` | EF entity for image generation/edit batches with ordered prompt-specification JSON, provider metadata, outputs/errors, lineage, recipe versions, edit snapshots/transforms, and user/assistant review completion provenance. |
+| `GenerationQueue.cs` | Prompt/output rows and immutable reference-byte snapshots for generation queues. |
+| `GenerationBatch.cs` | EF entity for image generation/edit batches with ordered queue rows, recipe snapshots, provider metadata, lineage, edit transforms, and review completion provenance. |
 | `PromptRecipe.cs` | EF entity backing reusable art recipe prompts with a generation-background preference, private notes, version history, and ordered example/guide attachments. |
 | `PromptRecipeVersion.cs` | EF entity for append-only art recipe name/prompt/notes/background-preference snapshots used by user/assistant saves and restore. |
 | `RecipeAssetAttachment.cs` | EF entity for ordered art/animation recipe asset attachments with example or guide roles. |
@@ -259,6 +263,7 @@
 | `20260730010111_RemoveProtectedPixelPasteback.cs` / `.Designer.cs` | EF migration removing obsolete logical-source snapshots after edit finalization stopped pasting protected source pixels over provider output. |
 | `20260914181503_OpenAIModelsAndNativeTransparency.cs` / `.Designer.cs` | Forward migration for global preferences, batch/edit snapshots, and old transparency aliases. |
 | `20260914182535_PreserveRawProviderImages.cs` / `.Designer.cs` | Retains original provider image bytes separately from finalized assets. |
+| `20260914183811_PersistRecipeBulkQueue.cs` / `.Designer.cs` | Expands batch JSON into ordered queue rows and snapshots available recipe/reference data before removing old columns. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

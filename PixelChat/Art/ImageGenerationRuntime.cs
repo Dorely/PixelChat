@@ -1,4 +1,7 @@
 using System.Globalization;
+using Microsoft.EntityFrameworkCore;
+using PixelChat.Models;
+using PixelChat.Persistence;
 using Microsoft.Extensions.Options;
 
 namespace PixelChat.Art;
@@ -6,12 +9,14 @@ namespace PixelChat.Art;
 public sealed class ImageGenerationRuntime(
     IServiceScopeFactory scopeFactory,
     IOptions<ImageGenerationOptions> imageOptions,
-    ILogger<ImageGenerationRuntime> logger) : IImageGenerationRuntime
+    ILogger<ImageGenerationRuntime> logger,
+    IHostApplicationLifetime lifetime) : IImageGenerationRuntime
 {
     private readonly object _lock = new();
     private readonly Dictionary<Guid, ImageGenerationBatchRuntimeView> _batches = [];
     private readonly Dictionary<Guid, TaskCompletionSource<bool>> _batchCompletions = [];
     private readonly HashSet<Guid> _reservedProjectStarts = [];
+    private readonly Dictionary<Guid, CancellationTokenSource> _cancellations = [];
 
     public event EventHandler? StateChanged;
 
@@ -62,7 +67,7 @@ public sealed class ImageGenerationRuntime(
         }
         NotifyStateChanged();
 
-        _ = Task.Run(() => RunGenerationBatchAsync(projectId, batch.Id, batch.Count, RuntimeBatchKind.Generate));
+        _ = Task.Run(() => RunGenerationBatchAsync(projectId, batch.Id, Enumerable.Range(0, batch.Count).ToArray(), RuntimeBatchKind.Generate));
         return batch;
     }
 
@@ -90,7 +95,7 @@ public sealed class ImageGenerationRuntime(
         }
         NotifyStateChanged();
 
-        _ = Task.Run(() => RunGenerationBatchAsync(projectId, batch.Id, batch.Count, RuntimeBatchKind.Edit));
+        _ = Task.Run(() => RunGenerationBatchAsync(projectId, batch.Id, Enumerable.Range(0, batch.Count).ToArray(), RuntimeBatchKind.Edit));
         return batch;
     }
 
@@ -169,111 +174,151 @@ public sealed class ImageGenerationRuntime(
         lock (_lock)
         {
             _reservedProjectStarts.Remove(projectId);
+            foreach (var oldBatch in _batches.Values.Where(b => b.ProjectId == projectId && !b.IsRunning).ToList())
+                _batches.Remove(oldBatch.BatchId);
             _batches[batch.Id] = runtimeBatch;
             _batchCompletions[batch.Id] = completion;
+            _cancellations[batch.Id] = CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping);
         }
     }
 
-    private async Task RunGenerationBatchAsync(Guid projectId, Guid batchId, int count, RuntimeBatchKind kind)
+    public async Task StopAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default)
     {
-        var parallelLimit = Math.Clamp(imageOptions.Value.MaxParallelRequests, 1, Math.Max(1, imageOptions.Value.MaxOutputs));
-        logger.LogDebug(
-            "Image generation runtime batch starting: projectId={ProjectId}, batchId={BatchId}, count={Count}, parallelLimit={ParallelLimit}",
-            projectId,
-            batchId,
-            count,
-            parallelLimit);
+        Task? completion = null;
+        lock (_lock)
+        {
+            if (_batches.TryGetValue(batchId, out var batch) && batch.ProjectId == projectId && _cancellations.TryGetValue(batchId, out var source))
+            {
+                source.Cancel();
+                completion = _batchCompletions.GetValueOrDefault(batchId)?.Task;
+            }
+        }
+        if (completion is not null) await completion.WaitAsync(cancellationToken);
+    }
 
-        using var throttler = new SemaphoreSlim(parallelLimit, parallelLimit);
-        var tasks = Enumerable.Range(0, count)
-            .Select(outputIndex => RunGenerationOutputAsync(projectId, batchId, outputIndex, throttler, kind))
-            .ToArray();
-
+    public async Task ResumeAsync(Guid projectId, Guid batchId, bool retryFailed = false, CancellationToken cancellationToken = default)
+    {
+        ReserveProjectStart(projectId);
         try
         {
-            await Task.WhenAll(tasks);
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var batch = await db.GenerationBatches.AsSplitQuery().FirstOrDefaultAsync(b => b.ProjectId == projectId && b.Id == batchId, cancellationToken)
+                ?? throw new InvalidOperationException("Batch was not found.");
+            var targets = batch.Outputs.Where(o => retryFailed ? o.Status == GenerationOutputStatus.Failed
+                : o.Status is GenerationOutputStatus.Queued or GenerationOutputStatus.Cancelled).OrderBy(o => o.OutputIndex).ToList();
+            if (targets.Count == 0) throw new InvalidOperationException(retryFailed ? "No failed outputs to retry." : "No stopped outputs to resume. Use Retry failed for errors.");
+            foreach (var target in targets)
+                GenerationQueueState.Apply(target, GenerationQueueState.Read(target) with { Status = GenerationOutputStatus.Queued,
+                    Message = "Waiting for an available worker.", Error = string.Empty, ErrorKind = null, CompletedAt = null, UpdatedAt = DateTime.UtcNow });
+            batch.Status = GenerationBatchStatus.Running;
+            batch.Error = string.Empty;
+            batch.ReviewCompletedBy = null;
+            batch.ReviewCompletedAt = null;
+            var project = await db.Projects.SingleAsync(p => p.Id == projectId, cancellationToken);
+            project.ActiveBatchId = batchId;
+            project.ActiveWorkspaceMode = WorkspaceMode.Batches;
+            project.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(cancellationToken);
+            var workbench = await scope.ServiceProvider.GetRequiredService<IArtWorkflowService>().GetWorkbenchAsync(projectId, cancellationToken);
+            RegisterStartedBatch(projectId, workbench.Batches.Single(b => b.Id == batchId), true);
+            var kind = batch.EditSourceData is { Length: > 0 } ? RuntimeBatchKind.Edit : RuntimeBatchKind.Generate;
+            _ = Task.Run(() => RunGenerationBatchAsync(projectId, batchId, targets.Select(o => o.OutputIndex).ToArray(), kind));
+            NotifyStateChanged();
         }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Image generation runtime batch failed unexpectedly: projectId={ProjectId}, batchId={BatchId}", projectId, batchId);
-        }
+        catch { ReleaseProjectStart(projectId); throw; }
+    }
+
+    private async Task RunGenerationBatchAsync(Guid projectId, Guid batchId, IReadOnlyList<int> indexes, RuntimeBatchKind kind)
+    {
+        CancellationToken token;
+        lock (_lock) token = _cancellations[batchId].Token;
+        var next = -1;
+        var workers = Enumerable.Range(0, Math.Min(indexes.Count, Math.Max(1, imageOptions.Value.MaxParallelRequests)))
+            .Select(async _ =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    var position = Interlocked.Increment(ref next);
+                    if (position >= indexes.Count) break;
+                    var outputIndex = indexes[position];
+                    try
+                    {
+                        var error = await GenerateBatchOutputWithRetriesAsync(projectId, batchId, outputIndex, kind, token);
+                        if (error is not null) await PersistGenerationFailureAsync(projectId, batchId, outputIndex, error);
+                    }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested)
+                    {
+                        await PersistOutputStateAsync(projectId, batchId, new(outputIndex, GenerationOutputStatus.Cancelled,
+                            Message: "Stopped. Resume manually.", Error: "Stopped by user or application shutdown. Resume when ready.", ErrorKind: "cancelled", UpdatedAt: DateTime.UtcNow));
+                        int attempt;
+                        lock (_lock) attempt = _batches[batchId].Outputs.FirstOrDefault(o => o.OutputIndex == outputIndex)?.Attempt ?? 0;
+                        UpdateRuntimeOutput(batchId, outputIndex, GenerationOutputStatus.Cancelled, attempt, "Stopped. Resume manually.", errorKind: "cancelled");
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Could not finish image output {BatchId}/{OutputIndex}", batchId, outputIndex);
+                        await PersistGenerationFailureAsync(projectId, batchId, outputIndex, ex);
+                    }
+                }
+            }).ToArray();
+        try { await Task.WhenAll(workers); }
+        catch (Exception ex) { logger.LogError(ex, "Batch workers stopped unexpectedly: {BatchId}", batchId); }
         finally
         {
             await CompleteBatchAsync(projectId, batchId);
-            MarkBatchNotRunning(batchId);
-            CompleteBatchWaiter(batchId);
+            TaskCompletionSource<bool>? completion;
+            lock (_lock)
+            {
+                if (_cancellations.Remove(batchId, out var source)) source.Dispose();
+                if (_batches.TryGetValue(batchId, out var batch)) _batches[batchId] = batch with { IsRunning = false };
+                _batchCompletions.Remove(batchId, out completion);
+            }
+            completion?.TrySetResult(true);
             NotifyStateChanged();
-            logger.LogDebug("Image generation runtime batch finished: projectId={ProjectId}, batchId={BatchId}", projectId, batchId);
         }
     }
 
-    private async Task RunGenerationOutputAsync(Guid projectId, Guid batchId, int outputIndex, SemaphoreSlim throttler, RuntimeBatchKind kind)
-    {
-        await throttler.WaitAsync();
-        try
-        {
-            var finalError = await GenerateBatchOutputWithRetriesAsync(projectId, batchId, outputIndex, kind);
-            if (finalError is null)
-                return;
-
-            logger.LogWarning(
-                finalError,
-                "Image generation runtime output failed after retries: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}",
-                projectId,
-                batchId,
-                outputIndex);
-            await PersistGenerationFailureAsync(projectId, batchId, outputIndex, finalError);
-        }
-        finally
-        {
-            throttler.Release();
-        }
-    }
-
-    private async Task<Exception?> GenerateBatchOutputWithRetriesAsync(Guid projectId, Guid batchId, int outputIndex, RuntimeBatchKind kind)
+    private async Task<Exception?> GenerateBatchOutputWithRetriesAsync(Guid projectId, Guid batchId, int outputIndex, RuntimeBatchKind kind, CancellationToken cancellationToken)
     {
         var maxAttempts = Math.Clamp(imageOptions.Value.MaxRequestAttempts, 1, 10);
         Exception? finalError = null;
+        int previousAttempts;
+        lock (_lock) previousAttempts = _batches[batchId].Outputs.FirstOrDefault(o => o.OutputIndex == outputIndex)?.Attempt ?? 0;
 
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        for (var currentAttempt = 1; currentAttempt <= maxAttempts; currentAttempt++)
         {
+            var attempt = previousAttempts + currentAttempt;
             try
             {
                 await PersistOutputStateAsync(projectId, batchId, new GenerationOutputStateView(
                     outputIndex,
                     GenerationOutputStatus.Running,
                     attempt,
-                    $"Starting image request attempt {attempt} of {maxAttempts}.",
+                    $"Starting image request attempt {attempt}.",
                     StartedAt: DateTime.UtcNow,
                     UpdatedAt: DateTime.UtcNow));
-                UpdateRuntimeOutput(batchId, outputIndex, GenerationOutputStatus.Running, attempt, $"Starting image request attempt {attempt} of {maxAttempts}.");
+                UpdateRuntimeOutput(batchId, outputIndex, GenerationOutputStatus.Running, attempt, $"Starting image request attempt {attempt}.");
 
                 var progress = new ActionProgress(update => HandleProviderProgress(projectId, batchId, outputIndex, attempt, update));
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
                 if (kind == RuntimeBatchKind.Edit)
-                    await workflow.GenerateEditBatchOutputAsync(projectId, batchId, outputIndex, CancellationToken.None, progress);
+                    await workflow.GenerateEditBatchOutputAsync(projectId, batchId, outputIndex, cancellationToken, progress);
                 else
-                    await workflow.GenerateBatchOutputAsync(projectId, batchId, outputIndex, CancellationToken.None, progress);
+                    await workflow.GenerateBatchOutputAsync(projectId, batchId, outputIndex, cancellationToken, progress);
 
-                await PersistOutputStateAsync(projectId, batchId, new GenerationOutputStateView(
-                    outputIndex,
-                    GenerationOutputStatus.Succeeded,
-                    attempt,
-                    "Image saved.",
-                    UpdatedAt: DateTime.UtcNow,
-                    CompletedAt: DateTime.UtcNow));
                 UpdateRuntimeOutput(batchId, outputIndex, GenerationOutputStatus.Succeeded, attempt, "Image saved.", partialImageDataUrl: null);
                 return null;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 finalError = ex;
-                if (attempt >= maxAttempts || !IsTransientImageGenerationError(ex))
+                if (currentAttempt >= maxAttempts || !IsTransientImageGenerationError(ex))
                     break;
 
                 var delay = ImageGenerationRetryDelay(ex, attempt);
-                var message = $"Retrying after provider error, attempt {attempt + 1} of {maxAttempts}.";
+                var message = $"Retrying after provider error, attempt {attempt + 1}.";
                 await PersistOutputStateAsync(projectId, batchId, new GenerationOutputStateView(
                     outputIndex,
                     GenerationOutputStatus.Running,
@@ -283,7 +328,7 @@ public sealed class ImageGenerationRuntime(
                     ErrorKind: TryReadErrorKind(ex),
                     UpdatedAt: DateTime.UtcNow));
                 UpdateRuntimeOutput(batchId, outputIndex, GenerationOutputStatus.Running, attempt, message, error: ex.Message, errorKind: TryReadErrorKind(ex));
-                await Task.Delay(delay);
+                await Task.Delay(delay, cancellationToken);
             }
         }
 
@@ -292,6 +337,12 @@ public sealed class ImageGenerationRuntime(
 
     private void HandleProviderProgress(Guid projectId, Guid batchId, int outputIndex, int attempt, ImageProviderProgress update)
     {
+        lock (_lock)
+        {
+            var current = _batches.GetValueOrDefault(batchId)?.Outputs.FirstOrDefault(o => o.OutputIndex == outputIndex);
+            if (current is null || current.Attempt > attempt || current.Status is GenerationOutputStatus.Succeeded or GenerationOutputStatus.Cancelled or GenerationOutputStatus.Deleted)
+                return;
+        }
         var status = update.Kind switch
         {
             ImageProviderProgressKind.Generating or ImageProviderProgressKind.PartialImage => GenerationOutputStatus.Generating,
@@ -314,23 +365,8 @@ public sealed class ImageGenerationRuntime(
             eventCount: update.EventCount,
             partialImageDataUrl: update.PartialImageDataUrl);
 
-        if (update.Kind != ImageProviderProgressKind.PartialImage)
-        {
-            PersistOutputStateFireAndForget(projectId, batchId, new GenerationOutputStateView(
-                outputIndex,
-                status,
-                attempt,
-                message,
-                status == GenerationOutputStatus.Failed ? update.Message : "",
-                update.ErrorKind,
-                update.RequestId,
-                update.ResponseId,
-                update.CallId,
-                update.LastEventType,
-                update.EventCount,
-                UpdatedAt: DateTime.UtcNow,
-                CompletedAt: status == GenerationOutputStatus.Failed ? DateTime.UtcNow : null));
-        }
+        // Live progress is serialized under the runtime lock. Only awaited lifecycle
+        // transitions are persisted, so delayed callbacks cannot overwrite saved success.
     }
 
     private async Task PersistGenerationFailureAsync(Guid projectId, Guid batchId, int outputIndex, Exception exception)
@@ -351,7 +387,11 @@ public sealed class ImageGenerationRuntime(
         await using var scope = scopeFactory.CreateAsyncScope();
         var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
         await workflow.MarkGenerationBatchOutputFailedAsync(projectId, batchId, outputError, CancellationToken.None);
-        UpdateRuntimeOutput(batchId, outputIndex, GenerationOutputStatus.Failed, attempt: 0, "Image request failed.", error: outputError.Error, errorKind: outputError.ErrorKind);
+        int attempt;
+        lock (_lock) attempt = _batches.GetValueOrDefault(batchId)?.Outputs.FirstOrDefault(o => o.OutputIndex == outputIndex)?.Attempt ?? 0;
+        UpdateRuntimeOutput(batchId, outputIndex, GenerationOutputStatus.Failed, attempt, "Image request failed.",
+            error: outputError.Error, errorKind: outputError.ErrorKind, requestId: outputError.RequestId,
+            responseId: outputError.ResponseId, callId: outputError.CallId, lastEventType: outputError.LastEventType, eventCount: outputError.EventCount);
     }
 
     private async Task CompleteBatchAsync(Guid projectId, Guid batchId)
@@ -373,13 +413,6 @@ public sealed class ImageGenerationRuntime(
         await using var scope = scopeFactory.CreateAsyncScope();
         var workflow = scope.ServiceProvider.GetRequiredService<IArtWorkflowService>();
         await workflow.MarkGenerationBatchOutputStateAsync(projectId, batchId, state, CancellationToken.None);
-    }
-
-    private void PersistOutputStateFireAndForget(Guid projectId, Guid batchId, GenerationOutputStateView state)
-    {
-        _ = PersistOutputStateAsync(projectId, batchId, state).ContinueWith(
-            task => logger.LogWarning(task.Exception, "Image generation runtime could not persist output state: projectId={ProjectId}, batchId={BatchId}, outputIndex={OutputIndex}", projectId, batchId, state.OutputIndex),
-            TaskContinuationOptions.OnlyOnFaulted);
     }
 
     private void UpdateRuntimeOutput(
@@ -416,34 +449,14 @@ public sealed class ImageGenerationRuntime(
                     callId,
                     lastEventType,
                     eventCount,
-                    partialImageDataUrl ?? batch.Outputs.FirstOrDefault(output => output.OutputIndex == outputIndex)?.PartialImageDataUrl))
+                    status is GenerationOutputStatus.Succeeded or GenerationOutputStatus.Failed or GenerationOutputStatus.Cancelled ? null
+                        : partialImageDataUrl ?? batch.Outputs.FirstOrDefault(output => output.OutputIndex == outputIndex)?.PartialImageDataUrl))
                 .OrderBy(output => output.OutputIndex)
                 .ToList();
             _batches[batchId] = batch with { Outputs = outputs };
         }
 
         NotifyStateChanged();
-    }
-
-    private void MarkBatchNotRunning(Guid batchId)
-    {
-        lock (_lock)
-        {
-            if (_batches.TryGetValue(batchId, out var batch))
-                _batches[batchId] = batch with { IsRunning = false };
-        }
-    }
-
-    private void CompleteBatchWaiter(Guid batchId)
-    {
-        TaskCompletionSource<bool>? completion;
-        lock (_lock)
-        {
-            if (!_batchCompletions.Remove(batchId, out completion))
-                return;
-        }
-
-        completion.TrySetResult(true);
     }
 
     private void NotifyStateChanged() => StateChanged?.Invoke(this, EventArgs.Empty);
@@ -478,6 +491,12 @@ public sealed class ImageGenerationRuntime(
 
     private static bool IsTransientImageGenerationError(Exception exception)
     {
+        if (exception is ImageProviderException provider)
+        {
+            if (provider.ErrorKind is "account_access" or "account_quota" or "invalid_request" or "image_model_invalid" || provider.StatusCode is 400 or 401 or 403) return false;
+            if (provider.StatusCode is 408 or 429 or >= 500 || provider.ErrorKind == "timeout") return true;
+        }
+        if (exception is HttpRequestException) return true;
         for (Exception? current = exception; current is not null; current = current.InnerException)
         {
             var message = current.Message;
@@ -495,6 +514,8 @@ public sealed class ImageGenerationRuntime(
 
     private static TimeSpan ImageGenerationRetryDelay(Exception exception, int failedAttempt)
     {
+        if (exception is ImageProviderException { RetryAfter: { } retryAfter } && retryAfter > TimeSpan.Zero)
+            return retryAfter;
         for (Exception? current = exception; current is not null; current = current.InnerException)
         {
             var providerDelay = TryReadProviderRetryDelay(current.Message);

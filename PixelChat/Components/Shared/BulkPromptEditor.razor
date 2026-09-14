@@ -1,0 +1,56 @@
+<div class="form-stack">
+    <label>One prompt per line
+        <textarea class="form-control" rows="8" @bind="_input" placeholder="Blue healing potion&#10;Iron sword&#10;Wooden shield"></textarea>
+    </label>
+    <button type="button" class="btn btn-outline-secondary" @onclick="ParseAsync">Preview prompts</button>
+    <span>@_rows.Count prompt(s). Blank lines are ignored; order and duplicates are preserved.</span>
+    @foreach (var row in _rows.Skip(_page * PageSize).Take(PageSize))
+    {
+        <div class="d-flex gap-2" @key="row">
+            <input class="form-control" aria-label="Prompt" @bind="row.Text" @bind:after="PublishAsync" />
+            <button type="button" class="btn btn-outline-danger" @onclick="() => RemoveAsync(row)">Remove</button>
+        </div>
+    }
+    @if (_rows.Count > PageSize)
+    {
+        <div class="d-flex gap-2">
+            <button type="button" class="btn btn-outline-secondary" disabled="@(_page == 0)" @onclick="() => _page--">Previous</button>
+            <span>Page @(_page + 1) / @PageCount</span>
+            <button type="button" class="btn btn-outline-secondary" disabled="@(_page + 1 >= PageCount)" @onclick="() => _page++">Next</button>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<string> Prompts { get; set; } = [];
+    [Parameter] public EventCallback<IReadOnlyList<string>> Changed { get; set; }
+    private const int PageSize = 50;
+    private string _input = string.Empty;
+    private List<PromptRow> _rows = [];
+    private int _page;
+    private int PageCount => Math.Max(1, (_rows.Count + PageSize - 1) / PageSize);
+    protected override void OnInitialized()
+    {
+        _rows = Prompts.Select(text => new PromptRow { Text = text }).ToList();
+        _input = string.Join("\n", Prompts);
+    }
+    private async Task ParseAsync()
+    {
+        _rows = _input.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0).Select(line => new PromptRow { Text = line }).ToList();
+        _page = 0;
+        await PublishAsync();
+    }
+    private async Task RemoveAsync(PromptRow row)
+    {
+        _rows.Remove(row);
+        _page = Math.Min(_page, PageCount - 1);
+        await PublishAsync();
+    }
+    private Task PublishAsync()
+    {
+        var prompts = _rows.Select(row => row.Text.Trim()).Where(text => text.Length > 0).ToList();
+        _input = string.Join("\n", prompts);
+        return Changed.InvokeAsync(prompts);
+    }
+    private sealed class PromptRow { public string Text { get; set; } = string.Empty; }
+}

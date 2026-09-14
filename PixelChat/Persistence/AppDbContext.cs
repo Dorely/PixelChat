@@ -9,6 +9,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
 {
     private const int MaxLockedSaveAttempts = 6;
 
+    public DbSet<GenerationPrompt> GenerationPrompts => Set<GenerationPrompt>();
+    public DbSet<GenerationOutput> GenerationOutputs => Set<GenerationOutput>();
+    public DbSet<GenerationReference> GenerationReferences => Set<GenerationReference>();
     public DbSet<WorkbenchPreferences> WorkbenchPreferences => Set<WorkbenchPreferences>();
     public DbSet<LlmProvider> LlmProviders => Set<LlmProvider>();
     public DbSet<OAuthToken> OAuthTokens => Set<OAuthToken>();
@@ -210,8 +213,27 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        modelBuilder.Entity<GenerationPrompt>(entity =>
+        {
+            entity.HasKey(e => new { e.BatchId, e.Index });
+            entity.HasOne(e => e.Batch).WithMany(b => b.Prompts).HasForeignKey(e => e.BatchId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<GenerationOutput>(entity =>
+        {
+            entity.HasKey(e => new { e.BatchId, e.OutputIndex });
+            entity.Property(e => e.Status).HasConversion<string>();
+            entity.HasIndex(e => new { e.BatchId, e.Status, e.OutputIndex });
+            entity.HasOne(e => e.Batch).WithMany(b => b.Outputs).HasForeignKey(e => e.BatchId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<GenerationReference>(entity =>
+        {
+            entity.HasKey(e => new { e.BatchId, e.Index });
+            entity.HasOne(e => e.Batch).WithMany(b => b.References).HasForeignKey(e => e.BatchId).OnDelete(DeleteBehavior.Cascade);
+        });
         modelBuilder.Entity<GenerationBatch>(entity =>
         {
+            entity.Navigation(e => e.Prompts).AutoInclude();
+            entity.Navigation(e => e.Outputs).AutoInclude();
             entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });
             entity.HasIndex(e => e.AnimationRecipeId);
             entity.Property(e => e.Status).HasConversion<string>();
@@ -219,8 +241,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.Property(e => e.Background).HasDefaultValue("auto");
             entity.Property(e => e.Quality).HasDefaultValue("auto");
             entity.Property(e => e.OutputFormat).HasDefaultValue("png");
-            entity.Property(e => e.PromptSpecsJson).HasDefaultValue("[]");
-            entity.Property(e => e.OutputStatesJson).HasDefaultValue("[]");
             entity.Property(e => e.EditCanvasTransformJson).HasDefaultValue(string.Empty);
 
             entity.HasOne(e => e.Project)

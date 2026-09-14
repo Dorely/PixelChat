@@ -11,7 +11,13 @@ public class GenerationBatch
     public string Provider { get; set; } = string.Empty;
     public string MainlineModel { get; set; } = string.Empty;
     public string ImageModel { get; set; } = string.Empty;
-    public string PromptSpecsJson { get; set; } = "[]";
+    public bool IsBulk { get; set; }
+    public string RecipePromptSnapshot { get; set; } = string.Empty;
+    public string AnimationPromptSnapshot { get; set; } = string.Empty;
+    public string AnimationNameSnapshot { get; set; } = string.Empty;
+    public ICollection<GenerationPrompt> Prompts { get; set; } = [];
+    public ICollection<GenerationOutput> Outputs { get; set; } = [];
+    public ICollection<GenerationReference> References { get; set; } = [];
     public string NegativePrompt { get; set; } = string.Empty;
     public string Size { get; set; } = string.Empty;
     public string Background { get; set; } = "auto";
@@ -37,8 +43,6 @@ public class GenerationBatch
     public int? AnimationRecipeVersion { get; set; }
     public GenerationBatchStatus Status { get; set; } = GenerationBatchStatus.Queued;
     public string Error { get; set; } = string.Empty;
-    public string OutputErrorsJson { get; set; } = "[]";
-    public string OutputStatesJson { get; set; } = "[]";
     public string AgentSummary { get; set; } = string.Empty;
     public string RawProviderResponseJson { get; set; } = string.Empty;
     public AssetReviewActor? ReviewCompletedBy { get; set; }
@@ -56,5 +60,6 @@ public enum GenerationBatchStatus
     Running,
     Succeeded,
     CompletedWithErrors,
-    Failed
+    Failed,
+    Stopped
 }

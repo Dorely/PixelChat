@@ -40,7 +40,6 @@ public interface IArtWorkflowService
     Task MarkGenerationBatchOutputFailedAsync(Guid projectId, Guid batchId, GenerationOutputErrorView outputError, CancellationToken cancellationToken = default);
     Task<GenerationBatchView> CompleteGenerationBatchAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
     Task ReconcileInterruptedGenerationBatchesAsync(CancellationToken cancellationToken = default);
-    Task<GenerationBatchView> GenerateImagesAsync(Guid projectId, GenerateImagesRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> ImportAssetAsync(Guid projectId, ImportAssetRequest request, CancellationToken cancellationToken = default);
     Task<ArtAssetView> CreateCropAssetAsync(Guid projectId, CropAssetRequest request, CancellationToken cancellationToken = default);
     Task<ExtractRegionAsAssetResult> ExtractRegionAsAssetAsync(Guid projectId, ExtractRegionAsAssetRequest request, CancellationToken cancellationToken = default);

@@ -9,6 +9,7 @@ namespace PixelChat.Art;
 
 public sealed class OpenAIAccountImageProvider(
     ILlmProviderService providerService,
+    ImageRequestScheduler scheduler,
     IOpenAIAccountAuthService openAIAuth,
     IHttpClientFactory httpClientFactory,
     IOptions<ImageGenerationOptions> options,
@@ -120,11 +121,11 @@ public sealed class OpenAIAccountImageProvider(
     {
         var provider = await providerService.GetByNameAsync(OpenAIAccountProvider.Name, cancellationToken);
         if (provider is null || !OpenAIAccountProvider.IsOpenAIAccount(provider))
-            throw new InvalidOperationException("No OpenAI account provider is configured. Connect OpenAI in Providers first.");
+            throw new ImageProviderException("No OpenAI account provider is configured. Connect OpenAI in Providers first.", "account_access");
 
         var token = await openAIAuth.GetValidTokenAsync(provider.Id, cancellationToken);
         if (string.IsNullOrWhiteSpace(token))
-            throw new InvalidOperationException("Connect OpenAI in Providers before generating images.");
+            throw new ImageProviderException("Connect OpenAI in Providers before generating images.", "account_access");
 
         return new OpenAIImageConnection(token, OpenAIAccountProvider.ExtractAccountId(token));
     }
@@ -139,6 +140,11 @@ public sealed class OpenAIAccountImageProvider(
         CancellationToken cancellationToken,
         IProgress<ImageProviderProgress>? progress)
     {
+        using var lease = await scheduler.EnterAsync(cancellationToken);
+        var callerToken = cancellationToken;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.Value.RequestTimeoutSeconds, 1, 3600)));
+        cancellationToken = deadline.Token;
         var json = JsonSerializer.Serialize(payload);
         var stopwatch = Stopwatch.StartNew();
         string? requestId = null;
@@ -178,7 +184,8 @@ public sealed class OpenAIAccountImageProvider(
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
-            var errorKind = ClassifyImageError(errorBody);
+            var errorKind = response.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden
+                ? "account_access" : (int)response.StatusCode == 400 ? "invalid_request" : ClassifyImageError(errorBody);
             var errorMessage = ReadErrorMessage(errorBody) ?? errorBody;
             logger.LogError(
                 "OpenAI account image API error: statusCode={StatusCode}, requestId={RequestId}, action={Action}, model={MainlineModel}, imageModel={ImageModel}, elapsedMs={ElapsedMs}, errorKind={ErrorKind}, body={Body}",
@@ -194,7 +201,8 @@ public sealed class OpenAIAccountImageProvider(
                 $"OpenAI account image request returned {(int)response.StatusCode} ({errorKind}): {errorMessage}",
                 errorKind,
                 requestId,
-                statusCode: (int)response.StatusCode);
+                statusCode: (int)response.StatusCode,
+                retryAfter: response.Headers.RetryAfter?.Delta ?? (response.Headers.RetryAfter?.Date is { } retryDate ? retryDate - DateTimeOffset.UtcNow : null));
             ReportProgress(progress, FailedProgress(exception, ImageProviderProgressKind.Failed));
             throw exception;
         }
@@ -388,7 +396,7 @@ public sealed class OpenAIAccountImageProvider(
         ReportProgress(progress, FailedProgress(missingImageException, ImageProviderProgressKind.StreamEndedWithoutImage));
         throw missingImageException;
         }
-        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (!callerToken.IsCancellationRequested)
         {
             var timeoutException = new ImageProviderException(
                 $"OpenAI account image request timed out after {timeoutSeconds} seconds.",
@@ -518,6 +526,9 @@ public sealed class OpenAIAccountImageProvider(
                 ResponseId = responseId,
                 CallId = callId,
                 RevisedPrompt = ReadString(item, "revised_prompt"),
+                ReportedModel = ReadString(item, "model"),
+                ReportedBackground = ReadString(item, "background"),
+                ReportedQuality = ReadString(item, "quality"),
                 OutputFormat = outputFormat,
             });
     }
@@ -784,6 +795,11 @@ public sealed class OpenAIAccountImageProvider(
     {
         if (string.IsNullOrWhiteSpace(message))
             return "unknown";
+
+        if (message.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("billing", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("quota exceeded", StringComparison.OrdinalIgnoreCase))
+            return "account_quota";
 
         if (IsCodexImageInputRateLimit(message))
             return "codex_image_input_rate_limit";

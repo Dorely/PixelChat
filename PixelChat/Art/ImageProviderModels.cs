@@ -97,7 +97,8 @@ public sealed class ImageProviderException : InvalidOperationException
         int? statusCode = null,
         string? lastEventType = null,
         int eventCount = 0,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        TimeSpan? retryAfter = null)
         : base(message, innerException)
     {
         ErrorKind = string.IsNullOrWhiteSpace(errorKind) ? "unknown" : errorKind.Trim();
@@ -107,8 +108,10 @@ public sealed class ImageProviderException : InvalidOperationException
         StatusCode = statusCode;
         LastEventType = lastEventType;
         EventCount = eventCount;
+        RetryAfter = retryAfter;
     }
 
+    public TimeSpan? RetryAfter { get; }
     public string ErrorKind { get; }
     public string? RequestId { get; }
     public string? ResponseId { get; }

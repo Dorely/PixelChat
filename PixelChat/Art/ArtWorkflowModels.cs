@@ -53,7 +53,8 @@ public sealed record ArtAssetView(
     AssetReviewStatus ReviewStatus,
     AssetReviewDecisionView? CurrentReviewDecision,
     AssetReviewDecisionView? LatestAgentReviewDecision,
-    bool HasRawProviderOutput = false);
+    bool HasRawProviderOutput = false,
+    string? RequestedBackground = null);
 
 public sealed record AssetReviewDecisionView(
     Guid Id,
@@ -282,7 +283,8 @@ public sealed record GenerationBatchView(
 public enum GenerationBatchPromptMode
 {
     Variants,
-    Concepts
+    Concepts,
+    Bulk
 }
 
 public sealed record GenerationPromptSpec(
@@ -435,7 +437,8 @@ public sealed record GenerateImagesRequest(
     IReadOnlyList<Guid> ReferenceAssetIds,
     Guid? ParentBatchId,
     string? ImageModel = null,
-    string? OutputLabel = null);
+    string? OutputLabel = null,
+    bool IsBulk = false);
 
 public sealed record EditImageRequest(
     Guid SourceAssetId,

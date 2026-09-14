@@ -9,6 +9,8 @@ public interface IImageGenerationRuntime
     Task<GenerationBatchView> StartGenerateImagesAsync(Guid projectId, GenerateImagesRequest request, CancellationToken cancellationToken = default);
     Task<GenerationBatchView> StartEditImageAsync(Guid projectId, EditImageRequest request, CancellationToken cancellationToken = default);
     Task<bool> WaitForBatchCompletionAsync(Guid batchId, TimeSpan timeout, CancellationToken cancellationToken = default);
+    Task StopAsync(Guid projectId, Guid batchId, CancellationToken cancellationToken = default);
+    Task ResumeAsync(Guid projectId, Guid batchId, bool retryFailed = false, CancellationToken cancellationToken = default);
     Task ReconcileInterruptedBatchesAsync(CancellationToken cancellationToken = default);
 }
 

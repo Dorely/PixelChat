@@ -156,7 +156,7 @@
 
 .workbench-topbar {
     display: grid;
-    grid-template-columns: minmax(180px, 1fr) minmax(320px, 460px) auto auto;
+    grid-template-columns: minmax(180px, 1fr) minmax(390px, 600px) auto auto;
     align-items: center;
     gap: 0.75rem;
     padding: 0.65rem 0.85rem;
@@ -201,9 +201,13 @@
 
 .project-controls {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr) auto;
+    grid-template-columns: minmax(110px, 1fr) minmax(185px, 1.6fr) minmax(75px, 0.6fr);
     gap: 0.45rem;
     min-width: 0;
+}
+
+.project-controls > small {
+    grid-column: 1 / -1;
 }
 
 .mode-tabs,
@@ -251,12 +255,16 @@
 }
 
 .chat-pane {
+    display: flex;
+    flex-direction: column;
     border-right: 1px solid #ccd5df;
     background: #f6f7f9;
 }
 
 .chat-pane ::deep .workbench-chat {
-    height: 100%;
+    height: auto;
+    flex: 1;
+    min-height: 0;
 }
 
 .chat-compaction-result {
