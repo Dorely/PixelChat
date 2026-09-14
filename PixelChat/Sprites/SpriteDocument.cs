@@ -13,6 +13,7 @@ public sealed class SpriteDocument
     public List<SpriteClip> Clips { get; set; } = [];
     public List<SpriteSlice> Slices { get; set; } = [];
     public SpriteSelection? Selection { get; set; }
+    public SpriteClipboard? Clipboard { get; set; }
     public Dictionary<string, string> Provenance { get; set; } = [];
     public static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     public string Serialize() => JsonSerializer.Serialize(this, JsonOptions);
@@ -70,7 +71,9 @@ public sealed record SpritePoint(int X, int Y);
 public sealed record SpriteRect(int X, int Y, int Width, int Height);
 public sealed record SpriteSlice(string Name, SpriteRect Rect);
 public sealed record SpriteSelection(Guid FrameId, List<SpritePoint> Polygon, string? Color = null);
+public sealed record SpriteClipboard(string BitmapHash, int Width, int Height);
 public sealed record SpriteSnapshot(Guid DocumentId, long Revision, SpriteDocument Document);
+public sealed record SpriteEditorFocus(Guid FrameId, Guid LayerId, long Revision);
 public sealed record SpriteBatch(Guid DocumentId, long ExpectedRevision, string Label, IReadOnlyList<JsonElement> Operations,
     string Source = "user", string? TaskId = null, string? Script = null);
 public sealed record SpriteCommit(Guid DocumentId, long Revision, Guid HistoryId, int OperationCount);

@@ -408,8 +408,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => new { e.ProjectId, e.UpdatedAt });
             entity.HasIndex(e => e.SourceAssetId);
             entity.Property(e => e.OrderedFrameIdsJson).HasDefaultValue("[]");
-            entity.Property(e => e.PlaybackSettingsJson).HasDefaultValue("{}");
-            entity.Property(e => e.AlignmentSettingsJson).HasDefaultValue("{}");
 
             entity.HasOne(e => e.Project)
                 .WithMany(p => p.FrameSets)

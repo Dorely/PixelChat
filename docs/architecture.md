@@ -89,7 +89,7 @@ single UI circuit.
 Generation batches persist ordered `GenerationPrompt` and `GenerationOutput` rows.
 Variants have one prompt with several outputs; assistant concept batches have
 several distinct prompts with one output each. Recipe bulk batches accept ordered,
-duplicate-preserving prompts, each with 1–4 outputs, without a fixed prompt-count
+duplicate-preserving prompts, each with 1â€“4 outputs, without a fixed prompt-count
 cap. The Generate workspace has Single/Bulk modes and art recipes offer Bulk
 generate. Prompt entry, output cards, and pending review use pagination.
 
@@ -288,3 +288,10 @@ do not validate Electron packaging, OAuth, provider calls, image generation,
 rembg provisioning or acceleration, or OS-specific behavior. Exercise the
 relevant integration on the relevant platform before claiming it works, and
 report anything not exercised.
+
+
+Native sprite editor UI
+
+`SpriteSheetWorkspace` manages source imports and the active document. `NativeSpriteEditor` sends complete pointer gestures as revision-checked command batches; its canvas displays server-rendered pixels and transient stroke previews. Rectangle/polygon/color selections, clipboard contents, layers, frame timing, clips, pivots, and history belong to document state. `SpriteDocumentEvents` triggers reloads after agent or manual commits. Revision-specific media URLs keep previews tied to the state they label. `SpriteTimeline` defines frame order for native playback and Review; the shared animation preview consumes saved durations and loop policy.
+
+For the authorized browser smoke check, run a host against an isolated database in Development (unpublished builds need development static-web-assets resolution), then run `node PixelChat.Tests/sprite-editor.browser.cjs`. Supply `PIXELCHAT_PLAYWRIGHT_MODULE` if Playwright is outside local module resolution and `PIXELCHAT_TEST_URL` for a different host. The script closes its headless Edge instance; terminate the host afterward. The check creates a named fixture sprite in that isolated database. Optional `PIXELCHAT_TEST_SCREENSHOT` saves a screenshot.

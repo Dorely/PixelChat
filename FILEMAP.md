@@ -145,7 +145,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` / `.razor.js` | Canvas-first Sprites workspace bound to greenfield SpriteRegion/FrameSet/Frame services. Provides Source/Frames/Sheet/Export modes, source-region drawing/editing, frame alignment, preview-locked modal masked/outpaint edits with prepared source/overlay images, bottom region/frame strips, sheet build, export, and disabled history placeholders. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` | Native sprite document chooser, blank creation, image/region import, and visible-state integration. |
 
 ### Llm/
 
@@ -307,3 +307,10 @@
 | `20260914205129_NativeSpriteDocuments.cs` / `.Designer.cs` | Forward native document schema transition. |
 | `20260914205804_RetireMutableFrameBitmaps.cs` / `.Designer.cs` | Forward native document schema transition. |
 | `20260914210308_RemoveDeferredSpriteHistory.cs` / `.Designer.cs` | Forward native document schema transition. |
+
+| `PixelChat/Components/Sprites/NativeSpriteEditor.razor` / `.razor.css` / `.razor.js` | Revision-aware canvas, drawing and selection tools, layers, transforms, clips, timeline, pivots, history, and script-ready server commands. |
+| `PixelChat/Sprites/SpriteTimeline.cs` | Shared clip ordering and duration-aware forward/reverse/ping-pong timing. |
+| `PixelChat/Sprites/SpriteDocumentEvents.cs` | App-process document revision notifications for live manual/agent editing. |
+| `PixelChat.Tests/SpriteTimelineTests.cs` | Unequal timing, one-shot, reverse, and ping-pong regression checks. |
+| `PixelChat.Tests/sprite-editor.browser.cjs` | Headless Edge checks for canvas coordinates, pixel refresh, layers, timing, history, and reopening. |
+| `20260914212522_NativeClipPlayback.cs` / `.Designer.cs` | Removes unused playback/alignment settings now represented by native document clips. |

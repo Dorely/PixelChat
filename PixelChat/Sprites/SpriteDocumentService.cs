@@ -20,7 +20,7 @@ public interface ISpriteDocumentService
 }
 
 /// <summary>Single writer for sprite state. SQLite compare-and-swap and history share one transaction.</summary>
-public sealed class SpriteDocumentService(AppDbContext db) : ISpriteDocumentService
+public sealed class SpriteDocumentService(AppDbContext db, SpriteDocumentEvents? events = null) : ISpriteDocumentService
 {
     public async Task<SpriteSnapshot> CreateAsync(Guid projectId, string name, int width, int height, string artMode, CancellationToken cancellationToken = default)
     {
@@ -64,6 +64,8 @@ public sealed class SpriteDocumentService(AppDbContext db) : ISpriteDocumentServ
     public async Task<Dictionary<string, SpriteBitmap>> LoadBitmapsAsync(SpriteDocument document, CancellationToken cancellationToken = default)
     {
         var hashes = document.Frames.SelectMany(f => f.Cels.Values).Distinct().ToList();
+        if (document.Clipboard is { } clipboard) hashes.Add(clipboard.BitmapHash);
+        hashes = hashes.Distinct().ToList();
         var result = new Dictionary<string, SpriteBitmap>();
         foreach (var chunk in hashes.Chunk(400))
             foreach (var bitmap in await db.SpriteBitmaps.AsNoTracking().Where(b => chunk.Contains(b.Hash)).ToListAsync(cancellationToken)) result.Add(bitmap.Hash, bitmap);
@@ -133,6 +135,7 @@ public sealed class SpriteDocumentService(AppDbContext db) : ISpriteDocumentServ
             await db.SaveChangesAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             await transaction.CommitAsync(cancellationToken);
+            events?.Publish(set.Id, next);
             return new(set.Id, next, history.Id, batch.Operations.Count);
         }
         catch

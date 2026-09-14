@@ -43,7 +43,9 @@ public sealed record FrameSetView(
     int FrameCount,
     Guid? LatestBuiltSheetAssetId,
     string? LatestBuiltSheetManifest,
-    IReadOnlyList<FrameView> Frames);
+    IReadOnlyList<FrameView> Frames,
+    long Revision = 0,
+    IReadOnlyList<PixelChat.Sprites.SpriteClip>? Clips = null);
 
 public sealed record FrameSetSummaryView(
     Guid Id,

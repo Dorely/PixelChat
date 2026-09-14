@@ -28,6 +28,10 @@ public static class ArtMediaEndpoints
 
         var group = app.MapGroup("/media/projects/{projectId:guid}");
 
+        group.MapGet("/sprites/{documentId:guid}/revisions/{revision:long}/frames/{frameId:guid}", async (
+            Guid projectId, Guid documentId, long revision, Guid frameId, PixelChat.Sprites.ISpriteDocumentService documents, CancellationToken cancellationToken) =>
+            Results.File(await documents.RenderAsync(projectId, documentId, frameId, revision, cancellationToken), "image/png"));
+
         group.MapGet("/assets/{assetId:guid}/preview", async (
             Guid projectId,
             Guid assetId,

@@ -252,7 +252,19 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
                 }
                 break;
             }
-            case "clear": case "cut":
+            case "copy": case "cut":
+            {
+                var points = document.Selection?.FrameId == frame.Id ? document.Selection.Polygon : RectanglePoints(new(0, 0, raster.Width, raster.Height));
+                var left = Math.Clamp(points.Min(p => p.X), 0, raster.Width - 1); var top = Math.Clamp(points.Min(p => p.Y), 0, raster.Height - 1);
+                var right = Math.Clamp(points.Max(p => p.X), left + 1, raster.Width); var bottom = Math.Clamp(points.Max(p => p.Y), top + 1, raster.Height);
+                var copy = SpriteRaster.Blank(right - left, bottom - top);
+                for (var y = top; y < bottom; y++) for (var x = left; x < right; x++) if (Allowed(x, y)) copy.Put(x - left, y - top, raster.Get(x, y));
+                document.Clipboard = new(Store(copy), copy.Width, copy.Height);
+                if (name == "copy") return;
+                for (var y = 0; y < raster.Height; y++) for (var x = 0; x < raster.Width; x++) if (Allowed(x, y)) raster.Put(x, y, default);
+                break;
+            }
+            case "clear":
                 for (var y = 0; y < raster.Height; y++) for (var x = 0; x < raster.Width; x++) if (Allowed(x, y)) raster.Put(x, y, default);
                 break;
             case "replaceCel":
@@ -264,6 +276,14 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
             }
             case "stamp": case "paste":
             {
+                if (name == "paste" && !op.TryGetProperty("source", out _))
+                {
+                    var clipboard = document.Clipboard ?? throw new InvalidOperationException("Copy pixels before pasting.");
+                    var pasted = SpriteRaster.Decode(Bitmap(clipboard.BitmapHash).Data);
+                    var dx = Int(op, "x"); var dy = Int(op, "y");
+                    for (var y = 0; y < pasted.Height; y++) for (var x = 0; x < pasted.Width; x++) if (Allowed(dx + x, dy + y)) raster.Put(dx + x, dy + y, Constrain(pasted.Get(x, y), false));
+                    break;
+                }
                 var source = op.GetProperty("source"); var sf = Frame(source); var sl = Layer(source);
                 var sr = sf.Cels.TryGetValue(sl.Id, out var hash) ? SpriteRaster.Decode(Bitmap(hash).Data) : SpriteRaster.Blank(sf.Width, sf.Height);
                 var rect = op.GetProperty("sourceRect").Deserialize<SpriteRect>(SpriteDocument.JsonOptions)!;

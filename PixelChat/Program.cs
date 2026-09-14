@@ -54,6 +54,7 @@ builder.Services.AddSingleton<IEditCanvasPreparationStore, EditCanvasPreparation
 builder.Services.AddScoped<IArtWorkflowService, ArtWorkflowService>();
 builder.Services.AddScoped<IFrameSetService, FrameSetService>();
 builder.Services.AddScoped<ISpriteDocumentService, SpriteDocumentService>();
+builder.Services.AddSingleton<SpriteDocumentEvents>();
 builder.Services.AddScoped<ISpriteWorkspaceActionService, SpriteWorkspaceActionService>();
 builder.Services.AddSingleton<TiktokenTokenCounter>();
 builder.Services.AddSingleton<CharEstimateTokenCounter>();

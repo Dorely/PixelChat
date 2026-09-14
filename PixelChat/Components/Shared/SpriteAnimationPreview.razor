@@ -54,7 +54,7 @@
                 duration = frame.DurationMs / 1000d,
             })
             .ToList();
-        var key = $"{PreviewKey}:{Fps}:{Loop}:{frames.Count}:{string.Join('|', frames.Select(frame => frame.previewImageUrl))}";
+        var key = $"{PreviewKey}:{Fps}:{Loop}:{frames.Count}:{string.Join('|', frames.Select(frame => $"{frame.previewImageUrl}:{frame.duration}"))}";
         if (string.Equals(key, _renderedKey, StringComparison.Ordinal))
             return;
 

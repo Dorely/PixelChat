@@ -29,12 +29,6 @@ public class FrameSet
     public int DefaultCellWidth { get; set; }
     public int DefaultCellHeight { get; set; }
 
-    /// <summary>fps, loop, playback mode (forward|reverse|pingpong).</summary>
-    public string PlaybackSettingsJson { get; set; } = "{}";
-
-    /// <summary>Default alignment anchor/axis settings for the set.</summary>
-    public string AlignmentSettingsJson { get; set; } = "{}";
-
     public ICollection<Frame> Frames { get; set; } = [];
     public ICollection<SheetLayout> SheetLayouts { get; set; } = [];
 

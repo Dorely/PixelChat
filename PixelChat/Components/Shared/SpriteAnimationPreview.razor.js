@@ -107,7 +107,7 @@ function scheduleNextFrame(state) {
     }
 
     const item = state.images[state.frameIndex] ?? state.images[0];
-    const delay = Math.max(16, Math.round((item.duration || 0) * 1000) || state.frameMs);
+    const delay = Math.max(1, Math.round((item.duration || 0) * 1000) || state.frameMs);
     state.timer = window.setTimeout(() => {
         state.timer = null;
         if (state.disposed) {

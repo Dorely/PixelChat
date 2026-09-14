@@ -522,10 +522,10 @@ else
     }
 
     private IReadOnlyList<AnimationPreviewFrame> FrameSetPreviewFrames(FrameSetView set) =>
-        set.Frames
-            .OrderBy(frame => frame.Index)
+        PixelChat.Sprites.SpriteTimeline.Sequence(set.Frames.OrderBy(f => f.Index).Select(f => f.Id), set.Clips?.FirstOrDefault())
+            .Select(id => set.Frames.Single(f => f.Id == id))
             .Select(frame => new AnimationPreviewFrame(
-                $"/media/projects/{_workbench!.Project.Id:D}/frame-set-frames/{frame.Id:D}/preview",
+                $"/media/projects/{_workbench!.Project.Id:D}/sprites/{set.Id:D}/revisions/{set.Revision}/frames/{frame.Id:D}",
                 frame.Name,
                 frame.DurationMs))
             .ToList();
@@ -1169,7 +1169,7 @@ else
         {
             <article class="review-card" @key="item.Id">
                 <button type="button" class="review-thumb review-animation-thumb" @onclick="() => OpenAnimationReviewPreview(item.RefId)">
-                    <SpriteAnimationPreview Frames="@FrameSetPreviewFrames(frameSet)" Fps="@FrameSetFps(frameSet)" Loop="true" PreviewKey="@($"{frameSet.Id:N}:{frameSet.FrameCount}")" CssClass="review-animation-canvas" Title="@item.Label" />
+                    <SpriteAnimationPreview Frames="@FrameSetPreviewFrames(frameSet)" Fps="@FrameSetFps(frameSet)" Loop="@(frameSet.Clips?.FirstOrDefault()?.Loop ?? true)" PreviewKey="@($"{frameSet.Id:N}:{frameSet.Revision}")" CssClass="review-animation-canvas" Title="@item.Label" />
                 </button>
                 <div class="review-card-body">
                     <div class="asset-title-row">
@@ -2272,7 +2272,7 @@ else
                         && _reviewFrameSets.TryGetValue(animationFrameSetId, out var previewFrameSet)
                         && previewFrameSet.FrameCount > 0)
                     {
-                        <SpriteAnimationPreview Frames="@FrameSetPreviewFrames(previewFrameSet)" Fps="@FrameSetFps(previewFrameSet)" Loop="true" PreviewKey="@($"{previewFrameSet.Id:N}:{previewFrameSet.FrameCount}:modal")" CssClass="review-modal-animation" Title="@preview.Title" />
+                        <SpriteAnimationPreview Frames="@FrameSetPreviewFrames(previewFrameSet)" Fps="@FrameSetFps(previewFrameSet)" Loop="@(previewFrameSet.Clips?.FirstOrDefault()?.Loop ?? true)" PreviewKey="@($"{previewFrameSet.Id:N}:{previewFrameSet.Revision}:modal")" CssClass="review-modal-animation" Title="@preview.Title" />
                     }
                 </div>
             </div>

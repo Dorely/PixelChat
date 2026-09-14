@@ -96,7 +96,9 @@ public sealed record WorkspaceSpritesVisibleState(
     Guid? ActiveSourceAssetId = null,
     Guid? ActiveFrameSetId = null,
     Guid? ActiveFrameId = null,
-    IReadOnlyList<Guid>? SelectedRegionIds = null);
+    IReadOnlyList<Guid>? SelectedRegionIds = null,
+    long? DocumentRevision = null,
+    Guid? ActiveLayerId = null);
 
 public sealed record WorkspaceSpriteAgentStatus(
     string State,

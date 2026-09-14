@@ -1413,7 +1413,7 @@ public sealed partial class FrameSetService(
                         DeserializeCanvasTransform(NativeFrame(frame).CanvasTransformJson),
                         DeserializeCanvasFinalization(NativeFrame(frame).CanvasFinalizationJson));
                 })
-                .ToList());
+                .ToList(), frameSet.Revision, Document(frameSet).Clips);
     }
 
     private static IReadOnlyList<Frame> OrderFrames(FrameSet frameSet, IReadOnlyList<Frame> frames)
