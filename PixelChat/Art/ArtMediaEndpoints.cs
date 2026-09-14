@@ -27,6 +27,9 @@ public static class ArtMediaEndpoints
         });
 
         var group = app.MapGroup("/media/projects/{projectId:guid}");
+        group.MapGet("/sprite-inspections/{artifactId:guid}", async (
+            Guid projectId, Guid artifactId, PixelChat.Sprites.SpriteInspectionService inspections, CancellationToken cancellationToken) =>
+            Results.File((await inspections.ReadArtifactAsync(projectId, artifactId, cancellationToken)).Data, "image/png"));
 
         group.MapGet("/sprites/{documentId:guid}/revisions/{revision:long}/frames/{frameId:guid}", async (
             Guid projectId, Guid documentId, long revision, Guid frameId, PixelChat.Sprites.ISpriteDocumentService documents, CancellationToken cancellationToken) =>

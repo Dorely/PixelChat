@@ -14,6 +14,7 @@ public sealed class AssistantToolRegistry(
     IArtWorkflowService workflow,
     IFrameSetService frameSets,
     ISpriteWorkspaceActionService spriteActions,
+    PixelChat.Sprites.SpriteToolRegistry spriteTools,
     IWorkspaceVisibleStateStore visibleState,
     IImageGenerationRuntime imageRuntime,
     IOptions<AgentOptions> agentOptions,
@@ -27,6 +28,7 @@ public sealed class AssistantToolRegistry(
 
     private static readonly HashSet<string> WorkspaceMutationTools = new(StringComparer.Ordinal)
     {
+        "sprite_create", "sprite_apply", "sprite_script", "sprite_history",
         "set_compare_review_set",
         "add_compare_review_items",
         "remove_compare_review_item",
@@ -70,6 +72,7 @@ public sealed class AssistantToolRegistry(
     public IList<AITool> Build(Guid projectId, AssistantTurnGenerationBudget budget) =>
         WithDisplayTitleParameters(
         [
+        .. spriteTools.Build(projectId),
         AIFunctionFactory.Create(
             method: () => ListWorkspaceStateAsync(projectId),
             name: "list_workspace_state",

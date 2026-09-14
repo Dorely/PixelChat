@@ -70,7 +70,7 @@ public sealed class SpriteClip
 public sealed record SpritePoint(int X, int Y);
 public sealed record SpriteRect(int X, int Y, int Width, int Height);
 public sealed record SpriteSlice(string Name, SpriteRect Rect);
-public sealed record SpriteSelection(Guid FrameId, List<SpritePoint> Polygon, string? Color = null);
+public sealed record SpriteSelection(Guid FrameId, List<SpritePoint> Polygon, string? Color = null, int Width = 0, byte[]? PixelMask = null);
 public sealed record SpriteClipboard(string BitmapHash, int Width, int Height);
 public sealed record SpriteSnapshot(Guid DocumentId, long Revision, SpriteDocument Document);
 public sealed record SpriteEditorFocus(Guid FrameId, Guid LayerId, long Revision);

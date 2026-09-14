@@ -13,6 +13,12 @@ using PixelChat.Persistence.Repositories;
 using PixelChat.Secrets;
 using PixelChat.Tokens;
 
+if (args.Contains("--sprite-script-worker", StringComparer.Ordinal))
+{
+    await SpriteScriptWorker.RunAsync();
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 var isElectronMode = IsElectronMode(args);
 var desktopUrl = isElectronMode ? GetDesktopUrl(builder.Configuration) : null;
@@ -55,6 +61,9 @@ builder.Services.AddScoped<IArtWorkflowService, ArtWorkflowService>();
 builder.Services.AddScoped<IFrameSetService, FrameSetService>();
 builder.Services.AddScoped<ISpriteDocumentService, SpriteDocumentService>();
 builder.Services.AddSingleton<SpriteDocumentEvents>();
+builder.Services.AddScoped<SpriteScriptService>();
+builder.Services.AddScoped<SpriteInspectionService>();
+builder.Services.AddScoped<SpriteToolRegistry>();
 builder.Services.AddScoped<ISpriteWorkspaceActionService, SpriteWorkspaceActionService>();
 builder.Services.AddSingleton<TiktokenTokenCounter>();
 builder.Services.AddSingleton<CharEstimateTokenCounter>();

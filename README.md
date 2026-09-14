@@ -81,6 +81,8 @@ Cross-platform package creation may require building on the target OS depending 
 
 ## Local Data
 
+Native sprite editing supports agent command batches and bounded JavaScript drawing scripts. Agents can inspect exact pixel regions, labeled revision PNGs, onion skins, contact sheets, and differences. Inspection artifacts and undo history persist independently of chat. Use `sprite_help` in the assistant workflow for the compact command and scripting references.
+
 The local SQLite database stores projects, assets and image data, generation batches, review decisions, recipes and versions, masks, frame sets and built sheets, export caches, assistant transcripts and visuals, provider metadata, OAuth metadata, and named secret values.
 
 API keys and OAuth token values are currently stored through the SQLite-backed `ISecretStore`; this is not an operating-system credential vault. Local database files are ignored by git.

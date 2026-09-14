@@ -8,6 +8,7 @@
 @inject ISpriteDocumentService Documents
 @inject SpriteDocumentEvents Events
 @inject IFrameSetService FrameSets
+@inject SpriteInspectionService Inspections
 @inject IJSRuntime JS
 
 @if (_snapshot is { } snapshot && CurrentFrame is { } frame)
@@ -126,7 +127,8 @@
                     <details><summary>r@item.Number · @item.Source · @item.Label · @item.CreatedAt.ToLocalTime()</summary>
                         @if (item.Script is not null) { <pre>@item.Script</pre> }
                         <pre>@item.OperationsJson</pre>
-                        <img src="@FrameUrl(frame.Id, item.Number)" alt="Revision preview" />
+                        <img src="@FrameUrl(SpriteDocument.Deserialize(item.DocumentJson).Frames[0].Id, item.Number)" alt="Revision preview" />
+                        @foreach (var artifact in _inspectionHistory.GetValueOrDefault(item.Number) ?? []) { <figure><img src="@artifact.Url" alt="@artifact.Label" /><figcaption>@artifact.Label</figcaption></figure> }
                     </details>
                 }
             </section>
@@ -152,6 +154,7 @@
     private bool _filled, _onion, _playing, _loop = true, _showHistory, _busy, _enforcePalette, _binaryAlpha, _convert, _disposed;
     private string? _error;
     private IReadOnlyList<SpriteRevision> _history = [];
+    private readonly Dictionary<long, IReadOnlyList<SpriteArtifactView>> _inspectionHistory = [];
     private Guid? _builtAsset;
     private CancellationTokenSource? _operation;
     private string _renderKey = "";
@@ -165,7 +168,7 @@
         _width = CurrentFrame!.Width; _height = CurrentFrame.Height; _clipLast = Math.Min(Math.Max(_clipLast, 1), _snapshot.Document.Frames.Count);
         _artMode = _snapshot.Document.Specification.ArtMode; _enforcePalette = _snapshot.Document.Specification.EnforcePalette;
         _binaryAlpha = _snapshot.Document.Specification.BinaryAlpha; _palette = string.Join(",", _snapshot.Document.Specification.Palette);
-        if (_showHistory) _history = await Documents.ListHistoryAsync(ProjectId, DocumentId);
+        if (_showHistory) await LoadHistoryAsync();
         _renderKey = "";
         await OnFocusChanged.InvokeAsync(new(_frameId, _layerId, _snapshot.Revision));
     }
@@ -210,7 +213,12 @@
     private Task TransformSizeAsync(string op) => ApplyAsync(op, new { op, frameId = _frameId, layerId = _layerId, x = _x, y = _y, width = _width, height = _height, resampling = _resampling });
     private Task ReorderFrameAsync(int delta) => ApplyAsync("Reorder frame", new { op = "reorderFrame", frameId = _frameId, index = _snapshot!.Document.Frames.FindIndex(f => f.Id == _frameId) + delta });
     private Task HistoryAsync(string action, bool wholeTask = false) => RunAsync(async token => { if (_snapshot is not null) await Documents.HistoryAsync(ProjectId, DocumentId, _snapshot.Revision, action, wholeTask, token); });
-    private async Task ToggleHistoryAsync() { _showHistory = !_showHistory; if (_showHistory) _history = await Documents.ListHistoryAsync(ProjectId, DocumentId); }
+    private async Task ToggleHistoryAsync() { _showHistory = !_showHistory; if (_showHistory) await LoadHistoryAsync(); }
+    private async Task LoadHistoryAsync()
+    {
+        _history = await Documents.ListHistoryAsync(ProjectId, DocumentId);
+        foreach (var item in _history) _inspectionHistory[item.Number] = await Inspections.ListAsync(ProjectId, DocumentId, item.Number);
+    }
     private void SelectClip(ChangeEventArgs e)
     {
         _clipName = e.Value?.ToString() ?? ""; var clip = _snapshot?.Document.Clips.FirstOrDefault(c => c.Name == _clipName);

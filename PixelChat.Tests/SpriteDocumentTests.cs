@@ -149,4 +149,19 @@ public sealed class SpriteDocumentTests : IAsyncLifetime
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _service.ApplyAsync(_projectId, new(s.DocumentId, 0, "Cancelled", [Op(new { op = "addLayer" })]), cancel.Token));
         Assert.Equal(0, (await _service.ReadAsync(_projectId, s.DocumentId)).Revision);
     }
+
+    [Fact]
+    public async Task VisibleColorSelectionRemainsFixedAcrossLayerEditsAndCutPaste()
+    {
+        var s = await _service.CreateAsync(_projectId, "Blend selection", 8, 8, "painted"); var f = s.Document.Frames[0].Id; var bottom = s.Document.Layers[0].Id; var top = Guid.NewGuid();
+        await Apply(s, new { op = "pencil", frameId = f, layerId = bottom, x = 2, y = 2, color = "#ff0000ff" },
+            new { op = "addLayer", id = top }, new { op = "pencil", frameId = f, layerId = top, x = 2, y = 2, color = "#0000ff80" },
+            new { op = "select", frameId = f, x = 0, y = 0, width = 8, height = 8, color = "#7f0080ff" },
+            new { op = "rectangle", frameId = f, layerId = top, x = 0, y = 0, width = 8, height = 8, filled = true, color = "#00ff00ff" },
+            new { op = "cut", frameId = f, layerId = top }, new { op = "clearSelection" }, new { op = "paste", frameId = f, layerId = top, x = 3, y = 3 });
+        var result = await Render(s);
+        Assert.Equal(new Rgba32(255,0,0,255), result.Get(2,2));
+        Assert.Equal(new Rgba32(0,255,0,255), result.Get(5,5));
+        Assert.Equal((byte)0, result.Get(0,0).A);
+    }
 }

@@ -19,6 +19,7 @@ public sealed class AssistantChatService(
     ILlmProviderService providerService,
     IChatClientFactory chatClientFactory,
     AssistantToolRegistry toolRegistry,
+    PixelChat.Sprites.SpriteToolRegistry spriteTools,
     IArtWorkflowService workflow,
     ImageModelSelectionService imageSelection,
     IFrameSetService frameSets,
@@ -1525,6 +1526,8 @@ public sealed class AssistantChatService(
     {
         try
         {
+            if (pendingCall.Name.StartsWith("sprite_", StringComparison.Ordinal))
+                return await spriteTools.ImageContentsAsync(projectId, toolResult, cancellationToken);
             if (string.Equals(pendingCall.Name, "read_asset", StringComparison.Ordinal)
                 && ReadGuidArgument(pendingCall, "assetId") is Guid assetId)
             {

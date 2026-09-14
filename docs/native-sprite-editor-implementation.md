@@ -11,3 +11,5 @@ The approved release promotes FrameSet into the native sprite document. It has f
 Impact crosses Models, Persistence and forward migrations, Art and sprite services, dependency registration, chat tools and image-result handling, Razor/JavaScript workspace controls, media endpoints, image jobs, and documentation. Image-provider transport and raw provider outputs remain owned by the existing image workflow. Source regions and generated assets remain provenance/import inputs; built sheets remain derived artifacts.
 
 Verification uses `dotnet test PixelChat.Tests/PixelChat.Tests.csproj`, `dotnet build PixelChat.sln`, and a bounded host startup check. Migration fixtures run against old schema boundaries before destructive column removal. Browser and live provider checks must be recorded separately; a successful build is not evidence of either.
+
+Stages 1 and 2 are committed. Stage 3 adds the native agent surface, persisted PNG inspections, and the bounded script worker. The AI job/diagnostic and export stages remain required before release completion.

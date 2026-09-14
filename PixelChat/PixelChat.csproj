@@ -21,6 +21,7 @@
   <ItemGroup>
     <PackageReference Include="ElectronNET.Core" Version="0.5.0" />
     <PackageReference Include="ElectronNET.Core.AspNet" Version="0.5.0" />
+    <PackageReference Include="Jint" Version="4.16.0" />
     <PackageReference Include="Microsoft.Bcl.Memory" Version="10.0.7" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.5">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -42,6 +43,7 @@
     <Content Update="Assets\MotionClips\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <EmbeddedResource Include="Sprites\Skills\*.md" />
   </ItemGroup>
 
 </Project>

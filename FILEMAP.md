@@ -314,3 +314,9 @@
 | `PixelChat.Tests/SpriteTimelineTests.cs` | Unequal timing, one-shot, reverse, and ping-pong regression checks. |
 | `PixelChat.Tests/sprite-editor.browser.cjs` | Headless Edge checks for canvas coordinates, pixel refresh, layers, timing, history, and reopening. |
 | `20260914212522_NativeClipPlayback.cs` / `.Designer.cs` | Removes unused playback/alignment settings now represented by native document clips. |
+| `PixelChat/Sprites/SpriteToolRegistry.cs` | Compact native tools with revision-checked edits and actual model-visible PNG inspection content. |
+| `PixelChat/Sprites/SpriteScriptService.cs` / `SpriteScriptWorker.cs` | Parent-enforced worker limits and restricted Jint command generation with atomic application. |
+| `PixelChat/Sprites/SpriteInspectionService.cs` / `PixelChat/Models/SpriteInspection.cs` | Cached, labeled revision renders persisted independently of chat. |
+| `PixelChat/Sprites/Skills/*.md` | Embedded, progressively loaded command references and drawing, pose, animation, and export workflows. |
+| `PixelChat.Tests/SpriteScriptTests.cs` / `SpriteToolTests.cs` | Real worker isolation/failure tests and native tool image-content checks. |
+| `20260914213826_SpriteInspectionArtifacts.cs` / `.Designer.cs` | Persists revision-addressed inspection artifacts with shared bitmap content. |

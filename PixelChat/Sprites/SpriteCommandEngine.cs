@@ -169,7 +169,18 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
             {
                 var f = Frame(op);
                 var points = op.TryGetProperty("polygon", out var p) ? p.Deserialize<List<SpritePoint>>(SpriteDocument.JsonOptions)! : RectanglePoints(Rect(op));
-                document.Selection = new(f.Id, points, op.TryGetProperty("color", out var c) ? c.GetString() : null); return;
+                var selectedColor = op.TryGetProperty("color", out var c) ? c.GetString() : null;
+                byte[]? mask = null;
+                if (selectedColor is not null)
+                {
+                    var visible = SpriteRaster.Composite(document, f, Bitmap);
+                    var expected = SpriteRaster.Color(selectedColor);
+                    mask = new byte[(f.Width * f.Height + 7) / 8];
+                    for (var y = 0; y < f.Height; y++) for (var x = 0; x < f.Width; x++)
+                        if (SpriteRaster.InsidePolygon(x, y, points) && visible.Get(x, y).Equals(expected))
+                        { var i = y * f.Width + x; mask[i / 8] |= (byte)(1 << (i % 8)); }
+                }
+                document.Selection = new(f.Id, points, selectedColor, f.Width, mask); return;
             }
             case "clearSelection": document.Selection = null; return;
         }
@@ -181,7 +192,9 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
         {
             var selection = document.Selection;
             return selection is null || selection.FrameId != frame.Id ||
-                (SpriteRaster.InsidePolygon(x, y, selection.Polygon) && (selection.Color is null || raster.Get(x, y).Equals(SpriteRaster.Color(selection.Color))));
+                (selection.PixelMask is { } mask
+                    ? (y * selection.Width + x) / 8 < mask.Length && (mask[(y * selection.Width + x) / 8] & (1 << ((y * selection.Width + x) % 8))) != 0
+                    : SpriteRaster.InsidePolygon(x, y, selection.Polygon));
         }
         var selectionMask = new bool[raster.Width * raster.Height];
         for (var y = 0; y < raster.Height; y++) for (var x = 0; x < raster.Width; x++) selectionMask[y * raster.Width + x] = Selected(x, y);
