@@ -2,15 +2,15 @@
 @using System.Text.Json
 @inject IServiceScopeFactory Scopes
 
-<details class="sprite-export">
-    <summary>Export sprite</summary>
+<section class="sprite-export">
+    <h3>Export sprite</h3>
     <p>Export revision @Revision. Padding is transparent space inside each slot; gutter separates slots; margin surrounds the atlas.</p>
     <div class="controls">
         <label>Format <select aria-label="Sprite export format" @bind="_format"><option value="bundle">Editable native bundle</option><option value="atlas">PNG atlas + JSON</option><option value="frames">PNG frames + JSON</option><option value="preview">Animated GIF preview</option><option value="metadata">JSON metadata</option></select></label>
         <label>Columns (0 = auto) <input type="number" min="0" @bind="_columns" /></label>
         <label>Padding <input type="number" min="0" @bind="_padding" /></label><label>Gutter <input type="number" min="0" @bind="_gutter" /></label><label>Margin <input type="number" min="0" @bind="_margin" /></label>
         <label>Preview clip <select @bind="_clip"><option value="">First clip / all frames</option>@foreach (var clip in Clips) { <option value="@clip.Name">@clip.Name</option> }</select></label>
-        <button disabled="@_busy" @onclick="ExportAsync">Create export</button>
+        <button class="primary-action" disabled="@_busy" @onclick="ExportAsync">Create export</button>
         <button disabled="@_busy" @onclick="() => RunAsync(_ => Task.CompletedTask)">Refresh exports</button>
     </div>
     <details><summary>Named export slices</summary>
@@ -26,7 +26,7 @@
             <details><summary>Export manifest</summary><pre>@export.ManifestJson</pre></details>
         </section>
     }
-</details>
+</section>
 
 @code {
     [Parameter] public Guid ProjectId { get; set; }

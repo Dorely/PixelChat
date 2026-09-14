@@ -12,30 +12,78 @@
 
 @if (_snapshot is { } snapshot && CurrentFrame is { } frame)
 {
-    <div class="native-editor" data-revision="@snapshot.Revision">
-        <div class="native-toolbar">
-            <strong>@snapshot.Document.Name</strong><span>Revision @snapshot.Revision · @snapshot.Document.Specification.ArtMode</span>
-            <button disabled="@_busy" @onclick='() => HistoryAsync("undo")'>Undo</button>
-            <button disabled="@_busy" @onclick='() => HistoryAsync("redo")'>Redo</button>
-            <button disabled="@_busy" @onclick='() => HistoryAsync("undo", true)'>Undo task</button>
-            <button @onclick="ToggleHistoryAsync">History</button>
-            <button disabled="@(!_busy)" @onclick="Stop">Stop</button>
-        </div>
-        <div class="native-toolbar" role="toolbar" aria-label="Drawing tools">
-            @foreach (var tool in Tools) { <button class="@(_tool == tool ? "active" : "")" @onclick="() => SetTool(tool)">@tool</button> }
+    <div class="native-editor @(_inspectorOpen ? "" : "inspector-closed")" data-revision="@snapshot.Revision" data-art-mode="@snapshot.Document.Specification.ArtMode">
+        <header class="native-toolbar document-bar">
+            <div class="document-identity"><strong>@snapshot.Document.Name</strong><span>@frame.Width × @frame.Height <b>·</b> @(snapshot.Document.Specification.ArtMode == "pixel" ? "Pixel art" : "Painted") <b>·</b> r@(snapshot.Revision)</span></div>
+            <div class="document-actions">
+                <button disabled="@_busy" title="Undo last edit" aria-label="Undo" @onclick='() => HistoryAsync("undo")'>↶ <span>Undo</span></button>
+                <button disabled="@_busy" title="Redo last edit" aria-label="Redo" @onclick='() => HistoryAsync("redo")'>↷ <span>Redo</span></button>
+                <button class="inspector-toggle" aria-label="Toggle inspector" aria-expanded="@(_inspectorOpen ? "true" : "false")" @onclick="() => _inspectorOpen = !_inspectorOpen">☷</button>
+                @if (_busy) { <button class="stop-button" @onclick="Stop">Stop</button> }
+            </div>
+        </header>
+        <div class="tool-options" role="toolbar" aria-label="Tool options">
+            <span class="current-tool">@ToolLabel(_tool)</span>
             <label>Color <input type="color" @bind="_color" /></label>
             <label>Alpha <input type="number" min="0" max="255" @bind="_alpha" /></label>
-            <label>Brush <input type="number" min="1" max="512" @bind="_size" /></label>
-            <label><input type="checkbox" @bind="_filled" /> Filled</label>
-            <label>Zoom <select @bind="_zoom"><option>1</option><option>2</option><option>4</option><option>8</option><option>12</option><option>16</option></select></label>
-            <label><input type="checkbox" @bind="_onion" /> Onion skin</label>
+            <label>Size <input aria-label="Brush size" type="number" min="1" max="512" @bind="_size" /><span class="unit">px</span></label>
+            @if (_tool is "rectangle" or "ellipse") { <label><input type="checkbox" @bind="_filled" /> Filled</label> }
+            <span class="tool-hint">@(_tool == "polygon" ? "Enter to finish · Esc to cancel" : "Wheel to zoom · Right-drag to pan")</span>
         </div>
-        <div class="native-main">
-            <div class="canvas-scroll">
-                <canvas @ref="_canvas" aria-label="Sprite drawing canvas" tabindex="0" style="width:@(frame.Width * _zoom)px;height:@(frame.Height * _zoom)px"></canvas>
-                <p class="canvas-caption">@frame.Name · @frame.Width × @frame.Height · @_pointer · Drag to draw; polygon selection finishes with Enter or double-click.</p>
-            </div>
-            <aside>
+        <div class="editor-body">
+            <nav class="tool-rail" aria-label="Drawing tools">
+                @foreach (var tool in Tools)
+                {
+                    <button class="@(_tool == tool ? "active" : "")" title="@ToolLabel(tool)" aria-label="@ToolLabel(tool)" aria-pressed="@(_tool == tool ? "true" : "false")" @onclick="() => SetTool(tool)"><SpriteToolIcon Tool="@tool" /></button>
+                }
+            </nav>
+            <section class="canvas-pane" aria-label="Canvas workspace">
+                <div class="canvas-viewport" tabindex="0" aria-label="Sprite viewport">
+                    <canvas @ref="_canvas" aria-label="Sprite drawing canvas" tabindex="0"></canvas>
+                    @if (_playing)
+                    {
+                        <div class="playback-overlay"><div><span>Animation preview</span><button @onclick="() => _playing = false" aria-label="Close playback">×</button></div><SpriteAnimationPreview Frames="PlaybackFrames" Loop="_loop" PreviewKey="@($"{DocumentId}:{snapshot.Revision}:{_clipName}:{_direction}")" CssClass="native-playback" /></div>
+                    }
+                </div>
+                <footer class="viewport-status">
+                    <span class="frame-status" title="@frame.Name">@frame.Name <span data-pointer-status>—</span></span>
+                    <div class="zoom-controls">
+                        <button data-view-action="out" aria-label="Zoom out" title="Zoom out">−</button>
+                        <label class="zoom-field"><input data-zoom-input aria-label="Zoom percent" inputmode="decimal" value="100" /><span>%</span></label>
+                        <button data-view-action="in" aria-label="Zoom in" title="Zoom in">+</button>
+                        <button data-view-action="actual" title="Actual size">100%</button>
+                        <button data-view-action="fit" title="Fit the whole image" class="fit-button">Fit</button>
+                    </div>
+                </footer>
+            </section>
+            <section class="timeline" aria-label="Animation timeline">
+                <div class="timeline-toolbar">
+                    <button class="play-button" @onclick="() => _playing = !_playing">@(_playing ? "Stop playback" : "Play")</button>
+                    <span class="timeline-count">@snapshot.Document.Frames.Count frames</span>
+                    <label>Duration <input aria-label="Duration (ms)" type="number" min="1" max="60000" value="@frame.DurationMs" @onchange='e => ApplyAsync("Frame timing", new { op = "setDuration", frameId = _frameId, durationMs = int.TryParse(e.Value?.ToString(), out var duration) ? duration : frame.DurationMs })' /><span class="unit">ms</span></label>
+                    <label><input type="checkbox" @bind="_onion" /> Onion skin</label>
+                    <button title="Clip settings" @onclick='() => OpenInspectorAsync("canvas")'>Clips</button>
+                    <div class="frame-actions">
+                        <button title="Add frame" aria-label="Add frame" @onclick='() => ApplyAsync("Add frame", new { op = "addFrame" })'>+</button>
+                        <button title="Duplicate frame" aria-label="Duplicate frame" @onclick='() => SimpleAsync("duplicateFrame")'>⧉</button>
+                        <button title="Delete frame" aria-label="Delete frame" @onclick='() => SimpleAsync("deleteFrame")'>−</button>
+                    </div>
+                </div>
+                <div class="frame-strip">
+                    @foreach (var item in snapshot.Document.Frames)
+                    {
+                        <button class="frame-card @(_frameId == item.Id ? "active" : "")" @onclick="() => SelectFrame(item.Id)" title="@item.Name">
+                            <span class="frame-number">@(snapshot.Document.Frames.IndexOf(item) + 1)</span><img loading="lazy" src="@FrameUrl(item.Id)" alt="@item.Name" /><small>@item.DurationMs ms</small>
+                        </button>
+                    }
+                </div>
+            </section>
+            <aside class="inspector" aria-label="Sprite inspector">
+                <nav class="inspector-tabs" aria-label="Inspector sections">
+                    @foreach (var tab in InspectorTabs) { <button aria-pressed="@(_inspectorTab == tab.Key ? "true" : "false")" class="@(_inspectorTab == tab.Key ? "active" : "")" @onclick="() => OpenInspectorAsync(tab.Key)">@tab.Label</button> }
+                </nav>
+                <div class="inspector-scroll">
+                    <section hidden='@(_inspectorTab != "layers")' class="inspector-section">
                 <h3>Layers</h3>
                 @foreach (var layer in snapshot.Document.Layers.AsEnumerable().Reverse())
                 {
@@ -44,7 +92,7 @@
                         <input aria-label="Layer name" value="@layer.Name" @onchange="e => LayerAsync(layer.Id, new { name = e.Value?.ToString() })" />
                         <label><input type="checkbox" checked="@layer.Visible" @onchange="e => LayerAsync(layer.Id, new { visible = e.Value is true })" /> Show</label>
                         <label><input type="checkbox" checked="@layer.Locked" @onchange="e => LayerAsync(layer.Id, new { locked = e.Value is true })" /> Lock</label>
-                        <input aria-label="Layer opacity" type="number" min="0" max="1" step="0.1" value="@layer.Opacity" @onchange='e => LayerAsync(layer.Id, new { opacity = double.TryParse(e.Value?.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var opacity) ? opacity : layer.Opacity })' />
+                        <label class="layer-opacity">Opacity <input aria-label="Layer opacity" type="range" min="0" max="100" step="@(snapshot.Document.Specification.BinaryAlpha ? 100 : 1)" value="@(layer.Opacity * 100)" @onchange='e => LayerAsync(layer.Id, new { opacity = double.TryParse(e.Value?.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var opacity) ? opacity / 100 : layer.Opacity })' /><span>@(Math.Round(layer.Opacity * 100))%</span></label>
                     </div>
                 }
                 <div class="actions">
@@ -55,6 +103,9 @@
                     <button @onclick='() => ApplyAsync("Raise layer", new { op = "reorderLayer", layerId = _layerId, index = snapshot.Document.Layers.FindIndex(l => l.Id == _layerId) + 1 })'>Up</button>
                     <button @onclick='() => ApplyAsync("Lower layer", new { op = "reorderLayer", layerId = _layerId, index = snapshot.Document.Layers.FindIndex(l => l.Id == _layerId) - 1 })'>Down</button>
                 </div>
+
+                    </section>
+                    <section hidden='@(_inspectorTab != "canvas")' class="inspector-section">
                 <h3>Selection and transforms</h3>
                 <div class="actions">
                     <button @onclick='() => SimpleAsync("copy")'>Copy</button><button @onclick='() => SimpleAsync("cut")'>Cut</button>
@@ -80,32 +131,17 @@
                 <details><summary>Production rules</summary>
                     <label>Mode <select @bind="_artMode"><option value="pixel">Pixel art</option><option value="painted">Painted</option></select></label>
                     <label>Palette (hex, comma separated)<textarea @bind="_palette"></textarea></label>
-                    <label>Identity reference asset IDs (comma separated)<textarea @bind="_identityReferences"></textarea></label>
+                    <label>Identity reference <select @bind="_identityChoice"><option value="">Choose artwork…</option>@foreach (var asset in Workbench?.Assets ?? []) { <option value="@asset.Id">@asset.Label</option> }</select></label>
+                    <button @onclick="AddIdentityReference">Add identity reference</button>
+                    @foreach (var id in IdentityIds) { <div class="identity-reference"><span>@(Workbench?.Assets.FirstOrDefault(a => a.Id.ToString() == id)?.Label ?? "Unavailable reference")</span><button aria-label="Remove identity reference" @onclick="() => RemoveIdentityReference(id)">×</button></div> }
                     <label>Motion requirements<textarea @bind="_motionRequirements"></textarea></label>
                     <label><input type="checkbox" @bind="_enforcePalette" /> Enforce palette</label>
                     <label><input type="checkbox" @bind="_binaryAlpha" /> Binary alpha</label>
                     <label><input type="checkbox" @bind="_convert" /> Explicitly convert existing pixels</label>
                     <button @onclick="SaveSpecificationAsync">Apply rules</button>
                 </details>
-            </aside>
-        </div>
-        <section class="timeline">
-            <div class="native-toolbar">
-                <button @onclick="() => _playing = !_playing">@(_playing ? "Stop playback" : "Play")</button>
-                <button @onclick='() => ApplyAsync("Add frame", new { op = "addFrame" })'>Add frame</button>
-                <button @onclick='() => SimpleAsync("duplicateFrame")'>Duplicate frame</button><button @onclick='() => SimpleAsync("deleteFrame")'>Delete frame</button>
-                <label>Duration (ms) <input type="number" min="1" max="60000" value="@frame.DurationMs" @onchange='e => ApplyAsync("Frame timing", new { op = "setDuration", frameId = _frameId, durationMs = int.TryParse(e.Value?.ToString(), out var duration) ? duration : frame.DurationMs })' /></label>
-                <button @onclick='() => ReorderFrameAsync(-1)'>Earlier</button><button @onclick='() => ReorderFrameAsync(1)'>Later</button>
-                <label><input type="checkbox" checked="@frame.HideFromOnionSkin" @onchange='e => ApplyAsync("Onion visibility", new { op = "setFrame", frameId = _frameId, hideFromOnionSkin = e.Value is true })' /> Hide in onion skin</label>
-            </div>
-            <div class="frame-strip">
-                @foreach (var item in snapshot.Document.Frames)
-                {
-                    <button class="frame-card @(_frameId == item.Id ? "active" : "")" @onclick="() => SelectFrame(item.Id)">
-                        <img loading="lazy" src="@FrameUrl(item.Id)" alt="@item.Name" /><span>@item.Name</span><small>@item.DurationMs ms</small>
-                    </button>
-                }
-            </div>
+
+                        <details class="clip-settings" open><summary>Animation clips</summary>
             <div class="clip-controls">
                 <label>Clip <select value="@_clipName" @onchange="SelectClip"><option value="">All frames</option>@foreach (var clip in snapshot.Document.Clips) { <option>@clip.Name</option> }</select></label>
                 <input aria-label="Clip name" @bind="_clipName" />
@@ -114,11 +150,15 @@
                 <label><input type="checkbox" @bind="_loop" /> Loop</label><button @onclick="SaveClipAsync">Save clip</button>
                 <button @onclick='() => ApplyAsync("Delete clip", new { op = "deleteClip", name = _clipName })'>Delete clip</button>
             </div>
-            @if (_playing) { <SpriteAnimationPreview Frames="PlaybackFrames" Loop="_loop" PreviewKey="@($"{DocumentId}:{snapshot.Revision}:{_clipName}:{_direction}")" CssClass="native-playback" /> }
-        </section>
-        <SpriteExportPanel ProjectId="ProjectId" DocumentId="DocumentId" Revision="snapshot.Revision" Clips="snapshot.Document.Clips" Slices="snapshot.Document.Slices" />
-        @if (_showHistory)
-        {
+
+                            <div class="actions"><button @onclick='() => ReorderFrameAsync(-1)'>Earlier</button><button @onclick='() => ReorderFrameAsync(1)'>Later</button></div>
+                            <label class="check-label"><input type="checkbox" checked="@frame.HideFromOnionSkin" @onchange='e => ApplyAsync("Onion visibility", new { op = "setFrame", frameId = _frameId, hideFromOnionSkin = e.Value is true })' /> Hide frame in onion skin</label>
+                        </details>
+                    </section>
+                    <section hidden='@(_inspectorTab != "ai")'><SpriteAiPanel ProjectId="ProjectId" DocumentId="DocumentId" FrameId="_frameId" LayerId="_layerId" Revision="snapshot.Revision" ArtMode="@snapshot.Document.Specification.ArtMode" Workbench="Workbench" FrameName="@frame.Name" LayerName="@snapshot.Document.Layers.Single(l => l.Id == _layerId).Name" /></section>
+                    <section hidden='@(_inspectorTab != "export")'><SpriteExportPanel ProjectId="ProjectId" DocumentId="DocumentId" Revision="snapshot.Revision" Clips="snapshot.Document.Clips" Slices="snapshot.Document.Slices" /></section>
+                    <section hidden='@(_inspectorTab != "history")' class="inspector-section">
+                        <button disabled="@_busy" @onclick='() => HistoryAsync("undo", true)'>Undo task</button>
             <section class="history"><h3>Operation history</h3>
                 @foreach (var item in _history)
                 {
@@ -130,13 +170,17 @@
                     </details>
                 }
             </section>
-        }
-        @if (_error is not null) { <p role="alert" class="error">@_error</p> }
-        <SpriteAiPanel ProjectId="ProjectId" DocumentId="DocumentId" FrameId="_frameId" LayerId="_layerId" Revision="snapshot.Revision" ArtMode="@snapshot.Document.Specification.ArtMode" />
+
+                    </section>
+                </div>
+            </aside>
+        </div>
+        @if (_error is not null) { <div role="alert" class="editor-error"><span>@_error</span><button aria-label="Dismiss editor error" @onclick="() => _error = null">×</button></div> }
     </div>
 }
 
 @code {
+    [Parameter] public WorkbenchView? Workbench { get; set; }
     [Parameter] public Guid ProjectId { get; set; }
     [Parameter] public Guid DocumentId { get; set; }
     [Parameter] public EventCallback OnChanged { get; set; }
@@ -144,15 +188,23 @@
     private static readonly string[] Tools = ["pencil", "brush", "erase", "eyedropper", "fill", "line", "rectangle", "ellipse", "select", "polygon", "selectColor", "pivot"];
     private SpriteSnapshot? _snapshot;
     private int _degrees = 90;
+    private bool _inspectorOpen = true;
+    private string _inspectorTab = "layers";
+    private static readonly (string Key, string Label)[] InspectorTabs = [("layers", "Layers"), ("canvas", "Properties"), ("ai", "AI"), ("export", "Export"), ("history", "History")];
+    private static string ToolLabel(string tool) => tool switch { "pencil" => "Pencil", "brush" => "Brush", "erase" => "Eraser", "eyedropper" => "Eyedropper", "fill" => "Fill", "line" => "Line", "rectangle" => "Rectangle", "ellipse" => "Ellipse", "select" => "Rectangle selection", "polygon" => "Polygon selection", "selectColor" => "Color selection", "pivot" => "Pivot", _ => tool };
+    private string _identityChoice = "";
+    private IEnumerable<string> IdentityIds => _identityReferences.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+    private void AddIdentityReference() { if (Guid.TryParse(_identityChoice, out _)) _identityReferences = string.Join(",", IdentityIds.Append(_identityChoice).Distinct()); }
+    private void RemoveIdentityReference(string id) => _identityReferences = string.Join(",", IdentityIds.Where(existing => existing != id));
     private string _identityReferences = "", _motionRequirements = "";
     private SpriteFrame? CurrentFrame => _snapshot?.Document.Frames.FirstOrDefault(f => f.Id == _frameId);
     private Guid _frameId, _layerId;
     private ElementReference _canvas;
     private IJSObjectReference? _module;
     private DotNetObjectReference<NativeSpriteEditor>? _reference;
-    private string _tool = "pencil", _color = "#ff8040", _pointer = "", _resampling = "nearest", _pivotName = "root", _artMode = "pixel", _palette = "", _clipName = "" , _direction = "forward";
-    private int _alpha = 255, _size = 1, _zoom = 8, _x, _y, _width = 64, _height = 64, _clipFirst = 1, _clipLast = 1;
-    private bool _filled, _onion, _playing, _loop = true, _showHistory, _busy, _enforcePalette, _binaryAlpha, _convert, _disposed;
+    private string _tool = "pencil", _color = "#ff8040", _resampling = "nearest", _pivotName = "root", _artMode = "pixel", _palette = "", _clipName = "" , _direction = "forward";
+    private int _alpha = 255, _size = 1, _x, _y, _width = 64, _height = 64, _clipFirst = 1, _clipLast = 1;
+    private bool _filled, _onion, _playing, _loop = true, _busy, _enforcePalette, _binaryAlpha, _convert, _disposed;
     private string? _error;
     private IReadOnlyList<SpriteRevision> _history = [];
     private readonly Dictionary<long, IReadOnlyList<SpriteArtifactView>> _inspectionHistory = [];
@@ -169,7 +221,7 @@
         _artMode = _snapshot.Document.Specification.ArtMode; _enforcePalette = _snapshot.Document.Specification.EnforcePalette;
         _binaryAlpha = _snapshot.Document.Specification.BinaryAlpha; _palette = string.Join(",", _snapshot.Document.Specification.Palette);
         _identityReferences = string.Join(",", _snapshot.Document.Specification.IdentityReferences); _motionRequirements = _snapshot.Document.Specification.MotionRequirements;
-        if (_showHistory) await LoadHistoryAsync();
+        if (_inspectorTab == "history") await LoadHistoryAsync();
         _renderKey = "";
         await OnFocusChanged.InvokeAsync(new(_frameId, _layerId, _snapshot.Revision));
     }
@@ -177,12 +229,12 @@
     {
         if (_snapshot is null || CurrentFrame is null) return;
         if (_module is null) { _module = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Sprites/NativeSpriteEditor.razor.js"); _reference = DotNetObjectReference.Create(this); }
-        var key = $"{_snapshot.Revision}:{_frameId}:{_layerId}:{_tool}:{_color}:{_alpha}:{_size}:{_filled}:{_onion}:{_busy}:{_zoom}";
+        var key = $"{_snapshot.Revision}:{_frameId}:{_layerId}:{_tool}:{_color}:{_alpha}:{_size}:{_filled}:{_onion}:{_busy}";
         if (key == _renderKey) return;
         _renderKey = key;
         var index = _snapshot.Document.Frames.FindIndex(f => f.Id == _frameId);
         var onions = _onion ? _snapshot.Document.Frames.Where((f, i) => Math.Abs(i - index) == 1 && !f.HideFromOnionSkin).Select(f => FrameUrl(f.Id)).ToList() : [];
-        await _module.InvokeVoidAsync("attach", _canvas, _reference, new { url = FrameUrl(_frameId), onions, CurrentFrame.Width, CurrentFrame.Height, tool = _tool, color = _color + _alpha.ToString("x2"), size = _size, filled = _filled, busy = _busy, frameId = _frameId, layerId = _layerId, revision = _snapshot.Revision, selection = _snapshot.Document.Selection, pivots = CurrentFrame.Pivots });
+        await _module.InvokeVoidAsync("attach", _canvas, _reference, new { url = FrameUrl(_frameId), onions, CurrentFrame.Width, CurrentFrame.Height, tool = _tool, color = _color + _alpha.ToString("x2"), size = _size, filled = _filled, busy = _busy, frameId = _frameId, layerId = _layerId, revision = _snapshot.Revision, selection = _snapshot.Document.Selection is { } selection ? new { selection.FrameId, selection.Polygon } : null, pivots = CurrentFrame.Pivots, artMode = _snapshot.Document.Specification.ArtMode });
     }
     private string FrameUrl(Guid id, long? revision = null) => $"/media/projects/{ProjectId}/sprites/{DocumentId}/revisions/{revision ?? _snapshot!.Revision}/frames/{id}";
     private IReadOnlyList<AnimationPreviewFrame> PlaybackFrames
@@ -203,7 +255,7 @@
         await RunAsync(async token => { await Documents.ApplyAsync(ProjectId, new(DocumentId, revision, _tool, [operation]), token); });
     }
     [JSInvokable] public Task PickColor(string color) { _color = color[..7]; _alpha = Convert.ToInt32(color[7..], 16); StateHasChanged(); return Task.CompletedTask; }
-    [JSInvokable] public Task SetPointer(int x, int y) { _x = x; _y = y; _pointer = $"{x}, {y}"; StateHasChanged(); return Task.CompletedTask; }
+    [JSInvokable] public Task SetPointer(int x, int y) { _x = x; _y = y; StateHasChanged(); return Task.CompletedTask; }
     private Task ApplyAsync(string label, object operation) => RunAsync(async token => { if (_snapshot is not null) await Documents.ApplyAsync(ProjectId, new(DocumentId, _snapshot.Revision, label, [JsonSerializer.SerializeToElement(operation, SpriteDocument.JsonOptions)]), token); });
     private Task SimpleAsync(string op) => ApplyAsync(op, new { op, frameId = _frameId, layerId = _layerId });
     private Task LayerAsync(Guid id, object values)
@@ -214,7 +266,7 @@
     private Task TransformSizeAsync(string op) => ApplyAsync(op, new { op, frameId = _frameId, layerId = _layerId, x = _x, y = _y, width = _width, height = _height, resampling = _resampling });
     private Task ReorderFrameAsync(int delta) => ApplyAsync("Reorder frame", new { op = "reorderFrame", frameId = _frameId, index = _snapshot!.Document.Frames.FindIndex(f => f.Id == _frameId) + delta });
     private Task HistoryAsync(string action, bool wholeTask = false) => RunAsync(async token => { if (_snapshot is not null) await Documents.HistoryAsync(ProjectId, DocumentId, _snapshot.Revision, action, wholeTask, token); });
-    private async Task ToggleHistoryAsync() { _showHistory = !_showHistory; if (_showHistory) await LoadHistoryAsync(); }
+    private async Task OpenInspectorAsync(string tab) { _inspectorTab = tab; _inspectorOpen = true; if (tab == "history") await LoadHistoryAsync(); }
     private async Task LoadHistoryAsync()
     {
         _history = await Documents.ListHistoryAsync(ProjectId, DocumentId);

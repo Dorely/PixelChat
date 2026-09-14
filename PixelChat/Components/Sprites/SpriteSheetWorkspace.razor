@@ -59,7 +59,7 @@
     @if (!string.IsNullOrEmpty(_error)) { <p role="alert" class="sprite-error">@_error</p> }
     @if (_documentId is { } id)
     {
-        <NativeSpriteEditor @key="id" ProjectId="Workbench.Project.Id" DocumentId="id" OnChanged="ChangedAsync" OnFocusChanged="FocusChangedAsync" />
+        <NativeSpriteEditor @key="id" ProjectId="Workbench.Project.Id" DocumentId="id" Workbench="Workbench" OnChanged="ChangedAsync" OnFocusChanged="FocusChangedAsync" />
     }
     else { <p>Create a blank sprite or import artwork to start drawing.</p> }
 </section>

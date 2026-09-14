@@ -1907,3 +1907,6 @@
         transform: rotate(360deg);
     }
 }
+
+.workspace-center.sprite-center { display:flex; flex-direction:column; overflow:hidden; padding:0; min-width:0; }
+.workspace-center.sprite-center > .busy-strip { flex:none; }

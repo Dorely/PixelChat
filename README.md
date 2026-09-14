@@ -1,6 +1,6 @@
 # PixelChat
 
-The Sprites workspace includes a native drawing canvas, layers, selections, transforms, clips, pivots, timeline, and undo/redo. Create a blank pixel-art or painted sprite, or import artwork. Native sprite documents store content-addressed cels and persistent revisions
+The Sprites workspace includes a native drawing canvas, layers, selections, transforms, clips, pivots, timeline, and undo/redo. The canvas starts fitted to the available viewport, including large generated images. Use the wheel to zoom at the cursor, right-drag (or middle-drag) to pan, and Fit or 100% to reset the view. Zoom supports 0.1–12,800%. A tool rail, fixed timeline, and collapsible tabbed inspector keep the image visible while editing. Create a blank pixel-art or painted sprite, or import artwork. Native sprite documents store content-addressed cels and persistent revisions
 on FrameSet. Existing frames migrate from rendered pixels into painted-mode
 documents. Export editable native bundles, PNG frames/atlases with versioned JSON, or GIF previews from a saved revision. Reimport native bundles to retain layers, timing, pivots, and production rules. Agent commands and bounded scripts share the manual editor's undo history.
 See [the implementation record](docs/native-sprite-editor-implementation.md) and [verification results](docs/native-sprite-validation.md).

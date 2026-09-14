@@ -5,9 +5,10 @@
 @inject IServiceScopeFactory Scopes
 @inject IImageGenerationRuntime Runtime
 
-<details class="sprite-ai">
-    <summary>AI candidates and validation</summary>
-    <p>Target: frame @FrameId · layer @LayerId · revision @Revision. Selected pixels become an advisory edit mask.</p>
+<section class="sprite-ai">
+    <h3>Image assistance</h3>
+    <p class="target-summary"><strong>@FrameName</strong> / @LayerName <span>Revision @Revision</span></p>
+    <p class="hint">Describe your change and what to preserve. Selections guide the edit mask.</p>
     <textarea aria-label="Sprite AI prompt" @bind="_prompt" placeholder="Change… Preserve… Motion or pose…"></textarea>
     <div class="controls">
         <select aria-label="Sprite generation kind" @bind="_kind"><option value="edit">Edit layer</option><option value="pose">Pose proposal</option><option value="reference">Reference artwork</option></select>
@@ -15,17 +16,29 @@
         <label>Model <select @bind="_model"><option value="">Current selection</option>@foreach (var model in ImageModelCatalog.Models) { <option value="@model">@model</option> }</select></label>
         <label>Background <select @bind="_background"><option value="auto">From source / auto</option><option value="transparent">Transparent</option><option value="opaque">Opaque</option><option value="removable">Removable</option></select></label>
     </div>
-    <label>References: one asset ID | role | preserve scope per line<textarea aria-label="Sprite references" @bind="_references" placeholder="asset-id | character identity | outfit, palette, proportions"></textarea></label>
-    <div class="controls">
-        <label>Art recipe ID <input @bind="_recipe" /></label><label>Animation recipe ID <input @bind="_animation" /></label>
-        <label>Padding L <input type="number" min="0" @bind="_left" /></label><label>T <input type="number" min="0" @bind="_top" /></label><label>R <input type="number" min="0" @bind="_right" /></label><label>B <input type="number" min="0" @bind="_bottom" /></label>
-    </div>
     <div class="controls">
         <button disabled="@_busy" @onclick="PrepareAsync">Preview preparation</button>
-        <button disabled="@(_busy || string.IsNullOrWhiteSpace(_prompt))" @onclick="GenerateAsync">Generate candidates</button>
+        <button class="primary-action" disabled="@(_busy || string.IsNullOrWhiteSpace(_prompt))" @onclick="GenerateAsync">Generate candidates</button>
         <button disabled="@_busy" @onclick="ValidateAsync">Validate every frame</button>
         <button disabled="@_busy" @onclick="RefreshAsync">Refresh jobs</button>
     </div>
+    <details class="reference-settings"><summary>References &amp; recipes</summary>
+        @foreach (var reference in _referenceRows)
+        {
+            <div class="reference-row">
+                <select aria-label="Reference artwork" @bind="reference.AssetId"><option value="">Choose artwork…</option>@foreach (var asset in Workbench?.Assets ?? []) { <option value="@asset.Id">@asset.Label</option> }</select>
+                <input aria-label="Reference role" @bind="reference.Role" placeholder="Role, e.g. character identity" />
+                <input aria-label="Reference preserve scope" @bind="reference.Preserve" placeholder="Preserve outfit, palette, proportions…" />
+                <button @onclick="() => _referenceRows.Remove(reference)">Remove reference</button>
+            </div>
+        }
+        <button @onclick="() => _referenceRows.Add(new())">Add reference</button>
+        <label>Art recipe <select @bind="_recipe"><option value="">No recipe</option>@foreach (var recipe in Workbench?.Recipes ?? []) { <option value="@recipe.Id">@recipe.Name</option> }</select></label>
+        <label>Animation recipe <select @bind="_animation"><option value="">No recipe</option>@foreach (var recipe in Workbench?.AnimationRecipes ?? []) { <option value="@recipe.Id">@recipe.Name</option> }</select></label>
+    </details>
+    <details><summary>Expand canvas</summary><p class="hint">Extra space around the image, in pixels. Preview the preparation before generating.</p><div class="padding-controls">
+        <label>Left <input type="number" min="0" @bind="_left" /></label><label>Top <input type="number" min="0" @bind="_top" /></label><label>Right <input type="number" min="0" @bind="_right" /></label><label>Bottom <input type="number" min="0" @bind="_bottom" /></label>
+    </div></details>
     @if (_error is not null) { <p role="alert">@_error</p> }
     @foreach (var artifact in _artifacts) { <figure><img src="@artifact.Url" alt="@artifact.Label" /><figcaption>@artifact.Label</figcaption></figure> }
     @if (_validation is { } validation)
@@ -50,7 +63,7 @@
             }</div>
         </section>
     }
-</details>
+</section>
 
 @code {
     [Parameter] public Guid ProjectId { get; set; }
@@ -59,7 +72,12 @@
     [Parameter] public Guid LayerId { get; set; }
     [Parameter] public long Revision { get; set; }
     [Parameter] public string ArtMode { get; set; } = "painted";
-    private string _prompt = "", _references = "", _kind = "edit", _model = "", _background = "auto", _recipe = "", _animation = "";
+    [Parameter] public string FrameName { get; set; } = "Frame";
+    [Parameter] public string LayerName { get; set; } = "Layer";
+    [Parameter] public WorkbenchView? Workbench { get; set; }
+    private sealed class ReferenceRow { public string AssetId { get; set; } = ""; public string Role { get; set; } = "character identity"; public string Preserve { get; set; } = ""; }
+    private readonly List<ReferenceRow> _referenceRows = [];
+    private string _prompt = "", _kind = "edit", _model = "", _background = "auto", _recipe = "", _animation = "";
     private int _count = 1, _left, _top, _right, _bottom;
     private Guid? _preparation;
     private string? _preparationKey, _error;
@@ -73,7 +91,7 @@
     private string PreparationKey => $"{DocumentId}:{Revision}:{FrameId}:{LayerId}:{_left}:{_top}:{_right}:{_bottom}:{_background}";
     private SpriteGenerationRequest Request(bool prepared = false)
     {
-        var refs = _references.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => { var parts = line.Split('|', 3); if (parts.Length != 3 || !Guid.TryParse(parts[0].Trim(), out var id)) throw new InvalidOperationException("References need asset ID | role | preserve scope."); return new SpriteReference(id, parts[1].Trim(), parts[2].Trim()); }).ToList();
+        var refs = _referenceRows.Select(row => { if (!Guid.TryParse(row.AssetId, out var id)) throw new InvalidOperationException("Choose artwork for each reference."); return new SpriteReference(id, row.Role.Trim(), row.Preserve.Trim()); }).ToList();
         return new(DocumentId, Revision, FrameId, LayerId, _prompt, _kind, _count, refs,
             prepared && _preparationKey == PreparationKey ? _preparation : null,
             prepared && _preparationKey == PreparationKey ? null : new(_top, _right, _bottom, _left, ResampleMode: ArtMode == "pixel" ? EditCanvasResampleMode.NearestNeighbor : EditCanvasResampleMode.Smooth), ImageModel: string.IsNullOrEmpty(_model) ? null : _model,

@@ -124,7 +124,7 @@ else
                 </ChatSurface>
             </aside>
 
-            <main class="workspace-center">
+            <main class="workspace-center @(_activeWorkspaceMode == WorkspaceMode.Sprites ? "sprite-center" : "")">
                 @if (!string.IsNullOrWhiteSpace(_busyText))
                 {
                     <div class="busy-strip">@_busyText</div>

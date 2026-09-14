@@ -145,7 +145,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` | Native sprite document chooser, blank creation, image/region import, and visible-state integration. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` | Bounded sprite workspace, document chooser, create/import overlays, and visible-state integration. |
 
 ### Llm/
 
@@ -307,7 +307,7 @@
 | `20260914205804_RetireMutableFrameBitmaps.cs` / `.Designer.cs` | Forward native document schema transition. |
 | `20260914210308_RemoveDeferredSpriteHistory.cs` / `.Designer.cs` | Forward native document schema transition. |
 
-| `PixelChat/Components/Sprites/NativeSpriteEditor.razor` / `.razor.css` / `.razor.js` | Revision-aware canvas, drawing and selection tools, layers, transforms, clips, timeline, pivots, history, and script-ready server commands. |
+| `PixelChat/Components/Sprites/NativeSpriteEditor.razor` / `.razor.css` / `.razor.js` | Canvas with fit/wheel zoom/right-drag pan, tool rail, fixed timeline, tabbed inspector, and revision-checked manual commands. |
 | `PixelChat/Sprites/SpriteTimeline.cs` | Shared clip ordering and duration-aware forward/reverse/ping-pong timing. |
 | `PixelChat/Sprites/SpriteDocumentEvents.cs` | App-process document revision notifications for live manual/agent editing. |
 | `PixelChat.Tests/SpriteTimelineTests.cs` | Unequal timing, one-shot, reverse, and ping-pong regression checks. |
@@ -322,14 +322,17 @@
 | `PixelChat/Sprites/SpriteGenerationService.cs` | Revision/layer-bound preparations and candidate inspection/application over persisted image jobs. |
 | `PixelChat/Art/ArtWorkflowService.Sprites.cs` | Native generation batch submission with captured references, model/recipe selections, provider canvases, and source-independent edits. |
 | `PixelChat/Sprites/SpriteValidationService.cs` / `PixelChat/Models/SpriteAssessment.cs` | Every-frame measurements, clip/pair diagnostics, and separate persisted artistic judgments. |
-| `PixelChat/Components/Sprites/SpriteAiPanel.razor` / `.razor.css` | Manual preparation, candidate comparison, job controls, and numerical validation. |
+| `PixelChat/Components/Sprites/SpriteAiPanel.razor` / `.razor.css` | Inspector AI prompt, named artwork/recipe references, preparation, candidates, jobs, and validation. |
 | `PixelChat.Tests/SpriteWorkflowTests.cs` | Late-frame diagnostics, intended motion, target preparation, stale AI results, reversible application, and a fixture provider pipeline. |
 | `20260914220038_NativeSpriteJobsAndAssessments.cs` / `.Designer.cs` | Adds native job snapshots/assessments and preserves edit-session provenance before retiring the obsolete session table. |
 
 | `PixelChat/Sprites/SpriteAtlasBuilder.cs` | Shared deterministic slot placement and versioned frame/clip/pivot/slice export metadata. |
 | `PixelChat/Sprites/SpriteExportService.cs` / `PixelChat/Models/SpriteExport.cs` | Cached immutable native/PNG/JSON/GIF artifacts and bounded hash-verified bundle reimport. |
-| `PixelChat/Components/Sprites/SpriteExportPanel.razor` / `.razor.css` | Revision-specific export controls, download history, GIF preview, and named slices. |
+| `PixelChat/Components/Sprites/SpriteExportPanel.razor` / `.razor.css` | Inspector export controls, revision-specific downloads, GIF previews, and named slices. |
 | `20260914221808_NativeSpriteExports.cs` / `.Designer.cs` | Persists native export artifacts and projects blank-frame identities for migrated empty sets. |
 | `PixelChat.Tests/SpriteExportTests.cs` | Exact RGBA reconstruction, timing/pivots/slices, padding placement, GIF timing, and tamper rejection. |
 | `PixelChat.Tests/SpriteCorpusTests.cs` / `sprite-corpus.js` | Five direct-drawing fixtures with script, render, validation, export, and usage records. |
 | `docs/native-sprite-validation.md` | Local release checks, measured corpus results, artistic judgments, and unverified integrations. |
+
+| `PixelChat/Components/Sprites/SpriteToolIcon.razor` | Accessible-label companion SVG icons for the native drawing tool rail. |
+| `PixelChat.Tests/sprite-viewport.browser.cjs` | Large-image fit, wheel anchoring, pan, transformed drawing, zoom bounds, resize, import, and inspector usability checks. |

@@ -45,17 +45,19 @@ async function main() {
         await revision(6); assert.equal(await editor.locator('.frame-card').count(), 2);
         await page.waitForFunction(() => document.querySelector('.native-editor canvas')?.dataset.renderRevision === '6');
         assert.deepEqual(await pixel(2, 3), [255,128,64,255]);
-        await editor.locator('.sprite-ai summary').click();
+        await editor.getByRole('button', { name: 'AI', exact: true }).click();
         await editor.getByRole('button', { name: 'Validate every frame', exact: true }).click();
         await editor.getByText('2 frames measured at r6', { exact: false }).waitFor();
         await editor.getByRole('button', { name: 'Preview preparation', exact: true }).click();
         await editor.locator('.sprite-ai figure').nth(1).waitFor();
         assert.equal(await editor.locator('.sprite-ai [role=alert]').count(), 0);
+        await editor.getByRole('button', { name: 'Layers', exact: true }).click();
         const artwork = editor.locator('.layer-row').last();
         await artwork.getByLabel('Show', { exact: true }).uncheck(); await revision(7);
         await page.waitForFunction(() => document.querySelector('.native-editor canvas').getContext('2d').getImageData(2,3,1,1).data[3] === 0);
         await artwork.getByLabel('Show', { exact: true }).check(); await revision(8);
         await page.waitForFunction(() => document.querySelector('.native-editor canvas').getContext('2d').getImageData(2,3,1,1).data[3] === 255);
+        await editor.getByRole('button', { name: 'Properties', exact: true }).click();
         await editor.getByLabel('Clip name', { exact: true }).fill('Reverse action');
         await editor.getByLabel('Last', { exact: true }).fill('2');
         await editor.getByLabel('Playback direction', { exact: true }).selectOption('reverse');
@@ -67,7 +69,7 @@ async function main() {
         assert.equal(await editor.locator('canvas.native-playback').getAttribute('data-frame-index'), '1');
         assert.equal(await editor.locator('canvas.native-playback').getAttribute('data-duration-ms'), '100');
         await editor.getByRole('button', { name: 'Stop playback', exact: true }).click();
-        await editor.locator('.sprite-export > summary').click();
+        await editor.getByRole('button', { name: 'Export', exact: true }).click();
         await editor.getByRole('button', { name: 'Create export', exact: true }).click();
         const downloadLink = editor.locator('.sprite-download').first(); await downloadLink.waitFor();
         const response = await page.request.get(new URL(await downloadLink.getAttribute('href'), page.url()).href);
@@ -81,6 +83,7 @@ async function main() {
         assert.equal(await editor.locator('.layer-row').count(), 2);
         assert.equal(await editor.locator('.frame-card').count(), 2);
         assert.equal(await editor.locator('.frame-card').last().locator('small').textContent(), '175 ms');
+        await editor.getByRole('button', { name: 'Properties', exact: true }).click();
         await editor.locator('.clip-controls select').first().selectOption('Reverse action');
         await page.waitForFunction(() => document.querySelector('[aria-label="Playback direction"]')?.value === 'reverse');
         assert.equal(await editor.getByLabel('Playback direction', { exact: true }).inputValue(), 'reverse');
