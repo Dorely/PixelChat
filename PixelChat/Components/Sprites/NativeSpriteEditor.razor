@@ -7,7 +7,6 @@
 @implements IAsyncDisposable
 @inject ISpriteDocumentService Documents
 @inject SpriteDocumentEvents Events
-@inject IFrameSetService FrameSets
 @inject SpriteInspectionService Inspections
 @inject IJSRuntime JS
 
@@ -71,7 +70,7 @@
                     <button @onclick='() => ApplyAsync("Translate", new { op = "translate", frameId = _frameId, layerId = _layerId, dx = _x, dy = _y })'>Translate</button>
                     <button @onclick='() => ApplyAsync("Flip horizontal", new { op = "flip", frameId = _frameId, layerId = _layerId, axis = "horizontal" })'>Flip H</button>
                     <button @onclick='() => ApplyAsync("Flip vertical", new { op = "flip", frameId = _frameId, layerId = _layerId, axis = "vertical" })'>Flip V</button>
-                    <button @onclick='() => ApplyAsync("Rotate", new { op = "rotate", frameId = _frameId, layerId = _layerId, degrees = 90 })'>Rotate 90°</button>
+                    <label>Degrees <input type="number" @bind="_degrees" /></label><button @onclick='() => ApplyAsync("Rotate", new { op = "rotate", frameId = _frameId, layerId = _layerId, degrees = _degrees, resampling = _resampling })'>Rotate</button>
                     <button @onclick='() => TransformSizeAsync("crop")'>Crop canvas</button><button @onclick='() => TransformSizeAsync("resize")'>Resize</button>
                 </div>
                 <h3>Pivots and attachments</h3>
@@ -81,6 +80,8 @@
                 <details><summary>Production rules</summary>
                     <label>Mode <select @bind="_artMode"><option value="pixel">Pixel art</option><option value="painted">Painted</option></select></label>
                     <label>Palette (hex, comma separated)<textarea @bind="_palette"></textarea></label>
+                    <label>Identity reference asset IDs (comma separated)<textarea @bind="_identityReferences"></textarea></label>
+                    <label>Motion requirements<textarea @bind="_motionRequirements"></textarea></label>
                     <label><input type="checkbox" @bind="_enforcePalette" /> Enforce palette</label>
                     <label><input type="checkbox" @bind="_binaryAlpha" /> Binary alpha</label>
                     <label><input type="checkbox" @bind="_convert" /> Explicitly convert existing pixels</label>
@@ -115,10 +116,7 @@
             </div>
             @if (_playing) { <SpriteAnimationPreview Frames="PlaybackFrames" Loop="_loop" PreviewKey="@($"{DocumentId}:{snapshot.Revision}:{_clipName}:{_direction}")" CssClass="native-playback" /> }
         </section>
-        <details><summary>Build sheet</summary>
-            <div class="geometry"><label>Columns <input type="number" min="1" @bind="_columns" /></label><label>Padding <input type="number" min="0" @bind="_padding" /></label><label>Gutter <input type="number" min="0" @bind="_gutter" /></label><label>Margin <input type="number" min="0" @bind="_margin" /></label><button @onclick="BuildAsync">Build</button></div>
-            @if (_builtAsset is { } built) { <ExportPanel ProjectId="ProjectId" AssetId="built" Inline="true" /> }
-        </details>
+        <SpriteExportPanel ProjectId="ProjectId" DocumentId="DocumentId" Revision="snapshot.Revision" Clips="snapshot.Document.Clips" Slices="snapshot.Document.Slices" />
         @if (_showHistory)
         {
             <section class="history"><h3>Operation history</h3>
@@ -134,7 +132,7 @@
             </section>
         }
         @if (_error is not null) { <p role="alert" class="error">@_error</p> }
-        <SpriteAiPanel ProjectId="ProjectId" DocumentId="DocumentId" FrameId="_frameId" LayerId="_layerId" Revision="snapshot.Revision" ArtMode="snapshot.Document.Specification.ArtMode" />
+        <SpriteAiPanel ProjectId="ProjectId" DocumentId="DocumentId" FrameId="_frameId" LayerId="_layerId" Revision="snapshot.Revision" ArtMode="@snapshot.Document.Specification.ArtMode" />
     </div>
 }
 
@@ -145,18 +143,19 @@
     [Parameter] public EventCallback<SpriteEditorFocus> OnFocusChanged { get; set; }
     private static readonly string[] Tools = ["pencil", "brush", "erase", "eyedropper", "fill", "line", "rectangle", "ellipse", "select", "polygon", "selectColor", "pivot"];
     private SpriteSnapshot? _snapshot;
+    private int _degrees = 90;
+    private string _identityReferences = "", _motionRequirements = "";
     private SpriteFrame? CurrentFrame => _snapshot?.Document.Frames.FirstOrDefault(f => f.Id == _frameId);
     private Guid _frameId, _layerId;
     private ElementReference _canvas;
     private IJSObjectReference? _module;
     private DotNetObjectReference<NativeSpriteEditor>? _reference;
     private string _tool = "pencil", _color = "#ff8040", _pointer = "", _resampling = "nearest", _pivotName = "root", _artMode = "pixel", _palette = "", _clipName = "" , _direction = "forward";
-    private int _alpha = 255, _size = 1, _zoom = 8, _x, _y, _width = 64, _height = 64, _clipFirst = 1, _clipLast = 1, _columns = 8, _padding, _gutter, _margin;
+    private int _alpha = 255, _size = 1, _zoom = 8, _x, _y, _width = 64, _height = 64, _clipFirst = 1, _clipLast = 1;
     private bool _filled, _onion, _playing, _loop = true, _showHistory, _busy, _enforcePalette, _binaryAlpha, _convert, _disposed;
     private string? _error;
     private IReadOnlyList<SpriteRevision> _history = [];
     private readonly Dictionary<long, IReadOnlyList<SpriteArtifactView>> _inspectionHistory = [];
-    private Guid? _builtAsset;
     private CancellationTokenSource? _operation;
     private string _renderKey = "";
     protected override async Task OnInitializedAsync() { Events.Changed += DocumentChanged; await ReloadAsync(); }
@@ -169,6 +168,7 @@
         _width = CurrentFrame!.Width; _height = CurrentFrame.Height; _clipLast = Math.Min(Math.Max(_clipLast, 1), _snapshot.Document.Frames.Count);
         _artMode = _snapshot.Document.Specification.ArtMode; _enforcePalette = _snapshot.Document.Specification.EnforcePalette;
         _binaryAlpha = _snapshot.Document.Specification.BinaryAlpha; _palette = string.Join(",", _snapshot.Document.Specification.Palette);
+        _identityReferences = string.Join(",", _snapshot.Document.Specification.IdentityReferences); _motionRequirements = _snapshot.Document.Specification.MotionRequirements;
         if (_showHistory) await LoadHistoryAsync();
         _renderKey = "";
         await OnFocusChanged.InvokeAsync(new(_frameId, _layerId, _snapshot.Revision));
@@ -229,10 +229,11 @@
     private Task SaveSpecificationAsync()
     {
         var spec = _snapshot!.Document.Specification;
-        var changed = new SpriteSpecification { ArtMode = _artMode, Width = spec.Width, Height = spec.Height, BinaryAlpha = _binaryAlpha, EnforcePalette = _enforcePalette, Palette = _palette.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList(), IdentityReferences = spec.IdentityReferences, MotionRequirements = spec.MotionRequirements };
+        var references = _identityReferences.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (references.Any(r => !Guid.TryParse(r, out _))) { _error = "Identity references must be asset IDs separated by commas."; return Task.CompletedTask; }
+        var changed = new SpriteSpecification { ArtMode = _artMode, Width = spec.Width, Height = spec.Height, BinaryAlpha = _binaryAlpha, EnforcePalette = _enforcePalette, Palette = _palette.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList(), IdentityReferences = references.Select(Guid.Parse).ToList(), MotionRequirements = _motionRequirements };
         return ApplyAsync("Production rules", new { op = "setSpecification", specification = changed, convert = _convert });
     }
-    private Task BuildAsync() => RunAsync(async token => { var result = await FrameSets.BuildSheetAsync(ProjectId, new(DocumentId, Columns: _columns, Padding: _padding, Gutter: _gutter, OuterMargin: _margin), token); _builtAsset = result.OutputAssetId; });
     private async Task RunAsync(Func<CancellationToken, Task> action)
     {
         if (_busy) return; _busy = true; _error = null; _operation = new();

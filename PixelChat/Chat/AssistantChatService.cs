@@ -1559,9 +1559,6 @@ public sealed class AssistantChatService(
             if (string.Equals(pendingCall.Name, "build_sheet", StringComparison.Ordinal))
                 return await BuildBuiltSheetModelOnlyContentsAsync(projectId, toolResult, cancellationToken);
 
-            if (string.Equals(pendingCall.Name, "translate_frame_content", StringComparison.Ordinal))
-                return await BuildFrameCellModelOnlyContentsAsync(pendingCall, projectId, "rendered logical cell after translation", cancellationToken);
-
             if (string.Equals(pendingCall.Name, "inspect_frame", StringComparison.Ordinal))
                 return await BuildInspectFrameModelOnlyContentsAsync(pendingCall, projectId, cancellationToken);
 

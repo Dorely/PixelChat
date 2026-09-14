@@ -4,15 +4,6 @@
     min-height: 0;
 }
 
-.export-panel-inline {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
-    gap: 0.65rem;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-}
-
 .export-modal-backdrop {
     position: fixed;
     inset: 0;
@@ -37,24 +28,21 @@
 }
 
 .export-modal-head,
-.export-modal-actions,
-.export-inline-head {
+.export-modal-actions {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
 }
 
-.export-modal-head h2,
-.export-inline-head h2 {
+.export-modal-head h2 {
     margin: 0;
     color: #1d2939;
     font-size: 1rem;
     font-weight: 750;
 }
 
-.export-modal-head span,
-.export-inline-head span {
+.export-modal-head span {
     color: #667085;
     font-size: 0.8rem;
 }
@@ -86,22 +74,6 @@
     grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
     gap: 0.85rem;
     min-height: 0;
-}
-
-.export-panel-inline .export-modal-grid {
-    height: 100%;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
-    align-items: stretch;
-}
-
-.export-panel-inline .export-preview-stage {
-    min-width: 0;
-    min-height: 0;
-}
-
-.export-panel-inline .export-controls {
-    width: min(100%, 380px);
-    justify-self: end;
 }
 
 .export-preview-stage {
@@ -311,12 +283,4 @@
         grid-template-columns: minmax(0, 1fr);
     }
 
-    .export-panel-inline .export-modal-grid {
-        grid-template-columns: minmax(0, 1fr);
-    }
-
-    .export-panel-inline .export-controls {
-        width: 100%;
-        justify-self: stretch;
-    }
 }

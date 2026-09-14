@@ -13,13 +13,16 @@ public sealed class SpriteScriptService(ISpriteDocumentService documents)
         return await documents.ApplyAsync(projectId, new(documentId, expectedRevision, label, commands, "agent", taskId, script), cancellationToken);
     }
 
-    public static async Task<IReadOnlyList<JsonElement>> EvaluateInWorkerAsync(SpriteScriptInput input, CancellationToken cancellationToken = default)
+    public static async Task<IReadOnlyList<JsonElement>> EvaluateInWorkerAsync(SpriteScriptInput input, CancellationToken cancellationToken = default, Action<Process>? workerStarted = null)
     {
         if (input.Script.Length > 262_144) throw new InvalidOperationException("Script exceeds 256K characters.");
         var json = JsonSerializer.Serialize(input, SpriteDocument.JsonOptions);
         if (json.Length > SpriteScriptWorker.MaxMessageChars) throw new InvalidOperationException("Script snapshot budget exceeded.");
-        var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        start.ArgumentList.Add(typeof(SpriteScriptService).Assembly.Location);
+        var assembly = typeof(SpriteScriptService).Assembly.Location;
+        var appHost = Path.Combine(Path.GetDirectoryName(assembly)!, OperatingSystem.IsWindows() ? "PixelChat.exe" : "PixelChat");
+        var hasAppHost = File.Exists(appHost);
+        var start = new ProcessStartInfo(hasAppHost ? appHost : "dotnet") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        if (!hasAppHost) start.ArgumentList.Add(assembly);
         start.ArgumentList.Add("--sprite-script-worker");
         // Child receives only runtime bootstrap environment, never app configuration or provider credentials.
         var environment = new[] { "PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "DOTNET_ROOT" }
@@ -32,6 +35,7 @@ public sealed class SpriteScriptService(ISpriteDocumentService documents)
         if (!process.Start()) throw new InvalidOperationException("Could not start sprite script worker.");
         try
         {
+            workerStarted?.Invoke(process);
             var stdout = SpriteScriptWorker.ReadBoundedAsync(process.StandardOutput, SpriteScriptWorker.MaxMessageChars, deadline.Token);
             var stderr = SpriteScriptWorker.ReadBoundedAsync(process.StandardError, 65536, deadline.Token);
             await process.StandardInput.WriteAsync(json.AsMemory(), deadline.Token); process.StandardInput.Close();
@@ -56,9 +60,14 @@ public sealed class SpriteScriptService(ISpriteDocumentService documents)
         {
             throw new InvalidOperationException("Sprite script exceeded its execution deadline; no changes were committed.");
         }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            throw new InvalidOperationException("Sprite worker stopped without a valid result; no changes were committed.", ex);
+        }
         finally
         {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) when (process.HasExited) { }
             await process.WaitForExitAsync(CancellationToken.None);
         }
     }

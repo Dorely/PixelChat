@@ -27,7 +27,7 @@ public class Frame
     public int LogicalWidth { get; set; }
     public int LogicalHeight { get; set; }
 
-    // Frame-content coordinate space (offset of content within the cell).
+    // Original import placement, retained as provenance; native cels already contain this offset.
     public int ContentOffsetX { get; set; }
     public int ContentOffsetY { get; set; }
 

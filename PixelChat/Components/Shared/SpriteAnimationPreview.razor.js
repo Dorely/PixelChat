@@ -25,6 +25,8 @@ export async function start(canvas, frames, fps, loop) {
 
     animations.set(canvas, state);
     state.images = (await Promise.all(frames.map(loadFrame))).filter(Boolean);
+    state.logicalWidth = Math.max(1, ...state.images.map(item => item.image.naturalWidth || item.image.width));
+    state.logicalHeight = Math.max(1, ...state.images.map(item => item.image.naturalHeight || item.image.height));
 
     if (state.disposed || animations.get(canvas) !== state) {
         return;
@@ -155,8 +157,10 @@ function draw(state) {
 
     const imageWidth = item.image.naturalWidth || item.image.width || 1;
     const imageHeight = item.image.naturalHeight || item.image.height || 1;
-    const viewport = fitRect(width, height, imageWidth, imageHeight);
-    state.context.drawImage(item.image, viewport.x, viewport.y, viewport.w, viewport.h);
+    const viewport = fitRect(width, height, state.logicalWidth, state.logicalHeight);
+    state.context.drawImage(item.image, viewport.x, viewport.y, imageWidth * viewport.w / state.logicalWidth, imageHeight * viewport.h / state.logicalHeight);
+    state.canvas.dataset.frameIndex = String(state.frameIndex);
+    state.canvas.dataset.durationMs = String(Math.round(item.duration * 1000));
 }
 
 function resizeCanvas(canvas) {

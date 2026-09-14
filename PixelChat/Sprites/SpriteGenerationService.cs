@@ -104,7 +104,9 @@ public sealed class SpriteGenerationService(AppDbContext db, ISpriteDocumentServ
             case "apply":
             {
                 var commit = await ApplyAsync(projectId, jobId, candidateId ?? throw new InvalidOperationException("Choose a candidate."), source, token);
-                return new { commit.DocumentId, commit.Revision, commit.HistoryId, artifacts = (await inspections.RenderAsync(projectId, new(commit.DocumentId, commit.Revision, "frame", [Target(batch).FrameId]), token)).Artifacts };
+                try { return new { commit.DocumentId, commit.Revision, commit.HistoryId, artifacts = (await inspections.RenderAsync(projectId, new(commit.DocumentId, commit.Revision, "frame", [Target(batch).FrameId]), token)).Artifacts }; }
+                catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException)
+                { return new { commit.DocumentId, commit.Revision, commit.HistoryId, warning = "Candidate applied. Preview unavailable; use sprite_render to inspect the saved revision." }; }
             }
             default: throw new InvalidOperationException("Action must be read, wait, cancel, resume, retry, inspect, or apply.");
         }

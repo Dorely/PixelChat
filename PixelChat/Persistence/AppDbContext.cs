@@ -35,6 +35,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<SpriteRevision> SpriteRevisions => Set<SpriteRevision>();
     public DbSet<SpriteInspection> SpriteInspections => Set<SpriteInspection>();
     public DbSet<SpriteAssessment> SpriteAssessments => Set<SpriteAssessment>();
+    public DbSet<SpriteExport> SpriteExports => Set<SpriteExport>();
     public DbSet<Anchor> Anchors => Set<Anchor>();
     public DbSet<SheetLayout> SheetLayouts => Set<SheetLayout>();
     public DbSet<BuiltSheet> BuiltSheets => Set<BuiltSheet>();
@@ -90,6 +91,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<SpriteBitmap>(entity => entity.HasKey(e => e.Hash));
+        modelBuilder.Entity<SpriteExport>(entity =>
+        {
+            entity.HasIndex(e => new { e.FrameSetId, e.Revision });
+            entity.HasOne<FrameSet>().WithMany().HasForeignKey(e => e.FrameSetId).OnDelete(DeleteBehavior.Cascade);
+        });
         modelBuilder.Entity<SpriteAssessment>(entity =>
         {
             entity.HasIndex(e => new { e.FrameSetId, e.Revision });

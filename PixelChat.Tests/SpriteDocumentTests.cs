@@ -31,6 +31,30 @@ public sealed class SpriteDocumentTests : IAsyncLifetime
     private async Task<SpriteRaster> Render(SpriteSnapshot s) => SpriteRaster.Decode(await _service.RenderAsync(_projectId, s.DocumentId, s.Document.Frames[0].Id));
 
     [Fact]
+    public async Task StrictConversionIsExplicitAndArbitraryRotationPreservesPixelAlpha()
+    {
+        var s = await _service.CreateAsync(_projectId, "Painted", 8, 8, "painted"); var f = s.Document.Frames[0].Id; var l = s.Document.Layers[0].Id;
+        await Apply(s, new { op = "rectangle", frameId = f, layerId = l, x = 2, y = 2, width = 3, height = 3, filled = true, color = "#ff000080" });
+        s = await _service.ReadAsync(_projectId, s.DocumentId);
+        var specification = new SpriteSpecification { Width = 8, Height = 8, ArtMode = "pixel", BinaryAlpha = true };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Apply(s, new { op = "setSpecification", specification }));
+        Assert.Equal(1, (await _service.ReadAsync(_projectId,s.DocumentId)).Revision);
+        await Apply(s, new { op = "setSpecification", specification, convert = true }, new { op = "rotate", frameId = f, layerId = l, degrees = 37, resampling = "nearest" });
+        var pixels = (await Render(s)).Pixels;
+        Assert.Contains((byte)255,pixels.Where((_,i)=>i%4==3));
+        Assert.All(pixels.Where((_,i)=>i%4==3), alpha => Assert.True(alpha is 0 or 255));
+    }
+
+    [Fact]
+    public async Task StrokeWorkLimitRejectsBatchWithoutMutation()
+    {
+        var s = await Create(); var f = s.Document.Frames[0].Id; var l = s.Document.Layers[0].Id;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Apply(s,new { op = "line", frameId = f, layerId = l, x = 0, y = 0, x2 = 8192, y2 = 8192, size = 512, color = "#ffffffff" }));
+        Assert.Equal(0,(await _service.ReadAsync(_projectId,s.DocumentId)).Revision);
+        Assert.Single(await _service.ListHistoryAsync(_projectId,s.DocumentId));
+    }
+
+    [Fact]
     public async Task DrawingAndFillArePixelExactAndClipToCanvas()
     {
         var s = await Create(); var f = s.Document.Frames[0].Id; var l = s.Document.Layers[0].Id;

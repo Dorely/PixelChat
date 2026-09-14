@@ -66,6 +66,7 @@ builder.Services.AddScoped<SpriteInspectionService>();
 builder.Services.AddScoped<SpriteToolRegistry>();
 builder.Services.AddScoped<SpriteGenerationService>();
 builder.Services.AddScoped<SpriteValidationService>();
+builder.Services.AddScoped<SpriteExportService>();
 builder.Services.AddScoped<ISpriteWorkspaceActionService, SpriteWorkspaceActionService>();
 builder.Services.AddSingleton<TiktokenTokenCounter>();
 builder.Services.AddSingleton<CharEstimateTokenCounter>();

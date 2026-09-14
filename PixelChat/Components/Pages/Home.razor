@@ -185,7 +185,6 @@ else
         "duplicate_frame",
         "set_frame_logical_cell",
         "update_frame_source_bounds",
-        "translate_frame_content",
         "reorder_frame",
         "delete_frame",
         "set_frame_duration",
@@ -1382,11 +1381,10 @@ else
 
     private RenderFragment RenderSpritesWorkspace() => __builder =>
     {
-        <SpriteSheetWorkspace Workbench="@_workbench" SelectedImageModel="@_imageModel"
+        <SpriteSheetWorkspace Workbench="@_workbench"
                               SourceAssetId="@_spriteEditorSourceAssetId"
                               OnChanged="OnSpriteSheetChangedAsync"
                               OnSourceAssetChanged="OnSpriteEditorSourceAssetChangedAsync"
-                              OnExportAsset="OpenExportAsync"
                               AgentStatus="CurrentSpriteAgentStatus()"
                               OnVisibleStateChanged="OnSpritesVisibleStateChanged" />
     };

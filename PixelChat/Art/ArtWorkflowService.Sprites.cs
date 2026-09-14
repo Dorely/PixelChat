@@ -35,7 +35,7 @@ public sealed partial class ArtWorkflowService
         prompt += "\nReferences:\n" + string.Join("\n", references.Select((a, i) =>
         {
             var role = roles.FirstOrDefault(r => r.AssetId == a.Id);
-            return $"Image {i + 1}: {role?.Role ?? "recipe example"}; {role?.Preserve ?? "use the attached recipe's relevant visual guidance"}.";
+            return $"Reference {i + 1} (after the target image for edits): {role?.Role ?? "recipe example"}; {role?.Preserve ?? "use the attached recipe's relevant visual guidance"}.";
         }));
         if (animation is not null && request.Kind != "reference") prompt = $"Animation guidance: {animation.Prompt}\n{prompt}";
         EditCanvasPreparation? preparation = null;

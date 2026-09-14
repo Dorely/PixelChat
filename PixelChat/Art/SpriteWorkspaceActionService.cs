@@ -148,13 +148,6 @@ public sealed class SpriteWorkspaceActionService(
         return view;
     }
 
-    public async Task<FrameSetView> TranslateFrameContentAsync(Guid projectId, TranslateFrameContentRequest request, CancellationToken cancellationToken = default)
-    {
-        var view = await frameSets.TranslateFrameContentAsync(projectId, request, cancellationToken);
-        await FocusFrameSetAsync(projectId, view, request.FrameId, cancellationToken);
-        return view;
-    }
-
     public async Task<FrameSetView> EraseFrameRegionsAsync(Guid projectId, EraseFrameRegionsRequest request, CancellationToken cancellationToken = default)
     {
         var view = await frameSets.EraseFrameRegionsAsync(projectId, request, cancellationToken);

@@ -12,6 +12,18 @@ namespace PixelChat.Tests;
 
 public sealed class SpriteMigrationTests
 {
+    [Fact]
+    public async Task EmptyLegacySetGetsVisibleBlankFrame()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:"); await connection.OpenAsync();
+        await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options, NullLogger<AppDbContext>.Instance);
+        await db.GetService<IMigrator>().MigrateAsync("20260914205129_NativeSpriteDocuments");
+        var project = new Project { Name = "Empty legacy" }; var set = new FrameSet { ProjectId = project.Id, Name = "Empty" };
+        db.Add(project); db.Add(set); await db.SaveChangesAsync(); db.ChangeTracker.Clear();
+        await DatabaseMigrationBootstrapper.MigrateAsync(db);
+        var snapshot = await new SpriteDocumentService(db).ReadAsync(project.Id, set.Id);
+        Assert.Equal(snapshot.Document.Frames.Single().Id, (await db.Frames.SingleAsync()).Id);
+    }
     [Theory]
     [InlineData(false, 2, 2)]
     [InlineData(true, 2, 2)]

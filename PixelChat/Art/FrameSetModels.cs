@@ -127,12 +127,6 @@ public sealed record SetFrameLogicalCellRequest(
     int Width,
     int Height);
 
-public sealed record TranslateFrameContentRequest(
-    Guid FrameSetId,
-    Guid FrameId,
-    int ContentOffsetX,
-    int ContentOffsetY);
-
 public sealed record UpsertFrameMaskRequest(
     Guid FrameId,
     string MaskDataUrl,

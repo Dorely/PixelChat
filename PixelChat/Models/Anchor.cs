@@ -2,7 +2,7 @@ namespace PixelChat.Models;
 
 /// <summary>
 /// A named alignment point on a frame (feet, root, center, custom, …) used to align
-/// frames in a frame set. Stored in frame-content coordinate space.
+/// frames in a frame set. Projects the native document's logical-canvas pivot coordinates.
 /// </summary>
 public class Anchor
 {

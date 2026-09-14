@@ -5,6 +5,7 @@
 @inject ISpriteDocumentService Documents
 @inject IFrameSetService FrameSets
 @inject IArtWorkflowService Workflow
+@inject SpriteExportService Exports
 
 <section class="sprite-workspace">
     <header class="sprite-heading">
@@ -31,6 +32,7 @@
     {
         <div class="sprite-import">
             <label>Import image <InputFile OnChange="ImportAsync" accept="image/png,image/jpeg" /></label>
+            <label>Import native / atlas / frames bundle <InputFile OnChange="ImportBundleAsync" accept=".zip" /></label>
             <select aria-label="Source image" value="@_sourceId" @onchange="SelectSourceAsync">
                 <option value="">Choose existing artwork</option>
                 @foreach (var asset in Workbench.Assets.Where(a => a.ContentType.StartsWith("image/"))) { <option value="@asset.Id">@asset.Label</option> }
@@ -64,9 +66,7 @@
 
 @code {
     [Parameter, EditorRequired] public WorkbenchView Workbench { get; set; } = null!;
-    [Parameter] public string SelectedImageModel { get; set; } = "gpt-image-2.5-sunburst";
     [Parameter] public EventCallback OnChanged { get; set; }
-    [Parameter] public EventCallback<ArtAssetView> OnExportAsset { get; set; }
     [Parameter] public Guid? SourceAssetId { get; set; }
     [Parameter] public EventCallback<Guid> OnSourceAssetChanged { get; set; }
     [Parameter] public EventCallback<WorkspaceSpritesVisibleState> OnVisibleStateChanged { get; set; }
@@ -103,6 +103,11 @@
         using var data = new MemoryStream(); await e.File.OpenReadStream(64 * 1024 * 1024).CopyToAsync(data);
         var asset = await Workflow.ImportAssetAsync(Workbench.Project.Id, new(e.File.Name, e.File.ContentType, data.ToArray(), Path.GetFileNameWithoutExtension(e.File.Name), SwitchToEdit: false));
         _sourceId = asset.Id; await OnSourceAssetChanged.InvokeAsync(asset.Id); await LoadRegionsAsync(); await OnChanged.InvokeAsync();
+    });
+    private Task ImportBundleAsync(InputFileChangeEventArgs e) => RunAsync(async () =>
+    {
+        using var data = new MemoryStream(); await e.File.OpenReadStream(SpriteExportService.MaxBundleBytes).CopyToAsync(data);
+        var imported = await Exports.ImportAsync(Workbench.Project.Id, data.ToArray()); _showImport = false; await ActivateAsync(imported.Snapshot.DocumentId);
     });
     private async Task LoadRegionsAsync() { _selectedRegions.Clear(); _regions = _sourceId is { } id ? await FrameSets.ListSourceRegionsAsync(Workbench.Project.Id, id) : []; }
     private Task DetectAsync() => RunAsync(async () => { if (_sourceId is { } id) { _regions = await FrameSets.DetectSourceRegionsAsync(Workbench.Project.Id, new(id)); foreach (var r in _regions) _selectedRegions.Add(r.Id); } });

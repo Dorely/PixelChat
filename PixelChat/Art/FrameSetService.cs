@@ -238,19 +238,6 @@ public sealed partial class FrameSetService(
         return await BuildFrameSetViewAsync(projectId, set.Id, cancellationToken);
     }
 
-    public async Task<FrameSetView> TranslateFrameContentAsync(
-        Guid projectId,
-        TranslateFrameContentRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        var snapshot = await documents.ReadAsync(projectId, request.FrameSetId, cancellationToken: cancellationToken);
-        var frame = snapshot.Document.Frames.Single(f => f.Id == request.FrameId);
-        var dx = request.ContentOffsetX - frame.ImportOffset.X; var dy = request.ContentOffsetY - frame.ImportOffset.Y;
-        var operations = snapshot.Document.Layers.Select(l => JsonSerializer.SerializeToElement(new { op = "translate", frameId = frame.Id, layerId = l.Id, dx, dy }, JsonOptions)).ToList();
-        await documents.ApplyAsync(projectId, new(request.FrameSetId, snapshot.Revision, "Translate frame", operations), cancellationToken);
-        return await BuildFrameSetViewAsync(projectId, request.FrameSetId, cancellationToken);
-    }
-
     public async Task<FrameSetView> EraseFrameRegionsAsync(
         Guid projectId,
         EraseFrameRegionsRequest request,
@@ -523,8 +510,8 @@ public sealed partial class FrameSetService(
         var template = BuildAnchorTemplate(referenceContent.Rgba, referenceContent.Width, referenceContent.Height, anchor, background);
         var searchPadding = Math.Clamp(request.SearchPadding, 0, 512);
         var minScore = Math.Clamp(request.MinScore, -1d, 1d);
-        var targetCenterX = reference.ContentOffsetX + anchor.X + (anchor.Width / 2);
-        var targetCenterY = reference.ContentOffsetY + anchor.Y + (anchor.Height / 2);
+        var targetCenterX = anchor.X + (anchor.Width / 2);
+        var targetCenterY = anchor.Y + (anchor.Height / 2);
         var warnings = template.Warnings.ToList();
         var matches = new List<AnchorAlignmentMatchView>();
         var now = DateTime.UtcNow;
@@ -544,8 +531,8 @@ public sealed partial class FrameSetService(
             var matchCenterY = match.Rect.Y + (match.Rect.Height / 2);
             var nextOffsetX = targetCenterX - matchCenterX;
             var nextOffsetY = targetCenterY - matchCenterY;
-            var deltaX = nextOffsetX - frame.ContentOffsetX;
-            var deltaY = nextOffsetY - frame.ContentOffsetY;
+            var deltaX = nextOffsetX;
+            var deltaY = nextOffsetY;
 
             if (request.Apply)
                 foreach (var layer in Document(frameSet).Layers)
@@ -586,68 +573,17 @@ public sealed partial class FrameSetService(
         CancellationToken cancellationToken = default)
     {
         var frameSet = await LoadFrameSetAsync(projectId, request.FrameSetId, cancellationToken);
-        var frames = await LoadFramesAsync(projectId, frameSet.Id, cancellationToken);
-        if (frames.Count == 0)
-            throw new InvalidOperationException("The frame set has no frames to build.");
-
+        var snapshot = await documents.ReadAsync(projectId, request.FrameSetId, cancellationToken: cancellationToken);
+        var ordered = snapshot.Document.Frames;
+        var requestedColumns = request.Columns > 0 ? Math.Min(request.Columns, ordered.Count) : (int)Math.Ceiling(ordered.Count / (double)Math.Max(1, request.Rows));
+        var packing = SpriteAtlasBuilder.Build(snapshot, await documents.LoadBitmapsAsync(snapshot.Document, cancellationToken),
+            new("atlas", requestedColumns, request.Padding, request.Gutter, request.OuterMargin, HorizontalAnchor: request.HorizontalAnchor, VerticalAnchor: request.VerticalAnchor, Ordering: request.Ordering), cancellationToken);
+        var rows = packing.Manifest.Rows; var columns = packing.Manifest.Columns;
+        var cellWidth = packing.Manifest.Frames[0].Slot.Width; var cellHeight = packing.Manifest.Frames[0].Slot.Height;
+        var gutter = request.Gutter; var outer = request.OuterMargin; var ordering = request.Ordering;
         var background = new SpriteSheetBackground("transparent", 0, 0, 0, 0);
-        var ordered = OrderFrames(frameSet, frames);
-        var rows = Math.Clamp(request.Rows, 1, 32);
-        var columns = request.Columns > 0
-            ? Math.Clamp(request.Columns, 1, 64)
-            : Math.Clamp((int)Math.Ceiling(ordered.Count / (double)rows), 1, 64);
-        if (rows * columns < ordered.Count)
-            rows = Math.Clamp((int)Math.Ceiling(ordered.Count / (double)columns), 1, 32);
-        if (rows * columns < ordered.Count)
-            throw new InvalidOperationException("Frame count exceeds the configured sheet grid.");
-
-        var cellWidth = Math.Max(1, ordered.Max(frame => frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth));
-        var cellHeight = Math.Max(1, ordered.Max(frame => frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight));
-        var gutter = Math.Clamp(request.Gutter, 0, 4096);
-        var outer = Math.Clamp(request.OuterMargin, 0, 4096);
-        var outputWidth = checked((outer * 2) + (columns * cellWidth) + (Math.Max(0, columns - 1) * gutter));
-        var outputHeight = checked((outer * 2) + (rows * cellHeight) + (Math.Max(0, rows - 1) * gutter));
-        ValidateCanvasSize(outputWidth, outputHeight, "Built sprite sheet is too large.");
-
-        var outputRgba = BuildBackgroundCell(outputWidth, outputHeight, background);
+        var outputWidth = packing.Bitmap!.Width; var outputHeight = packing.Bitmap.Height; var png = packing.Bitmap.Data;
         var warnings = new List<string>();
-        var manifestFrames = new List<object>();
-        var ordering = NormalizeOrdering(request.Ordering);
-
-        for (var ordinal = 0; ordinal < ordered.Count; ordinal++)
-        {
-            var frame = ordered[ordinal];
-            var (row, column) = SheetSlot(ordinal, rows, columns, ordering);
-            var destX = outer + (column * (cellWidth + gutter));
-            var destY = outer + (row * (cellHeight + gutter));
-            var cellRgba = RenderFrameCell(frame, cellWidth, cellHeight);
-            BlitInto(outputRgba, outputWidth, outputHeight, cellRgba, cellWidth, cellHeight, destX, destY);
-
-            if (frame.ContentOffsetX < 0
-                || frame.ContentOffsetY < 0
-                || frame.ContentOffsetX + frame.SourceWidth > cellWidth
-                || frame.ContentOffsetY + frame.SourceHeight > cellHeight)
-            {
-                warnings.Add($"Frame {frame.Index + 1}: content extends outside the logical cell.");
-            }
-
-            manifestFrames.Add(new
-            {
-                frameId = frame.Id,
-                frame.Index,
-                row,
-                column,
-                sheetX = destX,
-                sheetY = destY,
-                cellWidth,
-                cellHeight,
-                contentOffsetX = frame.ContentOffsetX,
-                contentOffsetY = frame.ContentOffsetY,
-                source = new { frame.SourceX, frame.SourceY, frame.SourceWidth, frame.SourceHeight },
-            });
-        }
-
-        var png = SpriteSheetPngCodec.EncodeRgba(outputWidth, outputHeight, outputRgba);
         var now = DateTime.UtcNow;
         var asset = new ArtAsset
         {
@@ -688,20 +624,8 @@ public sealed partial class FrameSetService(
         };
         await db.SheetLayouts.AddAsync(layout, cancellationToken);
 
-        var manifest = JsonSerializer.Serialize(new
-        {
-            builtAt = now,
-            frameSetId = frameSet.Id,
-            rows,
-            columns,
-            cellWidth,
-            cellHeight,
-            padding = layout.Padding,
-            gutter,
-            outerMargin = outer,
-            ordering,
-            frames = manifestFrames,
-        }, JsonOptions);
+        var manifest = JsonSerializer.Serialize(packing.Manifest, SpriteDocument.JsonOptions);
+        asset.SourceMetadataJson = manifest;
         var built = new BuiltSheet
         {
             ProjectId = projectId,
@@ -1116,11 +1040,6 @@ public sealed partial class FrameSetService(
         StageCell(frame, cell, cellWidth, cellHeight);
     }
 
-    private static (int Row, int Column) SheetSlot(int ordinal, int rows, int columns, string ordering) =>
-        ordering == "columnMajor"
-            ? (ordinal % rows, ordinal / rows)
-            : (ordinal / columns, ordinal % columns);
-
     private static IReadOnlyList<Guid> DeserializeIds(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -1173,9 +1092,6 @@ public sealed partial class FrameSetService(
             Math.Clamp(width, 1, Math.Max(1, sourceWidth - rectX)),
             Math.Clamp(height, 1, Math.Max(1, sourceHeight - rectY)));
     }
-
-    private static string NormalizeOrdering(string? value) =>
-        string.Equals(value?.Trim(), "columnMajor", StringComparison.OrdinalIgnoreCase) ? "columnMajor" : "rowMajor";
 
     private static byte[] BuildBackgroundCell(int width, int height, SpriteSheetBackground background)
     {

@@ -9,6 +9,7 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
 {
     private readonly Dictionary<string, SpriteBitmap> _created = [];
     private long _allocatedPixels;
+    private long _strokeWork;
     public IReadOnlyDictionary<string, SpriteBitmap> Created => _created;
     public SpriteBitmap Bitmap(string hash) => _created.TryGetValue(hash, out var bitmap) ? bitmap : resolve(hash);
 
@@ -42,8 +43,11 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
         if (doc.Frames.Select(f => f.Id).Distinct().Count() != doc.Frames.Count || doc.Layers.Select(l => l.Id).Distinct().Count() != doc.Layers.Count)
             throw new InvalidOperationException("Frame and layer IDs must be unique.");
         foreach (var layer in doc.Layers)
-            if (!double.IsFinite(layer.Opacity) || layer.Opacity is < 0 or > 1) throw new InvalidOperationException("Layer opacity must be 0–1.");
+            if (!double.IsFinite(layer.Opacity) || layer.Opacity is < 0 or > 1 || doc.Specification.BinaryAlpha && layer.Opacity is > 0 and < 1)
+                throw new InvalidOperationException("Layer opacity must be 0–1; binary-alpha documents require 0 or 1.");
         var layers = doc.Layers.Select(l => l.Id).ToHashSet();
+        if (doc.Frames.SelectMany(f => f.Cels.Values.Select(hash => new { hash, Pixels = (long)f.Width * f.Height })).DistinctBy(b => b.hash).Sum(b => b.Pixels) > 67_108_864)
+            throw new InvalidOperationException("Document bitmap budget exceeds 64 megapixels of unique content.");
         foreach (var frame in doc.Frames)
         {
             SpriteRaster.CheckSize(frame.Width, frame.Height);
@@ -56,6 +60,13 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
         if (doc.Clips.Select(c => c.Name).Distinct().Count() != doc.Clips.Count) throw new InvalidOperationException("Clip names must be unique.");
         if (doc.Specification.EnforcePalette && doc.Specification.Palette.Count == 0) throw new InvalidOperationException("An enforced palette cannot be empty.");
         foreach (var color in doc.Specification.Palette) _ = SpriteRaster.Color(color);
+        if (doc.Slices.Any(s => string.IsNullOrWhiteSpace(s.Name) || s.Rect.Width < 1 || s.Rect.Height < 1) || doc.Slices.Select(s => s.Name).Distinct().Count() != doc.Slices.Count) throw new InvalidOperationException("Slices need unique names and positive dimensions.");
+        if (doc.Selection is { } selection)
+        {
+            var frame = doc.Frames.SingleOrDefault(f => f.Id == selection.FrameId) ?? throw new InvalidOperationException("Selection frame missing.");
+            if (selection.Polygon.Count is < 3 or > 10000) throw new InvalidOperationException("Selection needs 3–10000 polygon points.");
+            if (selection.PixelMask is { } mask && (selection.Width != frame.Width || mask.Length != (frame.Width * frame.Height + 7) / 8)) throw new InvalidOperationException("Selection mask dimensions differ from its frame.");
+        }
     }
 
     private void ApplyOne(JsonElement op)
@@ -78,6 +89,7 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
                 if (op.TryGetProperty("visible", out var v)) layer.Visible = v.GetBoolean();
                 if (op.TryGetProperty("locked", out var l)) layer.Locked = l.GetBoolean();
                 if (op.TryGetProperty("opacity", out var a)) layer.Opacity = a.GetDouble();
+                if (document.Specification.BinaryAlpha && layer.Opacity is > 0 and < 1) throw new InvalidOperationException("Binary-alpha documents require layer opacity 0 or 1.");
                 return;
             }
             case "reorderLayer": Move(document.Layers, Layer(op), Int(op, "index")); return;
@@ -169,6 +181,12 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
                             for (var y = 0; y < converted.Height; y++) for (var x = 0; x < converted.Width; x++) converted.Put(x, y, Constrain(converted.Get(x, y), true));
                             f.Cels[id] = Store(converted);
                         }
+                else
+                    foreach (var hash in document.Frames.SelectMany(f => f.Cels.Values).Distinct())
+                    {
+                        var existing = SpriteRaster.Decode(Bitmap(hash).Data);
+                        for (var y = 0; y < existing.Height; y++) for (var x = 0; x < existing.Width; x++) _ = Constrain(existing.Get(x,y), false);
+                    }
                 return;
             }
             case "select":
@@ -216,6 +234,7 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
         }
         void Brush(int x, int y)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var size = Math.Clamp(Int(op, "size", 1), 1, 512);
             if (size == 1) { Paint(x, y); return; }
             var radius = size / 2d;
@@ -232,6 +251,11 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
                 var points = op.TryGetProperty("points", out var p) ? p.Deserialize<List<SpritePoint>>(SpriteDocument.JsonOptions)! : new List<SpritePoint> { new(Int(op, "x"), Int(op, "y")) };
                 if (name == "line") points.Add(new(Int(op, "x2"), Int(op, "y2")));
                 if (points.Count is < 1 or > 10000 || points.Any(p => Math.Abs((long)p.X) > 16384 || Math.Abs((long)p.Y) > 16384)) throw new InvalidOperationException("Invalid stroke coordinates.");
+                long steps = 1;
+                for (var i = 1; i < points.Count; i++) steps += 1 + Math.Max(Math.Abs(points[i].X - points[i-1].X), Math.Abs(points[i].Y - points[i-1].Y));
+                var size = Math.Clamp(Int(op, "size", 1), 1, 512);
+                _strokeWork += steps * (size + 1L) * (size + 1L);
+                if (_strokeWork > 67_108_864) throw new InvalidOperationException("Batch strokes exceed the raster work budget; split them into smaller batches.");
                 Brush(points[0].X, points[0].Y);
                 for (var i = 1; i < points.Count; i++) Line(points[i - 1], points[i], Brush);
                 break;
@@ -316,7 +340,8 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
             {
                 var before = new SpriteRaster(raster.Width, raster.Height, (byte[])raster.Pixels.Clone());
                 var degrees = Int(op, "degrees", 90);
-                if (name == "rotate" && degrees % 90 != 0) throw new InvalidOperationException("Typed rotation supports exact multiples of 90 degrees.");
+                var resampling = Text(op, "resampling", "nearest");
+                if (name == "rotate" && (resampling is not ("nearest" or "smooth") || document.Specification.ArtMode == "pixel" && resampling != "nearest")) throw new InvalidOperationException("Rotation requires nearest/smooth resampling; pixel mode requires nearest.");
                 var turns = ((degrees / 90) % 4 + 4) % 4;
                 for (var y = 0; y < raster.Height; y++) for (var x = 0; x < raster.Width; x++)
                 {
@@ -327,6 +352,27 @@ public sealed class SpriteCommandEngine(SpriteDocument document, Func<string, Sp
                     else
                     {
                         var dx = x - (raster.Width - 1) / 2d; var dy = y - (raster.Height - 1) / 2d;
+                        if (degrees % 90 != 0)
+                        {
+                            var angle = (degrees % 360) * Math.PI / 180;
+                            var sourceX = Math.Cos(angle) * dx + Math.Sin(angle) * dy + (raster.Width - 1) / 2d;
+                            var sourceY = -Math.Sin(angle) * dx + Math.Cos(angle) * dy + (raster.Height - 1) / 2d;
+                            if (resampling == "smooth")
+                            {
+                                var left = (int)Math.Floor(sourceX); var top = (int)Math.Floor(sourceY); var fx = sourceX-left; var fy = sourceY-top;
+                                double alpha = 0, red = 0, green = 0, blue = 0;
+                                for(var oy=0;oy<2;oy++) for(var ox=0;ox<2;ox++)
+                                {
+                                    var sample = Allowed(left+ox,top+oy) ? before.Get(left+ox,top+oy) : default;
+                                    var weight = (ox==0?1-fx:fx)*(oy==0?1-fy:fy)*sample.A/255d;
+                                    alpha += weight; red += sample.R*weight; green += sample.G*weight; blue += sample.B*weight;
+                                }
+                                raster.Put(x,y,alpha == 0 ? default : Constrain(new((byte)Math.Round(red/alpha),(byte)Math.Round(green/alpha),(byte)Math.Round(blue/alpha),(byte)Math.Clamp(Math.Round(alpha*255),0,255)),false));
+                                continue;
+                            }
+                            sx=(int)Math.Round(sourceX); sy=(int)Math.Round(sourceY);
+                            raster.Put(x,y,Allowed(sx,sy)?before.Get(sx,sy):default); continue;
+                        }
                         for (var t = 0; t < turns; t++) (dx, dy) = (dy, -dx);
                         sx = (int)Math.Round(dx + (raster.Width - 1) / 2d); sy = (int)Math.Round(dy + (raster.Height - 1) / 2d);
                     }

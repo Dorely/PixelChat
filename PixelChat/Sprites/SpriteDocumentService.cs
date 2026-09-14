@@ -37,16 +37,35 @@ public sealed class SpriteDocumentService(AppDbContext db, SpriteDocumentEvents?
     public async Task<SpriteSnapshot> ImportAsync(Guid projectId, Guid? sourceAssetId, SpriteDocument document, IReadOnlyCollection<SpriteBitmap> bitmaps, CancellationToken cancellationToken = default)
     {
         SpriteCommandEngine.ValidateStructure(document);
+        var frameIds = document.Frames.Select(f => f.Id).ToList();
+        if (await db.Frames.IgnoreQueryFilters().AnyAsync(f => frameIds.Contains(f.Id), cancellationToken)) throw new InvalidOperationException("Imported frame IDs already belong to another document.");
+        var supplied = bitmaps.DistinctBy(b => b.Hash).ToDictionary(b => b.Hash);
+        foreach (var bitmap in supplied.Values)
+        {
+            if (Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bitmap.Data)) != bitmap.Hash) throw new InvalidDataException("Bitmap content hash mismatch.");
+            var decoded = SpriteRaster.Decode(bitmap.Data);
+            if (decoded.Width != bitmap.Width || decoded.Height != bitmap.Height) throw new InvalidDataException("Bitmap metadata dimensions mismatch.");
+        }
+        foreach (var frame in document.Frames) foreach (var hash in frame.Cels.Values)
+        {
+            var bitmap = supplied.GetValueOrDefault(hash) ?? await db.SpriteBitmaps.AsNoTracking().SingleOrDefaultAsync(b => b.Hash == hash, cancellationToken) ?? throw new InvalidDataException("Missing imported cel bitmap.");
+            if (bitmap.Width != frame.Width || bitmap.Height != frame.Height) throw new InvalidDataException("Imported cel dimensions differ from its frame.");
+        }
         var set = new FrameSet { ProjectId = projectId, SourceAssetId = sourceAssetId, Name = document.Name, DefaultCellWidth = document.Specification.Width, DefaultCellHeight = document.Specification.Height, DocumentJson = document.Serialize() };
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
-        foreach (var bitmap in bitmaps.DistinctBy(b => b.Hash))
-            if (!db.SpriteBitmaps.Local.Any(b => b.Hash == bitmap.Hash) && !await db.SpriteBitmaps.AnyAsync(b => b.Hash == bitmap.Hash, cancellationToken)) db.SpriteBitmaps.Add(bitmap);
-        db.FrameSets.Add(set);
-        db.SpriteRevisions.Add(new() { FrameSetId = set.Id, Number = 0, DocumentJson = set.DocumentJson, Label = "Create sprite" });
-        await ProjectFramesAsync(set, document, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        return new(set.Id, 0, document);
+        try
+        {
+            foreach (var bitmap in bitmaps.DistinctBy(b => b.Hash))
+                if (!db.SpriteBitmaps.Local.Any(b => b.Hash == bitmap.Hash) && !await db.SpriteBitmaps.AnyAsync(b => b.Hash == bitmap.Hash, cancellationToken)) db.SpriteBitmaps.Add(bitmap);
+            db.FrameSets.Add(set);
+            db.SpriteRevisions.Add(new() { FrameSetId = set.Id, Number = 0, DocumentJson = set.DocumentJson, Label = "Create sprite" });
+            await ProjectFramesAsync(set, document, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await transaction.CommitAsync(cancellationToken);
+            return new(set.Id, 0, document);
+        }
+        catch { await transaction.RollbackAsync(CancellationToken.None); db.ChangeTracker.Clear(); throw; }
     }
 
     public async Task<SpriteSnapshot> ReadAsync(Guid projectId, Guid documentId, long? revision = null, CancellationToken cancellationToken = default)
@@ -161,10 +180,18 @@ public sealed class SpriteDocumentService(AppDbContext db, SpriteDocumentEvents?
             frame.IsDeleted = false;
             frame.Name = item.Name; frame.Index = index; frame.LogicalWidth = item.Width; frame.LogicalHeight = item.Height;
             frame.DurationMs = item.DurationMs; frame.HideFromOnionSkin = item.HideFromOnionSkin;
-            frame.SourceRegionId = item.SourceRegionId is { } regionId && await db.SpriteRegions.AnyAsync(r => r.Id == regionId, cancellationToken) ? regionId : null;
+            frame.SourceRegionId = item.SourceRegionId is { } regionId && await db.SpriteRegions.AnyAsync(r => r.Id == regionId && r.ProjectId == set.ProjectId, cancellationToken) ? regionId : null;
             if (item.SourceRect is { } rect) { frame.SourceX = rect.X; frame.SourceY = rect.Y; frame.SourceWidth = rect.Width; frame.SourceHeight = rect.Height; }
             frame.ContentOffsetX = item.ImportOffset.X; frame.ContentOffsetY = item.ImportOffset.Y;
             frame.UpdatedAt = DateTime.UtcNow;
+            var anchors = await db.Anchors.IgnoreQueryFilters().Where(a => a.FrameId == item.Id).ToListAsync(cancellationToken);
+            db.Anchors.RemoveRange(anchors.Where(a => !item.Pivots.ContainsKey(a.Name)));
+            foreach (var (name, point) in item.Pivots)
+            {
+                var anchor = anchors.FirstOrDefault(a => a.Name == name);
+                if (anchor is null) { anchor = new() { ProjectId = set.ProjectId, FrameId = item.Id, Name = name }; db.Anchors.Add(anchor); }
+                anchor.X = point.X; anchor.Y = point.Y; anchor.UpdatedAt = DateTime.UtcNow;
+            }
         }
         set.OrderedFrameIdsJson = JsonSerializer.Serialize(document.Frames.Select(f => f.Id));
     }

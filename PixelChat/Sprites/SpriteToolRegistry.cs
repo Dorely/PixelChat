@@ -6,7 +6,7 @@ using PixelChat.Models;
 namespace PixelChat.Sprites;
 
 public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteScriptService scripts, SpriteInspectionService inspections,
-    IArtWorkflowService workflow, IFrameSetService frameSets, SpriteValidationService? validation = null, SpriteGenerationService? generation = null)
+    IArtWorkflowService workflow, IFrameSetService frameSets, SpriteValidationService? validation = null, SpriteGenerationService? generation = null, SpriteExportService? exports = null)
 {
     public async Task<IReadOnlyList<AIContent>> ImageContentsAsync(Guid projectId, string result, CancellationToken cancellationToken)
     {
@@ -46,9 +46,23 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
             return Json(await generation!.OperateAsync(projectId, jobId, action, candidateId, waitSeconds, token: cancellationToken));
         },
             "sprite_job", "Read/wait/cancel/resume/retry a persisted sprite job, inspect a candidate with before/after/difference PNGs, or apply a candidate atomically against the job's captured revision. Stale results remain available but cannot overwrite manual work. Strict pixel conversion is explicit; provider masks remain advisory."),
-        AIFunctionFactory.Create((string name, int width = 64, int height = 64, string artMode = "pixel", Guid[]? assetIds = null, Guid? sourceAssetId = null, Guid[]? regionIds = null, CancellationToken cancellationToken = default) =>
-            CreateAsync(projectId, name, width, height, artMode, assetIds, sourceAssetId, regionIds, cancellationToken),
-            "sprite_create", "Create a blank native sprite, import assets as frames, or import selected source regions. Imports preserve pixels and use painted mode; explicit conversion is required for strict pixel art. Returns stable document/layer/frame IDs."),
+        AIFunctionFactory.Create(async (string name, int width = 64, int height = 64, string artMode = "pixel", Guid[]? assetIds = null, Guid? sourceAssetId = null, Guid[]? regionIds = null, Guid? bundleExportId = null, CancellationToken cancellationToken = default) =>
+        {
+            if (bundleExportId is { } exportId)
+            {
+                var imported = await exports!.ImportAsync(projectId, (await exports.ReadAsync(projectId, exportId, cancellationToken)).Data, name, cancellationToken);
+                await frameSets.SetActiveFrameSetAsync(projectId, imported.Snapshot.DocumentId, cancellationToken);
+                return Json(imported);
+            }
+            return await CreateAsync(projectId, name, width, height, artMode, assetIds, sourceAssetId, regionIds, cancellationToken);
+        },
+            "sprite_create", "Create a blank native sprite, import assets/regions, or reimport a native/atlas/frames bundle by bundleExportId. Image imports preserve pixels in painted mode; native bundles retain art mode and editable layers. Returns stable IDs and import mappings."),
+        AIFunctionFactory.Create(async (Guid documentId, long revision, SpriteExportSpec specification, CancellationToken cancellationToken = default) =>
+        {
+            var artifact = await exports!.ExportAsync(projectId, documentId, revision, specification, cancellationToken);
+            return Json(new { artifact.Id, artifact.DocumentId, artifact.Revision, artifact.FileName, artifact.ContentType, artifact.Bytes, artifact.Url, artifact.Warnings });
+        },
+            "sprite_export", "Export a specified revision as a portable native bundle, PNG atlas+JSON zip, PNG frames+JSON zip, versioned metadata, or animated GIF preview. Padding is inside slots, gutter between slots, outerMargin around atlas. Exact timing/pivots/slices/alpha remain in native/PNG/JSON; GIF is a quantized preview. Artifacts are persisted and downloadable."),
         AIFunctionFactory.Create((Guid documentId, long expectedRevision, string label, JsonElement[] operations, string? taskId = null, bool returnPreview = true, CancellationToken cancellationToken = default) =>
             ApplyAsync(projectId, new(documentId, expectedRevision, label, operations, "agent", taskId), returnPreview, cancellationToken),
             "sprite_apply", "Atomically apply a typed command batch to the expected document revision. Conflicts change nothing. Use sprite_help(commands) for operations. Prefer one coherent batch over one call per pixel. Optional preview returns actual PNG evidence."),
@@ -57,7 +71,7 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
             "sprite_script", "Run resource-bounded JavaScript in an isolated worker. document is the starting snapshot; sprite.apply(op) and sprite.batch(ops) emit the same typed operations as sprite_apply. No filesystem/network/CLR/modules. Success commits one undoable batch; errors and cancellation commit nothing."),
         AIFunctionFactory.Create((Guid documentId, long revision, string kind = "frame", Guid[]? frameIds = null, SpriteRect? crop = null, int scale = 1, int page = 0, int pageSize = 12, long? compareRevision = null, Guid[]? knownArtifacts = null, CancellationToken cancellationToken = default) =>
             RenderAsync(projectId, new(documentId, revision, kind, frameIds, crop, scale, page, pageSize, compareRevision), knownArtifacts, cancellationToken),
-            "sprite_render", "Inspect a specific revision as actual labeled PNGs: frame, contact, onion, or difference (requires compareRevision). Integer scale 1-16. Paginate contact sheets; frame IDs and timing accompany the pixels. knownArtifacts suppresses resending identical images."),
+            "sprite_render", "Inspect a specific revision as actual labeled PNGs: frame, contact, onion, difference (requires compareRevision), or playback (GIF plus PNG contact sheet). Integer scale 1-16. Paginate contact sheets; frame IDs and timing accompany the pixels. knownArtifacts suppresses resending identical images."),
         AIFunctionFactory.Create((Guid documentId, string action = "list", long expectedRevision = 0, bool wholeTask = false, int offset = 0, CancellationToken cancellationToken = default) =>
             HistoryAsync(projectId, documentId, action, expectedRevision, wholeTask, offset, cancellationToken),
             "sprite_history", "Read persisted command history (independent of chat) or perform revision-checked undo/redo. wholeTask undoes only a contiguous task suffix and stops at intervening manual work."),
@@ -87,7 +101,8 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
             pixels = [];
             for (var y = 0; y < rect.Height; y++) { var row = new List<string>(); for (var x = 0; x < rect.Width; x++) row.Add("#" + raster.Get(rect.X + x, rect.Y + y).ToHex()); pixels.Add(row); }
         }
-        return Json(new { documentId = id, snapshot.Revision, doc.Name, doc.FormatVersion, doc.Specification, doc.Layers, doc.Clips, doc.Slices, doc.Selection,
+        return Json(new { documentId = id, snapshot.Revision, doc.Name, doc.FormatVersion, doc.Specification, doc.Layers, doc.Clips, doc.Slices,
+            selection = doc.Selection is { } selection ? new { selection.FrameId, selection.Polygon, selection.Color, selection.Width, hasPixelMask = selection.PixelMask is not null } : null,
             frameCount = doc.Frames.Count, offset = Math.Max(0, offset), frames = doc.Frames.Skip(Math.Max(0, offset)).Take(Math.Clamp(limit, 1, 64)), pixelRect = rect, pixels });
     }
 
@@ -140,6 +155,12 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
     }
     private async Task<string> RenderAsync(Guid projectId, SpriteRenderRequest request, Guid[]? known, CancellationToken token)
     {
+        if (request.Kind == "playback")
+        {
+            var preview = await exports!.ExportAsync(projectId, request.DocumentId, request.Revision, new("preview"), token);
+            var contact = await inspections.RenderAsync(projectId, request with { Kind = "contact" }, token);
+            return Json(new { preview, artifacts = contact.Artifacts, contact.NextPage, contact.TotalFrames });
+        }
         var render = await inspections.RenderAsync(projectId, request, token);
         return Json(new { render.DocumentId, render.Revision, render.TotalFrames, render.NextPage,
             artifacts = render.Artifacts.Select(a => new { a.Id, a.Label, a.Url, a.Width, a.Height, a.Revision, sendImage = known?.Contains(a.Id) != true }) });

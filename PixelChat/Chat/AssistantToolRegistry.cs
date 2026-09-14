@@ -56,7 +56,6 @@ public sealed class AssistantToolRegistry(
         "duplicate_frame",
         "set_frame_logical_cell",
         "update_frame_source_bounds",
-        "translate_frame_content",
         "reorder_frame",
         "delete_frame",
         "set_frame_duration",
@@ -417,17 +416,6 @@ public sealed class AssistantToolRegistry(
 
         AIFunctionFactory.Create(
             method: (
-                Guid frameSetId,
-                Guid frameId,
-                int contentOffsetX,
-                int contentOffsetY,
-                CancellationToken cancellationToken = default) =>
-                TranslateFrameContentAsync(projectId, frameSetId, frameId, contentOffsetX, contentOffsetY, cancellationToken),
-            name: "translate_frame_content",
-            description: "Greenfield Frames pipeline: manually nudge one frame by setting its artwork offset inside the logical cell, then update the visible Sprites workspace. Use this after auto-anchor review when one or a few frames still drift; it does not change source bounds."),
-
-        AIFunctionFactory.Create(
-            method: (
                 Guid frameId,
                 SpriteSheetRect? rect = null,
                 int scale = 4,
@@ -501,7 +489,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 AutoAnchorAlignFramesAsync(projectId, frameSetId, referenceFrameId, anchorRect, searchPadding, minScore, axisX, axisY, apply, cancellationToken),
             name: "auto_anchor_align_frames",
-            description: "Greenfield Frames pipeline: align frames by template-matching a small, distinctive anchor detail chosen from a reference frame. anchorRect is required and is in the reference frame's local content-pixel coordinates, not source-sheet or logical-cell coordinates. Pick a detail repeated across every frame, favor stable center-mass details when possible, avoid broad bounding boxes/generic content centers, and inspect the returned scores/deltas before trusting the result. Use axisX/axisY to preserve intentional motion on one axis. If only a few frames still drift after review, use translate_frame_content for manual nudges. Run build_sheet afterward."),
+            description: "Greenfield Frames pipeline: align frames by template-matching a small, distinctive anchor detail chosen from a reference frame. anchorRect is required and uses the reference frame's logical canvas coordinates. Pick a detail repeated across every frame, favor stable center-mass details when possible, avoid broad bounding boxes/generic content centers, and inspect the returned scores/deltas before trusting the result. Use axisX/axisY to preserve intentional motion on one axis. If only a few frames still drift after review, use sprite_apply translate operations in logical canvas coordinates. Export when requested."),
 
         AIFunctionFactory.Create(
             method: (
@@ -1654,22 +1642,6 @@ public sealed class AssistantToolRegistry(
             height,
             shapePaths?.ToList()), cancellationToken);
         return SerializeFrameSet(view, "Frame source bounds updated.");
-    }
-
-    private async Task<string> TranslateFrameContentAsync(
-        Guid projectId,
-        Guid frameSetId,
-        Guid frameId,
-        int contentOffsetX,
-        int contentOffsetY,
-        CancellationToken cancellationToken)
-    {
-        var view = await spriteActions.TranslateFrameContentAsync(projectId, new TranslateFrameContentRequest(
-            frameSetId,
-            frameId,
-            contentOffsetX,
-            contentOffsetY), cancellationToken);
-        return SerializeFrameSet(view, "Frame content offset updated.");
     }
 
     private async Task<string> InspectFrameAsync(

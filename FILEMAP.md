@@ -44,7 +44,7 @@
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, chat-visual persistence, tool streaming/execution and replay, lookup-safe tool-history pruning, threshold-based hierarchical summaries, and model-only visual outputs. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns and cancellable compaction alive across renderer reloads, throttles state notifications, commits finished turns with visuals, and broadcasts workspace side effects. |
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact workspace records for Review, live sprite focus/agent status, asset, and recipe context used by assistant tools. |
-| `AssistantPromptBuilder.cs` | Builds the assistant system prompt from selected-image-model guidance and `AgentOptions` budget limits, including living-recipe maintenance, intent-based concept-vs-variant generation, model-vs-user visibility, direct generation/edit execution, provider-guided mask/outpaint guidance, Review presentation, Keep/Reject triage, and greenfield sprite workflows. |
+| `AssistantPromptBuilder.cs` | Builds the assistant system prompt from selected-image-model guidance and `AgentOptions` budget limits, including living-recipe maintenance, intent-based concept-vs-variant generation, model-vs-user visibility, direct generation/edit execution, provider-guided mask/outpaint guidance, Review presentation, Keep/Reject triage, and concise native sprite objectives with progressive workflow help. |
 | `AssistantToolModels.cs` | Persisted tool-call manifest records, concept-batch prompt items, explicit display titles, animation frame mark payloads, and per-turn autonomous generation budget state. |
 | `AssistantToolRegistry.cs` | Tool registry for visible state, focused reads, recipes/guides, same-prompt generation rounds, distinct-prompt concept batches, provider-guided preview-locked directional edits, greenfield Source/Frames/Sheet tools, visual Review sets, batch triage/finalization, exports, and `displayTitle` metadata. |
 | `AssistantTurnUpdate.cs` | Streaming update records consumed by the workbench: text/tool deltas, explicit display title metadata, visual metadata, completions, workspace mutations, and errors. |
@@ -56,8 +56,8 @@
 | `IArtWorkflowService.cs` / `ArtWorkflowService.cs` | Provider-agnostic workflow service for workbench loads, asset lifecycle/review decisions, visual Review sets, media, generation, transient canvas previews, logical/provider-aware edits with authoritative provider output, sprite work, exports, recipes, masks, import, and crop. |
 | `ArtWorkflowModels.cs` | Request/result/view records for the workbench, ordered generation prompt specifications and batch modes, edit-canvas options/transforms/finalization/previews, lazy media, animation guides, sprite-sheet metadata, region extraction, recipes, and assistant tools. |
 | `IFrameSetService.cs` / `FrameSetService.cs` | Source regions/import, deterministic frame cleanup/alignment, native frame projections, masks, and derived sheets; AI jobs use the native generation service. |
-| `ISpriteWorkspaceActionService.cs` / `SpriteWorkspaceActionService.cs` | Shared Sprites action layer used by UI clicks and assistant tools to wrap greenfield mutations including scale normalization, update persisted sprite focus, and keep the visible workspace synchronized. |
-| `FrameSetModels.cs` | View/request/result records for the greenfield source-region, frame-set, preview-locked outpaint edit/reference/mask, logical finalization, scale-normalization, inspection, sprite-edit sessions, and build-sheet pipeline. |
+| `ISpriteWorkspaceActionService.cs` / `SpriteWorkspaceActionService.cs` | Shared Sprites action layer used by UI clicks and assistant tools to wrap greenfield mutations including optional scale normalization, update persisted sprite focus, and keep the visible workspace synchronized. |
+| `FrameSetModels.cs` | View/request/result records for the greenfield source-region, frame-set, reference/mask, optional scale-normalization, inspection, and derived build-sheet pipeline. |
 | `AnimationGuideModels.cs` | Shared guide-rendering records for animation specs, frame specs, guide layouts, and per-frame slots without restoring the old animation job pipeline. |
 | `SpriteAnimationOptions.cs` | Configuration record for sprite-animation defaults used by guide rendering and animation-generation workflow setup. |
 | `SpriteFacing.cs` | Facing normalization, yaw conversion, left/right detection, and prompt phrasing helpers for animation guides. |
@@ -65,7 +65,7 @@
 | `SpriteGuideRenderer.cs` | Procedural PNG renderer for lightweight animation guide sheets and diagnostic guide sheets. |
 | `MotionClipCatalog.cs` | Motion clip manifest loader/resolver with shared defaults, discovery metadata, and GLTF-backed animation guide validation. |
 | `GltfMotionGuideRenderer.cs` | GLB sampler/renderer that produces yaw/pitch-adjustable mannequin motion guide sheets from cataloged Quaternius clips. |
-| `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, chat visual previews/full images, asset/frame masks, motion-clip GLB assets, legacy sprite-frame previews, and greenfield frame-set frame content/previews. |
+| `ArtMediaEndpoints.cs` | Local HTTP media endpoints for lazy asset previews/full images, chat visual previews/full images, asset/frame masks, motion-clip GLB assets, native revision/frame renders, persisted inspections, and downloadable sprite exports. |
 | `IImageGenerationRuntime.cs` / `ImageGenerationRuntime.cs` | App-process image batch runtime that owns atomic background generation/edit starts, bounded variant/concept/bulk workers, Stop/Resume/Retry failed, awaitable completion, serialized state, transient previews, and manual shutdown recovery. |
 | `IBackgroundRemovalService.cs` / `RembgBackgroundRemovalService.cs` | Export-only local AI background-removal service that provisions app-owned rembg/uv sidecars, prefers GPU with CPU fallback, and returns real-alpha PNG output. |
 | `BackgroundRemovalOptions.cs` | Configurable local background-removal sidecar defaults for uv, Python, rembg, model list, acceleration, cache paths, alpha matting, and timeout. |
@@ -110,7 +110,7 @@
 |------|-------------|
 | `BulkPromptEditor.razor` | Paginated editable one-prompt-per-line bulk input preserving order and duplicates. |
 | `ImageTransparencyInspector.razor` / `.razor.css` / `.razor.js` | Shared preview backgrounds, full-raster alpha statistics, requested-alpha warnings, and pixel inspection. |
-| `ExportPanel.razor` / `.razor.css` | Shared export workflow panel used inline by Sprites and as the Assets export modal, including cleanup steps, local AI removal, preview backgrounds, reset, and PNG/JSON downloads. |
+| `ExportPanel.razor` / `.razor.css` | Assets PNG export modal with cleanup steps, local AI removal, preview backgrounds, and reset; sprite bundles use SpriteExportPanel. |
 | `AnimationGuideBuilderModal.razor` / `.razor.css` | Shared Assets > Guides modal for configuring guide grids, previewing GLB motion clips in 3D with yaw/pitch drag, rendering guide previews, and saving SpriteGuide assets. |
 | `LazyImage.razor` / `.razor.css` / `.razor.js` | IntersectionObserver-backed image component that reserves thumbnail space and assigns `src` only when near the viewport. |
 | `SpriteAnimationPreview.razor` / `.razor.js` | Reusable canvas animation preview component that plays any ordered image sequence from a neutral `AnimationPreviewFrame` list (url/label/durationMs) plus fps/loop, with no GIF artifact. |
@@ -311,7 +311,7 @@
 | `PixelChat/Sprites/SpriteTimeline.cs` | Shared clip ordering and duration-aware forward/reverse/ping-pong timing. |
 | `PixelChat/Sprites/SpriteDocumentEvents.cs` | App-process document revision notifications for live manual/agent editing. |
 | `PixelChat.Tests/SpriteTimelineTests.cs` | Unequal timing, one-shot, reverse, and ping-pong regression checks. |
-| `PixelChat.Tests/sprite-editor.browser.cjs` | Headless Edge checks for canvas coordinates, pixel refresh, layers, timing, history, and reopening. |
+| `PixelChat.Tests/sprite-editor.browser.cjs` | Headless Edge checks for drawing, layers, timing, history, diagnostics/preparations, playback, and export/reimport. |
 | `20260914212522_NativeClipPlayback.cs` / `.Designer.cs` | Removes unused playback/alignment settings now represented by native document clips. |
 | `PixelChat/Sprites/SpriteToolRegistry.cs` | Compact native tools with revision-checked edits and actual model-visible PNG inspection content. |
 | `PixelChat/Sprites/SpriteScriptService.cs` / `SpriteScriptWorker.cs` | Parent-enforced worker limits and restricted Jint command generation with atomic application. |
@@ -325,3 +325,11 @@
 | `PixelChat/Components/Sprites/SpriteAiPanel.razor` / `.razor.css` | Manual preparation, candidate comparison, job controls, and numerical validation. |
 | `PixelChat.Tests/SpriteWorkflowTests.cs` | Late-frame diagnostics, intended motion, target preparation, stale AI results, reversible application, and a fixture provider pipeline. |
 | `20260914220038_NativeSpriteJobsAndAssessments.cs` / `.Designer.cs` | Adds native job snapshots/assessments and preserves edit-session provenance before retiring the obsolete session table. |
+
+| `PixelChat/Sprites/SpriteAtlasBuilder.cs` | Shared deterministic slot placement and versioned frame/clip/pivot/slice export metadata. |
+| `PixelChat/Sprites/SpriteExportService.cs` / `PixelChat/Models/SpriteExport.cs` | Cached immutable native/PNG/JSON/GIF artifacts and bounded hash-verified bundle reimport. |
+| `PixelChat/Components/Sprites/SpriteExportPanel.razor` / `.razor.css` | Revision-specific export controls, download history, GIF preview, and named slices. |
+| `20260914221808_NativeSpriteExports.cs` / `.Designer.cs` | Persists native export artifacts and projects blank-frame identities for migrated empty sets. |
+| `PixelChat.Tests/SpriteExportTests.cs` | Exact RGBA reconstruction, timing/pivots/slices, padding placement, GIF timing, and tamper rejection. |
+| `PixelChat.Tests/SpriteCorpusTests.cs` / `sprite-corpus.js` | Five direct-drawing fixtures with script, render, validation, export, and usage records. |
+| `docs/native-sprite-validation.md` | Local release checks, measured corpus results, artistic judgments, and unverified integrations. |

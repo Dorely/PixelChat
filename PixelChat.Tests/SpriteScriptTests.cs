@@ -29,4 +29,9 @@ public sealed class SpriteScriptTests
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => SpriteScriptService.EvaluateInWorkerAsync(Input("while(true){}"), cancellation.Token));
     }
+    [Fact]
+    public async Task WorkerCrashIsReportedWithoutACommandBatch()
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SpriteScriptService.EvaluateInWorkerAsync(Input("while(true){}"), workerStarted: process => process.Kill(entireProcessTree: true)));
+    }
 }

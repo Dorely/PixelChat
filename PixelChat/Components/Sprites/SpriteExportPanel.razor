@@ -1,0 +1,55 @@
+@using PixelChat.Sprites
+@using System.Text.Json
+@inject IServiceScopeFactory Scopes
+
+<details class="sprite-export">
+    <summary>Export sprite</summary>
+    <p>Export revision @Revision. Padding is transparent space inside each slot; gutter separates slots; margin surrounds the atlas.</p>
+    <div class="controls">
+        <label>Format <select aria-label="Sprite export format" @bind="_format"><option value="bundle">Editable native bundle</option><option value="atlas">PNG atlas + JSON</option><option value="frames">PNG frames + JSON</option><option value="preview">Animated GIF preview</option><option value="metadata">JSON metadata</option></select></label>
+        <label>Columns (0 = auto) <input type="number" min="0" @bind="_columns" /></label>
+        <label>Padding <input type="number" min="0" @bind="_padding" /></label><label>Gutter <input type="number" min="0" @bind="_gutter" /></label><label>Margin <input type="number" min="0" @bind="_margin" /></label>
+        <label>Preview clip <select @bind="_clip"><option value="">First clip / all frames</option>@foreach (var clip in Clips) { <option value="@clip.Name">@clip.Name</option> }</select></label>
+        <button disabled="@_busy" @onclick="ExportAsync">Create export</button>
+        <button disabled="@_busy" @onclick="() => RunAsync(_ => Task.CompletedTask)">Refresh exports</button>
+    </div>
+    <details><summary>Named export slices</summary>
+        <div class="controls"><input aria-label="Slice name" @bind="_sliceName" /><label>X <input type="number" @bind="_sliceX" /></label><label>Y <input type="number" @bind="_sliceY" /></label><label>Width <input type="number" min="1" @bind="_sliceW" /></label><label>Height <input type="number" min="1" @bind="_sliceH" /></label><button disabled="@_busy" @onclick="SaveSliceAsync">Save slice</button></div>
+        @foreach (var slice in Slices) { <p>@slice.Name: @slice.Rect <button disabled="@_busy" @onclick="() => DeleteSliceAsync(slice.Name)">Delete slice</button></p> }
+    </details>
+    @if (_error is not null) { <p role="alert">@_error</p> }
+    @foreach (var export in _exports)
+    {
+        <section><a class="sprite-download" href="@export.Url" download="@export.FileName">Download @export.FileName</a> <span>@export.Bytes bytes · revision @export.Revision</span>
+            @foreach (var warning in export.Warnings) { <p>@warning</p> }
+            @if (export.ContentType == "image/gif") { <img src="@(export.Url + "?download=false")" alt="Animated export preview" /> }
+            <details><summary>Export manifest</summary><pre>@export.ManifestJson</pre></details>
+        </section>
+    }
+</details>
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+    [Parameter] public Guid DocumentId { get; set; }
+    [Parameter] public long Revision { get; set; }
+    [Parameter] public IReadOnlyList<SpriteClip> Clips { get; set; } = [];
+    [Parameter] public IReadOnlyList<SpriteSlice> Slices { get; set; } = [];
+    private int _columns, _padding, _gutter, _margin, _sliceX, _sliceY, _sliceW = 16, _sliceH = 16;
+    private string _format = "bundle", _clip = "", _sliceName = "Slice";
+    private bool _busy;
+    private string? _error;
+    private Guid _loaded;
+    private IReadOnlyList<SpriteExportView> _exports = [];
+    protected override async Task OnParametersSetAsync() { if (_loaded != DocumentId) { _loaded = DocumentId; await RunAsync(_ => Task.CompletedTask); } }
+    private Task ExportAsync() => RunAsync(async services => { await services.GetRequiredService<SpriteExportService>().ExportAsync(ProjectId, DocumentId, Revision, new(_format, _columns, _padding, _gutter, _margin, string.IsNullOrEmpty(_clip) ? null : _clip)); });
+    private Task SaveSliceAsync() => CommandAsync(new { op = "setSlice", name = _sliceName, x = _sliceX, y = _sliceY, width = _sliceW, height = _sliceH });
+    private Task DeleteSliceAsync(string name) => CommandAsync(new { op = "deleteSlice", name });
+    private Task CommandAsync(object op) => RunAsync(async services => { await services.GetRequiredService<ISpriteDocumentService>().ApplyAsync(ProjectId, new(DocumentId, Revision, "Edit export slice", [JsonSerializer.SerializeToElement(op)])); });
+    private async Task RunAsync(Func<IServiceProvider, Task> action)
+    {
+        if (_busy) return; _busy = true; _error = null;
+        try { await using var scope = Scopes.CreateAsyncScope(); await action(scope.ServiceProvider); _exports = await scope.ServiceProvider.GetRequiredService<SpriteExportService>().ListAsync(ProjectId, DocumentId); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; await InvokeAsync(StateHasChanged); }
+    }
+}

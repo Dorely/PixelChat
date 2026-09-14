@@ -12,4 +12,4 @@ Impact crosses Models, Persistence and forward migrations, Art and sprite servic
 
 Verification uses `dotnet test PixelChat.Tests/PixelChat.Tests.csproj`, `dotnet build PixelChat.sln`, and a bounded host startup check. Migration fixtures run against old schema boundaries before destructive column removal. Browser and live provider checks must be recorded separately; a successful build is not evidence of either.
 
-Stages 1–3 are committed. Stage 4 unifies native AI jobs and all-frame diagnostics and retires obsolete edit ownership. Stage 5 exports and release verification remain required.
+All five implementation stages are implemented. The release verification record is in [native-sprite-validation.md](native-sprite-validation.md). Automated and browser checks cover the local editor loop; the recorded direct-drawing corpus includes explicit artistic judgments. Live image-assisted versus generated-sheet quality comparisons and Electron packaging were not exercised in this implementation run.

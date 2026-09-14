@@ -2,8 +2,8 @@
 
 The Sprites workspace includes a native drawing canvas, layers, selections, transforms, clips, pivots, timeline, and undo/redo. Create a blank pixel-art or painted sprite, or import artwork. Native sprite documents store content-addressed cels and persistent revisions
 on FrameSet. Existing frames migrate from rendered pixels into painted-mode
-documents. The full editor release is tracked in
-[the implementation plan](docs/native-sprite-editor-implementation.md).
+documents. Export editable native bundles, PNG frames/atlases with versioned JSON, or GIF previews from a saved revision. Reimport native bundles to retain layers, timing, pivots, and production rules. Agent commands and bounded scripts share the manual editor's undo history.
+See [the implementation record](docs/native-sprite-editor-implementation.md) and [verification results](docs/native-sprite-validation.md).
 Run its regression suite with `dotnet test PixelChat.Tests/PixelChat.Tests.csproj`.
 
 PixelChat is a desktop-first, local Blazor/Electron application for building an AI-assisted 2D game art workbench. The long-term product vision is a workspace that helps game developers move from rough ideas to consistent, reusable, game-ready 2D assets.
@@ -16,7 +16,7 @@ See [VISION.md](VISION.md) for the product direction and [docs/architecture.md](
 - Recipe bulk generation: paste one prompt per line, edit/remove preview rows, and request 1â€“4 images per prompt with shared settings/references. Order and duplicates are preserved, with paginated output/review and no fixed prompt-count cap. Stop, Resume, and Retry failed preserve saved successes; interrupted queues require manual resume.
 - Image generation with same-prompt variant or multi-prompt concept batches, imported-image editing, provider-guidance masks, outpainting-aware canvases whose complete provider output remains authoritative, batch progress, visual review, and kept/rejected asset management.
 - Reusable versioned art and animation recipes with example and guide attachments.
-- A native sprite workflow with source-region import, drawing, layers, saved frame timing, clips, AI candidates, reversible edits, and complete animation diagnostics.
+- A native sprite workflow with source-region and bundle imports, drawing, layers, selections, mode-aware transforms, saved frame timing, clips, AI candidates, reversible edits, complete animation diagnostics, and reproducible native/PNG/JSON exports.
 - Procedural and GLB-backed animation guides plus PNG/JSON export workflows and optional local AI background removal.
 - OpenAI account OAuth with Sol, Terra, Luna, and Astra chat selections and low through max effort; new account connections default to Sol / medium. Built-in models use a 272,000-token context and a 258,400-token input budget, including tools and images, with automatic safe compaction.
 - Persistent app-wide chat/effort and image/quality selectors. Image choices are Image 2, Image 2.5 Flare, and Image 2.5 Sunburst (default); Sol independently orchestrates images.
