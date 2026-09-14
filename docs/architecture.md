@@ -169,8 +169,11 @@ Native `transparent` differs from removable magenta. A forward migration convert
 historical transparent aliases to removable before introducing the new meaning.
 Generation and recipe preferences support native alpha on 2.5; edits default to
 preserving the submitted source treatment, with explicit overrides independent
-of recipe backgrounds. Native requests set the image tool background and PNG
-format and prohibit painted checkerboards in prompts. Original provider output bytes remain separately inspectable/downloadable after
+of recipe backgrounds. Native requests deliberately send image tool `background: auto`
+and PNG, while injecting explicit empty-alpha and no-painted-checkerboard requirements
+into Responses system instructions. Application background remains `transparent`;
+provider metadata records requested and transport backgrounds separately. Background
+and edit/mask instructions are selected by code, not conditional model-facing rules. Original provider output bytes remain separately inspectable/downloadable after
 canvas finalization, including direct frame edit revisions. Native edit padding has
 alpha zero; cropping, resizing, thumbnails, and exports preserve RGBA and bypass
 magenta normalization. Returned provider pixels remain authoritative.
@@ -180,12 +183,16 @@ checkerboard, white, black, and color preview backgrounds, plus pixel coordinate
 RGBA, and opacity. Preview backgrounds and overlays never enter asset bytes.
 Opaque requested-alpha results show a warning and remain available for inspection;
 mixed alpha is explicitly not proof that the entire background is transparent.
-The September 14, 2026 account endpoint rejected native-alpha generation and editing for both
-2.5 IDs with HTTP 400; this failure is surfaced, with no silent model/background
-fallback. Separate `background: auto` plus alpha-prompt diagnostics produced real
-alpha on both models for generation, while edits of those sources returned fully
-opaque pixels. This diagnostic route is not an automatic fallback. Deterministic
-alpha processing and diagnostics were checked separately.
+The September 14, 2026 account endpoint rejected the explicit transparent parameter
+for both 2.5 IDs. The auto parameter plus alpha instructions produced real alpha for
+generation on both models. With the wired system guidance, a Flare edit retained
+alpha while a Sunburst edit returned opaque pixels. The inspector discloses
+this route and retains measured-alpha warnings. There is no background retry or
+cleanup fallback. Assistant system prompts inject only the selected image model's
+applicable guidance, including native-alpha availability; static tool descriptions
+refer to that guidance instead of presenting model-dependent branches. Initial,
+continuation, compacted, and idle token-estimate prompts use the current global
+image selection.
 
 Local media endpoints serve persisted and transient images, masks, sprite
 frames, chat visuals, and motion assets to the local workbench. JavaScript

@@ -1,4 +1,5 @@
 @implements IAsyncDisposable
+@using PixelChat.Art
 @inject IJSRuntime JS
 
 <section class="alpha-inspector" @ref="_root">
@@ -14,6 +15,10 @@
         <label>Preview color <input type="color" @bind="_color" /></label>
         <span>Requested background: @(RequestedBackground ?? "Not recorded / source image")</span>
     </div>
+    @if (RequestedBackground == ImageBackgroundModes.Transparent)
+    {
+        <p>Native alpha is requested through explicit image instructions. The account provider uses background auto with PNG. Check the measured alpha below; edits may return opaque pixels.</p>
+    }
     <p>Real transparency reveals this background. A checkerboard that stays unchanged is painted into the image.</p>
     <strong data-alpha-status role="status">Inspecting image pixels…</strong>
     <p data-alpha-warning class="alpha-warning" hidden></p>

@@ -529,6 +529,8 @@ public sealed class OpenAIAccountImageProvider(
                 ReportedModel = ReadString(item, "model"),
                 ReportedBackground = ReadString(item, "background"),
                 ReportedQuality = ReadString(item, "quality"),
+                RequestedBackground = diagnostics.Background,
+                ProviderBackground = ProviderBackground(diagnostics.Background),
                 OutputFormat = outputFormat,
             });
     }
@@ -540,7 +542,7 @@ public sealed class OpenAIAccountImageProvider(
             new()
             {
                 ["type"] = "input_text",
-                ["text"] = request.Prompt + TransparencyInstructions(request.Background),
+                ["text"] = request.Prompt,
             },
         };
 
@@ -549,7 +551,7 @@ public sealed class OpenAIAccountImageProvider(
 
         var tool = BaseImageTool(request.Size, request.Quality, request.OutputFormat, request.Background, imageModel);
 
-        return BasePayload(mainlineModel, content, tool, "Use the image_generation tool to create one game-ready 2D art asset from the user's prompt.");
+        return BasePayload(mainlineModel, content, tool, BuildImageInstructions(imageModel, request.Background, edit: false, hasMask: false));
     }
 
     private Dictionary<string, object?> BuildEditPayload(ImageProviderEditRequest request, string mainlineModel, string imageModel)
@@ -559,7 +561,7 @@ public sealed class OpenAIAccountImageProvider(
             new()
             {
                 ["type"] = "input_text",
-                ["text"] = request.Prompt + TransparencyInstructions(request.Background),
+                ["text"] = request.Prompt,
             },
             InputImage(request.SourceImage),
         };
@@ -576,7 +578,7 @@ public sealed class OpenAIAccountImageProvider(
             };
         }
 
-        return BasePayload(mainlineModel, content, tool, "Use the image_generation tool to edit the first supplied image. Preserve unmentioned details and the source background treatment unless the request changes them. If a mask is supplied, apply it to guide the targeted edit.");
+        return BasePayload(mainlineModel, content, tool, BuildImageInstructions(imageModel, request.Background, edit: true, hasMask: request.Mask is not null));
     }
 
     private static Dictionary<string, object?> BasePayload(
@@ -618,8 +620,8 @@ public sealed class OpenAIAccountImageProvider(
             ["type"] = "image_generation",
             ["model"] = imageModel,
             ["size"] = string.IsNullOrWhiteSpace(size) ? "auto" : size.Trim(),
-            ["output_format"] = NormalizeOutputFormat(outputFormat),
-            ["background"] = NormalizeBackground(background),
+            ["output_format"] = ImageBackgroundModes.NormalizeGeneration(background) == ImageBackgroundModes.Transparent ? "png" : NormalizeOutputFormat(outputFormat),
+            ["background"] = ProviderBackground(background),
         };
         var partialImages = Math.Clamp(options.Value.PartialImages, 0, 3);
         if (partialImages > 0)
@@ -658,10 +660,29 @@ public sealed class OpenAIAccountImageProvider(
             _ => "png",
         };
 
-    private static string TransparencyInstructions(string background) =>
-        background == ImageBackgroundModes.Transparent
-            ? "\nOutput real alpha transparency: isolate the requested subject on an empty transparent backdrop. Do not paint a checkerboard, grid, magenta, or solid replacement background. Do not invent scenery, a ground plane, or shadows unless explicitly requested."
-            : string.Empty;
+    private static string BuildImageInstructions(string imageModel, string background, bool edit, bool hasMask)
+    {
+        var instructions = new List<string>
+        {
+            $"Use the image_generation tool with the selected image model {imageModel}.",
+            edit
+                ? "Edit the first supplied image. Preserve unmentioned subject details."
+                : "Create one game-ready 2D art asset from the user's prompt.",
+        };
+        if (hasMask)
+            instructions.Add("Use the supplied mask to guide the targeted edit.");
+        instructions.Add(ImageBackgroundModes.NormalizeGeneration(background) switch
+        {
+            ImageBackgroundModes.Transparent => "Output PNG with real alpha transparency. Isolate the requested subject on an empty alpha backdrop, including partially transparent object edges. Do not paint a checkerboard, grid, magenta, white, gray, or any solid replacement background. Do not invent scenery, a ground plane, or shadows. Carry these transparency requirements into the image tool prompt. The tool background is already configured to auto for this model; retain that setting.",
+            ImageBackgroundModes.Opaque => "Produce an opaque background matching the requested scene.",
+            ImageBackgroundModes.Removable => "Produce the flat opaque chroma background specified in the user's prompt.",
+            _ => edit ? "Preserve the source background treatment." : "Use a natural background appropriate to the requested art.",
+        });
+        return string.Join("\n\n", instructions);
+    }
+
+    private static string ProviderBackground(string background) =>
+        NormalizeBackground(background) == ImageBackgroundModes.Transparent ? ImageBackgroundModes.Auto : NormalizeBackground(background);
 
     private static string NormalizeBackground(string? value) =>
         ImageBackgroundModes.NormalizeGeneration(value) switch

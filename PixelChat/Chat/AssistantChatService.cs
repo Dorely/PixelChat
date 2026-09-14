@@ -20,6 +20,7 @@ public sealed class AssistantChatService(
     IChatClientFactory chatClientFactory,
     AssistantToolRegistry toolRegistry,
     IArtWorkflowService workflow,
+    ImageModelSelectionService imageSelection,
     IFrameSetService frameSets,
     IEditCanvasPreparationStore canvasPreparations,
     IChatTokenEstimator tokenEstimator,
@@ -284,7 +285,7 @@ public sealed class AssistantChatService(
         };
 
         var history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
-        var messages = new List<ChatMessage> { new(ChatRole.System, BuildSystemInstructions(history)) };
+        var messages = new List<ChatMessage> { new(ChatRole.System, await BuildSystemInstructionsAsync(history, cancellationToken)) };
         messages.AddRange(await BuildModelHistoryAsync(history, userMessage.Id, projectId, pastedAssets, cancellationToken));
         var modelName = providerAvailability.Provider.ModelId;
         yield return BuildTokenCountUpdate(messages, modelName);
@@ -292,6 +293,8 @@ public sealed class AssistantChatService(
         var maxIterations = Math.Max(1, agentOptions.Value.MaxToolIterations);
         for (var iteration = 0; iteration < maxIterations; iteration++)
         {
+            if (iteration > 0)
+                messages[0] = new(ChatRole.System, await BuildSystemInstructionsAsync(history, cancellationToken));
             if (OpenAIAccountProvider.IsOpenAIAccount(providerAvailability.Provider)
                 && OpenAIModelCatalog.IsBuiltIn(modelName)
                 && tokenEstimator.Count(messages, modelName, aiTools).TokenCount > OpenAIModelCatalog.EffectiveInputTokens)
@@ -314,7 +317,7 @@ public sealed class AssistantChatService(
                     await conversations.SaveChangesAsync(cancellationToken);
                     history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
                 }
-                messages = [new(ChatRole.System, BuildSystemInstructions(history))];
+                messages = [new(ChatRole.System, await BuildSystemInstructionsAsync(history, cancellationToken))];
                 messages.AddRange(await BuildModelHistoryAsync(history, userMessage.Id, projectId, pastedAssets, cancellationToken));
                 if (iteration > 0)
                     messages.Add(new ChatMessage(ChatRole.System, "This turn continued after compaction. Inspect current workspace state before acting. Do not repeat completed mutations unless current state proves they were not completed."));
@@ -1182,7 +1185,7 @@ public sealed class AssistantChatService(
         CancellationToken cancellationToken)
     {
         _requestTools = toolRegistry.Build(projectId, new AssistantTurnGenerationBudget(agentOptions.Value.MaxGenerationRoundsPerTurn));
-        var messages = BuildPersistedModelMessages(history);
+        var messages = await BuildPersistedModelMessagesAsync(history, cancellationToken);
         var workbench = await workflow.GetWorkbenchAsync(projectId, cancellationToken);
         if (workbench.Attachments.Count > 0)
             messages.Add(await BuildCurrentUserMessageAsync(string.Empty, workbench, projectId, [], cancellationToken));
@@ -1190,9 +1193,9 @@ public sealed class AssistantChatService(
         return messages;
     }
 
-    private List<ChatMessage> BuildPersistedModelMessages(IReadOnlyList<AssistantMessage> history)
+    private async Task<List<ChatMessage>> BuildPersistedModelMessagesAsync(IReadOnlyList<AssistantMessage> history, CancellationToken cancellationToken)
     {
-        var messages = new List<ChatMessage> { new(ChatRole.System, BuildSystemInstructions(history)) };
+        var messages = new List<ChatMessage> { new(ChatRole.System, await BuildSystemInstructionsAsync(history, cancellationToken)) };
         foreach (var message in history)
         {
             if (IsContextInstruction(message.Role))
@@ -1206,11 +1209,11 @@ public sealed class AssistantChatService(
         return messages;
     }
 
-    private string BuildSystemInstructions(IReadOnlyList<AssistantMessage> history)
+    private async Task<string> BuildSystemInstructionsAsync(IReadOnlyList<AssistantMessage> history, CancellationToken cancellationToken)
     {
         var parts = new List<string>
         {
-            AssistantPromptBuilder.Build(agentOptions.Value),
+            AssistantPromptBuilder.Build(agentOptions.Value, (await imageSelection.GetAsync(cancellationToken)).Model),
         };
         parts.AddRange(history
             .Where(message => message.Role is AssistantMessageRole.CompactionNotice or AssistantMessageRole.Summary)
