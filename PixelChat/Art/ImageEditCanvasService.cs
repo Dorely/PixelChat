@@ -498,6 +498,8 @@ public sealed class ImageEditCanvasService : IImageEditCanvasService
     {
         if (string.Equals(background?.Trim(), "removable", StringComparison.OrdinalIgnoreCase))
             return new SpriteSheetBackground("color", 255, 0, 255, 255);
+        if (background == ImageBackgroundModes.Transparent)
+            return new SpriteSheetBackground("alpha", 0, 0, 0, 0);
         return SpriteSheetImageAnalyzer.ResolveBackground(rgba, width, height);
     }
 

@@ -8,7 +8,7 @@ public static class OpenAIAccountProvider
 {
     public const string Name = "openai-account";
     public const string ResponsesEndpoint = "https://chatgpt.com/backend-api/codex/responses";
-    public const string DefaultChatModel = "gpt-5.4-mini";
+    public const string DefaultChatModel = "gpt-5.6-sol";
     public const string CodexOriginator = "codex_cli_rs";
 
     private const string CodexUserAgent = "codex_cli_rs/0.0.0 (PixelChat)";

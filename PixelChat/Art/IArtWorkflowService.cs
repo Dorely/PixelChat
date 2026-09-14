@@ -8,6 +8,7 @@ public interface IArtWorkflowService
     Task<ProjectView> CreateProjectAsync(string name, CancellationToken cancellationToken = default);
     Task<WorkbenchView> GetWorkbenchAsync(Guid? projectId = null, CancellationToken cancellationToken = default);
     Task<ImageBinaryView> GetAssetPreviewImageAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
+    Task<ImageBinaryView> GetAssetRawProviderImageAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<ImageBinaryView> GetAssetFullImageAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<ImageBinaryView> GetMaskImageAsync(Guid projectId, Guid maskId, CancellationToken cancellationToken = default);
     Task<ImageBinaryView> GetChatVisualImageAsync(Guid projectId, Guid visualId, bool preview, CancellationToken cancellationToken = default);

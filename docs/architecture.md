@@ -125,6 +125,41 @@ dimensions, restore logical scale, crop provider padding, and normalize
 editable removable-background pixels. The complete provider result remains
 authoritative: PixelChat never pastes protected source pixels back over it.
 
+OpenAI account chat exposes Sol, Terra, Luna, and Astra through the shared OAuth
+connection. Built-in models become ready from valid credentials without a separate
+manual test; a selected unavailable model produces an error rather than fallback.
+The chat selector persists model and effort (low, medium, high, xhigh, max).
+Built-in requests have a 272,000-token context and 258,400-token input ceiling.
+The estimate includes instructions, serialized tool schemas, conversation content,
+and conservative image reserves. Each initial/continuation submission checks the
+ceiling and compacts safely using the captured provider; an input still over the
+ceiling is rejected. Local estimates are not a billing guarantee.
+
+`ImageModelSelectionService` persists global model/quality preferences using
+short-lived scopes. Sunburst is the default, with Flare and Image 2 alternatives.
+Quality defaults to auto; 2.5 also offers xhigh/max, and changing to Image 2
+visibly normalizes unsupported quality to auto. Batches snapshot model, quality,
+format, and background. Image orchestration uses Sol independently of chat.
+
+Native `transparent` differs from removable magenta. A forward migration converts
+historical transparent aliases to removable before introducing the new meaning.
+Generation and recipe preferences support native alpha on 2.5; edits default to
+preserving the submitted source treatment, with explicit overrides independent
+of recipe backgrounds. Native requests set the image tool background and PNG
+format and prohibit painted checkerboards in prompts. Original provider output bytes remain separately inspectable/downloadable after
+canvas finalization, including direct frame edit revisions. Native edit padding has
+alpha zero; cropping, resizing, thumbnails, and exports preserve RGBA and bypass
+magenta normalization. Returned provider pixels remain authoritative.
+
+The shared transparency inspector measures the complete decoded raster and offers
+checkerboard, white, black, and color preview backgrounds, plus pixel coordinates,
+RGBA, and opacity. Preview backgrounds and overlays never enter asset bytes.
+Opaque requested-alpha results show a warning and remain available for inspection;
+mixed alpha is explicitly not proof that the entire background is transparent.
+The September 14, 2026 account endpoint rejected native-alpha generation and editing for both
+2.5 IDs with HTTP 400; this failure is surfaced, with no silent model/background
+fallback. Deterministic alpha processing and diagnostics were checked separately.
+
 Local media endpoints serve persisted and transient images, masks, sprite
 frames, chat visuals, and motion assets to the local workbench. JavaScript
 modules are used for browser-only canvas, scrolling, lazy-image, animation, and

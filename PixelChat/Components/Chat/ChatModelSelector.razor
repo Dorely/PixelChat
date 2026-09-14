@@ -1,0 +1,102 @@
+@using PixelChat.Llm
+@using PixelChat.Models
+@inject ILlmProviderService Providers
+
+<div class="d-flex gap-2 p-2 flex-wrap">
+    <label>Chat model
+        <select class="form-select form-select-sm" value="@_selection" @onchange="ChangeModelAsync" disabled="@(Disabled || _busy)">
+            @foreach (var provider in _providers)
+            {
+                if (OpenAIAccountProvider.IsOpenAIAccount(provider))
+                {
+                    @foreach (var model in OpenAIModelCatalog.ChatModels)
+                    {
+                        <option value="@($"{provider.Id}:{model}")">OpenAI · @model</option>
+                    }
+                    @if (!OpenAIModelCatalog.IsBuiltIn(provider.ModelId))
+                    {
+                        <option value="@($"{provider.Id}:{provider.ModelId}")">OpenAI · @provider.ModelId</option>
+                    }
+                }
+                else
+                {
+                    <option value="@($"{provider.Id}:{provider.ModelId}")">@(provider.DisplayName ?? provider.Name) · @provider.ModelId</option>
+                }
+            }
+        </select>
+    </label>
+    @if (_current is not null)
+    {
+        <label>Effort
+            <select class="form-select form-select-sm" value="@_current.ThinkingMode" @onchange="ChangeEffortAsync" disabled="@(Disabled || _busy)">
+                @if (OpenAIAccountProvider.IsOpenAIAccount(_current) && OpenAIModelCatalog.IsBuiltIn(_current.ModelId))
+                {
+                    @foreach (var effort in OpenAIModelCatalog.Efforts) { <option value="@effort">@effort</option> }
+                }
+                else
+                {
+                    @foreach (var effort in ProviderThinkingModes.OpenAIOptions) { <option value="@effort.Value">@effort.Label</option> }
+                }
+            </select>
+        </label>
+        @if (OpenAIAccountProvider.IsOpenAIAccount(_current) && OpenAIModelCatalog.IsBuiltIn(_current.ModelId))
+        {
+            <small>Context: 272,000 · input budget: 258,400</small>
+        }
+    }
+    @if (_error is not null) { <span class="text-danger">@_error</span> }
+</div>
+
+@code {
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback Changed { get; set; }
+    private List<LlmProvider> _providers = [];
+    private LlmProvider? _current;
+    private string _selection = string.Empty;
+    private string? _error;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _providers = await Providers.GetAllAsync();
+        var availability = await Providers.GetDefaultChatProviderAvailabilityAsync();
+        _current = availability.Provider;
+        _selection = _current is null ? string.Empty : $"{_current.Id}:{_current.ModelId}";
+    }
+
+    private async Task ChangeModelAsync(ChangeEventArgs args)
+    {
+        var parts = args.Value?.ToString()?.Split(':', 2);
+        if (parts is not { Length: 2 } || !int.TryParse(parts[0], out var id)) return;
+        await SaveAsync(async () =>
+        {
+            var provider = await Providers.GetByIdAsync(id) ?? throw new InvalidOperationException("Provider no longer exists.");
+            provider.ModelId = parts[1];
+            if (OpenAIAccountProvider.IsOpenAIAccount(provider) && OpenAIModelCatalog.IsBuiltIn(provider.ModelId)
+                && !OpenAIModelCatalog.Efforts.Contains(provider.ThinkingMode)) provider.ThinkingMode = "medium";
+            await Providers.UpdateAsync(provider);
+            await Providers.SetDefaultAsync(id);
+        });
+    }
+
+    private async Task ChangeEffortAsync(ChangeEventArgs args)
+    {
+        if (_current is null) return;
+        await SaveAsync(async () =>
+        {
+            _current.ThinkingMode = args.Value?.ToString();
+            await Providers.UpdateAsync(_current);
+        });
+    }
+
+    private async Task SaveAsync(Func<Task> save)
+    {
+        _busy = true;
+        _error = null;
+        try { await save(); await ReloadAsync(); await Changed.InvokeAsync(); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

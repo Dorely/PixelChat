@@ -38,6 +38,10 @@ public static class ArtMediaEndpoints
                 () => workflow.GetAssetPreviewImageAsync(projectId, assetId, cancellationToken));
         });
 
+        group.MapGet("/assets/{assetId:guid}/raw-provider", async (
+            Guid projectId, Guid assetId, IArtWorkflowService workflow, CancellationToken cancellationToken) =>
+            await ImageResultOrNotFoundAsync(() => workflow.GetAssetRawProviderImageAsync(projectId, assetId, cancellationToken)));
+
         group.MapGet("/assets/{assetId:guid}/full", async (
             Guid projectId,
             Guid assetId,

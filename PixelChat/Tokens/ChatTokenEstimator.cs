@@ -6,7 +6,7 @@ namespace PixelChat.Tokens;
 
 public interface IChatTokenEstimator
 {
-    TokenContextEstimate Count(IReadOnlyList<ChatMessage> messages, string? modelName);
+    TokenContextEstimate Count(IReadOnlyList<ChatMessage> messages, string? modelName, IEnumerable<AITool>? tools = null);
 }
 
 public sealed record TokenContextEstimate(
@@ -24,13 +24,16 @@ public sealed class ChatTokenEstimator(
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public TokenContextEstimate Count(IReadOnlyList<ChatMessage> messages, string? modelName)
+    public TokenContextEstimate Count(IReadOnlyList<ChatMessage> messages, string? modelName, IEnumerable<AITool>? tools = null)
     {
         var request = new TokenCountRequest(ModelName: modelName);
         var total = 0;
         var exact = true;
         var methods = new HashSet<string>(StringComparer.Ordinal);
         var warnings = new List<string>();
+
+        foreach (var function in (tools ?? []).OfType<AIFunction>())
+            CountText(JsonSerializer.Serialize(new { type = "function", name = function.Name, description = function.Description, parameters = function.JsonSchema }, JsonOptions), request, ref total, ref exact, methods, warnings);
 
         foreach (var message in messages)
         {

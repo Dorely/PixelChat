@@ -12,6 +12,8 @@ public class ArtAsset
     public ArtAssetKind Kind { get; set; }
     public required string ContentType { get; set; }
     public byte[] Data { get; set; } = [];
+    public byte[]? RawProviderData { get; set; }
+    public string? RawProviderContentType { get; set; }
     public byte[]? ThumbnailData { get; set; }
     public int? Width { get; set; }
     public int? Height { get; set; }

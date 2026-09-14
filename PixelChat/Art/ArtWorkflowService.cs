@@ -15,6 +15,7 @@ namespace PixelChat.Art;
 public sealed class ArtWorkflowService(
     AppDbContext db,
     IImageProvider imageProvider,
+    ImageModelSelectionService imageSelection,
     IImageEditCanvasService imageEditCanvas,
     IEditCanvasPreparationStore canvasPreparations,
     ILlmProviderService providerService,
@@ -115,7 +116,8 @@ public sealed class ArtWorkflowService(
                 a.Prompt,
                 a.SourceMetadataJson,
                 a.CreatedAt,
-                a.UpdatedAt))
+                a.UpdatedAt,
+                a.RawProviderData != null))
             .ToListAsync(cancellationToken);
         var batches = await db.GenerationBatches
             .AsNoTracking()
@@ -277,6 +279,15 @@ public sealed class ArtWorkflowService(
             asset.Data,
             FileNameForAsset(asset, "preview"),
             asset.UpdatedAt);
+    }
+
+    public async Task<ImageBinaryView> GetAssetRawProviderImageAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default)
+    {
+        var asset = await db.ArtAssets.AsNoTracking().FirstOrDefaultAsync(a => a.Id == assetId && a.ProjectId == projectId, cancellationToken)
+            ?? throw new InvalidOperationException("Asset was not found.");
+        if (asset.RawProviderData is not { Length: > 0 })
+            throw new InvalidOperationException("No raw provider output was retained for this asset.");
+        return new ImageBinaryView(asset.RawProviderContentType ?? "image/png", asset.RawProviderData, "provider-" + asset.FileName, asset.UpdatedAt);
     }
 
     public async Task<ImageBinaryView> GetAssetFullImageAsync(
@@ -940,10 +951,14 @@ public sealed class ArtWorkflowService(
 
         var references = await MergeGenerationReferencesAsync(projectId, recipe, animationRecipe, explicitReferences, excludedAssetId: null, cancellationToken);
 
+        var selection = await imageSelection.GetAsync(cancellationToken);
+        var selectedModel = string.IsNullOrWhiteSpace(request.ImageModel) ? selection.Model : request.ImageModel.Trim();
         var outputLabel = Clean(request.OutputLabel);
         var resolvedBackground = ImageBackgroundModes.ResolveGeneration(
             request.Background,
             recipe?.BackgroundPreference);
+        var outputFormat = resolvedBackground == ImageBackgroundModes.Transparent ? "png" : imageOptions.Value.DefaultOutputFormat;
+        ImageModelCatalog.Validate(selectedModel, selection.Quality, resolvedBackground, outputFormat);
         var batch = new GenerationBatch
         {
             ProjectId = projectId,
@@ -952,9 +967,9 @@ public sealed class ArtWorkflowService(
                 : outputLabel,
             Provider = OpenAIAccountProvider.Name,
             MainlineModel = imageOptions.Value.DefaultMainlineModel,
-            ImageModel = string.IsNullOrWhiteSpace(request.ImageModel)
-                ? imageOptions.Value.DefaultImageModel
-                : request.ImageModel.Trim(),
+            ImageModel = selectedModel,
+            Quality = selection.Quality,
+            OutputFormat = outputFormat,
             PromptSpecsJson = SerializePromptSpecs(promptSpecs),
             NegativePrompt = Clean(request.NegativePrompt),
             Size = NormalizeSize(request.Size),
@@ -1026,8 +1041,8 @@ public sealed class ArtWorkflowService(
                 batch.MainlineModel,
                 batch.ImageModel,
                 references.Select(ToProviderReference).ToList(),
-                imageOptions.Value.DefaultOutputFormat,
-                imageOptions.Value.DefaultQuality,
+                batch.OutputFormat,
+                batch.Quality,
                 ImageBackgroundModes.NormalizeGeneration(batch.Background)), cancellationToken, progress);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1073,12 +1088,18 @@ public sealed class ArtWorkflowService(
                 PromptSpecOutputIndex = resolvedPrompt.OutputIndexWithinSpec,
                 batch.PromptRecipeVersion,
                 batch.AnimationRecipeVersion,
+                RequestedBackground = batch.Background,
+                RequestedImageModel = batch.ImageModel,
+                batch.Quality,
+                ProviderMetadata = providerResult.RawMetadataJson,
                 image.RevisedPrompt,
                 image.ResponseId,
                 image.CallId,
                 image.OutputFormat,
                 References = references.Select(a => new { a.Id, a.Label, a.ContentType }),
             });
+        asset.RawProviderData = image.Data;
+        asset.RawProviderContentType = image.ContentType;
         asset.ReviewStatus = AssetReviewStatus.Pending;
         await db.ArtAssets.AddAsync(asset, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
@@ -1381,7 +1402,7 @@ public sealed class ArtWorkflowService(
         var options = request.CanvasOptions ?? new EditCanvasOptions();
         if (originalMaskPng is not null)
             sourceImage = NormalizeMaskedEditSource(sourceImage);
-        const string background = ImageBackgroundModes.Auto;
+        var background = ResolveEditBackground(request.Background, ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl).Data);
         var prepared = imageEditCanvas.Prepare(
             sourceImage.Data,
             originalMaskPng,
@@ -1440,7 +1461,10 @@ public sealed class ArtWorkflowService(
         var references = await MergeRecipeExampleReferenceAsync(projectId, recipe, explicitReferences, sourceAsset.Id, cancellationToken);
 
         var batchId = Guid.NewGuid();
-        const string normalizedBackground = ImageBackgroundModes.Auto;
+        var normalizedBackground = ResolveEditBackground(request.Background, ResolveEditSourceImage(sourceAsset, request.SourcePngDataUrl).Data);
+        var selection = await imageSelection.GetAsync(cancellationToken);
+        var outputFormat = normalizedBackground == ImageBackgroundModes.Transparent ? "png" : imageOptions.Value.DefaultOutputFormat;
+        ImageModelCatalog.Validate(selection.Model, selection.Quality, normalizedBackground, outputFormat);
         var canvasOptions = request.CanvasOptions ?? new EditCanvasOptions();
         if (request.CanvasPreparationId is null && canvasOptions.HasPadding)
             throw new InvalidOperationException("Padded edits require a current canvas preview. Preview the final padding and mask before generating.");
@@ -1588,7 +1612,9 @@ public sealed class ArtWorkflowService(
                 : outputLabel,
             Provider = OpenAIAccountProvider.Name,
             MainlineModel = imageOptions.Value.DefaultMainlineModel,
-            ImageModel = imageOptions.Value.DefaultImageModel,
+            ImageModel = selection.Model,
+            Quality = selection.Quality,
+            OutputFormat = storedMask is not null || canvasTransform is not null ? "png" : outputFormat,
             PromptSpecsJson = SerializePromptSpecs([new GenerationPromptSpec(prompt, count)]),
             Size = canvasTransform is null ? NormalizeSize(request.Size) : $"{canvasTransform.ProviderWidth}x{canvasTransform.ProviderHeight}",
             Background = normalizedBackground,
@@ -1691,9 +1717,9 @@ public sealed class ArtWorkflowService(
                 new ImageProviderReference(sourceAsset.FileName, sourceImage.ContentType, sourceImage.Data),
                 storedMask is null ? null : new ImageProviderReference(storedMask.Label, storedMask.ContentType, storedMask.Data),
                 references.Select(ToProviderReference).ToList(),
-                storedMask is null ? imageOptions.Value.DefaultOutputFormat : "png",
-                imageOptions.Value.DefaultQuality,
-                ImageBackgroundModes.Auto), cancellationToken, progress);
+                batch.OutputFormat,
+                batch.Quality,
+                batch.Background), cancellationToken, progress);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1755,6 +1781,10 @@ public sealed class ArtWorkflowService(
                 PromptSpecIndex = resolvedPrompt.SpecIndex,
                 PromptSpecOutputIndex = resolvedPrompt.OutputIndexWithinSpec,
                 batch.PromptRecipeVersion,
+                RequestedBackground = batch.Background,
+                RequestedImageModel = batch.ImageModel,
+                batch.Quality,
+                ProviderMetadata = providerResult.RawMetadataJson,
                 image.RevisedPrompt,
                 image.ResponseId,
                 image.CallId,
@@ -1765,6 +1795,8 @@ public sealed class ArtWorkflowService(
                 EditCanvasFinalization = canvasFinalization,
                 References = references.Select(a => new { a.Id, a.Label, a.ContentType }),
             });
+        asset.RawProviderData = image.Data;
+        asset.RawProviderContentType = image.ContentType;
         asset.ReviewStatus = AssetReviewStatus.Pending;
         await db.ArtAssets.AddAsync(asset, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
@@ -1857,7 +1889,7 @@ public sealed class ArtWorkflowService(
         var rectH = Math.Clamp(request.Height, 1, sourceHeight - rectY);
         var padding = Math.Clamp(request.Padding, 0, 4096);
 
-        // Determine the opaque output canvas and where the cropped content sits in it.
+        // Determine the output canvas and where the cropped content sits in it.
         int canvasW;
         int canvasH;
         if (request.FixedCanvasWidth is int fixedW and > 0 && request.FixedCanvasHeight is int fixedH and > 0)
@@ -1874,17 +1906,18 @@ public sealed class ArtWorkflowService(
         var offsetX = request.CenterInCanvas ? Math.Max(0, (canvasW - rectW) / 2) : padding;
         var offsetY = request.CenterInCanvas ? Math.Max(0, (canvasH - rectH) / 2) : padding;
 
-        // Fill with the opaque source background color, then blit the region.
+        // Fill with the detected source background, then blit the region.
         var canvasRgba = new byte[canvasW * canvasH * 4];
-        var bgR = sourceRgba[0];
-        var bgG = sourceRgba[1];
-        var bgB = sourceRgba[2];
+        var background = SpriteSheetImageAnalyzer.ResolveBackground(sourceRgba, sourceWidth, sourceHeight);
+        var bgR = background.R;
+        var bgG = background.G;
+        var bgB = background.B;
         for (var i = 0; i < canvasW * canvasH; i++)
         {
             canvasRgba[(i * 4) + 0] = bgR;
             canvasRgba[(i * 4) + 1] = bgG;
             canvasRgba[(i * 4) + 2] = bgB;
-            canvasRgba[(i * 4) + 3] = 255;
+            canvasRgba[(i * 4) + 3] = background.A;
         }
 
         for (var y = 0; y < rectH; y++)
@@ -1902,7 +1935,7 @@ public sealed class ArtWorkflowService(
                 canvasRgba[destIndex + 0] = sourceRgba[srcIndex + 0];
                 canvasRgba[destIndex + 1] = sourceRgba[srcIndex + 1];
                 canvasRgba[destIndex + 2] = sourceRgba[srcIndex + 2];
-                canvasRgba[destIndex + 3] = 255;
+                canvasRgba[destIndex + 3] = sourceRgba[srcIndex + 3];
             }
         }
 
@@ -4473,6 +4506,17 @@ public sealed class ArtWorkflowService(
         };
     }
 
+    private static string ResolveEditBackground(string? requested, byte[] source)
+    {
+        if (!string.IsNullOrWhiteSpace(requested) && requested != "preserve")
+            return ImageBackgroundModes.NormalizeGeneration(requested);
+        if (!ImageRgbaDecoder.TryReadRgba(source, out _, out _, out var rgba))
+            throw new InvalidOperationException("Source image could not be decoded.");
+        for (var i = 3; i < rgba.Length; i += 4)
+            if (rgba[i] < 255) return ImageBackgroundModes.Transparent;
+        return ImageBackgroundModes.Auto;
+    }
+
     private static string BuildGenerationPrompt(
         string prompt,
         string negativePrompt,
@@ -4977,7 +5021,7 @@ public sealed class ArtWorkflowService(
             asset.CreatedAt,
             asset.ReviewStatus,
             ReviewDecisionView(currentDecision),
-            ReviewDecisionView(latestAgentDecision));
+            ReviewDecisionView(latestAgentDecision), asset.HasRawProviderOutput);
 
     private static AssetReviewDecisionView? ReviewDecisionView(AssetReviewDecision? decision) =>
         decision is null
@@ -5658,7 +5702,7 @@ public sealed class ArtWorkflowService(
             asset.Prompt,
             asset.SourceMetadataJson,
             asset.CreatedAt,
-            asset.UpdatedAt);
+            asset.UpdatedAt, asset.RawProviderData is { Length: > 0 });
 
     private static GenerationBatchListItem ToGenerationBatchListItem(GenerationBatch batch) =>
         new(
@@ -6002,7 +6046,8 @@ public sealed class ArtWorkflowService(
         string Prompt,
         string SourceMetadataJson,
         DateTime CreatedAt,
-        DateTime UpdatedAt);
+        DateTime UpdatedAt,
+        bool HasRawProviderOutput);
 
     private sealed record GenerationBatchListItem(
         Guid Id,

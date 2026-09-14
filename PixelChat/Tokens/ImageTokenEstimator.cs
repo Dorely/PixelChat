@@ -47,6 +47,12 @@ public sealed class OpenAIImageTokenEstimator : IImageTokenEstimator
                 Warning: "Image dimensions were not available.");
         }
 
+        // Reserve the full original-detail image budget for account models. Their server
+        // image resize decisions are not visible locally; do not underestimate auto detail.
+        if (PixelChat.Llm.OpenAIModelCatalog.IsBuiltIn(modelName ?? string.Empty))
+            return new ImageTokenEstimate(10000, "account-image-reserve", false, width, height,
+                width, height, modelName, "Conservative 10,000-token image reserve; server usage may differ.");
+
         var profile = ResolveProfile(modelName, detail);
         return profile.Kind == ImageTokenizationKind.Tile
             ? CountTile(width, height, modelName, profile)

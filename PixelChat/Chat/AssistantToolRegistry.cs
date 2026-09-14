@@ -120,7 +120,7 @@ public sealed class AssistantToolRegistry(
                 [Description("Complete current reusable model-facing guidance. Use short applicable labeled blocks: Visual language, Subject family, Composition, Production use. Rewrite the whole coherent snapshot; exclude chronology, current candidates, experiments, and one-off prohibitions.")] string prompt,
                 [Description("Concise effective rule change in this version, not a turn narrative or duplicate of the notes.")] string changeSummary,
                 [Description("Complete current working memory, never sent to image generation. May include active project direction, workflow preferences, reference-use instructions, and operational caveats. Replace superseded state and exclude chronology.")] string? notes = null,
-                [Description("Generation-only background preference: current, auto, removable, or opaque. Use auto for concept/reference art and removable for export-ready sprite generation.")] string? backgroundPreference = null,
+                [Description("Generation-only background preference: current, auto, removable, opaque, or transparent (Image 2.5 native alpha). Use auto for concept/reference art and removable for export-ready sprite generation.")] string? backgroundPreference = null,
                 CancellationToken cancellationToken = default) =>
                 SavePromptRecipeToolAsync(projectId, recipeId, name, prompt, changeSummary, notes, backgroundPreference, cancellationToken),
             name: "save_prompt_recipe",
@@ -246,8 +246,9 @@ public sealed class AssistantToolRegistry(
                 bool allowScaleDown = true,
                 string resampleMode = "nearest",
                 int seamOverlapPixels = 32,
+                string? background = null,
                 CancellationToken cancellationToken = default) =>
-                PreviewAssetEditCanvasAsync(projectId, sourceAssetId, maskId, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, cancellationToken),
+                PreviewAssetEditCanvasAsync(projectId, sourceAssetId, maskId, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, background, cancellationToken),
             name: "preview_asset_edit_canvas",
             description: "Deterministically prepare and inspect an asset edit canvas without generating an image, consuming a generation round, creating a batch, or creating a library asset. Use this immediately before every edit_asset call with nonzero padding. Pass the final intended padding and effective saved/drawn mask once; the result returns a 15-minute canvasPreparationId plus model-only prepared-source and editable-mask-overlay images. After inspecting them, call edit_asset with only that id to lock the submitted source, mask, and canvas inputs; do not repeat inline padding or mask arguments. The mask guides the provider and does not pixel-lock the returned image."),
 
@@ -271,10 +272,11 @@ public sealed class AssistantToolRegistry(
                 string resampleMode = "nearest",
                 int seamOverlapPixels = 32,
                 Guid? canvasPreparationId = null,
+                string? background = null,
                 CancellationToken cancellationToken = default) =>
-                EditAssetAsync(projectId, budget, sourceAssetId, prompt, assetName, size, count, referenceAssetIds, recipeId, maskId, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, canvasPreparationId, cancellationToken),
+                EditAssetAsync(projectId, budget, sourceAssetId, prompt, assetName, size, count, referenceAssetIds, recipeId, maskId, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, canvasPreparationId, background, cancellationToken),
             name: "edit_asset",
-            description: "Directly edit an existing image asset and wait for completion. Asset edits always infer the background from the source; background mode is generation-only and no background clause is injected. Use this whenever the user asks to change, replace, repair, or refine an existing non-frame image; do not substitute new generation or UI instructions. Inspect the source first. For an ordinary zero-padding localized edit, pass maskRects/maskPolygons in full source pixels or maskId. For every padded/outpaint edit, first call preview_asset_edit_canvas with the final mask, padding, seam, and resampling; inspect both images, then call this tool with canvasPreparationId and no inline mask/canvas arguments. A preparation locks the exact submitted logical/provider canvases and expires after 15 minutes, but its mask only guides the provider and does not pixel-lock the result. Inspect the complete output for unintended changes. Padding is deterministic and must never be its own generation round. Use recipeId for reusable guidance and keep the prompt focused on Change/Preserve/Constraints. Outputs are model-only images and enter Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
+            description: "Directly edit an existing image asset and wait for completion. Background defaults to preserving source treatment; transparent requests native alpha and requires Image 2.5. Recipe background preferences apply only to generation. Use the same background for canvas preparation and editing. Use this whenever the user asks to change, replace, repair, or refine an existing non-frame image; do not substitute new generation or UI instructions. Inspect the source first. For an ordinary zero-padding localized edit, pass maskRects/maskPolygons in full source pixels or maskId. For every padded/outpaint edit, first call preview_asset_edit_canvas with the final mask, padding, seam, and resampling; inspect both images, then call this tool with canvasPreparationId and no inline mask/canvas arguments. A preparation locks the exact submitted logical/provider canvases and expires after 15 minutes, but its mask only guides the provider and does not pixel-lock the result. Inspect the complete output for unintended changes. Padding is deterministic and must never be its own generation round. Use recipeId for reusable guidance and keep the prompt focused on Change/Preserve/Constraints. Outputs are model-only images and enter Pending Generations for explicit Keep/Reject review. Counts against the fixed per-turn generation-round budget."),
 
         AIFunctionFactory.Create(
             method: (
@@ -308,7 +310,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 ExtractRegionAsAssetAsync(projectId, sourceAssetId, x, y, width, height, name, padding, fixedCanvasWidth, fixedCanvasHeight, centerInCanvas, linkToSource, cancellationToken),
             name: "extract_region_as_asset",
-            description: "Extract a rectangular region of a source image into a standalone, opaque project asset (weapon, prop, portrait, tile, UI element, VFX) and update the visible Sprites Source workspace. Coordinates are in source-image pixel space. Optional padding or a fixed centered canvas. The result stays opaque - transparency and background removal are Export-only. Returns the new asset id and its logical size/content offset."),
+            description: "Extract a rectangular region of a source image into a standalone project asset (weapon, prop, portrait, tile, UI element, VFX) and update the visible Sprites Source workspace. Coordinates are in source-image pixel space. Optional padding or a fixed centered canvas. Existing alpha is preserved; optional background removal is available at Export. Returns the new asset id and its logical size/content offset."),
 
         AIFunctionFactory.Create(
             method: (
@@ -638,7 +640,7 @@ public sealed class AssistantToolRegistry(
                 CancellationToken cancellationToken = default) =>
                 EditFrameAsync(projectId, budget, frameSetId, frameId, prompt, background, referenceAssetIds, includeAdjacentFrames, useFrameMask, maskRects, maskPolygons, canvasPaddingTop, canvasPaddingRight, canvasPaddingBottom, canvasPaddingLeft, allowScaleDown, resampleMode, seamOverlapPixels, canvasPreparationId, cancellationToken),
             name: "edit_frame",
-            description: "Greenfield Frames pipeline: AI-edit one frame's logical cell with a Change/Preserve/Constraints prompt, store the logical result as the frame's working image, and update the visible Sprites workspace. Consumes one autonomous generation round. Use only when deterministic crop/cell/offset/align/erase cannot fix the frame. For an ordinary zero-padding surgical edit, pass maskRects/maskPolygons in logical-frame pixels. For every padded/outpaint edit, first call preview_frame_edit_canvas with the final mask, padding, seam, and resampling; inspect both images, then call this tool with canvasPreparationId and no inline mask/canvas arguments. Masks guide the provider and do not pixel-lock the result, so inspect the complete edited frame for unintended changes. The accepted result expands the logical cell and is never squashed into the old one. Padding is deterministic and must never be its own generation round or a reason to construct a temporary frame set. background defaults to opaque."),
+            description: "Greenfield Frames pipeline: AI-edit one frame's logical cell with a Change/Preserve/Constraints prompt, store the logical result as the frame's working image, and update the visible Sprites workspace. Consumes one autonomous generation round. Use only when deterministic crop/cell/offset/align/erase cannot fix the frame. For an ordinary zero-padding surgical edit, pass maskRects/maskPolygons in logical-frame pixels. For every padded/outpaint edit, first call preview_frame_edit_canvas with the final mask, padding, seam, and resampling; inspect both images, then call this tool with canvasPreparationId and no inline mask/canvas arguments. Masks guide the provider and do not pixel-lock the result, so inspect the complete edited frame for unintended changes. The accepted result expands the logical cell and is never squashed into the old one. Padding is deterministic and must never be its own generation round or a reason to construct a temporary frame set. background defaults to preserving source treatment; transparent requests real alpha and requires Image 2.5."),
 
         AIFunctionFactory.Create(
             method: (Guid assetId) => ExportAssetAsync(projectId, assetId),
@@ -1265,6 +1267,7 @@ public sealed class AssistantToolRegistry(
         bool allowScaleDown,
         string resampleMode,
         int seamOverlapPixels,
+        string? background,
         CancellationToken cancellationToken)
     {
         if (!TryCreateCanvasOptions(
@@ -1306,7 +1309,7 @@ public sealed class AssistantToolRegistry(
             sourceAssetId,
             MaskPngDataUrl: drawnMaskDataUrl,
             MaskId: maskId,
-            CanvasOptions: canvasOptions), cancellationToken);
+            CanvasOptions: canvasOptions, Background: background), cancellationToken);
         return SerializeCanvasPreview(preview, "asset");
     }
 
@@ -1331,6 +1334,7 @@ public sealed class AssistantToolRegistry(
         string resampleMode,
         int seamOverlapPixels,
         Guid? canvasPreparationId,
+        string? background,
         CancellationToken cancellationToken)
     {
         var outputLabel = CleanAssetName(assetName);
@@ -1465,7 +1469,7 @@ public sealed class AssistantToolRegistry(
             OutputLabel: outputLabel,
             MaskId: canvasPreparationId is null ? maskId : null,
             CanvasOptions: canvasPreparationId is null ? canvasOptions : null,
-            CanvasPreparationId: canvasPreparationId), cancellationToken);
+            CanvasPreparationId: canvasPreparationId, Background: background), cancellationToken);
         var round = budget.Consume();
         var effectiveMaskId = batch.InputMaskIds.FirstOrDefault();
         return await AwaitGenerationRoundAsync(

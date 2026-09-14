@@ -45,6 +45,7 @@ builder.Services.Configure<TokenCountingOptions>(builder.Configuration.GetSectio
 builder.Services.AddScoped<ILlmProviderService, LlmProviderService>();
 builder.Services.AddScoped<IOpenAIAccountAuthService, OpenAIAccountAuthService>();
 builder.Services.AddScoped<IChatClientFactory, ChatClientFactory>();
+builder.Services.AddSingleton<ImageModelSelectionService>();
 builder.Services.AddScoped<IImageProvider, OpenAIAccountImageProvider>();
 builder.Services.AddScoped<IImageEditCanvasService, ImageEditCanvasService>();
 builder.Services.AddSingleton<IEditCanvasPreparationStore, EditCanvasPreparationStore>();

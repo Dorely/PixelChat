@@ -14,6 +14,7 @@ namespace PixelChat.Art;
 public sealed class FrameSetService(
     AppDbContext db,
     IImageProvider imageProvider,
+    ImageModelSelectionService imageSelection,
     IImageEditCanvasService imageEditCanvas,
     IEditCanvasPreparationStore canvasPreparations,
     IOptions<ImageGenerationOptions> imageOptions,
@@ -587,7 +588,7 @@ public sealed class FrameSetService(
             }
         }
 
-        var background = NormalizeBackgroundMode(request.Background);
+        var background = ResolveFrameEditBackground(request.Background, cellRgba);
         var options = request.CanvasOptions ?? new EditCanvasOptions();
         var prepared = imageEditCanvas.Prepare(
             cellPng,
@@ -648,7 +649,9 @@ public sealed class FrameSetService(
             cancellationToken);
         var editPrompt = BuildEditFramePrompt(prompt, referenceRoleLines);
         var options = imageOptions.Value;
-        var backgroundMode = NormalizeBackgroundMode(request.Background);
+        var backgroundMode = ResolveFrameEditBackground(request.Background, cellRgba);
+        var selection = await imageSelection.GetAsync(cancellationToken);
+        ImageModelCatalog.Validate(selection.Model, selection.Quality, backgroundMode, "png");
         var canvasOptions = request.CanvasOptions ?? new EditCanvasOptions();
         PreparedEditCanvas? prepared = null;
         ImageProviderReference? mask = null;
@@ -712,12 +715,12 @@ public sealed class FrameSetService(
             prepared?.OutputSize ?? NormalizeSize(options.DefaultSize),
             1,
             options.DefaultMainlineModel,
-            options.DefaultImageModel,
+            selection.Model,
             new ImageProviderReference($"frame-{frame.Index + 1}.png", "image/png", providerSource),
             providerMask,
             references,
             OutputFormat: "png",
-            Quality: options.DefaultQuality,
+            Quality: selection.Quality,
             Background: backgroundMode), cancellationToken);
         var image = providerResult.Images.FirstOrDefault()
             ?? throw new InvalidOperationException("Image provider completed without returning a frame image.");
@@ -748,6 +751,18 @@ public sealed class FrameSetService(
             targetHeight,
             prepared?.Transform.ResampleMode ?? EditCanvasResampleMode.NearestNeighbor,
             now);
+        var revision = new ArtAsset
+        {
+            ProjectId = projectId, Label = $"{frame.Name} edit", FileName = $"frame-{frame.Id}-edit.png",
+            Kind = ArtAssetKind.Edited, ContentType = "image/png", Data = outputData,
+            RawProviderData = image.Data, RawProviderContentType = image.ContentType,
+            Width = editedWidth, Height = editedHeight, ParentAssetId = source.Id,
+            Prompt = request.Prompt ?? string.Empty, ReviewStatus = AssetReviewStatus.Kept,
+            SourceMetadataJson = JsonSerializer.Serialize(new { RequestedBackground = backgroundMode,
+                selection.Model, selection.Quality, image.RevisedPrompt, providerResult.RawMetadataJson }, JsonOptions),
+        };
+        db.ArtAssets.Add(revision);
+        frame.BitmapRevisionAssetId = revision.Id;
         frame.WorkingCanvasTransformJson = prepared is null ? string.Empty : JsonSerializer.Serialize(prepared.Transform, JsonOptions);
         frame.WorkingCanvasFinalizationJson = finalization is null ? string.Empty : JsonSerializer.Serialize(finalization, JsonOptions);
         frame.LogicalWidth = targetWidth;
@@ -834,7 +849,7 @@ public sealed class FrameSetService(
         ValidateCanvasSize(sheetWidth, sheetHeight, "Composed sprite sheet is too large.");
 
         var background = SpriteSheetImageAnalyzer.ResolveBackground(decoded[0].Rgba, decoded[0].Width, decoded[0].Height);
-        var sheetRgba = BuildOpaqueCell(sheetWidth, sheetHeight, background);
+        var sheetRgba = BuildBackgroundCell(sheetWidth, sheetHeight, background);
         for (var index = 0; index < decoded.Count; index++)
         {
             var item = decoded[index];
@@ -989,7 +1004,7 @@ public sealed class FrameSetService(
             newOffsetX = Math.Clamp(newOffsetX, -8192, 8192);
             newOffsetY = Math.Clamp(newOffsetY, -8192, 8192);
 
-            var previewCell = BuildOpaqueCell(measurement.CellWidth, measurement.CellHeight, background);
+            var previewCell = BuildBackgroundCell(measurement.CellWidth, measurement.CellHeight, background);
             BlitInto(previewCell, measurement.CellWidth, measurement.CellHeight, scaledRgba, scaledWidth, scaledHeight, newOffsetX, newOffsetY);
             var newBounds = SpriteSheetImageAnalyzer.ForegroundBounds(previewCell, measurement.CellWidth, measurement.CellHeight, background);
 
@@ -1053,7 +1068,7 @@ public sealed class FrameSetService(
         var sheetHeight = cellHeight;
         ValidateCanvasSize(sheetWidth, sheetHeight, "Animation review sheet is too large.");
 
-        var sheetRgba = BuildOpaqueCell(sheetWidth, sheetHeight, background);
+        var sheetRgba = BuildBackgroundCell(sheetWidth, sheetHeight, background);
         var updates = new List<SpriteSheetFrameUpdateView>();
         for (var index = 0; index < limited.Count; index++)
         {
@@ -1261,7 +1276,7 @@ public sealed class FrameSetService(
         var outputHeight = checked((outer * 2) + (rows * cellHeight) + (Math.Max(0, rows - 1) * gutter));
         ValidateCanvasSize(outputWidth, outputHeight, "Built sprite sheet is too large.");
 
-        var outputRgba = BuildOpaqueCell(outputWidth, outputHeight, background);
+        var outputRgba = BuildBackgroundCell(outputWidth, outputHeight, background);
         var warnings = new List<string>();
         var manifestFrames = new List<object>();
         var ordering = NormalizeOrdering(request.Ordering);
@@ -1331,6 +1346,8 @@ public sealed class FrameSetService(
             Gutter = gutter,
             OuterMargin = outer,
             Ordering = ordering,
+            BackgroundMode = background.Mode,
+            BackgroundColor = $"#{background.R:X2}{background.G:X2}{background.B:X2}",
             HorizontalAnchor = request.HorizontalAnchor,
             VerticalAnchor = request.VerticalAnchor,
             CreatedAt = now,
@@ -1612,6 +1629,7 @@ public sealed class FrameSetService(
         session.PreviewOverlayActive = request.PreviewOverlayActive;
         session.Prompt = request.Prompt;
         session.Count = Math.Clamp(request.Count, 1, 16);
+        session.Background = request.Background == "preserve" ? "preserve" : ImageBackgroundModes.NormalizeGeneration(request.Background);
         session.CanvasOptionsJson = JsonSerializer.Serialize(request.CanvasOptions, JsonOptions);
         session.CanvasPreparationId = request.CanvasPreparationId;
         session.CanvasPreparationTransformJson = request.CanvasPreparationTransform is null
@@ -1891,7 +1909,7 @@ public sealed class FrameSetService(
             DeserializeSpriteEditCrop(session.CropJson),
             DeserializeGuidList(session.CandidateAssetIdsJson),
             DeserializeOutputStates(session.OutputStatesJson),
-            session.UpdatedAt);
+            session.UpdatedAt, session.Background);
 
     private static string NormalizeEditTargetKind(string? value) =>
         string.Equals(value, "frame", StringComparison.OrdinalIgnoreCase) ? "frame" : "source";
@@ -2170,7 +2188,7 @@ public sealed class FrameSetService(
     {
         var cellWidth = Math.Max(1, forcedWidth ?? (frame.LogicalWidth > 0 ? frame.LogicalWidth : frameSet.DefaultCellWidth));
         var cellHeight = Math.Max(1, forcedHeight ?? (frame.LogicalHeight > 0 ? frame.LogicalHeight : frameSet.DefaultCellHeight));
-        var cell = BuildOpaqueCell(cellWidth, cellHeight, background);
+        var cell = BuildBackgroundCell(cellWidth, cellHeight, background);
         var (contentRgba, contentWidth, contentHeight) = FrameContentPixels(frame, sourceRgba, sourceWidth, sourceHeight, ignoreWorking);
         var copyWholeCell = !ignoreWorking && frame.WorkingData.Length > 0 && contentWidth == cellWidth && contentHeight == cellHeight;
         BlitInto(
@@ -2212,8 +2230,14 @@ public sealed class FrameSetService(
         frame.UpdatedAt = now;
     }
 
-    private static string NormalizeBackgroundMode(string? value) =>
-        ImageBackgroundModes.NormalizeGeneration(value, ImageBackgroundModes.Opaque);
+    private static string ResolveFrameEditBackground(string? requested, byte[] rgba)
+    {
+        if (!string.IsNullOrWhiteSpace(requested) && requested != "preserve")
+            return ImageBackgroundModes.NormalizeGeneration(requested);
+        for (var i = 3; i < rgba.Length; i += 4)
+            if (rgba[i] < 255) return ImageBackgroundModes.Transparent;
+        return ImageBackgroundModes.Auto;
+    }
 
     private static string NormalizeSize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "auto" : value.Trim();
@@ -2279,7 +2303,7 @@ public sealed class FrameSetService(
     private static string NormalizeOrdering(string? value) =>
         string.Equals(value?.Trim(), "columnMajor", StringComparison.OrdinalIgnoreCase) ? "columnMajor" : "rowMajor";
 
-    private static byte[] BuildOpaqueCell(int width, int height, SpriteSheetBackground background)
+    private static byte[] BuildBackgroundCell(int width, int height, SpriteSheetBackground background)
     {
         var rgba = new byte[width * height * 4];
         for (var i = 0; i < width * height; i++)
@@ -2287,7 +2311,7 @@ public sealed class FrameSetService(
             rgba[(i * 4) + 0] = background.R;
             rgba[(i * 4) + 1] = background.G;
             rgba[(i * 4) + 2] = background.B;
-            rgba[(i * 4) + 3] = 255;
+            rgba[(i * 4) + 3] = background.A;
         }
 
         return rgba;
@@ -2318,7 +2342,7 @@ public sealed class FrameSetService(
                 destRgba[destIndex + 0] = srcRgba[srcIndex + 0];
                 destRgba[destIndex + 1] = srcRgba[srcIndex + 1];
                 destRgba[destIndex + 2] = srcRgba[srcIndex + 2];
-                destRgba[destIndex + 3] = 255;
+                destRgba[destIndex + 3] = srcRgba[srcIndex + 3];
             }
         }
     }
@@ -2351,7 +2375,7 @@ public sealed class FrameSetService(
         int rectHeight,
         SpriteSheetBackground background)
     {
-        var outRgba = BuildOpaqueCell(rectWidth, rectHeight, background);
+        var outRgba = BuildBackgroundCell(rectWidth, rectHeight, background);
         for (var y = 0; y < rectHeight; y++)
         {
             var sourceY = rectY + y;
@@ -2367,7 +2391,7 @@ public sealed class FrameSetService(
                 outRgba[destIndex + 0] = sourceRgba[sourceIndex + 0];
                 outRgba[destIndex + 1] = sourceRgba[sourceIndex + 1];
                 outRgba[destIndex + 2] = sourceRgba[sourceIndex + 2];
-                outRgba[destIndex + 3] = 255;
+                outRgba[destIndex + 3] = sourceRgba[sourceIndex + 3];
             }
         }
 
@@ -2387,8 +2411,6 @@ public sealed class FrameSetService(
         }));
         var output = new byte[destWidth * destHeight * 4];
         image.CopyPixelDataTo(output);
-        for (var index = 3; index < output.Length; index += 4)
-            output[index] = 255;
         return output;
     }
 
@@ -2406,7 +2428,7 @@ public sealed class FrameSetService(
                 output[destIndex + 0] = sourceRgba[sourceIndex + 0];
                 output[destIndex + 1] = sourceRgba[sourceIndex + 1];
                 output[destIndex + 2] = sourceRgba[sourceIndex + 2];
-                output[destIndex + 3] = 255;
+                output[destIndex + 3] = sourceRgba[sourceIndex + 3];
             }
         }
 

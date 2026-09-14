@@ -529,7 +529,7 @@ public sealed class OpenAIAccountImageProvider(
             new()
             {
                 ["type"] = "input_text",
-                ["text"] = request.Prompt,
+                ["text"] = request.Prompt + TransparencyInstructions(request.Background),
             },
         };
 
@@ -548,7 +548,7 @@ public sealed class OpenAIAccountImageProvider(
             new()
             {
                 ["type"] = "input_text",
-                ["text"] = request.Prompt,
+                ["text"] = request.Prompt + TransparencyInstructions(request.Background),
             },
             InputImage(request.SourceImage),
         };
@@ -565,7 +565,7 @@ public sealed class OpenAIAccountImageProvider(
             };
         }
 
-        return BasePayload(mainlineModel, content, tool, "Use the image_generation tool to edit the first supplied image. If a mask is supplied, apply it to guide the targeted edit.");
+        return BasePayload(mainlineModel, content, tool, "Use the image_generation tool to edit the first supplied image. Preserve unmentioned details and the source background treatment unless the request changes them. If a mask is supplied, apply it to guide the targeted edit.");
     }
 
     private static Dictionary<string, object?> BasePayload(
@@ -601,6 +601,7 @@ public sealed class OpenAIAccountImageProvider(
         if (!ImageSizeValidator.TryValidate(size, out var sizeError, out var suggestedSize))
             throw new ImageProviderException($"{sizeError} Suggested size: {suggestedSize}.", "invalid_size");
 
+        ImageModelCatalog.Validate(imageModel, string.IsNullOrWhiteSpace(quality) ? "auto" : quality.Trim(), NormalizeBackground(background), NormalizeOutputFormat(outputFormat));
         var tool = new Dictionary<string, object?>
         {
             ["type"] = "image_generation",
@@ -646,9 +647,15 @@ public sealed class OpenAIAccountImageProvider(
             _ => "png",
         };
 
+    private static string TransparencyInstructions(string background) =>
+        background == ImageBackgroundModes.Transparent
+            ? "\nOutput real alpha transparency: isolate the requested subject on an empty transparent backdrop. Do not paint a checkerboard, grid, magenta, or solid replacement background. Do not invent scenery, a ground plane, or shadows unless explicitly requested."
+            : string.Empty;
+
     private static string NormalizeBackground(string? value) =>
         ImageBackgroundModes.NormalizeGeneration(value) switch
         {
+            ImageBackgroundModes.Transparent => ImageBackgroundModes.Transparent,
             ImageBackgroundModes.Opaque or ImageBackgroundModes.Removable => ImageBackgroundModes.Opaque,
             _ => ImageBackgroundModes.Auto,
         };

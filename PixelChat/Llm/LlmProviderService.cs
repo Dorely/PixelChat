@@ -28,20 +28,15 @@ public class LlmProviderService(
             return ChatProviderAvailability.Unavailable("Configure and test a chat provider in Providers to enable chat.");
 
         var explicitDefault = all.FirstOrDefault(provider => provider.IsDefault);
-        if (explicitDefault is not null && await IsChatProviderWorkingAsync(explicitDefault, cancellationToken))
-            return ChatProviderAvailability.Available(explicitDefault);
+        if (explicitDefault is not null)
+            return await IsChatProviderWorkingAsync(explicitDefault, cancellationToken)
+                ? ChatProviderAvailability.Available(explicitDefault)
+                : ChatProviderAvailability.Unavailable(await GetUnavailableReasonAsync(explicitDefault, cancellationToken), explicitDefault);
 
-        foreach (var provider in all.Where(provider => !provider.IsDefault))
-        {
-            if (await IsChatProviderWorkingAsync(provider, cancellationToken))
-                return ChatProviderAvailability.Available(provider);
-        }
-
-        var candidate = explicitDefault ?? all.FirstOrDefault();
-        var reason = candidate is null
-            ? "Configure and test a chat provider in Providers to enable chat."
-            : await GetUnavailableReasonAsync(candidate, cancellationToken);
-        return ChatProviderAvailability.Unavailable(reason, candidate);
+        var candidate = all.FirstOrDefault(provider => OpenAIAccountProvider.IsOpenAIAccount(provider)) ?? all[0];
+        return await IsChatProviderWorkingAsync(candidate, cancellationToken)
+            ? ChatProviderAvailability.Available(candidate)
+            : ChatProviderAvailability.Unavailable(await GetUnavailableReasonAsync(candidate, cancellationToken), candidate);
     }
 
     public async Task<bool> IsChatProviderWorkingAsync(int providerId, CancellationToken cancellationToken = default)
@@ -170,9 +165,12 @@ public class LlmProviderService(
         };
     }
 
+    private static bool IsBuiltInAccountModel(LlmProvider provider) =>
+        OpenAIAccountProvider.IsOpenAIAccount(provider) && OpenAIModelCatalog.IsBuiltIn(provider.ModelId);
+
     private async Task<bool> IsChatProviderWorkingAsync(LlmProvider provider, CancellationToken cancellationToken)
     {
-        if (!provider.HasCurrentChatTestSnapshot)
+        if (!IsBuiltInAccountModel(provider) && !provider.HasCurrentChatTestSnapshot)
             return false;
 
         var credentials = await GetCredentialStatusAsync(provider, cancellationToken);
@@ -181,6 +179,8 @@ public class LlmProviderService(
 
     private async Task<string> GetUnavailableReasonAsync(LlmProvider provider, CancellationToken cancellationToken)
     {
+        if (IsBuiltInAccountModel(provider))
+            return (await GetCredentialStatusAsync(provider, cancellationToken)).Message;
         if (!provider.LastChatTestSucceeded)
         {
             return string.IsNullOrWhiteSpace(provider.LastChatTestError)
@@ -259,6 +259,8 @@ public class LlmProviderService(
     private static void NormalizeEditableValues(LlmProvider provider)
     {
         provider.ThinkingMode = ProviderThinkingModes.Normalize(provider.ThinkingMode);
+        if (IsBuiltInAccountModel(provider) && !OpenAIModelCatalog.Efforts.Contains(provider.ThinkingMode))
+            provider.ThinkingMode = "medium";
     }
 
     private sealed record CredentialStatus(bool Available, string Message);

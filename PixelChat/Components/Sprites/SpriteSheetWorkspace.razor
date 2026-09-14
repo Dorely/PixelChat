@@ -127,7 +127,7 @@
                         {
                             <div class="sprite-export-pane">
                                 <p>Build a sheet before exporting.</p>
-                                <p class="sprite-export-note">Background removal, transparency, and edge cleanup happen here after the opaque sheet exists.</p>
+                                <p class="sprite-export-note">Native alpha is preserved. Optional background removal and edge cleanup happen here.</p>
                             </div>
                         }
                     }
@@ -426,6 +426,16 @@
                     </label>
 
                     <label>
+                        <span>Edit background</span>
+                        <select class="form-select form-select-sm" @bind="_editBackground" @bind:after="EditCanvasControlsChangedAsync">
+                            <option value="preserve">Preserve source treatment</option>
+                            <option value="auto">Natural / model decides</option>
+                            <option value="opaque">Opaque</option>
+                            <option value="removable">Removable magenta</option>
+                            <option value="transparent" disabled="@(!ImageModelCatalog.SupportsTransparency(SelectedImageModel))">Transparent (requires Image 2.5)</option>
+                        </select>
+                    </label>
+                    <label>
                         <span>Prompt</span>
                         <textarea class="form-control form-control-sm sprite-edit-prompt" rows="7" @bind="_editPrompt" @bind:event="oninput" @bind:after="PersistEditSessionAsync"></textarea>
                     </label>
@@ -490,6 +500,12 @@
                         <button type="button" class="btn btn-sm btn-primary" disabled="@(!CanAcceptEditCandidate())" @onclick="AcceptEditCandidateAsync">Accept</button>
                     </div>
                 </div>
+                @if (SelectedEditCandidateOutput() is { ImageUrl: { } candidateUrl } selectedCandidate)
+                {
+                    <details><summary>Inspect candidate transparency and pixels</summary>
+                        <ImageTransparencyInspector Src="@candidateUrl" Alt="@selectedCandidate.Label" RequestedBackground="@(Workbench.Batches.FirstOrDefault(b => b.Id == _editBatchId)?.Background)" />
+                    </details>
+                }
                 <div class="sprite-edit-candidate-strip">
                     @if (editCandidateOutputs.Count == 0)
                     {
@@ -528,6 +544,8 @@
 @code {
     [Parameter, EditorRequired]
     public WorkbenchView Workbench { get; set; } = null!;
+
+    [Parameter] public string SelectedImageModel { get; set; } = "gpt-image-2.5-sunburst";
 
     [Parameter]
     public EventCallback OnChanged { get; set; }
@@ -622,6 +640,7 @@
     private string? _editMaskOverlayDataUrl;
     private EditCanvasTransform? _editCanvasTransform;
     private string _editPrompt = string.Empty;
+    private string _editBackground = "preserve";
     private string? _editModalError;
     private Guid? _editBatchId;
     private Guid? _editMaskId;
@@ -1368,6 +1387,7 @@
         _selectedEditOutputIndex = session.SelectedOutputIndex;
         _editPreviewOverlayActive = session.PreviewOverlayActive;
         _editPrompt = session.Prompt;
+        _editBackground = session.Background;
         _editCount = Math.Clamp(session.Count, 1, Math.Max(1, ImageOptions.Value.MaxOutputs));
         _editPaddingTop = session.CanvasOptions.PaddingTop;
         _editPaddingRight = session.CanvasOptions.PaddingRight;
@@ -1486,7 +1506,7 @@
                     sourceAssetId,
                     sourceDataUrl,
                     maskDataUrl,
-                    CanvasOptions: CurrentEditCanvasOptions()));
+                    CanvasOptions: CurrentEditCanvasOptions(), Background: _editBackground));
             _editCanvasPreparationId = preview.PreparationId;
             _editCanvasPreparationExpiresAt = preview.ExpiresAt;
             _editPreparedTransform = preview.Transform;
@@ -1540,7 +1560,7 @@
                 [],
                 SwitchToBatches: false,
                 CanvasOptions: _editCanvasPreparationId is null ? CurrentEditCanvasOptions() : null,
-                CanvasPreparationId: _editCanvasPreparationId));
+                CanvasPreparationId: _editCanvasPreparationId, Background: _editBackground));
             _editBatchId = batch.Id;
             _editCanvasTransform = batch.EditCanvasTransform;
             _editMaskId = batch.EditCanvasTransform?.OriginalMaskId;
@@ -1746,7 +1766,7 @@
                     _editCrop.CropWidth,
                     _editCrop.CropHeight),
             candidateIds,
-            outputStates));
+            outputStates, _editBackground));
         _editSessionId = view.Id;
         _editPersistedOutputStates = view.OutputStates.ToList();
         _editCandidateAssetIds = view.CandidateAssetIds.ToList();

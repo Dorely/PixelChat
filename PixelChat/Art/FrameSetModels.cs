@@ -311,7 +311,8 @@ public sealed record SpriteEditSessionView(
     SpriteEditSessionCrop? Crop,
     IReadOnlyList<Guid> CandidateAssetIds,
     IReadOnlyList<GenerationOutputStateView> OutputStates,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    string Background = "preserve");
 
 public sealed record SaveSpriteEditSessionRequest(
     bool ModalOpen,
@@ -332,4 +333,5 @@ public sealed record SaveSpriteEditSessionRequest(
     DateTime? CanvasPreparationExpiresAt,
     SpriteEditSessionCrop? Crop,
     IReadOnlyList<Guid> CandidateAssetIds,
-    IReadOnlyList<GenerationOutputStateView> OutputStates);
+    IReadOnlyList<GenerationOutputStateView> OutputStates,
+    string Background = "preserve");

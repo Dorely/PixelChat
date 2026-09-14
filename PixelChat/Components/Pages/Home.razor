@@ -17,6 +17,7 @@
 @inject IWorkspaceChatRuntime ChatRuntime
 @inject IWorkspaceVisibleStateStore VisibleState
 @inject IImageGenerationRuntime ImageRuntime
+@inject ImageModelSelectionService ImageSelection
 @inject IImageProvider ImageProvider
 @inject IImageEditCanvasService ImageEditCanvas
 @inject ILlmProviderService ProviderService
@@ -49,6 +50,13 @@ else
                         <option value="@project.Id">@project.Name</option>
                     }
                 </select>
+                <select class="form-select form-select-sm" aria-label="Global image model" @bind="_imageModel" @bind:after="SaveImageSelectionAsync">
+                    @foreach (var model in ImageModelCatalog.Models) { <option value="@model">@model</option> }
+                </select>
+                <select class="form-select form-select-sm" aria-label="Image quality" @bind="_imageQuality" @bind:after="SaveImageSelectionAsync">
+                    @foreach (var quality in ImageModelCatalog.Qualities(_imageModel)) { <option value="@quality">@quality</option> }
+                </select>
+                @if (_imageSelectionNotice is not null) { <small role="status">@_imageSelectionNotice</small> }
                 <input class="form-control form-control-sm" placeholder="New project" @bind="_newProjectName" />
                 <button type="button" class="btn btn-sm btn-outline-primary" @onclick="CreateProjectAsync">New</button>
             </div>
@@ -68,6 +76,7 @@ else
 
         <section class="workbench-main">
             <aside class="chat-pane">
+                <ChatModelSelector Disabled="@(ChatRuntime.IsRunning || ChatRuntime.IsCompacting || _compacting)" Changed="ReloadChatAsync" />
                 <ChatSurface Title="Assistant"
                              Subtitle="@ChatSubtitle"
                              Loading="@_loadingChat"
@@ -237,6 +246,24 @@ else
     private string _negativePrompt = string.Empty;
     private string _generateSize = "auto";
     private string _generateBackground = "removable";
+    private string _editBackground = "preserve";
+    private string _imageModel = "gpt-image-2.5-sunburst";
+    private string _imageQuality = "auto";
+    private string? _imageSelectionNotice;
+
+    private async Task SaveImageSelectionAsync()
+    {
+        try
+        {
+            var previousQuality = _imageQuality;
+            var selection = await ImageSelection.SetAsync(_imageModel, _imageQuality);
+            _imageModel = selection.Model;
+            _imageQuality = selection.Quality;
+            _imageSelectionNotice = previousQuality != selection.Quality ? "Quality changed to auto for this model." : null;
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
     private int _generateCount = 1;
     private string _generateRecipeText = string.Empty;
     private string _generateAnimationRecipeText = string.Empty;
@@ -316,6 +343,9 @@ else
         ChatRuntime.CompactionFinished += OnChatRuntimeCompactionFinished;
         ImageRuntime.StateChanged += OnImageGenerationRuntimeStateChanged;
         _generationRuntimeSnapshot = ImageRuntime.GetSnapshot();
+        var selection = await ImageSelection.GetAsync();
+        _imageModel = selection.Model;
+        _imageQuality = selection.Quality;
         await ReloadAllAsync();
         ApplyChatRuntimeSnapshot(ChatRuntime.GetSnapshot());
     }
@@ -689,6 +719,7 @@ else
                             <option value="@ImageBackgroundModes.Removable">Removable magenta</option>
                             <option value="@ImageBackgroundModes.Auto">Natural / model decides</option>
                             <option value="@ImageBackgroundModes.Opaque">Opaque output</option>
+                            <option value="@ImageBackgroundModes.Transparent" disabled="@(!ImageModelCatalog.SupportsTransparency(_imageModel))">Transparent (native alpha; requires Image 2.5)</option>
                         </select>
                     </label>
                     <label>
@@ -1216,6 +1247,16 @@ else
                             <button type="button" class="btn btn-sm btn-outline-primary" @onclick="CropAsync">Crop</button>
                         </div>
                         <label>
+                            <span>Edit background</span>
+                            <select class="form-select" @bind="_editBackground" @bind:after="InvalidateEditCanvasPreview">
+                                <option value="preserve">Preserve source treatment</option>
+                                <option value="auto">Natural / model decides</option>
+                                <option value="opaque">Opaque</option>
+                                <option value="removable">Removable magenta</option>
+                                <option value="transparent" disabled="@(!ImageModelCatalog.SupportsTransparency(_imageModel))">Transparent (native alpha; requires Image 2.5)</option>
+                            </select>
+                        </label>
+                        <label>
                             <span>Edit prompt</span>
                             <textarea class="form-control" rows="5" @bind="_editPrompt"></textarea>
                         </label>
@@ -1281,7 +1322,7 @@ else
 
     private RenderFragment RenderSpritesWorkspace() => __builder =>
     {
-        <SpriteSheetWorkspace Workbench="@_workbench"
+        <SpriteSheetWorkspace Workbench="@_workbench" SelectedImageModel="@_imageModel"
                               SourceAssetId="@_spriteEditorSourceAssetId"
                               OnChanged="OnSpriteSheetChangedAsync"
                               OnSourceAssetChanged="OnSpriteEditorSourceAssetChangedAsync"
@@ -1380,6 +1421,7 @@ else
                                     <option value="@ImageBackgroundModes.Auto">Natural / model decides</option>
                                     <option value="@ImageBackgroundModes.Removable">Removable magenta</option>
                                     <option value="@ImageBackgroundModes.Opaque">Opaque output</option>
+                            <option value="@ImageBackgroundModes.Transparent" disabled="@(!ImageModelCatalog.SupportsTransparency(_imageModel))">Transparent (native alpha; requires Image 2.5)</option>
                                 </select>
                             </label>
                         </div>
@@ -2155,7 +2197,14 @@ else
                 <div class="review-modal-stage">
                     @if (!string.IsNullOrWhiteSpace(preview.ImageUrl))
                     {
-                        <img src="@preview.ImageUrl" alt="@preview.Title" />
+                        <ImageTransparencyInspector Src="@preview.ImageUrl" Alt="@preview.Title" RequestedBackground="@PreviewRequestedBackground(preview.ImageUrl)" />
+                        @if (PreviewRawProviderUrl(preview.ImageUrl) is string rawUrl)
+                        {
+                            <details><summary>Inspect original provider output before canvas processing</summary>
+                                <ImageTransparencyInspector Src="@rawUrl" Alt="Original provider output" RequestedBackground="@PreviewRequestedBackground(preview.ImageUrl)" />
+                                <a href="@rawUrl" download>Download original provider image</a>
+                            </details>
+                        }
                     }
                     else if (preview.AnimationFrameSetId is Guid animationFrameSetId
                         && _reviewFrameSets.TryGetValue(animationFrameSetId, out var previewFrameSet)
@@ -2570,6 +2619,21 @@ else
             _selectedRejectedAssetIds.Remove(assetId);
     }
 
+    private string? PreviewRawProviderUrl(string imageUrl)
+    {
+        var asset = _workbench?.Assets.Concat(_workbench.PendingReviewAssets).Concat(_workbench.RejectedAssets)
+            .FirstOrDefault(item => item.FullImageUrl == imageUrl && item.HasRawProviderOutput);
+        return asset is null ? null : $"/media/projects/{_workbench!.Project.Id}/assets/{asset.Id}/raw-provider";
+    }
+
+    private string? PreviewRequestedBackground(string imageUrl)
+    {
+        if (_workbench is null) return null;
+        var asset = _workbench.Assets.Concat(_workbench.PendingReviewAssets).Concat(_workbench.RejectedAssets)
+            .FirstOrDefault(item => item.FullImageUrl == imageUrl);
+        return asset?.SourceBatchId is Guid id ? _workbench.Batches.FirstOrDefault(batch => batch.Id == id)?.Background : null;
+    }
+
     private void OpenImageReviewPreview(string title, string imageUrl, string subtitle)
     {
         _reviewPreview = new ReviewPreviewState(title, subtitle, imageUrl, null);
@@ -2923,7 +2987,7 @@ else
                 _editCanvasPreparationId is null ? maskDataUrl : null,
                 CurrentReferenceAssetIds().Where(id => id != asset.Id).ToList(),
                 CanvasOptions: _editCanvasPreparationId is null ? CurrentEditCanvasOptions() : null,
-                CanvasPreparationId: _editCanvasPreparationId));
+                CanvasPreparationId: _editCanvasPreparationId, Background: _editBackground));
             InvalidateEditCanvasPreview();
             await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Batches);
             Logger.LogDebug(
@@ -2972,7 +3036,7 @@ else
                     asset.Id,
                     sourceDataUrl,
                     maskDataUrl,
-                    CanvasOptions: CurrentEditCanvasOptions()));
+                    CanvasOptions: CurrentEditCanvasOptions(), Background: _editBackground));
             _editCanvasPreparationId = preview.PreparationId;
             _editCanvasPreparationExpiresAt = preview.ExpiresAt;
             _editCanvasPreparedTransform = preview.Transform;
@@ -4833,7 +4897,8 @@ else
     private static string BackgroundLabel(string background) =>
         background.Trim().ToLowerInvariant() switch
         {
-            ImageBackgroundModes.Removable or "transparent" => "Removable magenta",
+            ImageBackgroundModes.Removable => "Removable magenta",
+            ImageBackgroundModes.Transparent => "Transparent (native alpha)",
             ImageBackgroundModes.Opaque => "Opaque output",
             _ => "Natural / model decides",
         };
@@ -4892,6 +4957,7 @@ else
         ImageBackgroundModes.NormalizeRecipePreference(background) switch
         {
             ImageBackgroundModes.Removable => "Removable magenta",
+            ImageBackgroundModes.Transparent => "Transparent (native alpha)",
             ImageBackgroundModes.Opaque => "Opaque output",
             ImageBackgroundModes.Auto => "Natural / model decides",
             _ => "Use current Generate selection",

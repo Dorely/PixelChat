@@ -27,6 +27,8 @@ public sealed class AssistantChatService(
     IOptions<PixelChat.Art.ImageGenerationOptions> imageOptions,
     ILogger<AssistantChatService> logger) : IAssistantChatService
 {
+    private IList<AITool>? _requestTools;
+
     private const string InitialAssistantGreeting =
         "Tell me what kind of 2D game art you are working on. I can analyze active or attached images, shape style direction, generate or edit assets directly, and help build reusable prompt recipes.";
     private const string InterruptedToolResult = "Error: PixelChat was interrupted before this tool call produced a saved result.";
@@ -103,27 +105,30 @@ public sealed class AssistantChatService(
 
         var conversation = await GetOrCreateAsync(projectId, cancellationToken);
         var history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
-        return tokenEstimator.Count(await BuildIdleModelMessagesAsync(history, projectId, cancellationToken), providerAvailability.Provider.ModelId);
+        return tokenEstimator.Count(await BuildIdleModelMessagesAsync(history, projectId, cancellationToken), providerAvailability.Provider.ModelId, _requestTools);
     }
 
     public async Task<AssistantConversationCompactionResult> CompactAsync(
         Guid projectId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        await CompactCoreAsync(projectId, await providerService.GetDefaultChatProviderAvailabilityAsync(cancellationToken), cancellationToken);
+
+    private async Task<AssistantConversationCompactionResult> CompactCoreAsync(
+        Guid projectId, ChatProviderAvailability providerAvailability, CancellationToken cancellationToken)
     {
         var conversation = await GetOrCreateAsync(projectId, cancellationToken);
         await RecoverInterruptedToolCallsAsync(conversation, cancellationToken);
 
         var history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
-        var providerAvailability = await providerService.GetDefaultChatProviderAvailabilityAsync(cancellationToken);
         var modelName = providerAvailability.Provider?.ModelId;
         var before = tokenEstimator.Count(
             await BuildIdleModelMessagesAsync(history, projectId, cancellationToken),
-            modelName);
+            modelName, _requestTools);
 
         var pruning = BuildCompactionPruning(history, conversation.Id);
         var prunedEstimate = tokenEstimator.Count(
             await BuildIdleModelMessagesAsync(pruning.Messages, projectId, cancellationToken),
-            modelName);
+            modelName, _requestTools);
         var threshold = Math.Max(1, agentOptions.Value.CompactionThresholdTokens);
 
         if (prunedEstimate.TokenCount <= threshold)
@@ -171,7 +176,7 @@ public sealed class AssistantChatService(
         };
         var after = tokenEstimator.Count(
             await BuildIdleModelMessagesAsync([summaryMessage], projectId, cancellationToken),
-            providerAvailability.Provider.ModelId);
+            providerAvailability.Provider.ModelId, _requestTools);
 
         cancellationToken.ThrowIfCancellationRequested();
         conversations.RemoveConversation(conversation);
@@ -271,6 +276,7 @@ public sealed class AssistantChatService(
 
         var generationBudget = new AssistantTurnGenerationBudget(agentOptions.Value.MaxGenerationRoundsPerTurn);
         var aiTools = toolRegistry.Build(projectId, generationBudget);
+        _requestTools = aiTools;
         var chatOptions = new ChatOptions
         {
             Tools = aiTools,
@@ -286,6 +292,40 @@ public sealed class AssistantChatService(
         var maxIterations = Math.Max(1, agentOptions.Value.MaxToolIterations);
         for (var iteration = 0; iteration < maxIterations; iteration++)
         {
+            if (OpenAIAccountProvider.IsOpenAIAccount(providerAvailability.Provider)
+                && OpenAIModelCatalog.IsBuiltIn(modelName)
+                && tokenEstimator.Count(messages, modelName, aiTools).TokenCount > OpenAIModelCatalog.EffectiveInputTokens)
+            {
+                // Compact only between complete tool rounds, never while calls are outstanding.
+                await CompactCoreAsync(projectId, providerAvailability, cancellationToken);
+                conversation = await GetOrCreateAsync(projectId, cancellationToken);
+                history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
+                nextOrder = await conversations.GetMaxOrderAsync(conversation.Id, cancellationToken) + 1;
+                if (!history.Any(item => item.Id == userMessage.Id))
+                {
+                    userMessage = new AssistantMessage
+                    {
+                        ConversationId = conversation.Id, Order = nextOrder++, Role = AssistantMessageRole.User,
+                        Content = userText.Trim(), Status = AssistantMessageStatus.Completed,
+                    };
+                    await conversations.AddMessageAsync(userMessage, cancellationToken);
+                    var activeVisuals = BuildUserMessageVisuals(userMessage.Id, await workflow.GetWorkbenchAsync(projectId, cancellationToken), pastedAssets);
+                    await conversations.AddMessageVisualsAsync(activeVisuals, cancellationToken);
+                    await conversations.SaveChangesAsync(cancellationToken);
+                    history = await conversations.LoadMessagesAsync(conversation.Id, cancellationToken);
+                }
+                messages = [new(ChatRole.System, BuildSystemInstructions(history))];
+                messages.AddRange(await BuildModelHistoryAsync(history, userMessage.Id, projectId, pastedAssets, cancellationToken));
+                if (iteration > 0)
+                    messages.Add(new ChatMessage(ChatRole.System, "This turn continued after compaction. Inspect current workspace state before acting. Do not repeat completed mutations unless current state proves they were not completed."));
+                _requestTools = aiTools;
+                yield return BuildTokenCountUpdate(messages, modelName);
+                if (tokenEstimator.Count(messages, modelName, aiTools).TokenCount > OpenAIModelCatalog.EffectiveInputTokens)
+                {
+                    yield return new AssistantTurnError("The request still exceeds the 258,400-token input budget after compaction. Remove large attachments or shorten the message before retrying.", Cancelled: false);
+                    yield break;
+                }
+            }
             var activeAssistant = new AssistantMessage
             {
                 ConversationId = conversation.Id,
@@ -1008,7 +1048,7 @@ public sealed class AssistantChatService(
     }
 
     private AssistantTokenCountUpdated BuildTokenCountUpdate(IReadOnlyList<ChatMessage> messages, string modelName) =>
-        new(tokenEstimator.Count(messages, modelName));
+        new(tokenEstimator.Count(messages, modelName, _requestTools));
 
     private async Task RecoverInterruptedToolCallsAsync(
         AssistantConversation conversation,
@@ -1141,6 +1181,7 @@ public sealed class AssistantChatService(
         Guid projectId,
         CancellationToken cancellationToken)
     {
+        _requestTools = toolRegistry.Build(projectId, new AssistantTurnGenerationBudget(agentOptions.Value.MaxGenerationRoundsPerTurn));
         var messages = BuildPersistedModelMessages(history);
         var workbench = await workflow.GetWorkbenchAsync(projectId, cancellationToken);
         if (workbench.Attachments.Count > 0)

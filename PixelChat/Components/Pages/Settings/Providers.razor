@@ -60,7 +60,10 @@
             <div class="codex-provider-form">
                 <div class="provider-field codex-model-field">
                     <label class="form-label form-label-sm">Model</label>
-                    <input type="text" class="form-control form-control-sm" @bind="_openAIAccountProvider.ModelId" />
+                    <select class="form-select form-select-sm" @bind="_openAIAccountProvider.ModelId">
+                        @foreach (var model in OpenAIModelCatalog.ChatModels) { <option value="@model">@model</option> }
+                        @if (!OpenAIModelCatalog.IsBuiltIn(_openAIAccountProvider.ModelId)) { <option value="@_openAIAccountProvider.ModelId">@_openAIAccountProvider.ModelId</option> }
+                    </select>
                 </div>
                 <div class="provider-field codex-thinking-field">
                     <label class="form-label form-label-sm">Thinking</label>
@@ -545,6 +548,7 @@
                 DisplayName = "OpenAI Account",
                 EndpointUrl = OpenAIAccountProvider.ResponsesEndpoint,
                 ModelId = OpenAIAccountProvider.DefaultChatModel,
+                ThinkingMode = "medium",
                 AuthType = AuthType.OAuth,
                 IsDefault = false
             };
@@ -646,6 +650,13 @@
 
     private RenderFragment RenderThinkingField(LlmProvider provider) => __builder =>
     {
+        if (OpenAIAccountProvider.IsOpenAIAccount(provider) && OpenAIModelCatalog.IsBuiltIn(provider.ModelId))
+        {
+            <select class="form-select form-select-sm thinking-input" @bind="provider.ThinkingMode">
+                @foreach (var effort in OpenAIModelCatalog.Efforts) { <option value="@effort">@effort</option> }
+            </select>
+            return;
+        }
         if (ProviderThinkingModes.UsesOpenAIThinkingDropdown(provider))
         {
             <select class="form-select form-select-sm thinking-input" @bind="provider.ThinkingMode">

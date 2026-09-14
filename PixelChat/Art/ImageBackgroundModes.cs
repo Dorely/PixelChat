@@ -5,12 +5,14 @@ public static class ImageBackgroundModes
     public const string Auto = "auto";
     public const string Opaque = "opaque";
     public const string Removable = "removable";
+    public const string Transparent = "transparent";
     public const string Current = "current";
 
     public static string NormalizeGeneration(string? value, string fallback = Auto) =>
         value?.Trim().ToLowerInvariant() switch
         {
-            "removable" or "removablecolor" or "removable-color" or "transparent" or "chroma" or "chromakey" or "chroma-key" => Removable,
+            "removable" or "removablecolor" or "removable-color" or "chroma" or "chromakey" or "chroma-key" => Removable,
+            "transparent" => Transparent,
             "opaque" => Opaque,
             "auto" => Auto,
             _ => NormalizeFallback(fallback),
@@ -19,7 +21,8 @@ public static class ImageBackgroundModes
     public static string NormalizeRecipePreference(string? value) =>
         value?.Trim().ToLowerInvariant() switch
         {
-            "removable" or "removablecolor" or "removable-color" or "transparent" or "chroma" or "chromakey" or "chroma-key" => Removable,
+            "removable" or "removablecolor" or "removable-color" or "chroma" or "chromakey" or "chroma-key" => Removable,
+            "transparent" => Transparent,
             "opaque" => Opaque,
             "auto" or "natural" => Auto,
             _ => Current,
@@ -42,6 +45,7 @@ public static class ImageBackgroundModes
     private static string NormalizeFallback(string? fallback) =>
         fallback?.Trim().ToLowerInvariant() switch
         {
+            Transparent => Transparent,
             Removable => Removable,
             Opaque => Opaque,
             _ => Auto,

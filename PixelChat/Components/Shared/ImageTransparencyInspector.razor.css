@@ -1,0 +1,7 @@
+.alpha-inspector { width: 100%; min-width: 0; color: #172033; background: #f8fafc; padding: 12px; }
+.alpha-controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: end; }
+.alpha-inspector p { margin: 8px 0; }
+.alpha-stage { overflow: auto; max-height: 65vh; text-align: center; }
+.alpha-stage img { display: block; max-width: 100%; height: auto; margin: auto; cursor: crosshair; }
+.checkerboard { background-image: conic-gradient(#ddd 25%, #fff 0 50%, #ddd 0 75%, #fff 0); background-size: 24px 24px; }
+.alpha-warning { background: #fff0ce; color: #713e00; padding: 10px; border: 2px solid #b66d00; }

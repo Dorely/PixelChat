@@ -21,7 +21,8 @@ public static class ProviderThinkingModes
         (OpenAIModeLow, "Low"),
         (OpenAIModeMedium, "Medium"),
         (OpenAIModeHigh, "High"),
-        (OpenAIModeExtraHigh, "XHigh")
+        (OpenAIModeExtraHigh, "XHigh"),
+        ("max", "Max")
     ];
 
     public static string? Normalize(string? value)

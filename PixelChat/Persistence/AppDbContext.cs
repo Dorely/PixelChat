@@ -9,6 +9,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
 {
     private const int MaxLockedSaveAttempts = 6;
 
+    public DbSet<WorkbenchPreferences> WorkbenchPreferences => Set<WorkbenchPreferences>();
     public DbSet<LlmProvider> LlmProviders => Set<LlmProvider>();
     public DbSet<OAuthToken> OAuthTokens => Set<OAuthToken>();
     public DbSet<StoredSecret> StoredSecrets => Set<StoredSecret>();
@@ -216,6 +217,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.Property(e => e.Status).HasConversion<string>();
             entity.Property(e => e.ReviewCompletedBy).HasConversion<string>();
             entity.Property(e => e.Background).HasDefaultValue("auto");
+            entity.Property(e => e.Quality).HasDefaultValue("auto");
+            entity.Property(e => e.OutputFormat).HasDefaultValue("png");
             entity.Property(e => e.PromptSpecsJson).HasDefaultValue("[]");
             entity.Property(e => e.OutputStatesJson).HasDefaultValue("[]");
             entity.Property(e => e.EditCanvasTransformJson).HasDefaultValue(string.Empty);
@@ -502,6 +505,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => e.TargetFrameId);
             entity.Property(e => e.Status).HasDefaultValue("pending");
             entity.Property(e => e.TargetKind).HasDefaultValue("source");
+            entity.Property(e => e.Background).HasDefaultValue("preserve");
             entity.Property(e => e.CropJson).HasDefaultValue("{}");
             entity.Property(e => e.CanvasOptionsJson).HasDefaultValue("{}");
             entity.Property(e => e.CanvasPreparationTransformJson).HasDefaultValue(string.Empty);

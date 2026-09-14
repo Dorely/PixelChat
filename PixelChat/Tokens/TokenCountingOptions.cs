@@ -9,6 +9,7 @@ public sealed class TokenCountingOptions
 
     public Dictionary<string, string> ModelEncodings { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["gpt-6-astra"] = "o200k_base",
         ["gpt-5"] = "o200k_base",
         ["gpt-4.1"] = "o200k_base",
         ["gpt-4o"] = "o200k_base",

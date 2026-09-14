@@ -11,7 +11,12 @@ See [VISION.md](VISION.md) for the product direction and [docs/architecture.md](
 - Reusable versioned art and animation recipes with example and guide attachments.
 - A Source -> Frames -> Sheet sprite workflow with region extraction, frame ordering, alignment, cleanup, masked edits, animation preview, and deterministic sprite-sheet builds.
 - Procedural and GLB-backed animation guides plus PNG/JSON export workflows and optional local AI background removal.
-- OpenAI account OAuth and configurable OpenAI-compatible chat providers with local SQLite persistence.
+- OpenAI account OAuth with Sol, Terra, Luna, and Astra chat selections and low through max effort; new account connections default to Sol / medium. Built-in models use a 272,000-token context and a 258,400-token input budget, including tools and images, with automatic safe compaction.
+- Persistent app-wide chat/effort and image/quality selectors. Image choices are Image 2, Image 2.5 Flare, and Image 2.5 Sunburst (default); Sol independently orchestrates images.
+- Native-alpha requests for the two 2.5 image models, source-preserving edit backgrounds, and image inspection with switchable preview backgrounds, decoded alpha statistics, opaque-output warnings, and pixel RGBA values. A painted checkerboard is never treated as transparency.
+- Configurable OpenAI-compatible chat providers and local SQLite persistence.
+
+Native transparency sends the documented Responses image tool settings (`background: "transparent"`, `output_format: "png"`). On September 14, 2026, live account-endpoint generation and edit checks of both 2.5 models returned HTTP 400, “Transparent background is not supported for this model.” PixelChat surfaces this access/capability failure without a fallback. Native-alpha generation and editing therefore remain unverified on that endpoint; imported alpha and deterministic processing can still be inspected.
 
 ## Requirements
 

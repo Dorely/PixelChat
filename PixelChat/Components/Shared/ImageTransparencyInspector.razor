@@ -1,0 +1,56 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<section class="alpha-inspector" @ref="_root">
+    <div class="alpha-controls">
+        <label>Preview background — not part of the image
+            <select class="form-select form-select-sm" @bind="_background">
+                <option value="checkerboard">Checkerboard</option>
+                <option value="white">White</option>
+                <option value="black">Black</option>
+                <option value="color">Bright color</option>
+            </select>
+        </label>
+        <label>Preview color <input type="color" @bind="_color" /></label>
+        <span>Requested background: @(RequestedBackground ?? "Not recorded / source image")</span>
+    </div>
+    <p>Real transparency reveals this background. A checkerboard that stays unchanged is painted into the image.</p>
+    <strong data-alpha-status role="status">Inspecting image pixels…</strong>
+    <p data-alpha-warning class="alpha-warning" hidden></p>
+    <p data-alpha-pixel>Point at or tap the image to inspect its pixel coordinates, RGBA, and opacity.</p>
+    <div class="alpha-stage @(_background == "checkerboard" ? "checkerboard" : null)" style="@BackgroundStyle">
+        <img data-alpha-image alt="@Alt" />
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public string Src { get; set; } = string.Empty;
+    [Parameter] public string Alt { get; set; } = string.Empty;
+    [Parameter] public string? RequestedBackground { get; set; }
+    private ElementReference _root;
+    private IJSObjectReference? _module;
+    private string? _loadedKey;
+    private string _background = "white";
+    private string _color = "#00ff66";
+    private string BackgroundStyle => $"background-color: {(_background == "color" ? _color : _background == "black" ? "#000" : "#fff")}";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Shared/ImageTransparencyInspector.razor.js");
+        var key = $"{Src}|{RequestedBackground}";
+        if (_loadedKey == key) return;
+        _loadedKey = key;
+        await _module.InvokeVoidAsync("mount", _root, Src, RequestedBackground);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is null) return;
+        try
+        {
+            await _module.InvokeVoidAsync("unmount", _root);
+            await _module.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { }
+    }
+}

@@ -4,8 +4,8 @@ public sealed class ImageGenerationOptions
 {
     public const string SectionName = "Images";
 
-    public string DefaultMainlineModel { get; set; } = "gpt-5.5";
-    public string DefaultImageModel { get; set; } = "gpt-image-2";
+    public string DefaultMainlineModel { get; set; } = "gpt-5.6-sol";
+    public string DefaultImageModel { get; set; } = "gpt-image-2.5-sunburst";
     public string DefaultSize { get; set; } = "auto";
     public string DefaultQuality { get; set; } = "auto";
     public string DefaultOutputFormat { get; set; } = "png";

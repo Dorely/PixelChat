@@ -73,8 +73,9 @@
 | `OpenAIAccountImageProvider.cs` | OpenAI account Responses image provider using Codex-style auth headers, SSE parsing, partial image progress, references, masked edit payloads, and its configurable reliable edit pixel budget. |
 | `ImageEditCanvasService.cs` | Shared edit/outpaint pipeline that prepares logical/provider canvases, masks, and previews; normalizes removable logical-source backgrounds; dilates semantic boundaries; and restores provider output to logical dimensions without overwriting returned pixels from the source. |
 | `EditCanvasPreparationStore.cs` | Fifteen-minute bounded in-memory store for preview-locked asset/frame canvas preparations, limited to four entries per project and validated against source revisions. |
+| `ImageModelSelectionService.cs` | App-wide persisted image model/quality selection and model capability validation. |
 | `ImageGenerationOptions.cs` | Configurable image model, output, size, quality, count, parallelism, retry, timeout, partial previews, reference defaults, and OpenAI-account reliable edit pixel budget. |
-| `ImageBackgroundModes.cs` | Shared generation background modes and recipe-preference normalization/resolution for natural, opaque, and removable-magenta output. |
+| `ImageBackgroundModes.cs` | Shared generation background modes and recipe-preference normalization/resolution for natural, opaque, removable-magenta, and distinct native-alpha output. |
 | `DataUrl.cs` | Data URL parse/format helpers for stored BLOBs and model image inputs. |
 | `ImageMetadataReader.cs` | Lightweight PNG/JPEG dimension reader for imported and generated assets. |
 | `ImageRgbaDecoder.cs` | Shared RGBA decoder for PNG/JPEG source assets used by greenfield sprite region/frame operations and standalone region extraction. |
@@ -105,6 +106,7 @@
 
 | File | Description |
 |------|-------------|
+| `ImageTransparencyInspector.razor` / `.razor.css` / `.razor.js` | Shared preview backgrounds, full-raster alpha statistics, requested-alpha warnings, and pixel inspection. |
 | `ExportPanel.razor` / `.razor.css` | Shared export workflow panel used inline by Sprites and as the Assets export modal, including cleanup steps, local AI removal, preview backgrounds, reset, and PNG/JSON downloads. |
 | `AnimationGuideBuilderModal.razor` / `.razor.css` | Shared Assets > Guides modal for configuring guide grids, previewing GLB motion clips in 3D with yaw/pitch drag, rendering guide previews, and saving SpriteGuide assets. |
 | `LazyImage.razor` / `.razor.css` / `.razor.js` | IntersectionObserver-backed image component that reserves thumbnail space and assigns `src` only when near the viewport. |
@@ -115,6 +117,7 @@
 | File | Description |
 |------|-------------|
 | `ChatModels.cs` | UI-only ordered chat text/tool/image parts, compaction notice and summary presentation, compact tool chip state with explicit display titles and visuals, live-turn state, and persisted tool-call helpers. |
+| `ChatModelSelector.razor` | Persistent global chat model and effort selection with built-in account context budgets. |
 | `ChatSurface.razor` / `.razor.css` / `.razor.js` | Reusable chat shell for ordered text/tool/image/context transcript rendering, visual preview clicks, streaming state, composer autosize, enter-to-send, and scroll-follow behavior. |
 | `ChatToolChipView.razor` / `.razor.css` | Expandable compact tool-call chip used for live and persisted assistant tool timeline entries. |
 
@@ -146,6 +149,7 @@
 | File | Description |
 |------|-------------|
 | `AgentOptions.cs` | Configurable agent/chat options for OpenAI account timeout, tool-loop iterations, model-facing tool result limits, autonomous generation-round budgets, and the conversation-compaction token threshold. |
+| `OpenAIModelCatalog.cs` | Built-in account model IDs, effort choices, and default Codex context/input budgets. |
 | `ChatClientFactory.cs` / `IChatClientFactory.cs` | Creates and tests Microsoft.Extensions.AI chat clients from persisted providers, credentials, and provider thinking-mode defaults. |
 | `OpenAIAccountAuthService.cs` / `IOpenAIAccountAuthService.cs` | OpenAI account OAuth PKCE flow, token refresh, revocation, and token secret persistence. |
 | `OpenAIAccountChatClient.cs` | Streaming `IChatClient` bridge to the OpenAI account Responses SSE endpoint with image inputs and function-call events. |
@@ -164,7 +168,7 @@
 | `ITokenCounter.cs` / `TiktokenTokenCounter.cs` / `CharEstimateTokenCounter.cs` / `CompositeTokenCounter.cs` | Local text token counting abstractions and tiktoken-first implementation with character fallback. |
 | `TokenCountRequest.cs` / `TokenCountResult.cs` / `TokenCountingOptions.cs` | Token counting request/result records and model-to-encoding defaults. |
 | `ImageTokenEstimator.cs` | Local image token estimator using OpenAI-style patch and tile formulas by model family. |
-| `ChatTokenEstimator.cs` | Counts a model-facing `ChatMessage` context across text, tool calls/results, and image content. |
+| `ChatTokenEstimator.cs` | Counts a model-facing `ChatMessage` context across instructions, tool schemas/calls/results, text, and image content. |
 
 ### Models/
 
@@ -177,6 +181,7 @@
 | `AssetReviewDecision.cs` | Append-only user/assistant Keep, Reject, and Clear decisions with reasons, source-batch provenance, and timestamps. |
 | `BackgroundRemovalExportCache.cs` | EF entity for cached Local AI export PNGs keyed by source asset bytes, model, rembg version, and processing options. |
 | `ExportStepCache.cs` | EF entity for persisted applied export-step PNGs per source asset and source image hash. |
+| `WorkbenchPreferences.cs` | Singleton persisted app-wide image model/quality preferences. |
 | `GenerationBatch.cs` | EF entity for image generation/edit batches with ordered prompt-specification JSON, provider metadata, outputs/errors, lineage, recipe versions, edit snapshots/transforms, and user/assistant review completion provenance. |
 | `PromptRecipe.cs` | EF entity backing reusable art recipe prompts with a generation-background preference, private notes, version history, and ordered example/guide attachments. |
 | `PromptRecipeVersion.cs` | EF entity for append-only art recipe name/prompt/notes/background-preference snapshots used by user/assistant saves and restore. |
@@ -187,7 +192,7 @@
 | `Frame.cs` | Greenfield EF entity (replaces `SpriteSheetFrameRecord`) with explicit coordinate spaces, duration, onion-skin visibility, working/preview bitmaps, edit-canvas transform/finalization provenance, and anchors. |
 | `Anchor.cs` | Greenfield EF entity for a named per-frame alignment point (feet/root/center/custom) with confidence and detected/manual source. |
 | `SheetLayout.cs` | Greenfield EF entity for deterministic sheet geometry (rows/columns/cell/padding/gutter/outer-margin/ordering) and playback/background defaults for a frame set. |
-| `BuiltSheet.cs` | Greenfield EF entity for a reassembled opaque sheet asset retaining a per-frame placement manifest and links to the frames used, so the sheet stays rebuildable. |
+| `BuiltSheet.cs` | Greenfield EF entity for a reassembled RGBA sheet asset retaining a per-frame placement manifest and links to the frames used, so the sheet stays rebuildable. |
 | `HistoryTask.cs` | Greenfield EF entity (schema only; backend deferred) grouping a user/agent instruction's operations into one undoable task for the planned history system. |
 | `ImageMask.cs` | EF entity for saved PNG mask BLOBs attached to assets or greenfield frames, including owner and coordinate-space metadata. |
 | `SpriteEditSession.cs` | EF entity for one pending project-scoped Sprites edit modal session, including target, batch/candidate ownership, prompt/count, edit-canvas options, transient preparation provenance/expiry, crop transform, and overlay selection state. |
@@ -252,6 +257,8 @@
 | `20260727212737_GenerationOnlyBackgroundPreferences.cs` / `.Designer.cs` | EF migration adding versioned generation-background preferences to art recipes, defaulting existing recipes to the current Generate selection. |
 | `20260729043245_MultiPromptGenerationBatches.cs` / `.Designer.cs` | EF migration replacing the batch-level prompt with ordered prompt specifications and backfilling existing generation/edit batches as same-prompt variants. |
 | `20260730010111_RemoveProtectedPixelPasteback.cs` / `.Designer.cs` | EF migration removing obsolete logical-source snapshots after edit finalization stopped pasting protected source pixels over provider output. |
+| `20260914181503_OpenAIModelsAndNativeTransparency.cs` / `.Designer.cs` | Forward migration for global preferences, batch/edit snapshots, and old transparency aliases. |
+| `20260914182535_PreserveRawProviderImages.cs` / `.Designer.cs` | Retains original provider image bytes separately from finalized assets. |
 | `AppDbContextModelSnapshot.cs` | EF model snapshot for the current migrated schema. |
 
 ### Persistence/Repositories/

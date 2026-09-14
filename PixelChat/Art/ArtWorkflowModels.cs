@@ -52,7 +52,8 @@ public sealed record ArtAssetView(
     DateTime CreatedAt,
     AssetReviewStatus ReviewStatus,
     AssetReviewDecisionView? CurrentReviewDecision,
-    AssetReviewDecisionView? LatestAgentReviewDecision);
+    AssetReviewDecisionView? LatestAgentReviewDecision,
+    bool HasRawProviderOutput = false);
 
 public sealed record AssetReviewDecisionView(
     Guid Id,
@@ -449,14 +450,16 @@ public sealed record EditImageRequest(
     string? OutputLabel = null,
     Guid? MaskId = null,
     EditCanvasOptions? CanvasOptions = null,
-    Guid? CanvasPreparationId = null);
+    Guid? CanvasPreparationId = null,
+    string? Background = null);
 
 public sealed record PreviewAssetEditCanvasRequest(
     Guid SourceAssetId,
     string? SourcePngDataUrl = null,
     string? MaskPngDataUrl = null,
     Guid? MaskId = null,
-    EditCanvasOptions? CanvasOptions = null);
+    EditCanvasOptions? CanvasOptions = null,
+    string? Background = null);
 
 public sealed record CompareReviewSetItemRequest(
     CompareReviewItemKind Kind,
