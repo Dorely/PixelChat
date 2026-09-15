@@ -3948,6 +3948,8 @@ else
             ChatMessageRole.User,
             ChatMessageStatus.Completed,
             optimisticParts));
+        _forceScrollKey++;
+        StateHasChanged();
 
         try
         {

@@ -16,7 +16,7 @@ The Sprites chooser opens a searchable thumbnail dialog with dimensions, frame c
 
 Review shows Current Review, pending generation batches, and the latest completed agent review chronologically, newest first. The assistant presents changed artwork and animation previews in Current Review before replying; downloadable exports are created when requested.
 
-The chat header contains the model and effort selectors and shows calculated tokens as used / input limit (258,400 for built-in account models). Chat follows new output while at the bottom; scroll up to read earlier messages, then return to the bottom to resume following.
+The chat header contains the model and effort selectors and shows calculated tokens as used / input limit (258,400 for built-in account models). Sending a message jumps below it and starts following output. Scroll up to read earlier messages, then return to the bottom to resume following.
 
 - Project-scoped assistant chat with streaming tool execution, visible intermediate results, persisted transcripts, image context, confirmed tool-history compaction with lookup-safe context notices and threshold-based summaries, and intent-aware concept batches that generate one distinct prompt per output.
 - Recipe bulk generation: paste one prompt per line, edit/remove preview rows, and request 1â€“4 images per prompt with shared settings/references. Order and duplicates are preserved, with paginated output/review and no fixed prompt-count cap. Stop, Resume, and Retry failed preserve saved successes; interrupted queues require manual resume.
