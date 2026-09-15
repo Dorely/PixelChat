@@ -14,8 +14,7 @@ public sealed class SpriteCorpusTests
     [Fact]
     public async Task FixedCorpusExercisesScriptInspectValidateAndReconstruct()
     {
-        var repository = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"../../../.."));
-        var script = await File.ReadAllTextAsync(Path.Combine(repository,"PixelChat.Tests","sprite-corpus.js"));
+        var script = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory,"sprite-corpus.js"));
         var output = Environment.GetEnvironmentVariable("PIXELCHAT_CORPUS_OUTPUT");
         var results = new List<object>();
         foreach(var kind in new[]{"prop","walk","idle","impact","painted"})

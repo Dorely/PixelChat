@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using PixelChat.Art;
+using PixelChat.Chat;
 using PixelChat.Models;
 
 namespace PixelChat.Sprites;
@@ -15,14 +16,16 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
         if (!result.AsSpan().TrimStart().StartsWith("{")) return [];
         using var json = JsonDocument.Parse(result);
         if (json.RootElement.ValueKind != JsonValueKind.Object || !json.RootElement.TryGetProperty("artifacts", out var artifacts) || artifacts.ValueKind != JsonValueKind.Array) return [];
+        var background = json.RootElement.TryGetProperty("backgroundColor", out var bg) ? bg.GetString() : null;
         var images = new List<AIContent>();
         foreach (var artifact in artifacts.EnumerateArray())
         {
             if (artifact.TryGetProperty("sendImage", out var send) && !send.GetBoolean()) continue;
             var id = artifact.GetProperty("id").GetGuid();
             var image = await inspections.ReadArtifactAsync(projectId, id, cancellationToken);
-            images.Add(new TextContent(image.Label));
-            images.Add(new DataContent(DataUrl.ToDataUrl("image/png", image.Data), "image/png") { Name = $"sprite-inspection-{id}.png" });
+            var view = ModelImageInspection.Create(image.Data, $"sprite-inspection-{id}.png", background);
+            images.Add(new TextContent(image.Label + "\n" + ((TextContent)view[0]).Text));
+            images.Add(view[1]);
         }
         return images;
     }
@@ -72,9 +75,9 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
         AIFunctionFactory.Create((Guid documentId, long expectedRevision, string script, string label = "Sprite script", string? taskId = null, bool returnPreview = true, CancellationToken cancellationToken = default) =>
             ScriptAsync(projectId, documentId, expectedRevision, script, label, taskId, returnPreview, cancellationToken),
             "sprite_script", "Run resource-bounded JavaScript in an isolated worker. document is the starting snapshot; sprite.apply(op) and sprite.batch(ops) emit the same typed operations as sprite_apply. No filesystem/network/CLR/modules. Success commits one undoable batch; errors and cancellation commit nothing."),
-        AIFunctionFactory.Create((Guid documentId, long revision, string kind = "frame", Guid[]? frameIds = null, SpriteRect? crop = null, int scale = 1, int page = 0, int pageSize = 12, long? compareRevision = null, Guid[]? knownArtifacts = null, CancellationToken cancellationToken = default) =>
-            RenderAsync(projectId, new(documentId, revision, kind, frameIds, crop, scale, page, pageSize, compareRevision), knownArtifacts, cancellationToken),
-            "sprite_render", "Inspect a specific revision as actual labeled PNGs: frame, contact, onion, difference (requires compareRevision), or playback (GIF plus PNG contact sheet). Integer scale 1-16. Paginate contact sheets; frame IDs and timing accompany the pixels. knownArtifacts suppresses resending identical images."),
+        AIFunctionFactory.Create((Guid documentId, long revision, string kind = "frame", Guid[]? frameIds = null, SpriteRect? crop = null, int scale = 1, int page = 0, int pageSize = 12, long? compareRevision = null, Guid[]? knownArtifacts = null, string? backgroundColor = null, CancellationToken cancellationToken = default) =>
+            RenderAsync(projectId, new(documentId, revision, kind, frameIds, crop, scale, page, pageSize, compareRevision), knownArtifacts, backgroundColor, cancellationToken),
+            "sprite_render", "Inspect a specific revision as actual labeled PNGs: frame, contact, onion, difference (requires compareRevision), or playback (GIF plus PNG contact sheet). Integer scale 1-16. Paginate contact sheets; frame IDs and timing accompany the pixels. Measured source alpha accompanies each image. backgroundColor accepts opaque #RRGGBB for a composited inspection (default #808080). Choose a color distinct from the artwork before diagnosing haze. knownArtifacts suppresses unchanged default views; specifying a background always resends the cached artifact on that color. Source pixels are unchanged."),
         AIFunctionFactory.Create((Guid documentId, string action = "list", long expectedRevision = 0, bool wholeTask = false, int offset = 0, CancellationToken cancellationToken = default) =>
             HistoryAsync(projectId, documentId, action, expectedRevision, wholeTask, offset, cancellationToken),
             "sprite_history", "Read persisted command history (independent of chat) or perform revision-checked undo/redo. wholeTask undoes only a contiguous task suffix and stops at intervening manual work."),
@@ -171,17 +174,18 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
         }
         return Json(new { commit.DocumentId, commit.Revision, commit.HistoryId, commit.OperationCount, artifacts = render?.Artifacts, nextPreviewPage = render?.NextPage, previewWarning });
     }
-    private async Task<string> RenderAsync(Guid projectId, SpriteRenderRequest request, Guid[]? known, CancellationToken token)
+    private async Task<string> RenderAsync(Guid projectId, SpriteRenderRequest request, Guid[]? known, string? backgroundColor, CancellationToken token)
     {
+        var background = ModelImageInspection.Background(backgroundColor);
         if (request.Kind == "playback")
         {
             var preview = await exports!.ExportAsync(projectId, request.DocumentId, request.Revision, new("preview"), token);
             var contact = await inspections.RenderAsync(projectId, request with { Kind = "contact" }, token);
-            return Json(new { preview, artifacts = contact.Artifacts, contact.NextPage, contact.TotalFrames });
+            return Json(new { backgroundColor = background, preview, artifacts = contact.Artifacts, contact.NextPage, contact.TotalFrames });
         }
         var render = await inspections.RenderAsync(projectId, request, token);
-        return Json(new { render.DocumentId, render.Revision, render.TotalFrames, render.NextPage,
-            artifacts = render.Artifacts.Select(a => new { a.Id, a.Label, a.Url, a.Width, a.Height, a.Revision, sendImage = known?.Contains(a.Id) != true }) });
+        return Json(new { backgroundColor = background, render.DocumentId, render.Revision, render.TotalFrames, render.NextPage,
+            artifacts = render.Artifacts.Select(a => new { a.Id, a.Label, a.Url, a.Width, a.Height, a.Revision, sendImage = backgroundColor is not null || known?.Contains(a.Id) != true }) });
     }
     private async Task<string> HistoryAsync(Guid projectId, Guid id, string action, long expected, bool task, int offset, CancellationToken token)
     {

@@ -41,6 +41,19 @@ public sealed class SpriteToolTests
         Assert.Single(await inspections.ListAsync(project.Id, snapshot.DocumentId, 1));
         var skipped = JsonSerializer.Serialize(new { artifacts = new[] { new { id = cached.Artifacts[0].Id, sendImage = false } } });
         Assert.Empty(await registry.ImageContentsAsync(project.Id, skipped, CancellationToken.None));
+        // A known raw artifact must still be sent when inspecting a different background.
+        var renderTool = registry.Build(project.Id).OfType<AIFunction>().Single(t => t.Name == "sprite_render");
+        var backgroundResult = await renderTool.InvokeAsync(new AIFunctionArguments
+        {
+            ["documentId"] = snapshot.DocumentId, ["revision"] = 1L, ["kind"] = "contact",
+            ["knownArtifacts"] = new[] { cached.Artifacts[0].Id }, ["backgroundColor"] = "#FF00FF",
+        });
+        var backgroundJson = backgroundResult is JsonElement e ? e.GetString()! : (string)backgroundResult!;
+        var backgroundContents = await registry.ImageContentsAsync(project.Id, backgroundJson, CancellationToken.None);
+        var backgroundImage = SpriteRaster.Decode(Assert.Single(backgroundContents.OfType<DataContent>()).Data.ToArray());
+        Assert.Equal(new Rgba32(255, 0, 255, 255), backgroundImage.Get(0, 24));
+        Assert.True(ModelImageInspectionTests.Metadata(backgroundContents).GetProperty("hasTransparency").GetBoolean());
+        Assert.Single(await db.SpriteInspections.ToListAsync());
         Assert.Contains("sprite.apply", SpriteToolRegistry.Help("scripting"));
         Assert.Empty(await registry.ImageContentsAsync(project.Id, SpriteToolRegistry.Help("commands"), CancellationToken.None));
     }

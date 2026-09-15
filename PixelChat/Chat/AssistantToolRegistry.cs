@@ -82,9 +82,13 @@ public sealed class AssistantToolRegistry(
             description: "List compact asset metadata for the current project. Defaults to kept assets; reviewStatus may be kept, pending, rejected, or all. Optional kind values include generated, imported, edited, cropped, spriteGuide, and spriteSheet. This omits image bytes; use read_asset to inspect an image."),
 
         AIFunctionFactory.Create(
-            method: (Guid assetId) => workflow.ReadAssetJsonAsync(projectId, assetId),
+            method: (Guid assetId, string? backgroundColor = null) =>
+            {
+                ModelImageInspection.Background(backgroundColor);
+                return workflow.ReadAssetJsonAsync(projectId, assetId);
+            },
             name: "read_asset",
-            description: "Read an asset image for inspection. The JSON result returns metadata only, while the full image is delivered to the model as model-only image content for this tool call. This is read-only and does not attach the asset to visible chat context."),
+            description: "Read an asset image for inspection. The JSON result returns metadata only, while measured source alpha and a composited image are delivered to the model. Optional backgroundColor is opaque #RRGGBB (default #808080), used only for inspection. Choose a color distinct from the visible artwork to verify transparency or suspected haze; invisible RGB at alpha 0 is not a defect. This is read-only and does not attach the asset to visible chat context."),
 
         AIFunctionFactory.Create(
             method: (string? query = null, int? limit = null) =>
@@ -419,10 +423,14 @@ public sealed class AssistantToolRegistry(
                 Guid frameId,
                 SpriteSheetRect? rect = null,
                 int scale = 4,
+                string? backgroundColor = null,
                 CancellationToken cancellationToken = default) =>
-                InspectFrameAsync(projectId, frameId, rect, scale, cancellationToken),
+            {
+                ModelImageInspection.Background(backgroundColor);
+                return InspectFrameAsync(projectId, frameId, rect, scale, cancellationToken);
+            },
             name: "inspect_frame",
-            description: "Zoom into one frame or a sub-region at N times scale for close visual QC of hands, feet, face, or weapon grip. Coordinates are in the logical cell; out-of-range rect values are clamped. Returns a model-only image. Use before passing anatomy/facing checks, especially on back-facing sprites. Read-only and does not consume generation budget."),
+            description: "Zoom into one frame or a sub-region at N times scale for close visual QC of hands, feet, face, or weapon grip. Coordinates are in the logical cell; out-of-range rect values are clamped. Returns measured source alpha and a composited model-only image. Optional backgroundColor is opaque #RRGGBB (default #808080); choose a color distinct from the artwork before diagnosing haze. Source pixels are unchanged. Use before passing anatomy/facing checks, especially on back-facing sprites. Read-only and does not consume generation budget."),
 
         AIFunctionFactory.Create(
             method: (Guid frameSetId, CancellationToken cancellationToken = default) =>

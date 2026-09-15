@@ -1561,6 +1561,15 @@
     font-weight: 750;
 }
 
+.review-modal-head > div {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.review-modal-head > button {
+    flex-shrink: 0;
+}
+
 .export-modal-head span {
     color: #667085;
     font-size: 0.8rem;

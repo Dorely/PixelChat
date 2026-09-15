@@ -2255,7 +2255,11 @@ else
                     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CloseReviewPreviewAsync">Close</button>
                 </header>
                 <div class="review-modal-stage">
-                    @if (!string.IsNullOrWhiteSpace(preview.ImageUrl))
+                    @if (preview.IsInspectionComposite)
+                    {
+                        <img src="@preview.ImageUrl" alt="@preview.Title" />
+                    }
+                    else if (!string.IsNullOrWhiteSpace(preview.ImageUrl))
                     {
                         <ImageTransparencyInspector Src="@preview.ImageUrl" Alt="@preview.Title" RequestedBackground="@PreviewRequestedBackground(preview.ImageUrl)" />
                         @if (PreviewRawProviderUrl(preview.ImageUrl) is string rawUrl)
@@ -2709,14 +2713,18 @@ else
         return asset?.RequestedBackground ?? (asset?.SourceBatchId is Guid id ? _workbench.Batches.FirstOrDefault(batch => batch.Id == id)?.Background : null);
     }
 
-    private void OpenImageReviewPreview(string title, string imageUrl, string subtitle)
+    private void OpenImageReviewPreview(string title, string imageUrl, string subtitle, bool isInspectionComposite = false)
     {
-        _reviewPreview = new ReviewPreviewState(title, subtitle, imageUrl, null);
+        _reviewPreview = new ReviewPreviewState(title, subtitle, imageUrl, null, isInspectionComposite);
         StateHasChanged();
     }
 
-    private void OpenChatVisualPreview(ChatImageVisual visual) =>
-        OpenImageReviewPreview(visual.Title, visual.FullImageUrl, ChatVisualSubtitle(visual));
+    private void OpenChatVisualPreview(ChatImageVisual visual)
+    {
+        var inspection = ModelImageInspection.TryDescribe(visual.Caption, out var description);
+        OpenImageReviewPreview(visual.Title, visual.FullImageUrl,
+            inspection ? description : ChatVisualSubtitle(visual), inspection);
+    }
 
     private void OpenGenerationPartialReviewPreview(GenerationOutputStateView outputState, string imageUrl, string statusLabel) =>
         OpenImageReviewPreview($"Image {LabelForIndex(outputState.OutputIndex)} partial", imageUrl, statusLabel);
@@ -5155,7 +5163,8 @@ else
         string Title,
         string Subtitle,
         string? ImageUrl,
-        Guid? AnimationFrameSetId);
+        Guid? AnimationFrameSetId,
+        bool IsInspectionComposite = false);
 
     public async ValueTask DisposeAsync()
     {

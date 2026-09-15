@@ -38,6 +38,20 @@ public sealed class ChatToolSchemaTests
     }
 
     [Fact]
+    public async Task AccountTransportSendsAlphaMetadataBesideCompositedPixels()
+    {
+        var raster = SpriteRaster.Blank(1, 1);
+        raster.Put(0, 0, new SixLabors.ImageSharp.PixelFormats.Rgba32(53, 114, 16, 0));
+        var contents = ModelImageInspection.Create(raster.Encode().Data, "hidden-green.png", "#FF00FF");
+        var request = await CaptureAsync([], contents.ToList());
+        var input = request.GetProperty("input").EnumerateArray().SelectMany(m => m.GetProperty("content").EnumerateArray()).ToArray();
+        Assert.Contains(input, c => c.GetProperty("type").GetString() == "input_text" && c.GetProperty("text").GetString()!.Contains("\"fullyTransparentPixels\":1"));
+        var image = input.Single(c => c.GetProperty("type").GetString() == "input_image");
+        var sent = SpriteRaster.Decode(DataUrl.Parse(image.GetProperty("image_url").GetString()!).Data);
+        Assert.Equal(new SixLabors.ImageSharp.PixelFormats.Rgba32(255, 0, 255, 255), sent.Get(0, 0));
+    }
+
+    [Fact]
     public async Task StrictNormalizationKeepsReferencedDefinitions()
     {
         var tool = new ReferenceFunction(AIFunctionFactory.Create((string name) => name, "reference_test"));
@@ -47,12 +61,12 @@ public sealed class ChatToolSchemaTests
         Assert.Equal("object", schema.GetProperty("$defs").GetProperty("Target").GetProperty("type").GetString());
     }
 
-    private static async Task<JsonElement> CaptureAsync(IList<AITool> tools)
+    private static async Task<JsonElement> CaptureAsync(IList<AITool> tools, IList<AIContent>? contents = null)
     {
         using var handler = new CaptureHandler(); using var http = new HttpClient(handler);
         var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes("""{"https://api.openai.com/auth":{"chatgpt_account_id":"fixture"}}"""));
         using var client = new OpenAIAccountChatClient(http, $"test.{payload}.test", "gpt-6-astra", "low", NullLogger<OpenAIAccountChatClient>.Instance);
-        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "Schema fixture")], new ChatOptions { Tools = tools });
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, contents ?? [new TextContent("Schema fixture")])], new ChatOptions { Tools = tools });
         return handler.Body;
     }
 

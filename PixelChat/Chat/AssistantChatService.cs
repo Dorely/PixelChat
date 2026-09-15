@@ -1287,10 +1287,7 @@ public sealed class AssistantChatService(
                 continue;
 
             var image = await workflow.GetAssetFullImageAsync(projectId, asset.Id, cancellationToken);
-            contents.Add(new DataContent(DataUrl.ToDataUrl(image.ContentType, image.Data), image.ContentType)
-            {
-                Name = asset.FileName,
-            });
+            contents.AddRange(ModelImageInspection.Create(image.Data, asset.FileName));
         }
 
         foreach (var attachment in workbench.Attachments)
@@ -1303,10 +1300,7 @@ public sealed class AssistantChatService(
                     if (asset is not null && includedAssetIds.Add(asset.Id))
                     {
                         var image = await workflow.GetAssetFullImageAsync(projectId, asset.Id, cancellationToken);
-                        contents.Add(new DataContent(DataUrl.ToDataUrl(image.ContentType, image.Data), image.ContentType)
-                        {
-                            Name = asset.FileName,
-                        });
+                        contents.AddRange(ModelImageInspection.Create(image.Data, asset.FileName));
                     }
                     break;
 
@@ -1315,10 +1309,7 @@ public sealed class AssistantChatService(
                     if (mask is not null)
                     {
                         var image = await workflow.GetMaskImageAsync(projectId, mask.Id, cancellationToken);
-                        contents.Add(new DataContent(DataUrl.ToDataUrl(image.ContentType, image.Data), image.ContentType)
-                        {
-                            Name = $"{mask.Label}.png",
-                        });
+                        contents.AddRange(ModelImageInspection.Create(image.Data, $"{mask.Label}.png"));
                     }
                     break;
 
@@ -1538,10 +1529,7 @@ public sealed class AssistantChatService(
                 return
                 [
                     new TextContent($"Model-only image returned by read_asset for asset '{asset.Label}' ({asset.Id}). This image is not attached to visible chat context."),
-                    new DataContent(asset.DataUrl, asset.ContentType)
-                    {
-                        Name = asset.FileName,
-                    },
+                    .. ModelImageInspection.FromDataUrl(asset.DataUrl, asset.FileName, ReadStringArgument(pendingCall, "backgroundColor")),
                 ];
             }
 
@@ -1587,15 +1575,9 @@ public sealed class AssistantChatService(
         return
         [
             new TextContent($"Model-only deterministic edit-canvas preview {preparation.Id}. First image: exact logical prepared source at {preparation.Canvas.Transform.LogicalWidth}x{preparation.Canvas.Transform.LogicalHeight}."),
-            new DataContent(DataUrl.ToDataUrl("image/png", preparation.Canvas.LogicalSourcePng), "image/png")
-            {
-                Name = "prepared-logical-source.png",
-            },
+            .. ModelImageInspection.Create(preparation.Canvas.LogicalSourcePng, "prepared-logical-source.png"),
             new TextContent("Second image: the same logical canvas with the effective editable region tinted cyan and mask boundaries highlighted yellow. Inspect placement and mask coverage before generating."),
-            new DataContent(DataUrl.ToDataUrl("image/png", preparation.Canvas.PreviewPng), "image/png")
-            {
-                Name = "editable-region-overlay.png",
-            },
+            .. ModelImageInspection.Create(preparation.Canvas.PreviewPng, "editable-region-overlay.png"),
         ];
     }
 
@@ -1646,10 +1628,7 @@ public sealed class AssistantChatService(
                 continue;
 
             var asset = await workflow.GetAssetForExportAsync(projectId, assetId, cancellationToken);
-            contents.Add(new DataContent(asset.DataUrl, asset.ContentType)
-            {
-                Name = asset.FileName,
-            });
+            contents.AddRange(ModelImageInspection.FromDataUrl(asset.DataUrl, asset.FileName));
         }
 
         return contents.Count > 1 ? contents : Array.Empty<AIContent>();
@@ -1667,11 +1646,8 @@ public sealed class AssistantChatService(
         var asset = await workflow.GetAssetForExportAsync(projectId, outputAssetId, cancellationToken);
         return
         [
-            new TextContent($"Model-only image: rebuilt sheet '{asset.Label}' ({asset.Id}) - verify one row, equal cells, and no guide marks. This image is not attached to visible chat context."),
-            new DataContent(asset.DataUrl, asset.ContentType)
-            {
-                Name = asset.FileName,
-            },
+            new TextContent($"Model-only image: rebuilt sheet '{asset.Label}' ({asset.Id}) - verify requested layout, cells, and no guide marks. This image is not attached to visible chat context."),
+            .. ModelImageInspection.FromDataUrl(asset.DataUrl, asset.FileName),
         ];
     }
 
@@ -1699,10 +1675,7 @@ public sealed class AssistantChatService(
         return
         [
             new TextContent($"Model-only image: {label} for frame {frameId}. This image is not attached to visible chat context."),
-            new DataContent(DataUrl.ToDataUrl(image.Value.ContentType, image.Value.Data), image.Value.ContentType)
-            {
-                Name = $"frame-{frameId:N}-cell.png",
-            },
+            .. ModelImageInspection.Create(image.Value.Data, $"frame-{frameId:N}-cell.png"),
         ];
     }
 
@@ -1726,10 +1699,7 @@ public sealed class AssistantChatService(
         return
         [
             new TextContent($"Model-only image: zoomed inspection for frame {frameId}. This image is not attached to visible chat context."),
-            new DataContent(DataUrl.ToDataUrl(image.Value.ContentType, image.Value.Data), image.Value.ContentType)
-            {
-                Name = $"frame-{frameId:N}-inspect.png",
-            },
+            .. ModelImageInspection.Create(image.Value.Data, $"frame-{frameId:N}-inspect.png", ReadStringArgument(pendingCall, "backgroundColor")),
         ];
     }
 
@@ -1750,18 +1720,12 @@ public sealed class AssistantChatService(
         contents.Add(new TextContent(hasSeparateDiagnostic
             ? $"Model-only images returned by generate_animation_guide for SpriteGuide asset '{guide.Label}' ({guide.Id}). Use the guide asset first in sprite-sheet generation references; the diagnostic guide is for inspection only."
             : $"Model-only image returned by generate_animation_guide for SpriteGuide asset '{guide.Label}' ({guide.Id}). Use the guide asset first in sprite-sheet generation references."));
-        contents.Add(new DataContent(guide.DataUrl, guide.ContentType)
-        {
-            Name = guide.FileName,
-        });
+        contents.AddRange(ModelImageInspection.FromDataUrl(guide.DataUrl, guide.FileName));
 
         if (hasSeparateDiagnostic)
         {
             var diagnostic = await workflow.GetAssetForExportAsync(projectId, diagnosticGuideAssetId, cancellationToken);
-            contents.Add(new DataContent(diagnostic.DataUrl, diagnostic.ContentType)
-            {
-                Name = diagnostic.FileName,
-            });
+            contents.AddRange(ModelImageInspection.FromDataUrl(diagnostic.DataUrl, diagnostic.FileName));
         }
 
         return contents;
@@ -1909,9 +1873,15 @@ public sealed class AssistantChatService(
         CancellationToken cancellationToken)
     {
         var sourceBacked = await BuildSourceBackedToolVisualDraftsAsync(pendingCall, projectId, toolResult, cancellationToken);
-        return sourceBacked.Count > 0
-            ? sourceBacked
-            : BuildDataContentToolVisualDrafts(pendingCall, modelOnlyContents);
+        var inspected = BuildDataContentToolVisualDrafts(pendingCall, modelOnlyContents);
+        if (sourceBacked.Count == inspected.Count)
+            return inspected.Select((view, index) => view with
+            {
+                Title = sourceBacked[index].Title,
+                SourceKind = sourceBacked[index].SourceKind,
+                SourceRefId = sourceBacked[index].SourceRefId,
+            }).ToList();
+        return inspected.Count > 0 ? inspected : sourceBacked;
     }
 
     private async Task<List<ToolVisualDraft>> BuildSourceBackedToolVisualDraftsAsync(
@@ -2068,7 +2038,7 @@ public sealed class AssistantChatService(
         {
             if (content is TextContent textContent && !string.IsNullOrWhiteSpace(textContent.Text))
             {
-                caption = CompactText(textContent.Text, 220);
+                caption = textContent.Text;
                 continue;
             }
 

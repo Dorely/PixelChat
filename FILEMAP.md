@@ -42,6 +42,7 @@
 | File | Description |
 |------|-------------|
 | `IAssistantChatService.cs` / `AssistantChatService.cs` | Project-scoped assistant turn service with explicit image context, chat-visual persistence, tool streaming/execution and replay, lookup-safe tool-history pruning, threshold-based hierarchical summaries, and model-only visual outputs. |
+| `ModelImageInspection.cs` | Shared assistant image factory: measured source alpha, validated inspection backgrounds, opaque PNG composites, and readable inspection captions. |
 | `IWorkspaceChatRuntime.cs` / `WorkspaceChatRuntime.cs` | App-process chat runtime that keeps turns and cancellable compaction alive across renderer reloads, throttles state notifications, commits finished turns with visuals, and broadcasts workspace side effects. |
 | `WorkspaceVisibleState.cs` | In-memory visible UI snapshot store and compact workspace records for Review, live sprite focus/agent status, asset, and recipe context used by assistant tools. |
 | `AssistantPromptBuilder.cs` | Builds the assistant system prompt from selected-image-model guidance and `AgentOptions` budget limits, including living-recipe maintenance, intent-based concept-vs-variant generation, model-vs-user visibility, direct generation/edit execution, provider-guided mask/outpaint guidance, Review presentation, Keep/Reject triage, and concise native sprite objectives with progressive workflow help. |
@@ -136,7 +137,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: Generate/Batches/Review/Edit/Sprites/Recipes/Assets workspaces, variant/concept batch and per-output prompt presentation, preview-locked outpaint controls, pending and agent-completed review, asset management, chat, virtualized grids, canvas helpers, and exports. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: Generate/Batches/Review/Edit/Sprites/Recipes/Assets workspaces, variant/concept batch and per-output prompt presentation, preview-locked outpaint controls, pending and agent-completed review, asset management, chat, alpha-aware inspection modals, virtualized grids, canvas helpers, and exports. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, thinking modes, defaults, API-key updates, and child model rows. |
@@ -301,7 +302,7 @@
 | `PixelChat/Models/SpriteBitmap.cs` / `SpriteRevision.cs` | Shared immutable PNG content and independent document history records. |
 | `PixelChat/Persistence/NativeSpriteDataMigration.cs` | Rendered-cell materialization between additive and destructive schema migrations. |
 | `PixelChat.Tests/SpriteDocumentTests.cs` / `SpriteMigrationTests.cs` | Pixel, transaction, history, conflict, and migration regression fixtures. |
-| `PixelChat.Tests/PixelChat.Tests.csproj` | Authorized xUnit test project. |
+| `PixelChat.Tests/PixelChat.Tests.csproj` | Authorized xUnit test project with corpus fixtures copied to output for isolated builds. |
 | `docs/native-sprite-editor-implementation.md` | Release stages and cross-layer impact plan. |
 | `20260914205129_NativeSpriteDocuments.cs` / `.Designer.cs` | Forward native document schema transition. |
 | `20260914205804_RetireMutableFrameBitmaps.cs` / `.Designer.cs` | Forward native document schema transition. |
@@ -313,7 +314,7 @@
 | `PixelChat.Tests/SpriteTimelineTests.cs` | Unequal timing, one-shot, reverse, and ping-pong regression checks. |
 | `PixelChat.Tests/sprite-editor.browser.cjs` | Headless Edge checks for drawing, layers, timing, history, diagnostics/preparations, playback, and export/reimport. |
 | `20260914212522_NativeClipPlayback.cs` / `.Designer.cs` | Removes unused playback/alignment settings now represented by native document clips. |
-| `PixelChat/Sprites/SpriteToolRegistry.cs` | Native tools with explicit operation object schemas, revision-checked edits, and model-visible PNG inspection content. |
+| `PixelChat/Sprites/SpriteToolRegistry.cs` | Native tools with typed operation schemas, revision checks, and alpha-aware PNG views with optional inspection backgrounds. |
 | `PixelChat/Sprites/SpriteScriptService.cs` / `SpriteScriptWorker.cs` | Parent-enforced worker limits and restricted Jint command generation with atomic application. |
 | `PixelChat/Sprites/SpriteInspectionService.cs` / `PixelChat/Models/SpriteInspection.cs` | Cached, labeled revision renders persisted independently of chat. |
 | `PixelChat/Sprites/Skills/*.md` | Embedded, progressively loaded command references and drawing, pose, animation, and export workflows. |
@@ -331,7 +332,7 @@
 | `PixelChat/Components/Sprites/SpriteExportPanel.razor` / `.razor.css` | Inspector export controls, revision-specific downloads, GIF previews, and named slices. |
 | `20260914221808_NativeSpriteExports.cs` / `.Designer.cs` | Persists native export artifacts and projects blank-frame identities for migrated empty sets. |
 | `PixelChat.Tests/SpriteExportTests.cs` | Exact RGBA reconstruction, timing/pivots/slices, padding placement, GIF timing, and tamper rejection. |
-| `PixelChat.Tests/SpriteCorpusTests.cs` / `sprite-corpus.js` | Five direct-drawing fixtures with script, render, validation, export, and usage records. |
+| `PixelChat.Tests/SpriteCorpusTests.cs` / `sprite-corpus.js` | Five direct-drawing fixtures with script, render, validation, export, and usage records; the script is copied to test output. |
 | `docs/native-sprite-validation.md` | Local release checks, measured corpus results, artistic judgments, and unverified integrations. |
 
 | `PixelChat/Components/Sprites/SpriteToolIcon.razor` | Accessible-label companion SVG icons for the native drawing tool rail. |
@@ -339,5 +340,8 @@
 
 | `PixelChat/Components/Sprites/SpritePickerModal.razor` / `.razor.css` / `.razor.js` | Searchable revision-specific sprite thumbnail dialog with native modal focus and dismissal. |
 
-| `PixelChat.Tests/ChatToolSchemaTests.cs` | Captures the complete account request tool registry and checks typed schemas, strict constraints, and references. |
+| `PixelChat.Tests/ChatToolSchemaTests.cs` | Captures account requests to check tool schemas, strict constraints, references, and alpha-aware image payloads. |
 | `PixelChat.Tests/sprite-assistant-live.browser.cjs` | Explicitly enabled real-account browser check for Astra reads, sprite_apply, rendered evidence, and pixel/timing verification. |
+
+| `PixelChat.Tests/ModelImageInspectionTests.cs` | Hidden-RGB/source preservation, source alpha counts, partial blending, opaque/animated inputs, and background validation. |
+| `PixelChat.Tests/sprite-alpha-live.browser.cjs` | Opt-in live Astra/browser alpha regression across asset/frame/native views, stored composite pixels, and unchanged source bytes. |
