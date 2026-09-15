@@ -7,10 +7,11 @@
 }
 
 .chat-header {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: 0.5rem;
     padding: 0.9rem 1rem;
     border-bottom: 1px solid #d9dee7;
     background: #ffffff;
@@ -27,7 +28,11 @@
     color: #17212b;
 }
 
-.chat-subtitle {
+.chat-header-details {
+    display: grid;
+    grid-column: 1 / -1;
+    gap: 0.35rem;
+    min-width: 0;
     font-size: 0.82rem;
     color: #667085;
 }
@@ -42,7 +47,13 @@
 .chat-scroll {
     min-height: 0;
     overflow-y: auto;
+    overflow-anchor: none;
     padding: 1.25rem;
+}
+
+.chat-transcript {
+    display: flow-root;
+    min-width: 0;
 }
 
 .chat-empty {

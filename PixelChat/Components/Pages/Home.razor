@@ -78,9 +78,7 @@ else
 
         <section class="workbench-main">
             <aside class="chat-pane">
-                <ChatModelSelector Disabled="@(ChatRuntime.IsRunning || ChatRuntime.IsCompacting || _compacting)" Changed="ReloadChatAsync" />
                 <ChatSurface Title="Assistant"
-                             Subtitle="@ChatSubtitle"
                              Loading="@_loadingChat"
                              Messages="@_messages"
                              Live="@_live"
@@ -95,7 +93,6 @@ else
                              SendDisabled="@(_loadingChat || _running || _compacting || !_hasWorkingProvider || !CanSendChat)"
                              CssClass="workbench-chat"
                              ForceScrollKey="@_forceScrollKey"
-                             ScrollKey="@_scrollKey"
                              ResetComposerKey="@_resetComposerKey"
                              OnSend="SendAsync"
                              OnStop="StopAsync"
@@ -104,6 +101,14 @@ else
                              OnImagePasted="AddPendingChatImage"
                              OnPendingImageRemoved="RemovePendingChatImage"
                              OnPasteError="ShowChatPasteError">
+                    <HeaderDetails>
+                        <ChatModelSelector Disabled="@(ChatRuntime.IsRunning || ChatRuntime.IsCompacting || _compacting)" Changed="ReloadChatAsync" />
+                        <span title="Estimated request tokens / input limit">@ChatTokenUsage</span>
+                        @if (!string.IsNullOrWhiteSpace(_providerStatus))
+                        {
+                            <span>@_providerStatus</span>
+                        }
+                    </HeaderDetails>
                     <HeaderActions>
                         <button type="button"
                                 class="btn btn-sm btn-outline-secondary"
@@ -225,7 +230,8 @@ else
     private string _newProjectName = string.Empty;
     private string _input = string.Empty;
     private string? _error;
-    private string _providerSubtitle = "Checking provider status...";
+    private string? _providerStatus = "Checking provider status...";
+    private int? _inputTokenLimit;
     private TokenContextEstimate? _tokenCount;
     private bool _loadingChat = true;
     private bool _running;
@@ -236,12 +242,17 @@ else
     private string? _pendingUserText;
     private Guid? _optimisticUserMessageId;
     private int _forceScrollKey;
-    private int _scrollKey;
     private int _resetComposerKey;
 
-    private string ChatSubtitle => _tokenCount is null
-        ? _providerSubtitle
-        : $"{_providerSubtitle} - {FormatTokenCount(_tokenCount)}";
+    private string ChatTokenUsage
+    {
+        get
+        {
+            var used = _tokenCount is null ? "—" : $"{(_tokenCount.IsExact ? string.Empty : "~")}{_tokenCount.TokenCount.ToString("N0", CultureInfo.InvariantCulture)}";
+            var limit = _inputTokenLimit?.ToString("N0", CultureInfo.InvariantCulture) ?? "unknown";
+            return $"{used} / {limit} tokens";
+        }
+    }
 
     private bool CanSendChat => !string.IsNullOrWhiteSpace(_input) || _pendingChatImages.Count > 0;
 
@@ -554,9 +565,12 @@ else
 
         var availability = await ProviderService.GetDefaultChatProviderAvailabilityAsync();
         _hasWorkingProvider = availability.IsAvailable && availability.Provider is not null;
-        _providerSubtitle = _hasWorkingProvider
-            ? $"{availability.Provider!.DisplayName ?? availability.Provider.Name} / {availability.Provider.ModelId}"
-            : availability.Message;
+        _providerStatus = _hasWorkingProvider ? null : availability.Message;
+        _inputTokenLimit = availability.Provider is { } provider
+            && OpenAIAccountProvider.IsOpenAIAccount(provider)
+            && OpenAIModelCatalog.IsBuiltIn(provider.ModelId)
+                ? OpenAIModelCatalog.EffectiveInputTokens
+                : null;
         _tokenCount = _hasWorkingProvider
             ? await ChatService.EstimateNextRequestTokensAsync(_workbench.Project.Id)
             : null;
@@ -3566,7 +3580,6 @@ else
         {
             var snapshot = ChatRuntime.GetSnapshot();
             ApplyChatRuntimeSnapshot(snapshot);
-            _scrollKey++;
             PublishVisibleState();
             StateHasChanged();
         });
@@ -3808,7 +3821,6 @@ else
         _live = null;
         _pendingUserText = null;
         _error = turn.Error;
-        _scrollKey++;
     }
 
     private void ReconcileOptimisticUserMessage(Guid? persistedUserMessageId, IReadOnlyList<ChatImageVisual> visuals)
@@ -3936,7 +3948,6 @@ else
             ChatMessageRole.User,
             ChatMessageStatus.Completed,
             optimisticParts));
-        _scrollKey++;
 
         try
         {

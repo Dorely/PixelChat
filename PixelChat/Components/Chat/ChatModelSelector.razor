@@ -2,47 +2,43 @@
 @using PixelChat.Models
 @inject ILlmProviderService Providers
 
-<div class="d-flex gap-2 p-2 flex-wrap">
-    <label>Chat model
-        <select class="form-select form-select-sm" value="@_selection" @onchange="ChangeModelAsync" disabled="@(Disabled || _busy)">
-            @foreach (var provider in _providers)
+<div class="chat-model-selector">
+    <select class="form-select form-select-sm chat-model" aria-label="Chat model" value="@_selection" @onchange="ChangeModelAsync" disabled="@(Disabled || _busy)">
+        @if (_current is null)
+        {
+            <option value="" disabled>Select a chat model</option>
+        }
+        @foreach (var provider in _providers)
+        {
+            if (OpenAIAccountProvider.IsOpenAIAccount(provider))
             {
-                if (OpenAIAccountProvider.IsOpenAIAccount(provider))
+                @foreach (var model in OpenAIModelCatalog.ChatModels)
                 {
-                    @foreach (var model in OpenAIModelCatalog.ChatModels)
-                    {
-                        <option value="@($"{provider.Id}:{model}")">OpenAI · @model</option>
-                    }
-                    @if (!OpenAIModelCatalog.IsBuiltIn(provider.ModelId))
-                    {
-                        <option value="@($"{provider.Id}:{provider.ModelId}")">OpenAI · @provider.ModelId</option>
-                    }
+                    <option value="@($"{provider.Id}:{model}")">OpenAI Account / @model</option>
                 }
-                else
+                @if (!OpenAIModelCatalog.IsBuiltIn(provider.ModelId))
                 {
-                    <option value="@($"{provider.Id}:{provider.ModelId}")">@(provider.DisplayName ?? provider.Name) · @provider.ModelId</option>
+                    <option value="@($"{provider.Id}:{provider.ModelId}")">OpenAI Account / @provider.ModelId</option>
                 }
             }
-        </select>
-    </label>
+            else
+            {
+                <option value="@($"{provider.Id}:{provider.ModelId}")">@(provider.DisplayName ?? provider.Name) · @provider.ModelId</option>
+            }
+        }
+    </select>
     @if (_current is not null)
     {
-        <label>Effort
-            <select class="form-select form-select-sm" value="@_current.ThinkingMode" @onchange="ChangeEffortAsync" disabled="@(Disabled || _busy)">
-                @if (OpenAIAccountProvider.IsOpenAIAccount(_current) && OpenAIModelCatalog.IsBuiltIn(_current.ModelId))
-                {
-                    @foreach (var effort in OpenAIModelCatalog.Efforts) { <option value="@effort">@effort</option> }
-                }
-                else
-                {
-                    @foreach (var effort in ProviderThinkingModes.OpenAIOptions) { <option value="@effort.Value">@effort.Label</option> }
-                }
-            </select>
-        </label>
-        @if (OpenAIAccountProvider.IsOpenAIAccount(_current) && OpenAIModelCatalog.IsBuiltIn(_current.ModelId))
-        {
-            <small>Context: 272,000 · input budget: 258,400</small>
-        }
+        <select class="form-select form-select-sm chat-effort" aria-label="Effort" value="@_current.ThinkingMode" @onchange="ChangeEffortAsync" disabled="@(Disabled || _busy)">
+            @if (OpenAIAccountProvider.IsOpenAIAccount(_current) && OpenAIModelCatalog.IsBuiltIn(_current.ModelId))
+            {
+                @foreach (var effort in OpenAIModelCatalog.Efforts) { <option value="@effort">@effort</option> }
+            }
+            else
+            {
+                @foreach (var effort in ProviderThinkingModes.OpenAIOptions) { <option value="@effort.Value">@effort.Label</option> }
+            }
+        </select>
     }
     @if (_error is not null) { <span class="text-danger">@_error</span> }
 </div>

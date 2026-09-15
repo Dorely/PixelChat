@@ -1,10 +1,65 @@
-export function attachScroller(element) {
-    if (!element) return;
-    element.dataset.chatAutoFollow = 'true';
+const scrollers = new WeakMap();
+
+export function attachScroller(element, transcript) {
+    if (!element || !transcript) return;
+    detachScroller(element);
+    const controller = new AbortController();
+    const state = { following: true, lastTop: element.scrollTop, frame: null };
+    const setFollowing = value => {
+        state.following = value;
+        element.dataset.chatAutoFollow = String(value);
+    };
+    const schedule = () => {
+        if (!state.following || state.frame !== null) return;
+        state.frame = requestAnimationFrame(() => {
+            state.frame = null;
+            if (!state.following) return;
+            element.scrollTop = element.scrollHeight;
+            state.lastTop = element.scrollTop;
+        });
+    };
     element.addEventListener('scroll', () => {
-        const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
-        element.dataset.chatAutoFollow = distance < 80 ? 'true' : 'false';
+        const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= 2;
+        if (atBottom) setFollowing(true);
+        else if (element.scrollTop < state.lastTop) setFollowing(false);
+        state.lastTop = element.scrollTop;
+        schedule();
+    }, { passive: true, signal: controller.signal });
+    // Pause before the next layout-follow frame can override upward input.
+    element.addEventListener('wheel', event => {
+        if (event.deltaY < 0 && element.scrollTop > 0) setFollowing(false);
+    }, { passive: true, signal: controller.signal });
+    let touchY = null;
+    element.addEventListener('touchstart', event => {
+        touchY = event.touches[0]?.clientY ?? null;
+    }, { passive: true, signal: controller.signal });
+    element.addEventListener('touchmove', event => {
+        const nextY = event.touches[0]?.clientY ?? null;
+        if (touchY !== null && nextY !== null && nextY > touchY && element.scrollTop > 0) setFollowing(false);
+        touchY = nextY;
+    }, { passive: true, signal: controller.signal });
+    element.addEventListener('keydown', event => {
+        if (event.target === element && element.scrollTop > 0 && (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)))
+            setFollowing(false);
+    }, { signal: controller.signal });
+    const observer = new ResizeObserver(schedule);
+    observer.observe(transcript);
+    observer.observe(element);
+    scrollers.set(element, {
+        follow: () => { setFollowing(true); schedule(); },
+        dispose: () => {
+            controller.abort();
+            observer.disconnect();
+            if (state.frame !== null) cancelAnimationFrame(state.frame);
+        },
     });
+    setFollowing(true);
+    schedule();
+}
+
+export function detachScroller(element) {
+    scrollers.get(element)?.dispose();
+    scrollers.delete(element);
 }
 
 export function attachAutoSize(textarea) {
@@ -39,11 +94,8 @@ export function resetComposer(textarea) {
     textarea.style.height = 'auto';
 }
 
-export function scrollToBottom(element, force) {
-    if (!element) return;
-    if (force || element.dataset.chatAutoFollow !== 'false') {
-        element.scrollTop = element.scrollHeight;
-    }
+export function scrollToBottom(element) {
+    scrollers.get(element)?.follow();
 }
 
 async function handlePaste(event, dotNetRef) {

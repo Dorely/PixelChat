@@ -121,8 +121,8 @@
 | File | Description |
 |------|-------------|
 | `ChatModels.cs` | UI-only ordered chat text/tool/image parts, compaction notice and summary presentation, compact tool chip state with explicit display titles and visuals, live-turn state, and persisted tool-call helpers. |
-| `ChatModelSelector.razor` | Persistent global chat model and effort selection with built-in account context budgets. |
-| `ChatSurface.razor` / `.razor.css` / `.razor.js` | Reusable chat shell for ordered text/tool/image/context transcript rendering, visual preview clicks, streaming state, composer autosize, enter-to-send, and scroll-follow behavior. |
+| `ChatModelSelector.razor` / `.razor.css` | Compact header model/effort selection with persistent global provider settings. |
+| `ChatSurface.razor` / `.razor.css` / `.razor.js` | Chat shell with header content, ordered transcript rendering, composer interaction, and resize-aware bottom following that pauses on upward scrolling. |
 | `ChatToolChipView.razor` / `.razor.css` | Expandable compact tool-call chip used for live and persisted assistant tool timeline entries. |
 
 ### Components/Layout/

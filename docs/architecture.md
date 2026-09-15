@@ -160,6 +160,11 @@ OpenAI account chat exposes Sol, Terra, Luna, and Astra through the shared OAuth
 connection. Built-in models become ready from valid credentials without a separate
 manual test; a selected unavailable model produces an error rather than fallback.
 The chat selector persists model and effort (low, medium, high, xhigh, max).
+It occupies the provider/model position in the chat header. Home supplies a
+separate calculated-token used / limit display from the selected provider and
+the live request estimate; the denominator is the catalog's effective input
+ceiling. Unavailable counts and unknown external-provider limits are shown
+explicitly rather than assumed. Model selection owns no duplicate budget label.
 Built-in requests have a 272,000-token context and 258,400-token input ceiling.
 The estimate includes instructions, serialized tool schemas, conversation content,
 and conservative image reserves. Each initial/continuation submission checks the
@@ -363,3 +368,7 @@ The opt-in `node PixelChat.Tests/sprite-alpha-live.browser.cjs` uses the live-ac
 Review presentation
 
 Current Review, individual pending generation batches, and the latest completed agent review share a newest-first timeline. Ordering uses the curated set update time, pending output creation time, and agent review completion time respectively; empty sections appear last. Item order within a curated comparison remains explicit. Assistant system and workflow guidance requires presenting changed artwork in Current Review before replying, with an updated title, summary, and relevant images or animation previews. Downloads are produced on request; routine final replies do not append export links.
+
+Chat transcript scrolling
+
+ChatSurface owns a bounded scroll viewport and a measured transcript wrapper. Its JavaScript ResizeObserver follows transcript and viewport size changes, including delayed image/tool layout, through one scheduled animation frame. Follow state changes when the user scrolls upward or returns to the bottom; content growth alone does not pause it. Browser scroll anchoring is disabled so it cannot compete with that state. Explicit conversation reloads can force the bottom. Disposal disconnects the observer, removes its input listeners, and cancels pending scroll work. Per-stream server scroll keys are removed.
