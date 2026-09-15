@@ -16,7 +16,7 @@ public sealed class ChatToolSchemaTests
     [Fact]
     public async Task AccountRequestContainsValidTypedSchemasForEntireRegistry()
     {
-        var sprites = new SpriteToolRegistry(null!, null!, null!, null!, null!);
+        var sprites = new SpriteToolRegistry(null!, null!, null!, null!);
         var registry = new AssistantToolRegistry(null!, null!, null!, sprites, null!, null!,
             Options.Create(new AgentOptions()), Options.Create(new PixelChat.Art.ImageGenerationOptions()));
         var tools = registry.Build(Guid.NewGuid(), new(0));

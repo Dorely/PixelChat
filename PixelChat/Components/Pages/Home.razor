@@ -6,12 +6,14 @@
 @using PixelChat.Chat
 @using PixelChat.Llm
 @using PixelChat.Models
+@using PixelChat.Sprites
 @using PixelChat.Tokens
 @using Microsoft.Extensions.Options
 @rendermode InteractiveServer
 @implements IAsyncDisposable
 @inject IArtWorkflowService Workflow
 @inject ISpriteWorkspaceActionService SpriteActions
+@inject ISpriteDocumentService SpriteDocuments
 @inject IFrameSetService FrameSets
 @inject IAssistantChatService ChatService
 @inject IWorkspaceChatRuntime ChatRuntime
@@ -2033,7 +2035,7 @@ else
                         {
                             <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => AddGenerationReferenceAsync(asset.Id)">Reference</button>
                             <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => EditAssetAsync(asset.Id)">Edit</button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenSpriteSheetAsync(asset)">Sprite Sheet</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!string.IsNullOrWhiteSpace(_busyText))" @onclick="() => OpenSpriteAsync(asset)">Sprite</button>
                         }
                         @if (allowReject)
                         {
@@ -3277,20 +3279,21 @@ else
         await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Edit);
     }
 
-    private async Task OpenSpriteSheetAsync(ArtAssetView asset)
+    private async Task OpenSpriteAsync(ArtAssetView asset)
     {
         if (_workbench is null)
             return;
 
-        await FlushMaskAutosaveAsync();
-        _spriteEditorSourceAssetId = asset.Id;
-        await SpriteActions.SetFocusAsync(_workbench.Project.Id, new SpriteWorkspaceFocusUpdate(
-            SpriteWorkspaceModes.Source,
-            asset.Id,
-            FrameSetId: null,
-            FrameId: null,
-            SelectedRegionIds: []));
-        await ReloadWorkbenchAsync(acceptBackendMode: true);
+        if (!string.IsNullOrWhiteSpace(_busyText))
+            return;
+        await RunWorkflowAsync("Importing sprite...", async () =>
+        {
+            await FlushMaskAutosaveAsync();
+            var sprite = await SpriteDocuments.ImportAssetsAsync(_workbench.Project.Id, asset.Label, [asset.Id]);
+            await SpriteActions.SetActiveFrameSetAsync(_workbench.Project.Id, sprite.DocumentId);
+            _spriteEditorSourceAssetId = asset.Id;
+            await ReloadWorkbenchAsync(acceptBackendMode: true);
+        });
     }
 
     private async Task OnSpriteSheetChangedAsync()

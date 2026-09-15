@@ -19,7 +19,7 @@ public sealed class SpriteToolTests
         await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options, NullLogger<AppDbContext>.Instance);
         await db.Database.EnsureCreatedAsync(); var project = new Project { Name = "Tools" }; db.Projects.Add(project); await db.SaveChangesAsync();
         var documents = new SpriteDocumentService(db); var scripts = new SpriteScriptService(documents); var inspections = new SpriteInspectionService(db, documents);
-        var registry = new SpriteToolRegistry(documents, scripts, inspections, null!, null!);
+        var registry = new SpriteToolRegistry(documents, scripts, inspections, null!);
         var snapshot = await documents.CreateAsync(project.Id, "Fixture", 8, 8, "pixel");
         var frame = snapshot.Document.Frames[0].Id; var layer = snapshot.Document.Layers[0].Id;
         var tool = registry.Build(project.Id).OfType<AIFunction>().Single(t => t.Name == "sprite_apply");

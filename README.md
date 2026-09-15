@@ -12,7 +12,7 @@ See [VISION.md](VISION.md) for the product direction and [docs/architecture.md](
 
 ## Current Capabilities
 
-The Sprites chooser opens a searchable thumbnail dialog with dimensions, frame counts, and a current-sprite marker. Close it with Close, Escape, or a click outside. Import artwork has a sticky Close control and supports Escape; dismissing it keeps the selected source for reopening.
+The Sprites chooser opens a searchable thumbnail dialog with dimensions, frame counts, and a current-sprite marker. Close it with Close, Escape, or a click outside. The Import artwork panel opens only from its button; dismissing it keeps the selected source for reopening. Choose Sprite on an asset to import the whole image directly into a painted sprite and open the editor.
 
 Review shows Current Review, pending generation batches, and the latest completed agent review chronologically, newest first. The assistant presents changed artwork and animation previews in Current Review before replying; downloadable exports are created when requested.
 

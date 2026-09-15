@@ -91,7 +91,7 @@
             _projectId = Workbench.Project.Id; _documentId = Workbench.Project.ActiveFrameSetId;
             _documents = await FrameSets.ListFrameSetsAsync(Workbench.Project.Id);
         }
-        if (SourceAssetId is { } source && _sourceId != source) { _sourceId = source; _showImport = true; _showCreate = false; _showPicker = false; _focusImport = true; await LoadRegionsAsync(); }
+        if (SourceAssetId is { } source && _sourceId != source) { _sourceId = source; await LoadRegionsAsync(); }
         _ready = true;
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -141,10 +141,8 @@
     private Task ImportWholeAsync() => RunAsync(async () =>
     {
         if (_sourceId is not { } id) return;
-        var image = await Workflow.GetAssetFullImageAsync(Workbench.Project.Id, id) ?? throw new InvalidOperationException("Source image missing.");
-        var raster = SpriteRaster.Decode(image.Data); var bitmap = raster.Encode(); var layer = new SpriteLayer { Name = "Artwork" };
-        var doc = new SpriteDocument { Name = _name, Specification = new() { Width = raster.Width, Height = raster.Height }, Layers = [layer], Frames = [new() { Width = raster.Width, Height = raster.Height, Cels = new() { [layer.Id] = bitmap.Hash } }] };
-        var created = await Documents.ImportAsync(Workbench.Project.Id, id, doc, [bitmap]); _showImport = false; await ActivateAsync(created.DocumentId);
+        var created = await Documents.ImportAssetsAsync(Workbench.Project.Id, Workbench.Assets.FirstOrDefault(asset => asset.Id == id)?.Label ?? _name, [id]);
+        _showImport = false; await ActivateAsync(created.DocumentId);
     });
     private Task AddRegionAsync() => RunAsync(async () =>
     {

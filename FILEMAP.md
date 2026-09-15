@@ -146,7 +146,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` | Bounded sprite workspace, thumbnail picker integration, dismissible create/import panels, and visible-state integration. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` | Bounded sprite workspace, thumbnail picker, button-opened import panel, shared asset import, and visible-state integration. |
 
 ### Llm/
 
@@ -297,7 +297,7 @@
 | `PixelChat/Sprites/SpriteDocument.cs` | Versioned document, layer/cel/frame/clip/specification contracts and revision conflicts. |
 | `PixelChat/Sprites/SpriteRaster.cs` | Bounded RGBA operations, compositing, resampling, and content-addressed PNGs. |
 | `PixelChat/Sprites/SpriteCommandEngine.cs` | Typed operations on temporary state with selection, locking, palette, and allocation constraints. |
-| `PixelChat/Sprites/SpriteDocumentService.cs` | Atomic persistence, revision checks, frame identity projections, and durable undo/redo. |
+| `PixelChat/Sprites/SpriteDocumentService.cs` | Shared whole-asset imports, atomic persistence, revision checks, frame identity projections, and durable undo/redo. |
 | `PixelChat/Art/FrameSetService.Native.cs` | Source import and native revision integration for existing frame workflows. |
 | `PixelChat/Models/SpriteBitmap.cs` / `SpriteRevision.cs` | Shared immutable PNG content and independent document history records. |
 | `PixelChat/Persistence/NativeSpriteDataMigration.cs` | Rendered-cell materialization between additive and destructive schema migrations. |

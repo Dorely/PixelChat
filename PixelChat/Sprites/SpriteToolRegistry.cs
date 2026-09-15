@@ -8,7 +8,7 @@ using PixelChat.Models;
 namespace PixelChat.Sprites;
 
 public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteScriptService scripts, SpriteInspectionService inspections,
-    IArtWorkflowService workflow, IFrameSetService frameSets, SpriteValidationService? validation = null, SpriteGenerationService? generation = null, SpriteExportService? exports = null)
+    IFrameSetService frameSets, SpriteValidationService? validation = null, SpriteGenerationService? generation = null, SpriteExportService? exports = null)
 {
     public async Task<IReadOnlyList<AIContent>> ImageContentsAsync(Guid projectId, string result, CancellationToken cancellationToken)
     {
@@ -137,16 +137,7 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
         }
         else if (assetIds is { Length: > 0 })
         {
-            var doc = new SpriteDocument { Name = name, Layers = [new() { Name = "Artwork" }] }; var bitmaps = new List<SpriteBitmap>();
-            foreach (var id in assetIds)
-            {
-                var image = await workflow.GetAssetFullImageAsync(projectId, id, token) ?? throw new InvalidOperationException("Import asset not found.");
-                var raster = SpriteRaster.Decode(image.Data); var bitmap = raster.Encode(); bitmaps.Add(bitmap);
-                var frame = new SpriteFrame { Name = $"Frame {doc.Frames.Count + 1}", Width = raster.Width, Height = raster.Height, Cels = new() { [doc.Layers[0].Id] = bitmap.Hash } };
-                doc.Frames.Add(frame); doc.Provenance[$"frame:{frame.Id}:sourceAssetId"] = id.ToString();
-            }
-            doc.Specification.Width = doc.Frames.Max(f => f.Width); doc.Specification.Height = doc.Frames.Max(f => f.Height);
-            snapshot = await documents.ImportAsync(projectId, assetIds.Length == 1 ? assetIds[0] : null, doc, bitmaps, token);
+            snapshot = await documents.ImportAssetsAsync(projectId, name, assetIds, token);
         }
         else snapshot = await documents.CreateAsync(projectId, name, width, height, mode, token);
         await frameSets.SetActiveFrameSetAsync(projectId, snapshot.DocumentId, token);

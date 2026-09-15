@@ -7,6 +7,7 @@ namespace PixelChat.Sprites;
 
 public interface ISpriteDocumentService
 {
+    Task<SpriteSnapshot> ImportAssetsAsync(Guid projectId, string name, IReadOnlyList<Guid> assetIds, CancellationToken cancellationToken = default);
     Task<SpriteSnapshot> ImportAsync(Guid projectId, Guid? sourceAssetId, SpriteDocument document, IReadOnlyCollection<SpriteBitmap> bitmaps, CancellationToken cancellationToken = default);
     Task<SpriteSnapshot> CreateAsync(Guid projectId, string name, int width, int height, string artMode, CancellationToken cancellationToken = default);
     Task<SpriteSnapshot> ReadAsync(Guid projectId, Guid documentId, long? revision = null, CancellationToken cancellationToken = default);
@@ -22,6 +23,32 @@ public interface ISpriteDocumentService
 /// <summary>Single writer for sprite state. SQLite compare-and-swap and history share one transaction.</summary>
 public sealed class SpriteDocumentService(AppDbContext db, SpriteDocumentEvents? events = null) : ISpriteDocumentService
 {
+    public async Task<SpriteSnapshot> ImportAssetsAsync(Guid projectId, string name, IReadOnlyList<Guid> assetIds, CancellationToken cancellationToken = default)
+    {
+        if (assetIds.Count == 0) throw new InvalidOperationException("Select at least one asset to import.");
+        var document = new SpriteDocument { Name = name.Trim(), Layers = [new() { Name = "Artwork" }] };
+        var bitmaps = new List<SpriteBitmap>();
+        foreach (var id in assetIds)
+        {
+            var source = await db.ArtAssets.AsNoTracking().Where(asset => asset.ProjectId == projectId && asset.Id == id)
+                .Select(asset => new { asset.Data }).SingleOrDefaultAsync(cancellationToken)
+                ?? throw new InvalidOperationException("Import asset not found.");
+            var raster = SpriteRaster.Decode(source.Data);
+            var bitmap = raster.Encode();
+            bitmaps.Add(bitmap);
+            var frame = new SpriteFrame
+            {
+                Name = $"Frame {document.Frames.Count + 1}", Width = raster.Width, Height = raster.Height,
+                Cels = new() { [document.Layers[0].Id] = bitmap.Hash },
+            };
+            document.Frames.Add(frame);
+            document.Provenance[$"frame:{frame.Id}:sourceAssetId"] = id.ToString();
+        }
+        document.Specification.Width = document.Frames.Max(frame => frame.Width);
+        document.Specification.Height = document.Frames.Max(frame => frame.Height);
+        return await ImportAsync(projectId, assetIds.Count == 1 ? assetIds[0] : null, document, bitmaps, cancellationToken);
+    }
+
     public async Task<SpriteSnapshot> CreateAsync(Guid projectId, string name, int width, int height, string artMode, CancellationToken cancellationToken = default)
     {
         SpriteRaster.CheckSize(width, height);
