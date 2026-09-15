@@ -188,13 +188,16 @@ magenta normalization. Returned provider pixels remain authoritative.
 The shared transparency inspector measures the complete decoded raster and offers
 checkerboard, white, black, and color preview backgrounds, plus pixel coordinates,
 RGBA, and opacity. Preview backgrounds and overlays never enter asset bytes.
-Opaque requested-alpha results show a warning and remain available for inspection;
-mixed alpha is explicitly not proof that the entire background is transparent.
+The inspector shows compact measured transparency percentages and pixel data.
+Its image fits the space below the controls without nested scrolling. Original
+provider output replaces the displayed artwork when selected, using the same
+bounded inspection area. Saved assistant composites show a compact source-alpha
+summary. Explanatory caveat and provider-transport copy is omitted from the modal.
 The September 14, 2026 account endpoint rejected the explicit transparent parameter
 for both 2.5 IDs. The auto parameter plus alpha instructions produced real alpha for
 generation on both models. With the wired system guidance, a Flare edit retained
-alpha while a Sunburst edit returned opaque pixels. The inspector discloses
-this route and retains measured-alpha warnings. There is no background retry or
+alpha while a Sunburst edit returned opaque pixels. The inspector retains measured
+alpha data. There is no background retry or
 cleanup fallback. Assistant system prompts inject only the selected image model's
 applicable guidance, including native-alpha availability; static tool descriptions
 refer to that guidance instead of presenting model-dependent branches. Initial,

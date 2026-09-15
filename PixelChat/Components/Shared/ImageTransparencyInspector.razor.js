@@ -23,15 +23,14 @@ export function unmount(root) {
     mounted.delete(root);
 }
 
-export async function mount(root, src, requestedBackground) {
+export async function mount(root, src) {
     unmount(root);
     const controller = new AbortController();
     mounted.set(root, controller);
     const image = root.querySelector('[data-alpha-image]');
     const status = root.querySelector('[data-alpha-status]');
-    const warning = root.querySelector('[data-alpha-warning]');
     status.textContent = 'Inspecting image pixels…';
-    warning.hidden = true;
+    root.querySelector('[data-alpha-pixel]').textContent = 'Pixel: — · RGBA: — · Opacity: —';
     image.src = src;
     try {
         await image.decode();
@@ -45,20 +44,15 @@ export async function mount(root, src, requestedBackground) {
         const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
         const alpha = analyzeRgba(pixels);
         const percent = count => (100 * count / alpha.total).toFixed(3);
-        status.textContent = alpha.opaque === alpha.total
-            ? 'Opaque — no transparent pixels'
-            : alpha.transparent === alpha.total
-                ? 'Fully transparent — no visible pixels'
-                : `Contains transparency — fully transparent ${percent(alpha.transparent)}%; partially transparent ${percent(alpha.partial)}%. This does not prove every background pixel is transparent.`;
-        if (requestedBackground === 'transparent' && alpha.opaque === alpha.total) {
-            warning.textContent = 'Transparency was requested, but this image is fully opaque. Any checkerboard visible in it is part of the image.';
-            warning.hidden = false;
-        }
+        status.textContent = `${canvas.width} × ${canvas.height} · Fully transparent ${percent(alpha.transparent)}% · Partially transparent ${percent(alpha.partial)}% · Opaque ${percent(alpha.opaque)}%`;
         const inspect = event => {
             const bounds = image.getBoundingClientRect();
-            const pixel = inspectPixel(pixels, canvas.width, canvas.height,
-                (event.clientX - bounds.left) * canvas.width / bounds.width,
-                (event.clientY - bounds.top) * canvas.height / bounds.height);
+            const scale = Math.min(bounds.width / canvas.width, bounds.height / canvas.height);
+            if (scale <= 0) return;
+            const x = (event.clientX - bounds.left - (bounds.width - canvas.width * scale) / 2) / scale;
+            const y = (event.clientY - bounds.top - (bounds.height - canvas.height * scale) / 2) / scale;
+            if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return;
+            const pixel = inspectPixel(pixels, canvas.width, canvas.height, x, y);
             root.querySelector('[data-alpha-pixel]').textContent =
                 `Pixel (${pixel.x}, ${pixel.y}) · RGBA (${pixel.r}, ${pixel.g}, ${pixel.b}, ${pixel.a}) · Opacity ${(100 * pixel.a / 255).toFixed(2)}%`;
         };

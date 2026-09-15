@@ -334,6 +334,7 @@ else
     private Guid? _exportModalAssetId;
     private bool _guideBuilderOpen;
     private ReviewPreviewState? _reviewPreview;
+    private bool _previewOriginalProvider;
     private bool _reviewPreviewEscapeBound;
 
     private sealed class RecipeAttachmentDraft
@@ -2254,6 +2255,8 @@ else
         if (_reviewPreview is not { } preview)
             return;
 
+        var rawUrl = PreviewRawProviderUrl(preview.ImageUrl);
+        var imageUrl = _previewOriginalProvider && rawUrl is not null ? rawUrl : preview.ImageUrl;
         <div class="review-modal-backdrop" @onclick="CloseReviewPreviewAsync">
             <div class="review-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="review-preview-title" @onclick:stopPropagation="true">
                 <header class="review-modal-head">
@@ -2264,7 +2267,14 @@ else
                             <span>@preview.Subtitle</span>
                         }
                     </div>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CloseReviewPreviewAsync">Close</button>
+                    <div class="review-modal-actions">
+                        @if (rawUrl is not null)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _previewOriginalProvider = !_previewOriginalProvider">@(_previewOriginalProvider ? "Show artwork" : "Show original provider output")</button>
+                            <a href="@rawUrl" download>Download original</a>
+                        }
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CloseReviewPreviewAsync">Close</button>
+                    </div>
                 </header>
                 <div class="review-modal-stage">
                     @if (preview.IsInspectionComposite)
@@ -2273,14 +2283,7 @@ else
                     }
                     else if (!string.IsNullOrWhiteSpace(preview.ImageUrl))
                     {
-                        <ImageTransparencyInspector Src="@preview.ImageUrl" Alt="@preview.Title" RequestedBackground="@PreviewRequestedBackground(preview.ImageUrl)" />
-                        @if (PreviewRawProviderUrl(preview.ImageUrl) is string rawUrl)
-                        {
-                            <details><summary>Inspect original provider output before canvas processing</summary>
-                                <ImageTransparencyInspector Src="@rawUrl" Alt="Original provider output" RequestedBackground="@PreviewRequestedBackground(preview.ImageUrl)" />
-                                <a href="@rawUrl" download>Download original provider image</a>
-                            </details>
-                        }
+                        <ImageTransparencyInspector Src="@(imageUrl!)" Alt="@(_previewOriginalProvider ? "Original provider output" : preview.Title)" RequestedBackground="@PreviewRequestedBackground(preview.ImageUrl)" />
                     }
                     else if (preview.AnimationFrameSetId is Guid animationFrameSetId
                         && _reviewFrameSets.TryGetValue(animationFrameSetId, out var previewFrameSet)
@@ -2710,7 +2713,7 @@ else
             _selectedRejectedAssetIds.Remove(assetId);
     }
 
-    private string? PreviewRawProviderUrl(string imageUrl)
+    private string? PreviewRawProviderUrl(string? imageUrl)
     {
         var asset = _workbench?.Assets.Concat(_workbench.PendingReviewAssets).Concat(_workbench.RejectedAssets)
             .FirstOrDefault(item => item.FullImageUrl == imageUrl && item.HasRawProviderOutput);
@@ -2727,6 +2730,7 @@ else
 
     private void OpenImageReviewPreview(string title, string imageUrl, string subtitle, bool isInspectionComposite = false)
     {
+        _previewOriginalProvider = false;
         _reviewPreview = new ReviewPreviewState(title, subtitle, imageUrl, null, isInspectionComposite);
         StateHasChanged();
     }

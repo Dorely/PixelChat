@@ -22,7 +22,7 @@ public sealed class ModelImageInspectionTests
         var metadata = Metadata(contents);
         Assert.True(ModelImageInspection.TryDescribe(Assert.Single(contents.OfType<TextContent>()).Text, out var description));
         Assert.Contains("Source alpha: 1 fully transparent, 1 partially transparent, and 1 opaque pixels", description);
-        Assert.Contains("This saved preview is opaque", description);
+        Assert.Equal("Inspection background #FF00FF · Source alpha: 1 fully transparent, 1 partially transparent, and 1 opaque pixels.", description);
         Assert.DoesNotContain("sourceSha256", description);
         Assert.True(metadata.GetProperty("hasTransparency").GetBoolean());
         Assert.Equal(1, metadata.GetProperty("fullyTransparentPixels").GetInt32());

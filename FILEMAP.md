@@ -110,7 +110,7 @@
 | File | Description |
 |------|-------------|
 | `BulkPromptEditor.razor` | Paginated editable one-prompt-per-line bulk input preserving order and duplicates. |
-| `ImageTransparencyInspector.razor` / `.razor.css` / `.razor.js` | Shared preview backgrounds, full-raster alpha statistics, requested-alpha warnings, and pixel inspection. |
+| `ImageTransparencyInspector.razor` / `.razor.css` / `.razor.js` | Fitted image preview with background controls, compact full-raster alpha statistics, and pixel inspection. |
 | `ExportPanel.razor` / `.razor.css` | Assets PNG export modal with cleanup steps, local AI removal, preview backgrounds, and reset; sprite bundles use SpriteExportPanel. |
 | `AnimationGuideBuilderModal.razor` / `.razor.css` | Shared Assets > Guides modal for configuring guide grids, previewing GLB motion clips in 3D with yaw/pitch drag, rendering guide previews, and saving SpriteGuide assets. |
 | `LazyImage.razor` / `.razor.css` / `.razor.js` | IntersectionObserver-backed image component that reserves thumbnail space and assigns `src` only when near the viewport. |

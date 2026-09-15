@@ -4,7 +4,7 @@
 
 <section class="alpha-inspector" @ref="_root">
     <div class="alpha-controls">
-        <label>Preview background — not part of the image
+        <label>Preview background
             <select class="form-select form-select-sm" @bind="_background">
                 <option value="checkerboard">Checkerboard</option>
                 <option value="white">White</option>
@@ -15,14 +15,8 @@
         <label>Preview color <input type="color" @bind="_color" /></label>
         <span>Requested background: @(RequestedBackground ?? "Not recorded / source image")</span>
     </div>
-    @if (RequestedBackground == ImageBackgroundModes.Transparent)
-    {
-        <p>Native alpha is requested through explicit image instructions. The account provider uses background auto with PNG. Check the measured alpha below; edits may return opaque pixels.</p>
-    }
-    <p>Real transparency reveals this background. A checkerboard that stays unchanged is painted into the image.</p>
     <strong data-alpha-status role="status">Inspecting image pixels…</strong>
-    <p data-alpha-warning class="alpha-warning" hidden></p>
-    <p data-alpha-pixel>Point at or tap the image to inspect its pixel coordinates, RGBA, and opacity.</p>
+    <span data-alpha-pixel>Pixel: — · RGBA: — · Opacity: —</span>
     <div class="alpha-stage @(_background == "checkerboard" ? "checkerboard" : null)" style="@BackgroundStyle">
         <img data-alpha-image alt="@Alt" />
     </div>
@@ -45,7 +39,7 @@
         var key = $"{Src}|{RequestedBackground}";
         if (_loadedKey == key) return;
         _loadedKey = key;
-        await _module.InvokeVoidAsync("mount", _root, Src, RequestedBackground);
+        await _module.InvokeVoidAsync("mount", _root, Src);
     }
 
     public async ValueTask DisposeAsync()

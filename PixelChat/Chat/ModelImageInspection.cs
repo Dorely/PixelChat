@@ -25,7 +25,7 @@ public static class ModelImageInspection
             using var parsed = JsonDocument.Parse(json);
             var metadata = parsed.RootElement;
             if (!metadata.GetProperty("inspectionIsOpaqueComposite").GetBoolean()) return false;
-            description = FormattableString.Invariant($"Agent inspection on {metadata.GetProperty("inspectionBackground").GetString()}. Source alpha: {metadata.GetProperty("fullyTransparentPixels").GetInt64():N0} fully transparent, {metadata.GetProperty("partiallyTransparentPixels").GetInt64():N0} partially transparent, and {metadata.GetProperty("opaquePixels").GetInt64():N0} opaque pixels. This saved preview is opaque; the original artwork retains its alpha.");
+            description = FormattableString.Invariant($"Inspection background {metadata.GetProperty("inspectionBackground").GetString()} · Source alpha: {metadata.GetProperty("fullyTransparentPixels").GetInt64():N0} fully transparent, {metadata.GetProperty("partiallyTransparentPixels").GetInt64():N0} partially transparent, and {metadata.GetProperty("opaquePixels").GetInt64():N0} opaque pixels.");
             return true;
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
