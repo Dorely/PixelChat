@@ -842,10 +842,23 @@ else
 
     private RenderFragment RenderReviewWorkspace() => __builder =>
     {
+        var sections = new List<(DateTime Timestamp, RenderFragment Content)>
+        {
+            (_workbench!.CompareReviewSet is { Items.Count: > 0 } currentReview ? currentReview.UpdatedAt : DateTime.MinValue, RenderCompareReviewSet()),
+        };
+        if (LatestAgentReviewedBatch() is { } reviewedBatch)
+            sections.Add((reviewedBatch.ReviewCompletedAt!.Value, RenderLatestAgentReview()));
+        var pendingGroups = PendingReviewGroups();
+        foreach (var group in pendingGroups)
+            sections.Add((group.Assets.Max(asset => asset.CreatedAt), RenderPendingGenerationReviews([group])));
+        if (pendingGroups.Count == 0)
+            sections.Add((DateTime.MinValue, RenderPendingGenerationReviews([])));
+
         <div class="workspace-panel compare-panel">
-            @RenderPendingGenerationReviews()
-            @RenderLatestAgentReview()
-            @RenderCompareReviewSet()
+            @foreach (var entry in sections.OrderByDescending(entry => entry.Timestamp))
+            {
+                @entry.Content
+            }
         </div>
     };
 
@@ -960,9 +973,8 @@ else
         </div>
     };
 
-    private RenderFragment RenderPendingGenerationReviews() => __builder =>
+    private RenderFragment RenderPendingGenerationReviews(IReadOnlyList<PendingReviewGroup> groups) => __builder =>
     {
-        var groups = PendingReviewGroups();
         <section class="pending-review-section">
             <div class="compare-review-head">
                 <div>

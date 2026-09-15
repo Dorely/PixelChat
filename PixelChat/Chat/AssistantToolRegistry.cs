@@ -532,7 +532,7 @@ public sealed class AssistantToolRegistry(
             method: (string? title = null, string? summary = null, CompareReviewToolItem[]? items = null, bool switchToReview = true, CancellationToken cancellationToken = default) =>
                 SetCompareReviewSetAsync(projectId, title, summary, items, switchToReview, cancellationToken),
             name: "set_compare_review_set",
-            description: "Replace the curated Review tab set with ordered visual items. Item kind values: asset, frame (a greenfield Frame id), animation (a greenfield FrameSet id, played as a looping preview). This does not attach images to chat or send them back as model context."),
+            description: "Present your latest artwork changes to the user in Current Review before replying. Replace the set with a clear title, change summary, and ordered visual items. Item kind values: asset, frame (a Frame id), animation (a FrameSet id, played with saved timing and loop policy). This does not attach images to chat or send them back as model context."),
 
         AIFunctionFactory.Create(
             method: (CompareReviewToolItem[]? items = null, string? title = null, string? summary = null, bool switchToReview = true, CancellationToken cancellationToken = default) =>
