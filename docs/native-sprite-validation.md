@@ -43,3 +43,10 @@ Live Astra chat orchestration, Sunburst/Flare image-assisted poses, generated-sh
 For that evaluation, run the same five briefs through direct drawing, image-assisted poses and generated sheets where applicable. Preserve approved references, logical size/palette/motion requirements and each returned candidate. Record the selected provider model, actual calls/retries/usage, elapsed generation and review time, interventions, frame-addressed judgments and accepted revision. Use native exports to compare exact output and retain rejected candidates. GIF previews quantize color/alpha and timing; use native playback and PNG/JSON for exact inspection.
 
 The Jint worker has resource limits and no exposed system APIs; it is not an operating-system security boundary. Native bundles contain one portable revision snapshot; persistent undo history stays with the originating document in the local database.
+
+
+Account assistant schema regression (September 14, 2026)
+
+The initial editor browser suites exercised manual controls but did not send an actual assistant turn to the account API. A user-reported 400 exposed the untyped `sprite_apply.operations.items` schema under forced strict mode. The corrected request retains typed operation objects and uses non-strict transport only for schemas with explicitly open properties; the engine still validates and commits batches atomically.
+
+A live headless Edge run against the signed-in local app used gpt-6-astra at the saved high effort. All 65 tool definitions were accepted (HTTP 200). Astra called workspace state, sprite_read, sprite_help, sprite_apply, and sprite_render, then completed with ACCOUNT_TOOL_OK. In project `Account tool validation 1789446336538`, one batch created exactly the requested red pixel at (2,3) and changed timing to 125ms. The browser checked authoritative canvas RGBA and the duration field, and the resulting contact/frame PNGs appeared in chat. The prior project/model selection was restored and the browser and validation host were terminated. This verifies this account assistant path; it does not extend prior image-generation, packaging, or platform claims.

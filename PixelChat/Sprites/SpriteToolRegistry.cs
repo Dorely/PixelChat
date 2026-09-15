@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using PixelChat.Art;
 using PixelChat.Models;
@@ -10,6 +11,8 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
 {
     public async Task<IReadOnlyList<AIContent>> ImageContentsAsync(Guid projectId, string result, CancellationToken cancellationToken)
     {
+        // Workflow help is Markdown and has no image artifacts to extract.
+        if (!result.AsSpan().TrimStart().StartsWith("{")) return [];
         using var json = JsonDocument.Parse(result);
         if (json.RootElement.ValueKind != JsonValueKind.Object || !json.RootElement.TryGetProperty("artifacts", out var artifacts) || artifacts.ValueKind != JsonValueKind.Array) return [];
         var images = new List<AIContent>();
@@ -63,9 +66,9 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
             return Json(new { artifact.Id, artifact.DocumentId, artifact.Revision, artifact.FileName, artifact.ContentType, artifact.Bytes, artifact.Url, artifact.Warnings });
         },
             "sprite_export", "Export a specified revision as a portable native bundle, PNG atlas+JSON zip, PNG frames+JSON zip, versioned metadata, or animated GIF preview. Padding is inside slots, gutter between slots, outerMargin around atlas. Exact timing/pivots/slices/alpha remain in native/PNG/JSON; GIF is a quantized preview. Artifacts are persisted and downloadable."),
-        AIFunctionFactory.Create((Guid documentId, long expectedRevision, string label, JsonElement[] operations, string? taskId = null, bool returnPreview = true, CancellationToken cancellationToken = default) =>
+        new SpriteApplyFunction(AIFunctionFactory.Create((Guid documentId, long expectedRevision, string label, JsonElement[] operations, string? taskId = null, bool returnPreview = true, CancellationToken cancellationToken = default) =>
             ApplyAsync(projectId, new(documentId, expectedRevision, label, operations, "agent", taskId), returnPreview, cancellationToken),
-            "sprite_apply", "Atomically apply a typed command batch to the expected document revision. Conflicts change nothing. Use sprite_help(commands) for operations. Prefer one coherent batch over one call per pixel. Optional preview returns actual PNG evidence."),
+            "sprite_apply", "Atomically apply a typed command batch to the expected document revision. Conflicts change nothing. Use sprite_help(commands) for operations. Prefer one coherent batch over one call per pixel. Optional preview returns actual PNG evidence.")),
         AIFunctionFactory.Create((Guid documentId, long expectedRevision, string script, string label = "Sprite script", string? taskId = null, bool returnPreview = true, CancellationToken cancellationToken = default) =>
             ScriptAsync(projectId, documentId, expectedRevision, script, label, taskId, returnPreview, cancellationToken),
             "sprite_script", "Run resource-bounded JavaScript in an isolated worker. document is the starting snapshot; sprite.apply(op) and sprite.batch(ops) emit the same typed operations as sprite_apply. No filesystem/network/CLR/modules. Success commits one undoable batch; errors and cancellation commit nothing."),
@@ -76,6 +79,21 @@ public sealed class SpriteToolRegistry(ISpriteDocumentService documents, SpriteS
             HistoryAsync(projectId, documentId, action, expectedRevision, wholeTask, offset, cancellationToken),
             "sprite_history", "Read persisted command history (independent of chat) or perform revision-checked undo/redo. wholeTask undoes only a contiguous task suffix and stops at intervening manual work."),
     ];
+
+    // JsonElement alone emits an unconstrained schema. Operations are objects with an
+    // op discriminator and command-specific fields, validated by the command engine.
+    private sealed class SpriteApplyFunction(AIFunction inner) : DelegatingAIFunction(inner)
+    {
+        private readonly Lazy<JsonElement> _schema = new(() =>
+        {
+            var schema = JsonNode.Parse(inner.JsonSchema.GetRawText())!;
+            schema["properties"]!["operations"]!["items"] = JsonNode.Parse("""
+                {"type":"object","properties":{"op":{"type":"string","description":"Command name from sprite_help(commands)."}},"required":["op"],"additionalProperties":true}
+                """);
+            return JsonSerializer.SerializeToElement(schema);
+        });
+        public override JsonElement JsonSchema => _schema.Value;
+    }
 
     public static string Help(string topic)
     {

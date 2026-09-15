@@ -42,6 +42,7 @@ public sealed class SpriteToolTests
         var skipped = JsonSerializer.Serialize(new { artifacts = new[] { new { id = cached.Artifacts[0].Id, sendImage = false } } });
         Assert.Empty(await registry.ImageContentsAsync(project.Id, skipped, CancellationToken.None));
         Assert.Contains("sprite.apply", SpriteToolRegistry.Help("scripting"));
+        Assert.Empty(await registry.ImageContentsAsync(project.Id, SpriteToolRegistry.Help("commands"), CancellationToken.None));
     }
 
     [Fact]

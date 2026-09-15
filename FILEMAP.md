@@ -155,7 +155,7 @@
 | `OpenAIModelCatalog.cs` | Built-in account model IDs, effort choices, and default Codex context/input budgets. |
 | `ChatClientFactory.cs` / `IChatClientFactory.cs` | Creates and tests Microsoft.Extensions.AI chat clients from persisted providers, credentials, and provider thinking-mode defaults. |
 | `OpenAIAccountAuthService.cs` / `IOpenAIAccountAuthService.cs` | OpenAI account OAuth PKCE flow, token refresh, revocation, and token secret persistence. |
-| `OpenAIAccountChatClient.cs` | Streaming `IChatClient` bridge to the OpenAI account Responses SSE endpoint with image inputs and function-call events. |
+| `OpenAIAccountChatClient.cs` | Account Responses SSE bridge with image inputs, function-call events, and schema-aware strict tool serialization. |
 | `OpenAIAccountProvider.cs` | Constants and helpers for the OpenAI account provider and JWT account-id extraction. |
 | `LlmProviderService.cs` / `ILlmProviderService.cs` | Provider CRUD, readiness snapshots, credential status, default-provider selection, and effective API-key/token resolution. |
 | `ProviderThinkingModes.cs` | Thinking-mode normalization, OpenAI mode constants/dropdown options, endpoint detection, and chat-option mapping. |
@@ -313,7 +313,7 @@
 | `PixelChat.Tests/SpriteTimelineTests.cs` | Unequal timing, one-shot, reverse, and ping-pong regression checks. |
 | `PixelChat.Tests/sprite-editor.browser.cjs` | Headless Edge checks for drawing, layers, timing, history, diagnostics/preparations, playback, and export/reimport. |
 | `20260914212522_NativeClipPlayback.cs` / `.Designer.cs` | Removes unused playback/alignment settings now represented by native document clips. |
-| `PixelChat/Sprites/SpriteToolRegistry.cs` | Compact native tools with revision-checked edits and actual model-visible PNG inspection content. |
+| `PixelChat/Sprites/SpriteToolRegistry.cs` | Native tools with explicit operation object schemas, revision-checked edits, and model-visible PNG inspection content. |
 | `PixelChat/Sprites/SpriteScriptService.cs` / `SpriteScriptWorker.cs` | Parent-enforced worker limits and restricted Jint command generation with atomic application. |
 | `PixelChat/Sprites/SpriteInspectionService.cs` / `PixelChat/Models/SpriteInspection.cs` | Cached, labeled revision renders persisted independently of chat. |
 | `PixelChat/Sprites/Skills/*.md` | Embedded, progressively loaded command references and drawing, pose, animation, and export workflows. |
@@ -338,3 +338,6 @@
 | `PixelChat.Tests/sprite-viewport.browser.cjs` | Canvas navigation, large-image import, inspector state, import dismissal, and thumbnail picker interaction checks. |
 
 | `PixelChat/Components/Sprites/SpritePickerModal.razor` / `.razor.css` / `.razor.js` | Searchable revision-specific sprite thumbnail dialog with native modal focus and dismissal. |
+
+| `PixelChat.Tests/ChatToolSchemaTests.cs` | Captures the complete account request tool registry and checks typed schemas, strict constraints, and references. |
+| `PixelChat.Tests/sprite-assistant-live.browser.cjs` | Explicitly enabled real-account browser check for Astra reads, sprite_apply, rendered evidence, and pixel/timing verification. |

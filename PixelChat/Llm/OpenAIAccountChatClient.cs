@@ -427,15 +427,18 @@ public sealed class OpenAIAccountChatClient : IChatClient
                 if (tool is not AIFunction function)
                     continue;
 
+                // Extensible command objects cannot be closed without losing valid
+                // fields. Preserve their schema and let the owning service validate.
+                var strict = !HasOpenProperties(function.JsonSchema);
                 var toolDef = new Dictionary<string, object>
                 {
                     ["type"] = "function",
                     ["name"] = function.Name,
                     ["description"] = function.Description ?? string.Empty,
-                    ["strict"] = true,
+                    ["strict"] = strict,
                     ["parameters"] = function.JsonSchema.ValueKind == JsonValueKind.Undefined
                         ? EmptyStrictSchema()
-                        : PrepareStrictSchema(function.JsonSchema)
+                        : strict ? PrepareStrictSchema(function.JsonSchema) : function.JsonSchema
                 };
                 openAiTools.Add(toolDef);
             }
@@ -502,6 +505,16 @@ public sealed class OpenAIAccountChatClient : IChatClient
         return doc.RootElement.Clone();
     }
 
+    private static bool HasOpenProperties(JsonElement schema)
+    {
+        if (schema.ValueKind == JsonValueKind.Array)
+            return schema.EnumerateArray().Any(HasOpenProperties);
+        if (schema.ValueKind != JsonValueKind.Object) return false;
+        return schema.EnumerateObject().Any(property =>
+            property.Name == "additionalProperties" && property.Value.ValueKind != JsonValueKind.False
+            || HasOpenProperties(property.Value));
+    }
+
     private static JsonElement EnforceStrictSchema(JsonElement element, bool isPropertiesContainer = false)
     {
         if (element.ValueKind == JsonValueKind.Array)
@@ -534,7 +547,7 @@ public sealed class OpenAIAccountChatClient : IChatClient
 
         foreach (var prop in element.EnumerateObject())
         {
-            if (prop.Name is "$defs" or "title")
+            if (prop.Name == "title")
                 continue;
 
             if (prop.Name == "type"
@@ -558,7 +571,7 @@ public sealed class OpenAIAccountChatClient : IChatClient
                 hasAdditionalProperties = true;
 
             dict[prop.Name] = prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
-                ? EnforceStrictSchema(prop.Value, isPropertiesContainer: prop.Name == "properties")
+                ? EnforceStrictSchema(prop.Value, isPropertiesContainer: prop.Name is "properties" or "$defs")
                 : prop.Value;
         }
 
