@@ -14,6 +14,8 @@
 
 ## Repository Readiness
 
+- Work directly on `main`. Do not create feature branches or worktrees unless
+  the user explicitly requests one.
 - Before beginning new work, inspect the current branch, working tree, index,
   configured remotes, and upstream status.
 - Start feature work only from a clean working tree whose index matches `HEAD`.
