@@ -57,7 +57,7 @@
 | `ArtWorkflowModels.cs` | Request/result/view records for the workbench, ordered generation prompt specifications and batch modes, edit-canvas options/transforms/finalization/previews, lazy media, animation guides, sprite-sheet metadata, region extraction, recipes, and assistant tools. |
 | `IFrameSetService.cs` / `FrameSetService.cs` | Source regions/import, deterministic frame cleanup/alignment, native frame projections, masks, and derived sheets; AI jobs use the native generation service. |
 | `ISpriteWorkspaceActionService.cs` / `SpriteWorkspaceActionService.cs` | Shared Sprites action layer used by UI clicks and assistant tools to wrap greenfield mutations including optional scale normalization, update persisted sprite focus, and keep the visible workspace synchronized. |
-| `FrameSetModels.cs` | View/request/result records for the greenfield source-region, frame-set, reference/mask, optional scale-normalization, inspection, and derived build-sheet pipeline. |
+| `FrameSetModels.cs` | Source/frame/sheet contracts, including sprite summary revisions and first-frame identities for thumbnail selection. |
 | `AnimationGuideModels.cs` | Shared guide-rendering records for animation specs, frame specs, guide layouts, and per-frame slots without restoring the old animation job pipeline. |
 | `SpriteAnimationOptions.cs` | Configuration record for sprite-animation defaults used by guide rendering and animation-generation workflow setup. |
 | `SpriteFacing.cs` | Facing normalization, yaw conversion, left/right detection, and prompt phrasing helpers for animation guides. |
@@ -145,7 +145,7 @@
 
 | File | Description |
 |------|-------------|
-| `SpriteSheetWorkspace.razor` / `.razor.css` | Bounded sprite workspace, document chooser, create/import overlays, and visible-state integration. |
+| `SpriteSheetWorkspace.razor` / `.razor.css` | Bounded sprite workspace, thumbnail picker integration, dismissible create/import panels, and visible-state integration. |
 
 ### Llm/
 
@@ -335,4 +335,6 @@
 | `docs/native-sprite-validation.md` | Local release checks, measured corpus results, artistic judgments, and unverified integrations. |
 
 | `PixelChat/Components/Sprites/SpriteToolIcon.razor` | Accessible-label companion SVG icons for the native drawing tool rail. |
-| `PixelChat.Tests/sprite-viewport.browser.cjs` | Large-image fit, wheel anchoring, pan, transformed drawing, zoom bounds, resize, import, and inspector usability checks. |
+| `PixelChat.Tests/sprite-viewport.browser.cjs` | Canvas navigation, large-image import, inspector state, import dismissal, and thumbnail picker interaction checks. |
+
+| `PixelChat/Components/Sprites/SpritePickerModal.razor` / `.razor.css` / `.razor.js` | Searchable revision-specific sprite thumbnail dialog with native modal focus and dismissal. |

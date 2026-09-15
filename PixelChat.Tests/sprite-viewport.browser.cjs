@@ -23,10 +23,12 @@ async function main() {
             const overflow = await page.evaluate(() => ({ page: document.documentElement.scrollWidth > innerWidth, workspace: document.querySelector('.sprite-workspace').scrollHeight > document.querySelector('.sprite-workspace').clientHeight + 1 }));
             assert.deepEqual(overflow, { page: false, workspace: false });
         }
+        const documentNames = [];
         for (const [width,height] of [[8,8],[1024,1536],[4096,2048]]) {
             await page.getByRole('button', { name: 'New sprite', exact: true }).click();
             const form = page.locator('.sprite-workspace > .sprite-form');
             const name = `Viewport ${width}x${height} ${Date.now()}`;
+            documentNames.push(name);
             await form.getByLabel('Name', { exact: true }).fill(name);
             await form.getByLabel('Width', { exact: true }).fill(String(width));
             await form.getByLabel('Height', { exact: true }).fill(String(height));
@@ -83,6 +85,15 @@ async function main() {
         await page.getByRole('button',{name:'Import artwork',exact:true}).click();
         await page.getByLabel('Import image',{exact:true}).setInputFiles({name:'viewport-large.png',mimeType:'image/png',buffer:Buffer.from(encoded,'base64')});
         await page.locator('.source-preview').waitFor({state:'visible'});
+        const importPanel = page.getByRole('region', { name:'Import artwork panel' });
+        await importPanel.getByRole('button', { name:'Close import panel' }).click();
+        await importPanel.waitFor({state:'hidden'});
+        await page.getByRole('button',{name:'Import artwork',exact:true}).click();
+        await page.locator('.source-preview').waitFor({state:'visible'});
+        await page.keyboard.press('Escape');
+        await importPanel.waitFor({state:'hidden'});
+        await page.getByRole('button',{name:'Import artwork',exact:true}).click();
+        await page.locator('.source-preview').waitFor({state:'visible'});
         await page.getByRole('button',{name:'Import whole image',exact:true}).click();
         await page.waitForFunction(() => document.querySelector('[aria-label="Sprite drawing canvas"]').dataset.renderRevision === '0');
         await fits(4096,2048);
@@ -96,9 +107,40 @@ async function main() {
         await editor.locator('.sprite-ai').waitFor({state:'visible'});
         assert.equal(await editor.getByLabel('Sprite AI prompt').inputValue(),'Preserve the full resolution and silhouette.');
         await fits(4096,2048);
+        const choose = page.getByRole('button', {name:'Choose sprite',exact:true});
+        const picker = page.getByRole('dialog', {name:'Choose a sprite',exact:true});
+        await choose.click();
+        await picker.waitFor({state:'visible'});
+        const current = picker.locator('.sprite-card.active');
+        await current.locator('img').evaluate(img => img.decode());
+        assert.equal(await current.locator('img').evaluate(img => img.naturalWidth),256,'Picker sends a bounded thumbnail');
+        assert.deepEqual(await current.locator('img').evaluate(img => {
+            const c=document.createElement('canvas'); c.width=img.naturalWidth; c.height=img.naturalHeight;
+            const ctx=c.getContext('2d'); ctx.drawImage(img,0,0); return [...ctx.getImageData(20,20,1,1).data];
+        }),[68,96,137,255],'Thumbnail contains the imported artwork pixels');
+        assert.ok((await current.locator('img').getAttribute('src')).includes('/revisions/0/'),'Preview identifies its revision');
+        await picker.getByLabel('Search sprites').fill('no-sprite-with-this-name');
+        await picker.getByText('No sprites match your search.',{exact:true}).waitFor({state:'visible'});
+        assert.equal(await picker.locator('.sprite-card').count(),0);
+        await picker.getByLabel('Search sprites').fill(documentNames[0]);
+        await picker.getByRole('button',{name:`Open sprite ${documentNames[0]}`,exact:true}).waitFor({state:'visible'});
+        assert.equal(await picker.locator('.sprite-card').count(),1);
+        await picker.getByRole('button',{name:`Open sprite ${documentNames[0]}`,exact:true}).click();
+        await picker.waitFor({state:'hidden'});
+        await page.waitForFunction(name=>document.querySelector('.document-identity strong')?.textContent===name,documentNames[0]);
+        await fits(8,8);
+        await choose.click(); await picker.waitFor({state:'visible'});
+        await page.keyboard.press('Escape'); await picker.waitFor({state:'hidden'});
+        assert.equal(await choose.evaluate(e=>e===document.activeElement),true,'Picker returns keyboard focus');
+        await choose.click(); await picker.waitFor({state:'visible'});
+        await page.mouse.click(5,5); await picker.waitFor({state:'hidden'});
+        await choose.click(); await picker.waitFor({state:'visible'});
+        await picker.getByRole('button',{name:'Close sprite picker'}).click(); await picker.waitFor({state:'hidden'});
+        await choose.click(); await picker.waitFor({state:'visible'});
+        await picker.getByLabel('Search sprites').fill(documentNames[2]);
         if(process.env.PIXELCHAT_TEST_SCREENSHOT) await page.screenshot({path:process.env.PIXELCHAT_TEST_SCREENSHOT,fullPage:true});
         assert.deepEqual(errors,[]);
-        console.log('PASS: 8px, 1024px and 4096px fit; wheel anchoring; right-drag pan; no navigation edits; transformed drawing/undo; 0.1–12800% zoom; resize fit; full-resolution PNG import; inspector layout and retained AI drafts.');
+        console.log('PASS: 8px, 1024px and 4096px fit; wheel anchoring; right-drag pan; no navigation edits; transformed drawing/undo; 0.1–12800% zoom; resize fit; full-resolution PNG import; inspector layout and retained AI drafts; import dismissal/source retention; thumbnail picker search, selection, Escape, backdrop and focus.');
     } finally { await browser.close(); }
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

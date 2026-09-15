@@ -12,6 +12,8 @@ See [VISION.md](VISION.md) for the product direction and [docs/architecture.md](
 
 ## Current Capabilities
 
+The Sprites chooser opens a searchable thumbnail dialog with dimensions, frame counts, and a current-sprite marker. Close it with Close, Escape, or a click outside. Import artwork has a sticky Close control and supports Escape; dismissing it keeps the selected source for reopening.
+
 - Project-scoped assistant chat with streaming tool execution, visible intermediate results, persisted transcripts, image context, confirmed tool-history compaction with lookup-safe context notices and threshold-based summaries, and intent-aware concept batches that generate one distinct prompt per output.
 - Recipe bulk generation: paste one prompt per line, edit/remove preview rows, and request 1â€“4 images per prompt with shared settings/references. Order and duplicates are preserved, with paginated output/review and no fixed prompt-count cap. Stop, Resume, and Retry failed preserve saved successes; interrupted queues require manual resume.
 - Image generation with same-prompt variant or multi-prompt concept batches, imported-image editing, provider-guidance masks, outpainting-aware canvases whose complete provider output remains authoritative, batch progress, visual review, and kept/rejected asset management.

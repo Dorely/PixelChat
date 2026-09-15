@@ -7,17 +7,18 @@
 @inject IArtWorkflowService Workflow
 @inject SpriteExportService Exports
 
-<section class="sprite-workspace">
+<section class="sprite-workspace" @onkeydown="HandleKeyAsync">
     <header class="sprite-heading">
         <h1>Sprites</h1>
-        <select aria-label="Sprite document" value="@_documentId" @onchange="SelectDocumentAsync">
-            <option value="">Choose a sprite</option>
-            @foreach (var document in _documents) { <option value="@document.Id">@document.Name</option> }
-        </select>
-        <button @onclick="() => _showCreate = !_showCreate">New sprite</button>
-        <button @onclick="() => _showImport = !_showImport">Import artwork</button>
+        <button class="sprite-picker-trigger" disabled="@(!_ready)" aria-label="Choose sprite" aria-haspopup="dialog" @onclick="OpenPickerAsync"><span>@(_documents.FirstOrDefault(d => d.Id == _documentId)?.Name ?? "Choose a sprite")</span><span aria-hidden="true">▦</span></button>
+        <button disabled="@(!_ready)" @onclick="ToggleCreate">New sprite</button>
+        <button disabled="@(!_ready)" @ref="_importButton" aria-expanded="@_showImport.ToString().ToLowerInvariant()" @onclick="ToggleImportAsync">Import artwork</button>
         @if (AgentStatus is { } status) { <span role="status">@status.State @status.TargetSummary</span> }
     </header>
+    @if (_showPicker)
+    {
+        <SpritePickerModal ProjectId="Workbench.Project.Id" Documents="_documents" ActiveDocumentId="_documentId" OnSelected="SelectDocumentAsync" OnClose="() => _showPicker = false" />
+    }
     @if (_showCreate)
     {
         <div class="sprite-form">
@@ -26,11 +27,13 @@
             <label>Height <input type="number" min="1" max="8192" @bind="_height" /></label>
             <label>Art mode <select @bind="_mode"><option value="pixel">Pixel art</option><option value="painted">Painted sprite</option></select></label>
             <button @onclick="CreateAsync">Create</button>
+            <button @onclick="() => _showCreate = false">Cancel</button>
         </div>
     }
     @if (_showImport)
     {
-        <div class="sprite-import">
+        <div class="sprite-import" role="region" aria-label="Import artwork panel" tabindex="-1" @ref="_importPanel">
+            <header class="import-heading"><h2>Import artwork</h2><button aria-label="Close import panel" @onclick="CloseImportAsync">Close ×</button></header>
             <label>Import image <InputFile OnChange="ImportAsync" accept="image/png,image/jpeg" /></label>
             <label>Import native / atlas / frames bundle <InputFile OnChange="ImportBundleAsync" accept=".zip" /></label>
             <select aria-label="Source image" value="@_sourceId" @onchange="SelectSourceAsync">
@@ -76,7 +79,8 @@
     private IReadOnlyList<FrameSetSummaryView> _documents = [];
     private IReadOnlyList<SourceRegionView> _regions = [];
     private readonly HashSet<Guid> _selectedRegions = [];
-    private bool _showCreate, _showImport;
+    private bool _showCreate, _showImport, _showPicker, _focusImport, _ready;
+    private ElementReference _importPanel, _importButton;
     private string _name = "New sprite", _mode = "pixel";
     private string? _error;
     private int _width = 64, _height = 64, _regionX, _regionY, _regionW = 64, _regionH = 64;
@@ -87,8 +91,31 @@
             _projectId = Workbench.Project.Id; _documentId = Workbench.Project.ActiveFrameSetId;
             _documents = await FrameSets.ListFrameSetsAsync(Workbench.Project.Id);
         }
-        if (SourceAssetId is { } source && _sourceId != source) { _sourceId = source; _showImport = true; await LoadRegionsAsync(); }
+        if (SourceAssetId is { } source && _sourceId != source) { _sourceId = source; _showImport = true; _showCreate = false; _showPicker = false; _focusImport = true; await LoadRegionsAsync(); }
+        _ready = true;
     }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusImport && _showImport) { _focusImport = false; await _importPanel.FocusAsync(preventScroll: true); }
+    }
+    private void ToggleCreate() { _showCreate = !_showCreate; _showImport = false; }
+    private async Task ToggleImportAsync()
+    {
+        if (_showImport) await CloseImportAsync();
+        else { _showCreate = false; _showImport = true; _focusImport = true; }
+    }
+    private async Task CloseImportAsync() { _showImport = false; _focusImport = false; await _importButton.FocusAsync(preventScroll: true); }
+    private async Task HandleKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key != "Escape") return;
+        if (_showImport) await CloseImportAsync();
+        _showCreate = false;
+    }
+    private Task OpenPickerAsync() => RunAsync(async () =>
+    {
+        _documents = await FrameSets.ListFrameSetsAsync(Workbench.Project.Id);
+        _showCreate = false; _showImport = false; _showPicker = true;
+    });
     private async Task RunAsync(Func<Task> action) { try { _error = null; await action(); } catch (Exception ex) { _error = ex.Message; } }
     private Task CreateAsync() => RunAsync(async () => { var s = await Documents.CreateAsync(Workbench.Project.Id, _name, _width, _height, _mode); _showCreate = false; await ActivateAsync(s.DocumentId); });
     private async Task ActivateAsync(Guid id)
@@ -96,7 +123,7 @@
         await FrameSets.SetActiveFrameSetAsync(Workbench.Project.Id, id); _documentId = id;
         _documents = await FrameSets.ListFrameSetsAsync(Workbench.Project.Id); await ChangedAsync();
     }
-    private Task SelectDocumentAsync(ChangeEventArgs e) => RunAsync(async () => { if (Guid.TryParse(e.Value?.ToString(), out var id)) await ActivateAsync(id); });
+    private Task SelectDocumentAsync(Guid id) => RunAsync(async () => { _showPicker = false; await ActivateAsync(id); });
     private Task SelectSourceAsync(ChangeEventArgs e) => RunAsync(async () => { if (Guid.TryParse(e.Value?.ToString(), out var id)) { _sourceId = id; await LoadRegionsAsync(); await OnSourceAssetChanged.InvokeAsync(id); } });
     private Task ImportAsync(InputFileChangeEventArgs e) => RunAsync(async () =>
     {

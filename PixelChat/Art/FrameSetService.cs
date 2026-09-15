@@ -668,7 +668,9 @@ public sealed partial class FrameSetService(
                 f.DefaultCellWidth,
                 f.DefaultCellHeight,
                 f.Frames.Count,
-                f.UpdatedAt))
+                f.UpdatedAt,
+                f.Revision,
+                f.Frames.OrderBy(frame => frame.Index).Select(frame => (Guid?)frame.Id).FirstOrDefault()))
             .ToListAsync(cancellationToken);
     }
 

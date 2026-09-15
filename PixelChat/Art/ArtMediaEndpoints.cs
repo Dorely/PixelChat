@@ -38,8 +38,18 @@ public static class ArtMediaEndpoints
             Results.File((await inspections.ReadArtifactAsync(projectId, artifactId, cancellationToken)).Data, "image/png"));
 
         group.MapGet("/sprites/{documentId:guid}/revisions/{revision:long}/frames/{frameId:guid}", async (
-            Guid projectId, Guid documentId, long revision, Guid frameId, PixelChat.Sprites.ISpriteDocumentService documents, CancellationToken cancellationToken) =>
-            Results.File(await documents.RenderAsync(projectId, documentId, frameId, revision, cancellationToken), "image/png"));
+            Guid projectId, Guid documentId, long revision, Guid frameId, bool? preview, PixelChat.Sprites.ISpriteDocumentService documents, CancellationToken cancellationToken) =>
+        {
+            var png = await documents.RenderAsync(projectId, documentId, frameId, revision, cancellationToken);
+            if (preview == true)
+            {
+                var raster = PixelChat.Sprites.SpriteRaster.Decode(png);
+                var scale = Math.Min(1d, 256d / Math.Max(raster.Width, raster.Height));
+                if (scale < 1)
+                    png = raster.Resize(Math.Max(1, (int)Math.Round(raster.Width * scale)), Math.Max(1, (int)Math.Round(raster.Height * scale)), "smooth").Encode().Data;
+            }
+            return Results.File(png, "image/png");
+        });
 
         group.MapGet("/assets/{assetId:guid}/preview", async (
             Guid projectId,

@@ -54,7 +54,9 @@ public sealed record FrameSetSummaryView(
     int DefaultCellWidth,
     int DefaultCellHeight,
     int FrameCount,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    long Revision,
+    Guid? PreviewFrameId);
 
 public sealed record CreateFrameSetFromAssetRequest(
     Guid SourceAssetId,
