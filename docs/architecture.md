@@ -156,9 +156,10 @@ dimensions, restore logical scale, crop provider padding, and normalize
 editable removable-background pixels. The complete provider result remains
 authoritative: PixelChat never pastes protected source pixels back over it.
 
-OpenAI account chat exposes Sol, Terra, Luna, and Astra through the shared OAuth
-connection. Built-in models become ready from valid credentials without a separate
-manual test; a selected unavailable model produces an error rather than fallback.
+OpenAI account chat exposes GPT-6 Astra, Sol, and Luna plus GPT-5.6 Sol,
+Terra, and Luna through the shared OAuth connection. Built-in models become
+ready from valid credentials without a separate manual test; a selected
+unavailable model produces an error rather than fallback.
 The chat selector persists model and effort (low, medium, high, xhigh, max).
 It occupies the provider/model position in the chat header. Home supplies a
 separate calculated-token used / limit display from the selected provider and
