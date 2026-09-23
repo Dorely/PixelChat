@@ -29,7 +29,7 @@
       "stopAtEntry": false,
       "env": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "ASPNETCORE_URLS": "http://localhost:1455"
+        "ASPNETCORE_URLS": "http://localhost:1457"
       },
       "serverReadyAction": {
         "action": "openExternally",

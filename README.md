@@ -55,7 +55,7 @@ Run the local browser-hosted app:
 dotnet run --project PixelChat
 ```
 
-The HTTP launch profile is pinned to `http://localhost:1455` so OpenAI account OAuth callbacks can use the same local redirect URI as the desktop shell.
+The HTTP launch profile uses `http://localhost:1457` so OpenAI account OAuth callbacks can use the same local redirect URI as the desktop shell.
 
 ## Desktop Development
 
@@ -67,14 +67,15 @@ dotnet run --project PixelChat -- --electron
 
 In VS Code, press F5 with the default `PixelChat Electron` launch configuration to build and debug the Electron desktop shell.
 
-Desktop binding is configured in `PixelChat/appsettings.json` under `Desktop:BindHost` and `Desktop:HttpPort`. Override the port in PowerShell with:
+Desktop binding is configured in `PixelChat/appsettings.json` under `Desktop:BindHost` and `Desktop:HttpPort`. The default is port 1457 because another local app may use 1455. OpenAI account sign-in uses a registered callback on the same port, so the desktop port cannot be chosen arbitrarily. To return to the other registered port for a run, set both values in PowerShell:
 
 ```powershell
-$env:Desktop__HttpPort = '1456'
+$env:Desktop__HttpPort = '1455'
+$env:Auth__OpenAIAccount__RedirectUri = 'http://localhost:1455/auth/callback'
 dotnet run --project PixelChat -- --electron
 ```
 
-Changing the port can break OpenAI account OAuth unless `Auth:OpenAIAccount:RedirectUri` is also changed to an accepted redirect URI.
+For browser debugging, change the browser launch URL to match the callback port as well.
 
 ## Packaging
 
