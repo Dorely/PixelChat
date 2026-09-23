@@ -9,6 +9,7 @@ namespace PixelChat.Llm;
 public sealed class OpenAIAccountChatClient : IChatClient
 {
     private const int MaxBufferedResponseAttempts = 2;
+    private const int MaxRequestSendAttempts = 2;
 
     private readonly HttpClient _httpClient;
     private readonly string _accessToken;
@@ -92,11 +93,6 @@ public sealed class OpenAIAccountChatClient : IChatClient
         var json = JsonSerializer.Serialize(body);
         var toolCount = options?.Tools?.Count ?? 0;
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, OpenAIAccountProvider.ResponsesEndpoint);
-        request.Content = new StringContent(json, Encoding.UTF8);
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-        OpenAIAccountProvider.ApplyCodexRequestHeaders(request, _accessToken, _accountId);
-
         _logger.LogDebug(
             "OpenAI account request: POST {Endpoint}, account={AccountId}, model={Model}, messages={MessageCount}, tools={ToolCount}, bodyChars={BodyChars}",
             OpenAIAccountProvider.ResponsesEndpoint,
@@ -106,7 +102,7 @@ public sealed class OpenAIAccountChatClient : IChatClient
             toolCount,
             json.Length);
 
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await SendRequestAsync(json, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -320,6 +316,29 @@ public sealed class OpenAIAccountChatClient : IChatClient
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+    private async Task<HttpResponseMessage> SendRequestAsync(string json, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, OpenAIAccountProvider.ResponsesEndpoint);
+            request.Content = new StringContent(json, Encoding.UTF8);
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            OpenAIAccountProvider.ApplyCodexRequestHeaders(request, _accessToken, _accountId);
+
+            try
+            {
+                return await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            }
+            catch (HttpRequestException ex) when (attempt < MaxRequestSendAttempts && !cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex,
+                    "OpenAI account chat request failed before response headers on attempt {Attempt}; retrying once. Model={Model}, bodyChars={BodyChars}",
+                    attempt, _model, json.Length);
+                await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
+            }
+        }
+    }
 
     public void Dispose()
     {

@@ -147,6 +147,9 @@ Provider-specific OAuth, Responses streaming, tool-call parsing, readiness
 checks, and image requests belong in the `Llm`, `Auth`, and provider adapter
 implementations. New providers should extend those boundaries rather than add
 provider conditionals throughout the UI or art services.
+The OpenAI account chat adapter retries one transport failure before response
+headers, rebuilding the HTTP request for the resend. It does not replay a stream
+after assistant output has begun.
 
 Asset and frame edit masks are provider guidance, not a local pixel lock.
 Canvas preparation may create or transform a mask for localized edits and
