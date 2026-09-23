@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using ElectronNET.API;
 using ElectronNET.API.Entities;
 using Microsoft.Data.Sqlite;
@@ -158,10 +160,53 @@ static string GetDesktopUrl(IConfiguration configuration)
     if (bindHost.Contains("://", StringComparison.Ordinal))
         throw new InvalidOperationException("Desktop:BindHost must be a host name only, without a URL scheme.");
 
+    bindHost = bindHost.Trim();
     var httpPort = configuration.GetValue<int?>("Desktop:HttpPort")
         ?? throw new InvalidOperationException("Desktop:HttpPort must be configured to run the desktop shell.");
     if (httpPort is <= 0 or > 65535)
         throw new InvalidOperationException("Desktop:HttpPort must be between 1 and 65535.");
 
-    return $"http://{bindHost.Trim()}:{httpPort}";
+    if (bindHost.Equals("localhost", StringComparison.OrdinalIgnoreCase) && (httpPort is 1455 or 1457))
+    {
+        var fallbackPort = httpPort == 1455 ? 1457 : 1455;
+        if (!IsLoopbackPortAvailable(httpPort))
+        {
+            if (!IsLoopbackPortAvailable(fallbackPort))
+                throw new IOException($"Desktop ports {httpPort} and {fallbackPort} are both unavailable. Close the app using one of them and restart PixelChat.");
+
+            Console.WriteLine($"Desktop port {httpPort} is unavailable; using {fallbackPort}.");
+            httpPort = fallbackPort;
+        }
+
+        configuration["Auth:OpenAIAccount:RedirectUri"] = $"http://localhost:{httpPort}/auth/callback";
+    }
+
+    return $"http://{bindHost}:{httpPort}";
+}
+
+static bool IsLoopbackPortAvailable(int port) =>
+    CanBindLoopback(IPAddress.Loopback, port)
+    && (!Socket.OSSupportsIPv6 || CanBindLoopback(IPAddress.IPv6Loopback, port));
+
+static bool CanBindLoopback(IPAddress address, int port)
+{
+    using var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
+    {
+        ExclusiveAddressUse = true
+    };
+
+    try
+    {
+        socket.Bind(new IPEndPoint(address, port));
+        return true;
+    }
+    catch (SocketException ex) when (address.AddressFamily == AddressFamily.InterNetworkV6
+        && ex.SocketErrorCode is SocketError.AddressFamilyNotSupported or SocketError.AddressNotAvailable)
+    {
+        return true;
+    }
+    catch (SocketException)
+    {
+        return false;
+    }
 }

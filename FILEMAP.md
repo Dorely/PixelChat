@@ -26,7 +26,7 @@
 | File | Description |
 |------|-------------|
 | `PixelChat.csproj` | `net10.0` Blazor Web project with Electron.NET, EF Core SQLite, Microsoft.Extensions.AI, OpenAI SDK, ImageSharp image decoding, SharpGLTF motion-guide support, SQLitePCLRaw bundle pin, runtime IDs, and warnings-as-errors. |
-| `Program.cs` | App host setup: Electron mode detection/window launch, Blazor Interactive Server, DI wiring, art/sprite services, EF migrations, static files/assets, OAuth/media endpoints, and routing. |
+| `Program.cs` | App host setup: Electron mode detection/window launch with registered-port fallback, Blazor Interactive Server, DI wiring, art/sprite services, EF migrations, static files/assets, OAuth/media endpoints, and routing. |
 | `appsettings.json` / `appsettings.Development.json` | Configuration for logging, desktop binding, OAuth redirect URI, SQLite, Blazor hub size, agent/tool and chat-compaction limits, image-generation defaults, sprite-animation defaults, and local background-removal sidecar/model defaults. |
 | `Properties/launchSettings.json` | Local launch profiles for browser-hosted HTTP and Electron desktop mode on `localhost:1457`. |
 | `Properties/electron-builder.json` | Electron/electron-builder packaging metadata for Windows, Linux, and macOS targets. |

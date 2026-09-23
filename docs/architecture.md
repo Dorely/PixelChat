@@ -246,14 +246,16 @@ credential vault or a claim of encryption at rest. Never log secrets,
 authorization codes, access tokens, refresh tokens, or sensitive provider
 payloads.
 
-The desktop and browser development profiles use `localhost:1457`. OpenAI
-account OAuth currently depends on the registered
-`http://localhost:1457/auth/callback` redirect. OpenAI's Codex OAuth client
-registers only specific loopback redirect ports, so an arbitrary desktop port
-would break new account sign-in. Port changes must update desktop binding,
-development profiles, and an accepted OAuth redirect configuration together.
-Keep the desktop host local-only unless a deliberate architecture and security
-change expands its exposure.
+The browser development profile uses `localhost:1457`. The desktop prefers
+`localhost:1457` and tries `localhost:1455` if the preferred loopback port is
+unavailable; both are registered Codex OAuth callback ports. The selected
+desktop port also sets the runtime OpenAI account redirect URI, including when
+an environment override selected one of those ports. If both are unavailable,
+startup reports that limitation before launching Electron. Arbitrary dynamic
+ports would break new account sign-in. Custom desktop ports still require a
+matching accepted OAuth redirect configuration. Keep the desktop host
+local-only unless a deliberate architecture and security change expands its
+exposure.
 
 ## Build and Validation
 

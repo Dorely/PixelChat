@@ -67,11 +67,10 @@ dotnet run --project PixelChat -- --electron
 
 In VS Code, press F5 with the default `PixelChat Electron` launch configuration to build and debug the Electron desktop shell.
 
-Desktop binding is configured in `PixelChat/appsettings.json` under `Desktop:BindHost` and `Desktop:HttpPort`. The default is port 1457 because another local app may use 1455. OpenAI account sign-in uses a registered callback on the same port, so the desktop port cannot be chosen arbitrarily. To return to the other registered port for a run, set both values in PowerShell:
+Desktop binding is configured in `PixelChat/appsettings.json` under `Desktop:BindHost` and `Desktop:HttpPort`. The desktop prefers port 1457 and uses 1455 if 1457 is occupied. It matches the OpenAI account callback to the selected port. Those are the registered callback ports, so an arbitrary dynamic port would break new account sign-in. If both are occupied, close one of the apps using them. To prefer 1455 for a run, set:
 
 ```powershell
 $env:Desktop__HttpPort = '1455'
-$env:Auth__OpenAIAccount__RedirectUri = 'http://localhost:1455/auth/callback'
 dotnet run --project PixelChat -- --electron
 ```
 
