@@ -711,9 +711,9 @@ else
 
             <div class="form-stack">
                 <label>Generation mode
-                    <select class="form-select" @bind="_bulkGenerate">
-                        <option value="false">Single prompt</option>
-                        <option value="true">Bulk — one recipe, multiple prompts</option>
+                    <select class="form-select" @bind="GenerationMode">
+                        <option value="single">Single prompt</option>
+                        <option value="bulk">Bulk — one recipe, multiple prompts</option>
                     </select>
                 </label>
                 @if (_bulkGenerate)
@@ -4695,6 +4695,12 @@ else
         }
 
         return count == 0 ? "No references selected" : $"{count} reference(s) selected";
+    }
+
+    private string GenerationMode
+    {
+        get => _bulkGenerate ? "bulk" : "single";
+        set => _bulkGenerate = value == "bulk";
     }
 
     private bool CanGenerate =>
