@@ -15,6 +15,7 @@ public class Project
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
     public ICollection<ArtAsset> Assets { get; set; } = [];
+    public ICollection<AssetCollection> AssetCollections { get; set; } = [];
     public ICollection<GenerationBatch> GenerationBatches { get; set; } = [];
     public ICollection<PromptRecipe> PromptRecipes { get; set; } = [];
     public ICollection<PromptRecipeVersion> PromptRecipeVersions { get; set; } = [];

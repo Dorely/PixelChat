@@ -16,6 +16,7 @@ The implemented workbench includes project-scoped assistant chat, image
 generation and editing, visual review and asset lifecycle management, reusable
 art and animation recipes, source-region and frame-set sprite workflows,
 deterministic sprite-sheet construction, animation guides, and export cleanup.
+Assets also has project-scoped collections for kept images and guides.
 `VISION.md` remains the product direction and is not proof that every future
 workflow is complete.
 
@@ -68,6 +69,13 @@ fail without overwriting newer work. UI and assistant sprite
 mutations should pass through `ISpriteWorkspaceActionService` when visible focus
 and workspace synchronization must accompany the underlying mutation.
 
+Each kept asset has zero or one collection. Collection names are unique within
+a project, and assignment validates both the collection and all selected assets
+against that project. Rejecting an asset clears its membership; deleting a
+collection keeps its assets as Unfiled. The collection media route streams a ZIP
+of stored image bytes with unique, safe entry names. It does not apply the
+per-asset export cleanup pipeline or use separate raw provider bytes.
+
 `IAssistantChatService` owns a scoped assistant turn and tool loop.
 `IWorkspaceChatRuntime` is app-process state that allows a turn to continue
 across renderer reloads, owns cancellable conversation compaction, and
@@ -92,6 +100,14 @@ several distinct prompts with one output each. Recipe bulk batches accept ordere
 duplicate-preserving prompts, each with 1â€“4 outputs, without a fixed prompt-count
 cap. The Generate workspace has Single/Bulk modes and art recipes offer Bulk
 generate. Prompt entry, output cards, and pending review use pagination.
+
+Generate and Edit UI submissions persist a prompt-excerpt naming mode on the
+batch; assistant submissions retain existing explicit-name behavior. A shared
+formatter takes the first five submitted prompt words (up to 60 characters),
+then appends the global batch output letter (`A` through `Z`, then `AA`). Queued
+cards, saved labels, and default filenames use the same result through retries.
+Renaming an asset also updates its default filename; historical labels remain
+unchanged until edited.
 
 Submission captures recipe guidance/version, reference bytes/order, image model,
 quality, format, and background. Recipe notes remain excluded. A forward migration
@@ -123,7 +139,7 @@ Recipes are maintained current creative guidance rather than cumulative project
 documentation. Their fields have distinct ownership:
 
 - The prompt is concise model-facing guidance that should apply to every future
-  use within the recipe's scope. Art prompts use only applicable visual
+use within the recipe's scope. Art prompts use only applicable visual
   language, subject-family, composition, and production-use blocks; animation
   prompts use only applicable motion, layout, continuity, and timing blocks.
 - Notes are model-excluded current working memory for active direction,
@@ -299,6 +315,8 @@ release. Run `dotnet test PixelChat.Tests/PixelChat.Tests.csproj` for raster,
 transaction, history, conflict, and migration fixtures. Native migration first
 adds the document tables, materializes existing rendered cells, and only then
 drops mutable bitmap columns. Failed materialization leaves those columns intact.
+The materialization bridge projects only historical asset bytes so later asset
+columns do not break an upgrade paused at that older schema.
 Cross-platform runtime identifiers and successful compilation
 do not validate Electron packaging, OAuth, provider calls, image generation,
 rembg provisioning or acceleration, or OS-specific behavior. Exercise the

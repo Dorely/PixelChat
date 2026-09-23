@@ -330,6 +330,13 @@ else
     private string _editorTool = "mask";
     private string _assetOrganization = "latest";
     private string _assetLibraryView = "library";
+    private bool _collectionShowAll = true;
+    private Guid? _selectedCollectionId;
+    private readonly HashSet<Guid> _selectedCollectionAssetIds = [];
+    private string _newCollectionName = string.Empty;
+    private string _renameCollectionName = string.Empty;
+    private bool _renamingCollection;
+    private string _moveToCollectionIdText = string.Empty;
     private const int AssetGridMinColumnWidthPixels = 220;
     private const int AssetGridGapPixels = 14;
     private const int AssetGridVirtualRowHeightPixels = 430;
@@ -495,6 +502,12 @@ else
             _recipeAttachments.RemoveAll(attachment => !allAssetIds.Contains(attachment.AssetId));
             _animationRecipeAttachments.RemoveAll(attachment => !allAssetIds.Contains(attachment.AssetId));
             _selectedRejectedAssetIds.RemoveWhere(assetId => !_workbench.RejectedAssets.Any(asset => asset.Id == assetId));
+            _selectedCollectionAssetIds.RemoveWhere(assetId => !_workbench.Assets.Any(asset => asset.Id == assetId));
+            if (_selectedCollectionId is Guid selectedCollectionId && !_workbench.Collections.Any(collection => collection.Id == selectedCollectionId))
+            {
+                _selectedCollectionId = null;
+                _collectionShowAll = true;
+            }
             _bulkDeleteCandidateIds.RemoveWhere(assetId => !_workbench.RejectedAssets.Any(asset => asset.Id == assetId));
             await RefreshRecipeEditorAfterWorkbenchReloadAsync();
             await LoadReviewFrameSetsAsync();
@@ -636,6 +649,11 @@ else
         _resetComposerKey++;
         _loadedEditorAssetId = null;
         _draftReferenceAssetIds.Clear();
+        _selectedCollectionAssetIds.Clear();
+        _selectedCollectionId = null;
+        _collectionShowAll = true;
+        _renamingCollection = false;
+        _moveToCollectionIdText = string.Empty;
         _editAssetId = null;
         _assetDeleteCandidateId = null;
         ResetExportModal();
@@ -650,6 +668,11 @@ else
         var project = await Workflow.CreateProjectAsync(_newProjectName);
         _newProjectName = string.Empty;
         _projectIdText = project.Id.ToString();
+        _selectedCollectionAssetIds.Clear();
+        _selectedCollectionId = null;
+        _collectionShowAll = true;
+        _renamingCollection = false;
+        _moveToCollectionIdText = string.Empty;
         _input = string.Empty;
         _pendingChatImages.Clear();
         _resetComposerKey++;
@@ -960,30 +983,30 @@ else
                 }
                 else if (outputErrorsByIndex.TryGetValue(index, out var outputError))
                 {
-                    @RenderGenerationErrorCard(outputError, promptSpec, activeBatch.Label)
+                    @RenderGenerationErrorCard(outputError, promptSpec, activeBatch.Label, activeBatch.AssetNamingMode)
                 }
                 else
                 {
                     var outputState = ResolveOutputState(index, outputStatesByIndex, runtimeOutputsByIndex);
                     if (outputState.Status == GenerationOutputStatus.Deleted)
                     {
-                        @RenderGenerationDeletedCard(index, promptSpec, activeBatch.Label)
+                        @RenderGenerationDeletedCard(index, promptSpec, activeBatch.Label, activeBatch.AssetNamingMode)
                     }
                     else if (IsFailedOutputStatus(outputState.Status))
                     {
-                        @RenderGenerationErrorCard(OutputErrorFromState(outputState, runtimeOutputsByIndex.GetValueOrDefault(index)), promptSpec, activeBatch.Label)
+                        @RenderGenerationErrorCard(OutputErrorFromState(outputState, runtimeOutputsByIndex.GetValueOrDefault(index)), promptSpec, activeBatch.Label, activeBatch.AssetNamingMode)
                     }
                     else if (outputErrorsByIndex.TryGetValue(index, out var persistedOutputError))
                     {
-                        @RenderGenerationErrorCard(persistedOutputError, promptSpec, activeBatch.Label)
+                        @RenderGenerationErrorCard(persistedOutputError, promptSpec, activeBatch.Label, activeBatch.AssetNamingMode)
                     }
                     else if (IsTerminalGenerationStatus(activeBatch.Status))
                     {
-                        @RenderGenerationErrorCard(new GenerationOutputErrorView(index, MissingOutputError(activeBatch.Status)), promptSpec, activeBatch.Label)
+                        @RenderGenerationErrorCard(new GenerationOutputErrorView(index, MissingOutputError(activeBatch.Status)), promptSpec, activeBatch.Label, activeBatch.AssetNamingMode)
                     }
                     else
                     {
-                        @RenderGenerationPlaceholderCard(outputState, runtimeOutputsByIndex.GetValueOrDefault(index), promptSpec, activeBatch.Label)
+                        @RenderGenerationPlaceholderCard(outputState, runtimeOutputsByIndex.GetValueOrDefault(index), promptSpec, activeBatch.Label, activeBatch.AssetNamingMode)
                     }
                 }
             }
@@ -1867,6 +1890,7 @@ else
                             <button type="button" class="@AssetOrganizationClass("latest")" @onclick='() => SetAssetOrganization("latest")'>Latest</button>
                             <button type="button" class="@AssetOrganizationClass("recipe")" @onclick='() => SetAssetOrganization("recipe")'>Art Recipe</button>
                             <button type="button" class="@AssetOrganizationClass("guides")" @onclick='() => SetAssetOrganization("guides")'>Guides</button>
+                            <button type="button" class="@AssetOrganizationClass("collections")" @onclick='() => SetAssetOrganization("collections")'>Collections</button>
                         </div>
                         <button type="button"
                                 class="@AssetDeleteModeClass()"
@@ -1892,7 +1916,18 @@ else
             }
             else if (_workbench.Assets.Count == 0)
             {
-                <div class="empty-state">No assets yet. Generate or import images to build the library.</div>
+                @if (_assetOrganization == "collections")
+                {
+                    @RenderCollectionsWorkspace()
+                }
+                else
+                {
+                    <div class="empty-state">No assets yet. Generate or import images to build the library.</div>
+                }
+            }
+            else if (_assetOrganization == "collections")
+            {
+                @RenderCollectionsWorkspace()
             }
             else if (_assetOrganization == "recipe")
             {
@@ -1928,6 +1963,76 @@ else
                     @RenderVirtualAssetGrid(latestAssets)
                 }
             }
+        </div>
+    };
+
+    private RenderFragment RenderCollectionsWorkspace() => __builder =>
+    {
+        var visible = CollectionVisibleAssets().ToList();
+        var selectedCollection = _selectedCollectionId is Guid id
+            ? _workbench!.Collections.FirstOrDefault(collection => collection.Id == id)
+            : null;
+        <div class="collection-workspace">
+            <aside class="collection-sidebar">
+                <div class="section-title">Collections</div>
+                <button type="button" class="@CollectionFilterClass(true, null)" @onclick="() => SelectCollection(true, null)">All assets (@_workbench!.Assets.Count)</button>
+                <button type="button" class="@CollectionFilterClass(false, null)" @onclick="() => SelectCollection(false, null)">Unfiled assets (@_workbench.Assets.Count(asset => asset.CollectionId is null))</button>
+                @foreach (var collection in _workbench.Collections)
+                {
+                    <button type="button" class="@CollectionFilterClass(false, collection.Id)" @onclick="() => SelectCollection(false, collection.Id)">@collection.Name (@collection.AssetCount)</button>
+                }
+                <div class="collection-create">
+                    <input class="form-control form-control-sm" aria-label="New collection name" placeholder="New collection" @bind="_newCollectionName" />
+                    <button type="button" class="btn btn-sm btn-primary" disabled="@string.IsNullOrWhiteSpace(_newCollectionName)" @onclick="CreateCollectionAsync">Create</button>
+                </div>
+            </aside>
+            <div class="collection-content">
+                <div class="collection-toolbar">
+                    <strong>@(_collectionShowAll ? "All assets" : selectedCollection?.Name ?? "Unfiled")</strong>
+                    @if (selectedCollection is not null)
+                    {
+                        @if (selectedCollection.AssetCount == 0)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-primary" disabled>Export ZIP</button>
+                        }
+                        else
+                        {
+                            <a class="btn btn-sm btn-outline-primary" href="@CollectionDownloadUrl(selectedCollection.Id)" download>Export ZIP</a>
+                        }
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="BeginRenameCollection">Rename</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="DeleteSelectedCollectionAsync">Delete collection</button>
+                    }
+                </div>
+                @if (_renamingCollection && selectedCollection is not null)
+                {
+                    <div class="collection-rename">
+                        <input class="form-control form-control-sm" aria-label="Collection name" @bind="_renameCollectionName" />
+                        <button type="button" class="btn btn-sm btn-primary" disabled="@string.IsNullOrWhiteSpace(_renameCollectionName)" @onclick="RenameSelectedCollectionAsync">Save</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _renamingCollection = false">Cancel</button>
+                    </div>
+                }
+                <div class="collection-bulk-bar">
+                    <span>@_selectedCollectionAssetIds.Count selected</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(visible.Count == 0)" @onclick="() => SelectAllCollectionAssets(visible)">Select all shown</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_selectedCollectionAssetIds.Count == 0)" @onclick="() => _selectedCollectionAssetIds.Clear()">Clear</button>
+                    <select class="form-select form-select-sm" aria-label="Destination collection" @bind="_moveToCollectionIdText">
+                        <option value="">Unfiled</option>
+                        @foreach (var collection in _workbench.Collections)
+                        {
+                            <option value="@collection.Id">@collection.Name</option>
+                        }
+                    </select>
+                    <button type="button" class="btn btn-sm btn-primary" disabled="@(_selectedCollectionAssetIds.Count == 0)" @onclick="MoveSelectedCollectionAssetsAsync">Move selected</button>
+                </div>
+                @if (visible.Count == 0)
+                {
+                    <div class="empty-state">No assets in this view.</div>
+                }
+                else
+                {
+                    @RenderVirtualAssetGrid(visible)
+                }
+            </div>
         </div>
     };
 
@@ -1994,6 +2099,13 @@ else
     private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact, bool guideCard = false, Guid? reviewItemId = null, bool allowReject = false) => __builder =>
     {
         <article class="asset-card @(compact ? "asset-card-compact" : "")" @key="asset.Id">
+            @if (_assetOrganization == "collections" && _activeWorkspaceMode == WorkspaceMode.Assets && asset.ReviewStatus == AssetReviewStatus.Kept)
+            {
+                <label class="collection-asset-select">
+                    <input type="checkbox" checked="@_selectedCollectionAssetIds.Contains(asset.Id)" @onchange="args => SetCollectionAssetSelected(asset.Id, args.Value is true)" />
+                    <span>Select</span>
+                </label>
+            }
             @if (!guideCard && asset.ReviewStatus == AssetReviewStatus.Kept)
             {
                 <button type="button"
@@ -2038,7 +2150,13 @@ else
                 }
                 @if (!compact)
                 {
-                    <p>@(string.IsNullOrWhiteSpace(asset.Prompt) ? FormatDimensions(asset) : asset.Prompt)</p>
+                    <p>
+                        @if (_assetOrganization == "collections" && _activeWorkspaceMode == WorkspaceMode.Assets)
+                        {
+                            <small class="collection-asset-location">@CollectionNameForAsset(asset)</small><br />
+                        }
+                        @(string.IsNullOrWhiteSpace(asset.Prompt) ? FormatDimensions(asset) : asset.Prompt)
+                    </p>
                 }
                 <div class="asset-actions">
                     @if (asset.ReviewStatus == AssetReviewStatus.Kept)
@@ -2104,7 +2222,8 @@ else
         GenerationOutputStateView outputState,
         ImageGenerationOutputRuntimeView? runtimeOutput,
         GenerationPromptSpec? promptSpec,
-        string batchLabel) => __builder =>
+        string batchLabel,
+        GenerationAssetNamingMode namingMode) => __builder =>
     {
         var status = runtimeOutput?.Status ?? outputState.Status;
         var isGenerating = status is GenerationOutputStatus.Running or GenerationOutputStatus.Generating;
@@ -2123,15 +2242,16 @@ else
                     ? "Waiting for earlier image requests."
                     : "Waiting for the image request to complete.";
         var partialImageDataUrl = runtimeOutput?.PartialImageDataUrl;
+        var outputName = GenerationOutputLabel(promptSpec, batchLabel, outputState.OutputIndex, namingMode);
         <article class="asset-card generation-placeholder-card">
             @if (!string.IsNullOrWhiteSpace(partialImageDataUrl))
             {
                 <button type="button"
                         class="generation-partial-frame"
-                        title="@($"Preview partial image {LabelForIndex(outputState.OutputIndex)}")"
-                        aria-label="@($"Preview partial image {LabelForIndex(outputState.OutputIndex)}")"
-                        @onclick="() => OpenGenerationPartialReviewPreview(outputState, partialImageDataUrl, label)">
-                    <img src="@partialImageDataUrl" alt="@($"Partial preview for Image {LabelForIndex(outputState.OutputIndex)}")" />
+                        title="@($"Preview partial {outputName}")"
+                        aria-label="@($"Preview partial {outputName}")"
+                        @onclick="() => OpenGenerationPartialReviewPreview(outputName, partialImageDataUrl, label)">
+                    <img src="@partialImageDataUrl" alt="@($"Partial preview for {outputName}")" />
                     @if (isGenerating)
                     {
                         <div class="generation-partial-spinner" aria-hidden="true"></div>
@@ -2148,7 +2268,7 @@ else
             }
             <div class="asset-card-body">
                 <div class="asset-title-row">
-                    <strong>@GenerationOutputLabel(promptSpec, batchLabel, outputState.OutputIndex)</strong>
+                    <strong>@outputName</strong>
                     <span>@label</span>
                 </div>
                 @if (!string.IsNullOrWhiteSpace(promptSpec?.Prompt))
@@ -2163,13 +2283,14 @@ else
     private RenderFragment RenderGenerationErrorCard(
         GenerationOutputErrorView outputError,
         GenerationPromptSpec? promptSpec,
-        string batchLabel) => __builder =>
+        string batchLabel,
+        GenerationAssetNamingMode namingMode) => __builder =>
     {
         <article class="asset-card generation-error-card">
             <div class="generation-error-mark">!</div>
             <div class="asset-card-body">
                 <div class="asset-title-row">
-                    <strong>@GenerationOutputLabel(promptSpec, batchLabel, outputError.OutputIndex)</strong>
+                    <strong>@GenerationOutputLabel(promptSpec, batchLabel, outputError.OutputIndex, namingMode)</strong>
                     <span>Failed</span>
                 </div>
                 @if (!string.IsNullOrWhiteSpace(promptSpec?.Prompt))
@@ -2185,13 +2306,13 @@ else
         </article>
     };
 
-    private RenderFragment RenderGenerationDeletedCard(int outputIndex, GenerationPromptSpec? promptSpec, string batchLabel) => __builder =>
+    private RenderFragment RenderGenerationDeletedCard(int outputIndex, GenerationPromptSpec? promptSpec, string batchLabel, GenerationAssetNamingMode namingMode) => __builder =>
     {
         <article class="asset-card generation-deleted-card">
             <div class="generation-deleted-mark">×</div>
             <div class="asset-card-body">
                 <div class="asset-title-row">
-                    <strong>@GenerationOutputLabel(promptSpec, batchLabel, outputIndex)</strong>
+                    <strong>@GenerationOutputLabel(promptSpec, batchLabel, outputIndex, namingMode)</strong>
                     <span>Deleted</span>
                 </div>
                 @if (!string.IsNullOrWhiteSpace(promptSpec?.Prompt))
@@ -2346,7 +2467,7 @@ else
                 SelectedGenerateRecipeIdOrNull(),
                 SelectedGenerateAnimationRecipeIdOrNull(),
                 CurrentReferenceAssetIds(),
-                _workbench.Project.ActiveBatchId, IsBulk: _bulkGenerate));
+                _workbench.Project.ActiveBatchId, IsBulk: _bulkGenerate, AssetNamingMode: GenerationAssetNamingMode.PromptExcerpt));
             await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Batches);
             Logger.LogDebug(
                 "Image generation background batch scheduled: projectId={ProjectId}, batchId={BatchId}, count={Count}, size={Size}, promptChars={PromptChars}, referenceImages={ReferenceImageCount}",
@@ -2758,8 +2879,8 @@ else
             inspection ? description : ChatVisualSubtitle(visual), inspection);
     }
 
-    private void OpenGenerationPartialReviewPreview(GenerationOutputStateView outputState, string imageUrl, string statusLabel) =>
-        OpenImageReviewPreview($"Image {LabelForIndex(outputState.OutputIndex)} partial", imageUrl, statusLabel);
+    private void OpenGenerationPartialReviewPreview(string outputName, string imageUrl, string statusLabel) =>
+        OpenImageReviewPreview($"{outputName} partial", imageUrl, statusLabel);
 
     private void OpenAssetReviewPreview(ArtAssetView asset) =>
         OpenImageReviewPreview(asset.Label, asset.FullImageUrl, FormatDimensions(asset));
@@ -3102,7 +3223,8 @@ else
                 _editCanvasPreparationId is null ? maskDataUrl : null,
                 CurrentReferenceAssetIds().Where(id => id != asset.Id).ToList(),
                 CanvasOptions: _editCanvasPreparationId is null ? CurrentEditCanvasOptions() : null,
-                CanvasPreparationId: _editCanvasPreparationId, Background: _editBackground));
+                CanvasPreparationId: _editCanvasPreparationId, Background: _editBackground,
+                AssetNamingMode: GenerationAssetNamingMode.PromptExcerpt));
             InvalidateEditCanvasPreview();
             await SetWorkspaceModeAndReloadAsync(WorkspaceMode.Batches);
             Logger.LogDebug(
@@ -4360,7 +4482,9 @@ else
 
     private WorkspaceAssetsVisibleState BuildAssetsVisibleState() =>
         new(
-            _assetLibraryView == "rejected" ? "rejected" : _assetOrganization,
+            _assetLibraryView == "rejected" ? "rejected" : _assetOrganization == "collections"
+                ? _collectionShowAll ? "collections:all" : $"collections:{_selectedCollectionId?.ToString("D") ?? "unfiled"}"
+                : _assetOrganization,
             VisibleAssetsForSnapshot().Select(AssetSummary).ToList());
 
     private IReadOnlyList<ArtAssetView> VisibleAssetsForSnapshot()
@@ -4372,6 +4496,8 @@ else
                 ? _workbench.RejectedAssets.OrderByDescending(asset => asset.CreatedAt)
                 : _assetOrganization == "guides"
                 ? GuideAssetsByLatest()
+                : _assetOrganization == "collections"
+                    ? CollectionVisibleAssets()
                 : _assetOrganization == "recipe"
                     ? AssetRecipeGroups().SelectMany(group => group.Assets)
                     : AssetsByLatest())
@@ -4399,7 +4525,8 @@ else
             asset.ReviewStatus,
             asset.CurrentReviewDecision?.Decision,
             asset.CurrentReviewDecision?.Actor,
-            asset.CurrentReviewDecision?.Reason ?? string.Empty);
+            asset.CurrentReviewDecision?.Reason ?? string.Empty,
+            asset.CollectionId);
 
     private static WorkspaceBatchSummary BatchSummary(GenerationBatchView batch) =>
         new(
@@ -4670,8 +4797,117 @@ else
         return groups;
     }
 
-    private void SetAssetOrganization(string organization) =>
-        _assetOrganization = organization is "recipe" or "guides" ? organization : "latest";
+    private void SetAssetOrganization(string organization)
+    {
+        _assetOrganization = organization is "recipe" or "guides" or "collections" ? organization : "latest";
+        _selectedCollectionAssetIds.Clear();
+    }
+
+    private IEnumerable<ArtAssetView> CollectionVisibleAssets() =>
+        (_workbench?.Assets ?? [])
+            .Where(asset => _collectionShowAll || asset.CollectionId == _selectedCollectionId)
+            .OrderByDescending(asset => asset.IsFavorite)
+            .ThenByDescending(asset => asset.CreatedAt);
+
+    private string CollectionNameForAsset(ArtAssetView asset) =>
+        asset.CollectionId is Guid id
+            ? _workbench?.Collections.FirstOrDefault(collection => collection.Id == id)?.Name ?? "Unfiled"
+            : "Unfiled";
+
+    private string CollectionFilterClass(bool all, Guid? collectionId) =>
+        _collectionShowAll == all && (all || _selectedCollectionId == collectionId)
+            ? "collection-filter is-active"
+            : "collection-filter";
+
+    private void SelectCollection(bool all, Guid? collectionId)
+    {
+        _collectionShowAll = all;
+        _selectedCollectionId = all ? null : collectionId;
+        _renamingCollection = false;
+        _selectedCollectionAssetIds.Clear();
+    }
+
+    private void SetCollectionAssetSelected(Guid assetId, bool selected)
+    {
+        if (selected)
+            _selectedCollectionAssetIds.Add(assetId);
+        else
+            _selectedCollectionAssetIds.Remove(assetId);
+    }
+
+    private void SelectAllCollectionAssets(IReadOnlyList<ArtAssetView> assets) =>
+        _selectedCollectionAssetIds.UnionWith(assets.Select(asset => asset.Id));
+
+    private async Task CreateCollectionAsync()
+    {
+        if (_workbench is null)
+            return;
+        await RunWorkflowAsync("Creating collection...", async () =>
+        {
+            var created = await Workflow.CreateCollectionAsync(_workbench.Project.Id, _newCollectionName);
+            _newCollectionName = string.Empty;
+            SelectCollection(false, created.Id);
+        });
+    }
+
+    private void BeginRenameCollection()
+    {
+        var collection = _workbench?.Collections.FirstOrDefault(item => item.Id == _selectedCollectionId);
+        if (collection is null)
+            return;
+        _renameCollectionName = collection.Name;
+        _renamingCollection = true;
+    }
+
+    private async Task RenameSelectedCollectionAsync()
+    {
+        if (_workbench is null || _selectedCollectionId is not Guid collectionId)
+            return;
+        await RunWorkflowAsync("Renaming collection...", async () =>
+        {
+            await Workflow.RenameCollectionAsync(_workbench.Project.Id, collectionId, _renameCollectionName);
+            _renamingCollection = false;
+        });
+    }
+
+    private async Task DeleteSelectedCollectionAsync()
+    {
+        if (_workbench is null || _selectedCollectionId is not Guid collectionId)
+            return;
+        await RunWorkflowAsync("Deleting collection...", async () =>
+        {
+            await Workflow.DeleteCollectionAsync(_workbench.Project.Id, collectionId);
+            if (_moveToCollectionIdText == collectionId.ToString())
+                _moveToCollectionIdText = string.Empty;
+            SelectCollection(false, null);
+        });
+    }
+
+    private async Task MoveSelectedCollectionAssetsAsync()
+    {
+        if (_workbench is null || _selectedCollectionAssetIds.Count == 0)
+            return;
+        Guid? collectionId = null;
+        if (!string.IsNullOrWhiteSpace(_moveToCollectionIdText))
+        {
+            if (!Guid.TryParse(_moveToCollectionIdText, out var parsed)
+                || !_workbench.Collections.Any(collection => collection.Id == parsed))
+            {
+                _error = "Choose an available destination collection.";
+                return;
+            }
+            collectionId = parsed;
+        }
+        var assetIds = _selectedCollectionAssetIds.ToList();
+        await RunWorkflowAsync("Moving assets...", async () =>
+        {
+            await Workflow.MoveAssetsToCollectionAsync(_workbench.Project.Id, assetIds, collectionId);
+            _selectedCollectionAssetIds.Clear();
+        });
+    }
+
+    private string CollectionDownloadUrl(Guid collectionId) =>
+        $"/media/projects/{_workbench!.Project.Id:D}/collections/{collectionId:D}/download";
 
     private void SetAssetLibraryView(string view)
     {
@@ -5057,8 +5293,10 @@ else
         return null;
     }
 
-    private static string GenerationOutputLabel(GenerationPromptSpec? promptSpec, string batchLabel, int outputIndex)
+    private static string GenerationOutputLabel(GenerationPromptSpec? promptSpec, string batchLabel, int outputIndex, GenerationAssetNamingMode namingMode)
     {
+        if (namingMode == GenerationAssetNamingMode.PromptExcerpt && promptSpec is not null)
+            return AssetOutputNaming.PromptLabel(promptSpec.Prompt, outputIndex);
         if (!string.IsNullOrWhiteSpace(promptSpec?.OutputName))
         {
             return promptSpec.Count > 1

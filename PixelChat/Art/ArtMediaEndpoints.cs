@@ -27,6 +27,26 @@ public static class ArtMediaEndpoints
         });
 
         var group = app.MapGroup("/media/projects/{projectId:guid}");
+        group.MapGet("/collections/{collectionId:guid}/download", async (
+            Guid projectId, Guid collectionId, IArtWorkflowService workflow, CancellationToken cancellationToken) =>
+        {
+            AssetCollectionView collection;
+            try
+            {
+                collection = await workflow.GetCollectionForExportAsync(projectId, collectionId, cancellationToken);
+            }
+            catch (InvalidOperationException)
+            {
+                return Results.NotFound();
+            }
+            if (collection.AssetCount == 0)
+                return Results.BadRequest("Collection is empty.");
+            var fileName = AssetOutputNaming.SafeStem(collection.Name, "collection") + ".zip";
+            return Results.Stream(
+                stream => workflow.WriteCollectionZipAsync(projectId, collectionId, stream, cancellationToken),
+                "application/zip",
+                fileDownloadName: fileName);
+        });
         group.MapGet("/sprite-exports/{exportId:guid}", async (
             Guid projectId, Guid exportId, bool? download, PixelChat.Sprites.SpriteExportService exports, CancellationToken cancellationToken) =>
         {

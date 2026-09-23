@@ -18,6 +18,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
     public DbSet<StoredSecret> StoredSecrets => Set<StoredSecret>();
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<ArtAsset> ArtAssets => Set<ArtAsset>();
+    public DbSet<AssetCollection> AssetCollections => Set<AssetCollection>();
     public DbSet<AssetReviewDecision> AssetReviewDecisions => Set<AssetReviewDecision>();
     public DbSet<BackgroundRemovalExportCache> BackgroundRemovalExportCaches => Set<BackgroundRemovalExportCache>();
     public DbSet<ExportStepCache> ExportStepCaches => Set<ExportStepCache>();
@@ -155,6 +156,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
             entity.HasIndex(e => new { e.ProjectId, e.ReviewStatus, e.CreatedAt });
             entity.HasIndex(e => e.ParentAssetId);
             entity.HasIndex(e => e.SourceBatchId);
+            entity.HasIndex(e => new { e.ProjectId, e.CollectionId });
             entity.HasIndex(e => e.SourceAnimationRecipeId).IsUnique(false);
             entity.Property(e => e.Kind).HasConversion<string>();
             entity.Property(e => e.ReviewStatus).HasConversion<string>().HasDefaultValue(AssetReviewStatus.Kept);
@@ -163,6 +165,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .WithMany(p => p.Assets)
                 .HasForeignKey(e => e.ProjectId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Collection)
+                .WithMany(c => c.Assets)
+                .HasForeignKey(e => e.CollectionId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             entity.HasOne(e => e.ParentAsset)
                 .WithMany(e => e.ChildAssets)
@@ -183,6 +190,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
                 .WithMany()
                 .HasForeignKey(e => e.SourceAnimationRecipeId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AssetCollection>(entity =>
+        {
+            entity.HasIndex(e => new { e.ProjectId, e.Name }).IsUnique();
+            entity.Property(e => e.Name).UseCollation("NOCASE");
+            entity.HasOne(e => e.Project)
+                .WithMany(p => p.AssetCollections)
+                .HasForeignKey(e => e.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<AssetReviewDecision>(entity =>
@@ -259,6 +276,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, ILogger<AppDbC
         });
         modelBuilder.Entity<GenerationBatch>(entity =>
         {
+            entity.Property(e => e.AssetNamingMode).HasConversion<string>().HasDefaultValue(GenerationAssetNamingMode.Existing);
             entity.Navigation(e => e.Prompts).AutoInclude();
             entity.Navigation(e => e.Outputs).AutoInclude();
             entity.HasIndex(e => new { e.ProjectId, e.CreatedAt });

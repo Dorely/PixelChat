@@ -7,6 +7,9 @@ public class ArtAsset
     public Guid ProjectId { get; set; }
     public Project Project { get; set; } = null!;
 
+    public Guid? CollectionId { get; set; }
+    public AssetCollection? Collection { get; set; }
+
     public required string Label { get; set; }
     public string FileName { get; set; } = string.Empty;
     public ArtAssetKind Kind { get; set; }

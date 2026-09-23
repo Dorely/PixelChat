@@ -13,6 +13,12 @@ public interface IArtWorkflowService
     Task<ImageBinaryView> GetMaskImageAsync(Guid projectId, Guid maskId, CancellationToken cancellationToken = default);
     Task<ImageBinaryView> GetChatVisualImageAsync(Guid projectId, Guid visualId, bool preview, CancellationToken cancellationToken = default);
     Task<ArtAssetExportView> GetAssetForExportAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
+    Task<AssetCollectionView> CreateCollectionAsync(Guid projectId, string name, CancellationToken cancellationToken = default);
+    Task<AssetCollectionView> RenameCollectionAsync(Guid projectId, Guid collectionId, string name, CancellationToken cancellationToken = default);
+    Task DeleteCollectionAsync(Guid projectId, Guid collectionId, CancellationToken cancellationToken = default);
+    Task MoveAssetsToCollectionAsync(Guid projectId, IReadOnlyList<Guid> assetIds, Guid? collectionId, CancellationToken cancellationToken = default);
+    Task<AssetCollectionView> GetCollectionForExportAsync(Guid projectId, Guid collectionId, CancellationToken cancellationToken = default);
+    Task WriteCollectionZipAsync(Guid projectId, Guid collectionId, Stream destination, CancellationToken cancellationToken = default);
     Task<string> ListAssetsJsonAsync(Guid projectId, string? kind = null, string? query = null, bool? favorite = null, int? limit = null, string? reviewStatus = null, CancellationToken cancellationToken = default);
     Task<string> ReadAssetJsonAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken = default);
     Task<string> ListPromptRecipesJsonAsync(Guid projectId, string? query = null, int? limit = null, CancellationToken cancellationToken = default);

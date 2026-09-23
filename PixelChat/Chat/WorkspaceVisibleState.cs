@@ -180,7 +180,8 @@ public sealed record WorkspaceAssetSummary(
     AssetReviewStatus ReviewStatus = AssetReviewStatus.Kept,
     AssetReviewDecisionKind? ReviewDecision = null,
     AssetReviewActor? ReviewDecisionActor = null,
-    string ReviewDecisionReason = "");
+    string ReviewDecisionReason = "",
+    Guid? CollectionId = null);
 
 public sealed record WorkspaceBatchSummary(
     Guid Id,

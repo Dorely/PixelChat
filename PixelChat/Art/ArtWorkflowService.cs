@@ -37,6 +37,7 @@ public sealed partial class ArtWorkflowService(
                 a.ProjectId,
                 a.Label,
                 a.FileName,
+                a.CollectionId,
                 a.Kind,
                 a.ContentType,
                 a.Width,
@@ -123,6 +124,11 @@ public sealed partial class ArtWorkflowService(
             .OrderByDescending(a => a.CreatedAt)
             .Select(AssetListProjection)
             .ToListAsync(cancellationToken);
+        var collections = await db.AssetCollections.AsNoTracking()
+            .Where(c => c.ProjectId == selected.Id)
+            .OrderBy(c => c.Name)
+            .Select(c => new AssetCollectionView(c.Id, c.Name, c.Assets.Count(a => a.ReviewStatus == AssetReviewStatus.Kept)))
+            .ToListAsync(cancellationToken);
         var batches = await db.GenerationBatches.AsSplitQuery()
             .AsNoTracking()
             .Where(b => b.ProjectId == selected.Id)
@@ -150,6 +156,7 @@ public sealed partial class ArtWorkflowService(
                 b.Error,
                 b.Outputs.ToList(),
                 b.IsBulk,
+                b.AssetNamingMode,
                 b.CreatedAt,
                 b.ReviewCompletedBy,
                 b.ReviewCompletedAt))
@@ -244,7 +251,8 @@ public sealed partial class ArtWorkflowService(
             attachmentViews,
             compareReviewSet is null ? null : CompareReviewSetView(compareReviewSet, compareReviewItems),
             batchViews.FirstOrDefault(b => b.Id == selected.ActiveBatchId),
-            providerStatus);
+            providerStatus,
+            collections);
     }
 
     public async Task<ImageBinaryView> GetAssetPreviewImageAsync(
@@ -975,6 +983,7 @@ public sealed partial class ArtWorkflowService(
             Quality = selection.Quality,
             OutputFormat = outputFormat,
             IsBulk = request.IsBulk,
+            AssetNamingMode = request.AssetNamingMode,
             RecipePromptSnapshot = recipe?.Prompt ?? string.Empty,
             AnimationPromptSnapshot = animationRecipe?.Prompt ?? string.Empty,
             AnimationNameSnapshot = animationRecipe?.Name ?? string.Empty,
@@ -1072,10 +1081,15 @@ public sealed partial class ArtWorkflowService(
         var image = providerResult.Images.FirstOrDefault()
             ?? throw new InvalidOperationException("Image provider completed without returning an image.");
         var fallbackLabel = $"Image {LabelForIndex(outputIndex)}";
+        var outputLabel = batch.AssetNamingMode == GenerationAssetNamingMode.PromptExcerpt
+            ? AssetOutputNaming.PromptLabel(resolvedPrompt.Spec.Prompt, outputIndex)
+            : OutputAssetLabel(batch.Label, resolvedPrompt, outputIndex, batch.Count, fallbackLabel);
         var asset = CreateAsset(
             projectId,
-            OutputAssetLabel(batch.Label, resolvedPrompt, outputIndex, batch.Count, fallbackLabel),
-            $"generated-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(image.ContentType)}",
+            outputLabel,
+            batch.AssetNamingMode == GenerationAssetNamingMode.PromptExcerpt
+                ? AssetOutputNaming.FileName(outputLabel, image.ContentType)
+                : $"generated-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(image.ContentType)}",
             ArtAssetKind.Generated,
             image.ContentType,
             image.Data,
@@ -1426,6 +1440,7 @@ public sealed partial class ArtWorkflowService(
             Label = string.IsNullOrWhiteSpace(outputLabel)
                 ? $"Edit {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}"
                 : outputLabel,
+            AssetNamingMode = request.AssetNamingMode,
             Provider = OpenAIAccountProvider.Name,
             MainlineModel = imageOptions.Value.DefaultMainlineModel,
             ImageModel = selection.Model,
@@ -1577,10 +1592,15 @@ public sealed partial class ArtWorkflowService(
             outputContentType = "image/png";
         }
         var fallbackLabel = $"{sourceAsset?.Label ?? batch.Label} edit {LabelForIndex(outputIndex)}";
+        var outputLabel = batch.AssetNamingMode == GenerationAssetNamingMode.PromptExcerpt
+            ? AssetOutputNaming.PromptLabel(resolvedPrompt.Spec.Prompt, outputIndex)
+            : OutputAssetLabel(batch.Label, resolvedPrompt, outputIndex, batch.Count, fallbackLabel);
         var asset = CreateAsset(
             projectId,
-            OutputAssetLabel(batch.Label, resolvedPrompt, outputIndex, batch.Count, fallbackLabel),
-            $"edited-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(outputContentType)}",
+            outputLabel,
+            batch.AssetNamingMode == GenerationAssetNamingMode.PromptExcerpt
+                ? AssetOutputNaming.FileName(outputLabel, outputContentType)
+                : $"edited-{DateTime.UtcNow:yyyyMMddHHmmss}-{outputIndex + 1}.{ExtensionForContentType(outputContentType)}",
             ArtAssetKind.Edited,
             outputContentType,
             outputData,
@@ -2697,6 +2717,8 @@ public sealed partial class ArtWorkflowService(
             var keep = latestByAsset.TryGetValue(asset.Id, out var decision)
                 && decision.Decision == AssetReviewDecisionKind.Keep;
             asset.ReviewStatus = keep ? AssetReviewStatus.Kept : AssetReviewStatus.Rejected;
+            if (!keep)
+                asset.CollectionId = null;
             if (keep)
                 keepCount++;
             asset.UpdatedAt = now;
@@ -2770,7 +2792,11 @@ public sealed partial class ArtWorkflowService(
                 && asset.SourceBatchId is Guid sourceBatchId
                 && !completedPendingBatchIds.Contains(sourceBatchId);
             if (!pendingReviewStillOpen)
+            {
                 asset.ReviewStatus = status;
+                if (status == AssetReviewStatus.Rejected)
+                    asset.CollectionId = null;
+            }
             asset.UpdatedAt = now;
             await db.AssetReviewDecisions.AddAsync(new AssetReviewDecision
             {
@@ -2810,6 +2836,7 @@ public sealed partial class ArtWorkflowService(
         var asset = await db.ArtAssets.FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Id == assetId, cancellationToken)
             ?? throw new InvalidOperationException("Asset was not found.");
         asset.Label = CleanRequired(label, "Asset name is required.");
+        asset.FileName = AssetOutputNaming.FileName(asset.Label, asset.ContentType);
         asset.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
         return AssetView(asset);
@@ -4528,6 +4555,7 @@ public sealed partial class ArtWorkflowService(
         asset.Width,
         asset.Height,
         asset.ParentAssetId,
+        asset.CollectionId,
         asset.SourceBatchId,
         batchOutputIndex = ReadBatchOutputIndex(asset),
         asset.SourcePromptRecipeId,
@@ -4549,6 +4577,7 @@ public sealed partial class ArtWorkflowService(
         asset.Width,
         asset.Height,
         asset.ParentAssetId,
+        asset.CollectionId,
         asset.SourceBatchId,
         batchOutputIndex = ReadBatchOutputIndex(asset),
         asset.SourcePromptRecipeId,
@@ -4717,6 +4746,7 @@ public sealed partial class ArtWorkflowService(
         asset.Width,
         asset.Height,
         asset.ParentAssetId,
+        asset.CollectionId,
         asset.SourceBatchId,
         asset.IsFavorite,
         asset.ReviewStatus,
@@ -4792,7 +4822,7 @@ public sealed partial class ArtWorkflowService(
             asset.CreatedAt,
             asset.ReviewStatus,
             ReviewDecisionView(currentDecision),
-            ReviewDecisionView(latestAgentDecision), asset.HasRawProviderOutput, ReadRequestedBackground(asset.SourceMetadataJson));
+            ReviewDecisionView(latestAgentDecision), asset.HasRawProviderOutput, ReadRequestedBackground(asset.SourceMetadataJson), asset.CollectionId);
 
     private static AssetReviewDecisionView? ReviewDecisionView(AssetReviewDecision? decision) =>
         decision is null
@@ -5074,7 +5104,8 @@ public sealed partial class ArtWorkflowService(
             outputErrors,
             batch.CreatedAt,
             batch.ReviewCompletedBy,
-            batch.ReviewCompletedAt);
+            batch.ReviewCompletedAt,
+            batch.AssetNamingMode);
     }
 
     private static PromptRecipeView RecipeView(PromptRecipe recipe, int currentVersion) =>
@@ -5443,6 +5474,7 @@ public sealed partial class ArtWorkflowService(
             asset.ProjectId,
             asset.Label,
             asset.FileName,
+            asset.CollectionId,
             asset.Kind,
             asset.ContentType,
             asset.Width,
@@ -5485,6 +5517,7 @@ public sealed partial class ArtWorkflowService(
             batch.Error,
             batch.Outputs.ToList(),
             batch.IsBulk,
+            batch.AssetNamingMode,
             batch.CreatedAt,
             batch.ReviewCompletedBy,
             batch.ReviewCompletedAt);
@@ -5648,6 +5681,7 @@ public sealed partial class ArtWorkflowService(
         Guid ProjectId,
         string Label,
         string FileName,
+        Guid? CollectionId,
         ArtAssetKind Kind,
         string ContentType,
         int? Width,
@@ -5690,6 +5724,7 @@ public sealed partial class ArtWorkflowService(
         string Error,
         IReadOnlyList<GenerationOutput> Outputs,
         bool IsBulk,
+        GenerationAssetNamingMode AssetNamingMode,
         DateTime CreatedAt,
         AssetReviewActor? ReviewCompletedBy,
         DateTime? ReviewCompletedAt);

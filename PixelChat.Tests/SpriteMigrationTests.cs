@@ -38,7 +38,34 @@ public sealed class SpriteMigrationTests
         var asset = new ArtAsset { ProjectId = project.Id, Label = "Source", FileName = "source.png", Data = source.Encode().Data, ContentType = "image/png", Width = 4, Height = 4 };
         var frameId = Guid.NewGuid();
         var set = new FrameSet { ProjectId = project.Id, Name = "Existing", SourceAssetId = asset.Id, DefaultCellWidth = 4, DefaultCellHeight = 4, OrderedFrameIdsJson = $"[\"{frameId}\"]" };
-        db.Projects.Add(project); db.ArtAssets.Add(asset); db.FrameSets.Add(set); await db.SaveChangesAsync();
+        db.Projects.Add(project); await db.SaveChangesAsync();
+        var assetValues = new Dictionary<string, object?>
+        {
+            ["Id"] = asset.Id, ["ProjectId"] = project.Id, ["Label"] = asset.Label,
+            ["FileName"] = asset.FileName, ["Kind"] = "Imported", ["ContentType"] = asset.ContentType,
+            ["Data"] = asset.Data, ["Width"] = asset.Width, ["Height"] = asset.Height,
+            ["ReviewStatus"] = "Kept", ["CreatedAt"] = DateTime.UtcNow, ["UpdatedAt"] = DateTime.UtcNow,
+        };
+        var assetColumns = new List<(string Name, string Type, bool Required, string? Default)>();
+        await using (var info = connection.CreateCommand())
+        {
+            info.CommandText = "PRAGMA table_info(ArtAssets)";
+            await using var reader = await info.ExecuteReaderAsync();
+            while (await reader.ReadAsync()) assetColumns.Add((reader.GetString(1), reader.GetString(2), reader.GetInt32(3) != 0, reader.IsDBNull(4) ? null : reader.GetString(4)));
+        }
+        await using (var insertAsset = connection.CreateCommand())
+        {
+            var supplied = assetColumns.Where(column => assetValues.ContainsKey(column.Name) || column.Required && column.Default is null).ToList();
+            insertAsset.CommandText = $"INSERT INTO ArtAssets ({string.Join(',', supplied.Select(column => $"\"{column.Name}\""))}) VALUES ({string.Join(',', supplied.Select((_, index) => $"$p{index}"))})";
+            for (var index = 0; index < supplied.Count; index++)
+            {
+                var column = supplied[index];
+                object fallback = column.Type == "INTEGER" ? 0 : column.Type == "BLOB" ? Array.Empty<byte>() : "";
+                insertAsset.Parameters.AddWithValue($"$p{index}", assetValues.GetValueOrDefault(column.Name) ?? fallback);
+            }
+            await insertAsset.ExecuteNonQueryAsync();
+        }
+        db.FrameSets.Add(set); await db.SaveChangesAsync();
         var working = SpriteRaster.Blank(contentWidth, contentHeight); working.Put(0, 0, new(0, 255, 0, 255)); working.Put(1, 1, new(20, 30, 40, 0));
         var values = new Dictionary<string, object?>
         {

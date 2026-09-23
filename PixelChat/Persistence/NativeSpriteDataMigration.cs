@@ -17,8 +17,10 @@ internal static class NativeSpriteDataMigration
         foreach (var set in sets)
         {
             await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
-            var source = set.SourceAssetId is { } id ? await db.ArtAssets.SingleOrDefaultAsync(a => a.Id == id, cancellationToken) : null;
-            var sourcePixels = source is null ? null : SpriteRaster.Decode(source.Data);
+            var sourceData = set.SourceAssetId is { } id
+                ? await db.ArtAssets.Where(a => a.Id == id).Select(a => a.Data).SingleOrDefaultAsync(cancellationToken)
+                : null;
+            var sourcePixels = sourceData is null ? null : SpriteRaster.Decode(sourceData);
             var background = sourcePixels is null ? new SpriteSheetBackground("transparent", 0, 0, 0, 0) :
                 SpriteSheetImageAnalyzer.ResolveBackground(sourcePixels.Pixels, sourcePixels.Width, sourcePixels.Height);
             var document = new SpriteDocument { Name = set.Name, Specification = new() { ArtMode = "painted", Width = Math.Max(1, set.DefaultCellWidth), Height = Math.Max(1, set.DefaultCellHeight) }, Layers = [new() { Name = "Imported artwork" }] };

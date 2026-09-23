@@ -12,6 +12,7 @@ public class GenerationBatch
     public string MainlineModel { get; set; } = string.Empty;
     public string ImageModel { get; set; } = string.Empty;
     public bool IsBulk { get; set; }
+    public GenerationAssetNamingMode AssetNamingMode { get; set; }
     public string RecipePromptSnapshot { get; set; } = string.Empty;
     public string AnimationPromptSnapshot { get; set; } = string.Empty;
     public string AnimationNameSnapshot { get; set; } = string.Empty;
@@ -55,6 +56,12 @@ public class GenerationBatch
 
     public ICollection<ArtAsset> OutputAssets { get; set; } = [];
     public ICollection<AssetReviewDecision> ReviewDecisions { get; set; } = [];
+}
+
+public enum GenerationAssetNamingMode
+{
+    Existing,
+    PromptExcerpt
 }
 
 public enum GenerationBatchStatus

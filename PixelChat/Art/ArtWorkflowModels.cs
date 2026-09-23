@@ -15,7 +15,10 @@ public sealed record WorkbenchView(
     IReadOnlyList<ChatContextAttachmentView> Attachments,
     CompareReviewSetView? CompareReviewSet,
     GenerationBatchView? ActiveBatch,
-    ProviderStatusView ImageProviderStatus);
+    ProviderStatusView ImageProviderStatus,
+    IReadOnlyList<AssetCollectionView> Collections);
+
+public sealed record AssetCollectionView(Guid Id, string Name, int AssetCount);
 
 public sealed record ProjectView(
     Guid Id,
@@ -54,7 +57,8 @@ public sealed record ArtAssetView(
     AssetReviewDecisionView? CurrentReviewDecision,
     AssetReviewDecisionView? LatestAgentReviewDecision,
     bool HasRawProviderOutput = false,
-    string? RequestedBackground = null);
+    string? RequestedBackground = null,
+    Guid? CollectionId = null);
 
 public sealed record AssetReviewDecisionView(
     Guid Id,
@@ -241,7 +245,8 @@ public sealed record GenerationBatchView(
     IReadOnlyList<GenerationOutputErrorView> OutputErrors,
     DateTime CreatedAt,
     AssetReviewActor? ReviewCompletedBy,
-    DateTime? ReviewCompletedAt);
+    DateTime? ReviewCompletedAt,
+    GenerationAssetNamingMode AssetNamingMode = GenerationAssetNamingMode.Existing);
 
 public enum GenerationBatchPromptMode
 {
@@ -401,7 +406,8 @@ public sealed record GenerateImagesRequest(
     Guid? ParentBatchId,
     string? ImageModel = null,
     string? OutputLabel = null,
-    bool IsBulk = false);
+    bool IsBulk = false,
+    GenerationAssetNamingMode AssetNamingMode = GenerationAssetNamingMode.Existing);
 
 public sealed record EditImageRequest(
     Guid SourceAssetId,
@@ -417,7 +423,8 @@ public sealed record EditImageRequest(
     Guid? MaskId = null,
     EditCanvasOptions? CanvasOptions = null,
     Guid? CanvasPreparationId = null,
-    string? Background = null);
+    string? Background = null,
+    GenerationAssetNamingMode AssetNamingMode = GenerationAssetNamingMode.Existing);
 
 public sealed record PreviewAssetEditCanvasRequest(
     Guid SourceAssetId,
