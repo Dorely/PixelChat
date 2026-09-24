@@ -339,7 +339,7 @@ else
     private string _moveToCollectionIdText = string.Empty;
     private const int AssetGridMinColumnWidthPixels = 220;
     private const int AssetGridGapPixels = 14;
-    private const int AssetGridVirtualRowHeightPixels = 430;
+    private const int AssetGridVirtualRowHeightPixels = 470;
     private const int AssetGridOverscanCount = 3;
     private int _assetGridColumnCount = 3;
     private bool _assetGridMeasurementBound;
@@ -1871,8 +1871,14 @@ else
 
     private RenderFragment RenderAssetsWorkspace() => __builder =>
     {
-        var latestAssets = AssetsByLatest().ToList();
-        var guideAssets = GuideAssetsByLatest().ToList();
+        var visibleAssets = CollectionVisibleAssets().ToList();
+        var latestAssets = AssetsByLatest(visibleAssets).ToList();
+        var guideAssets = GuideAssetsByLatest(visibleAssets).ToList();
+        var shownAssets = _assetOrganization == "guides"
+            ? guideAssets
+            : _assetOrganization == "recipe"
+                ? latestAssets.Where(asset => asset.Kind != ArtAssetKind.SpriteGuide).ToList()
+                : latestAssets;
         <div class="workspace-panel assets-panel">
             <div class="panel-head">
                 <div>
@@ -1890,7 +1896,6 @@ else
                             <button type="button" class="@AssetOrganizationClass("latest")" @onclick='() => SetAssetOrganization("latest")'>Latest</button>
                             <button type="button" class="@AssetOrganizationClass("recipe")" @onclick='() => SetAssetOrganization("recipe")'>Art Recipe</button>
                             <button type="button" class="@AssetOrganizationClass("guides")" @onclick='() => SetAssetOrganization("guides")'>Guides</button>
-                            <button type="button" class="@AssetOrganizationClass("collections")" @onclick='() => SetAssetOrganization("collections")'>Collections</button>
                         </div>
                         <button type="button"
                                 class="@AssetDeleteModeClass()"
@@ -1914,83 +1919,80 @@ else
             {
                 @RenderRejectedAssets()
             }
-            else if (_workbench.Assets.Count == 0)
+            else
             {
-                @if (_assetOrganization == "collections")
-                {
-                    @RenderCollectionsWorkspace()
-                }
-                else
+                @RenderCollectionControls(shownAssets)
+                @if (_workbench.Assets.Count == 0)
                 {
                     <div class="empty-state">No assets yet. Generate or import images to build the library.</div>
                 }
-            }
-            else if (_assetOrganization == "collections")
-            {
-                @RenderCollectionsWorkspace()
-            }
-            else if (_assetOrganization == "recipe")
-            {
-                <div class="asset-group-stack">
-                    @foreach (var group in AssetRecipeGroups())
+                else if (_assetOrganization == "recipe")
+                {
+                    @if (shownAssets.Count == 0)
                     {
-                        <section class="asset-group" @key="group.Label">
-                            <div class="section-title">@group.Label</div>
-                            @RenderVirtualAssetGrid(group.Assets)
-                        </section>
+                        <div class="empty-state">No production assets in this view.</div>
                     }
-                </div>
-            }
-            else if (_assetOrganization == "guides")
-            {
-                @if (guideAssets.Count == 0)
+                    else
+                    {
+                        <div class="asset-group-stack">
+                            @foreach (var group in AssetRecipeGroups(visibleAssets))
+                            {
+                                <section class="asset-group" @key="group.Label">
+                                    <div class="section-title">@group.Label</div>
+                                    @RenderVirtualAssetGrid(group.Assets)
+                                </section>
+                            }
+                        </div>
+                    }
+                }
+                else if (_assetOrganization == "guides")
                 {
-                    <div class="empty-state">No guide assets yet.</div>
+                    @if (guideAssets.Count == 0)
+                    {
+                        <div class="empty-state">No guide assets in this view.</div>
+                    }
+                    else
+                    {
+                        @RenderVirtualAssetGrid(guideAssets, guideCard: true)
+                    }
                 }
                 else
                 {
-                    @RenderVirtualAssetGrid(guideAssets, guideCard: true)
-                }
-            }
-            else
-            {
-                @if (latestAssets.Count == 0)
-                {
-                    <div class="empty-state">No production assets yet.</div>
-                }
-                else
-                {
-                    @RenderVirtualAssetGrid(latestAssets)
+                    @if (latestAssets.Count == 0)
+                    {
+                        <div class="empty-state">No assets in this view.</div>
+                    }
+                    else
+                    {
+                        @RenderVirtualAssetGrid(latestAssets)
+                    }
                 }
             }
         </div>
     };
 
-    private RenderFragment RenderCollectionsWorkspace() => __builder =>
+    private RenderFragment RenderCollectionControls(IReadOnlyList<ArtAssetView> visibleAssets) => __builder =>
     {
-        var visible = CollectionVisibleAssets().ToList();
         var selectedCollection = _selectedCollectionId is Guid id
             ? _workbench!.Collections.FirstOrDefault(collection => collection.Id == id)
             : null;
-        <div class="collection-workspace">
-            <aside class="collection-sidebar">
-                <div class="section-title">Collections</div>
-                <button type="button" class="@CollectionFilterClass(true, null)" @onclick="() => SelectCollection(true, null)">All assets (@_workbench!.Assets.Count)</button>
-                <button type="button" class="@CollectionFilterClass(false, null)" @onclick="() => SelectCollection(false, null)">Unfiled assets (@_workbench.Assets.Count(asset => asset.CollectionId is null))</button>
+        <section class="library-collection-bar" aria-label="Collections">
+            <div class="collection-switcher" role="group" aria-label="Show collection">
+                <button type="button" class="@CollectionFilterClass(true, null)" aria-pressed="@_collectionShowAll" @onclick="() => SelectCollection(true, null)">All assets (@_workbench!.Assets.Count)</button>
+                <button type="button" class="@CollectionFilterClass(false, null)" aria-pressed="@(!_collectionShowAll && _selectedCollectionId is null)" @onclick="() => SelectCollection(false, null)">Unfiled (@_workbench.Assets.Count(asset => asset.CollectionId is null))</button>
                 @foreach (var collection in _workbench.Collections)
                 {
-                    <button type="button" class="@CollectionFilterClass(false, collection.Id)" @onclick="() => SelectCollection(false, collection.Id)">@collection.Name (@collection.AssetCount)</button>
+                    <button type="button" class="@CollectionFilterClass(false, collection.Id)" aria-pressed="@(!_collectionShowAll && _selectedCollectionId == collection.Id)" @onclick="() => SelectCollection(false, collection.Id)">@collection.Name (@collection.AssetCount)</button>
                 }
+            </div>
+            <div class="collection-toolbar">
                 <div class="collection-create">
-                    <input class="form-control form-control-sm" aria-label="New collection name" placeholder="New collection" @bind="_newCollectionName" />
-                    <button type="button" class="btn btn-sm btn-primary" disabled="@string.IsNullOrWhiteSpace(_newCollectionName)" @onclick="CreateCollectionAsync">Create</button>
+                    <input class="form-control form-control-sm" aria-label="New collection name" placeholder="New collection name" @bind="_newCollectionName" />
+                    <button type="button" class="btn btn-sm btn-primary" disabled="@string.IsNullOrWhiteSpace(_newCollectionName)" @onclick="CreateCollectionAsync">Create collection</button>
                 </div>
-            </aside>
-            <div class="collection-content">
-                <div class="collection-toolbar">
-                    <strong>@(_collectionShowAll ? "All assets" : selectedCollection?.Name ?? "Unfiled")</strong>
-                    @if (selectedCollection is not null)
-                    {
+                @if (selectedCollection is not null)
+                {
+                    <div class="collection-current-actions">
                         @if (selectedCollection.AssetCount == 0)
                         {
                             <button type="button" class="btn btn-sm btn-outline-primary" disabled>Export ZIP</button>
@@ -2001,39 +2003,31 @@ else
                         }
                         <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="BeginRenameCollection">Rename</button>
                         <button type="button" class="btn btn-sm btn-outline-danger" @onclick="DeleteSelectedCollectionAsync">Delete collection</button>
-                    }
-                </div>
-                @if (_renamingCollection && selectedCollection is not null)
-                {
-                    <div class="collection-rename">
-                        <input class="form-control form-control-sm" aria-label="Collection name" @bind="_renameCollectionName" />
-                        <button type="button" class="btn btn-sm btn-primary" disabled="@string.IsNullOrWhiteSpace(_renameCollectionName)" @onclick="RenameSelectedCollectionAsync">Save</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _renamingCollection = false">Cancel</button>
                     </div>
                 }
-                <div class="collection-bulk-bar">
-                    <span>@_selectedCollectionAssetIds.Count selected</span>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(visible.Count == 0)" @onclick="() => SelectAllCollectionAssets(visible)">Select all shown</button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_selectedCollectionAssetIds.Count == 0)" @onclick="() => _selectedCollectionAssetIds.Clear()">Clear</button>
-                    <select class="form-select form-select-sm" aria-label="Destination collection" @bind="_moveToCollectionIdText">
-                        <option value="">Unfiled</option>
-                        @foreach (var collection in _workbench.Collections)
-                        {
-                            <option value="@collection.Id">@collection.Name</option>
-                        }
-                    </select>
-                    <button type="button" class="btn btn-sm btn-primary" disabled="@(_selectedCollectionAssetIds.Count == 0)" @onclick="MoveSelectedCollectionAssetsAsync">Move selected</button>
-                </div>
-                @if (visible.Count == 0)
-                {
-                    <div class="empty-state">No assets in this view.</div>
-                }
-                else
-                {
-                    @RenderVirtualAssetGrid(visible)
-                }
             </div>
-        </div>
+            @if (_renamingCollection && selectedCollection is not null)
+            {
+                <div class="collection-rename">
+                    <input class="form-control form-control-sm" aria-label="Collection name" @bind="_renameCollectionName" />
+                    <button type="button" class="btn btn-sm btn-primary" disabled="@string.IsNullOrWhiteSpace(_renameCollectionName)" @onclick="RenameSelectedCollectionAsync">Save</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _renamingCollection = false">Cancel</button>
+                </div>
+            }
+            <div class="collection-bulk-bar">
+                <span>@_selectedCollectionAssetIds.Count selected</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(visibleAssets.Count == 0)" @onclick="() => SelectAllCollectionAssets(visibleAssets)">Select all shown</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(_selectedCollectionAssetIds.Count == 0)" @onclick="() => _selectedCollectionAssetIds.Clear()">Clear</button>
+                <select class="form-select form-select-sm" aria-label="Destination collection" @bind="_moveToCollectionIdText">
+                    <option value="">Unfiled</option>
+                    @foreach (var collection in _workbench.Collections)
+                    {
+                        <option value="@collection.Id">@collection.Name</option>
+                    }
+                </select>
+                <button type="button" class="btn btn-sm btn-primary" disabled="@(_selectedCollectionAssetIds.Count == 0)" @onclick="MoveSelectedCollectionAssetsAsync">Move selected</button>
+            </div>
+        </section>
     };
 
     private RenderFragment RenderRejectedAssets() => __builder =>
@@ -2099,7 +2093,7 @@ else
     private RenderFragment RenderAssetCard(ArtAssetView asset, bool compact, bool guideCard = false, Guid? reviewItemId = null, bool allowReject = false) => __builder =>
     {
         <article class="asset-card @(compact ? "asset-card-compact" : "")" @key="asset.Id">
-            @if (_assetOrganization == "collections" && _activeWorkspaceMode == WorkspaceMode.Assets && asset.ReviewStatus == AssetReviewStatus.Kept)
+            @if (_activeWorkspaceMode == WorkspaceMode.Assets && asset.ReviewStatus == AssetReviewStatus.Kept)
             {
                 <label class="collection-asset-select">
                     <input type="checkbox" checked="@_selectedCollectionAssetIds.Contains(asset.Id)" @onchange="args => SetCollectionAssetSelected(asset.Id, args.Value is true)" />
@@ -2151,12 +2145,24 @@ else
                 @if (!compact)
                 {
                     <p>
-                        @if (_assetOrganization == "collections" && _activeWorkspaceMode == WorkspaceMode.Assets)
-                        {
-                            <small class="collection-asset-location">@CollectionNameForAsset(asset)</small><br />
-                        }
                         @(string.IsNullOrWhiteSpace(asset.Prompt) ? FormatDimensions(asset) : asset.Prompt)
                     </p>
+                }
+                @if (_activeWorkspaceMode == WorkspaceMode.Assets && asset.ReviewStatus == AssetReviewStatus.Kept)
+                {
+                    <label class="asset-collection-field">
+                        <span>Collection</span>
+                        <select class="form-select form-select-sm"
+                                aria-label="Collection for @asset.Label"
+                                value="@(asset.CollectionId?.ToString("D") ?? string.Empty)"
+                                @onchange="args => ChangeAssetCollectionAsync(asset.Id, args)">
+                            <option value="">Unfiled</option>
+                            @foreach (var collection in _workbench!.Collections)
+                            {
+                                <option value="@collection.Id.ToString("D")">@collection.Name</option>
+                            }
+                        </select>
+                    </label>
                 }
                 <div class="asset-actions">
                     @if (asset.ReviewStatus == AssetReviewStatus.Kept)
@@ -2213,7 +2219,7 @@ else
         <div class="asset-grid-row" @key="row.Key">
             @foreach (var asset in row.Assets)
             {
-                @RenderAssetCard(asset, compact: false, guideCard: row.GuideCard, allowReject: true)
+                @RenderAssetCard(asset, compact: false, guideCard: row.GuideCard || asset.Kind == ArtAssetKind.SpriteGuide, allowReject: true)
             }
         </div>
     };
@@ -4482,9 +4488,8 @@ else
 
     private WorkspaceAssetsVisibleState BuildAssetsVisibleState() =>
         new(
-            _assetLibraryView == "rejected" ? "rejected" : _assetOrganization == "collections"
-                ? _collectionShowAll ? "collections:all" : $"collections:{_selectedCollectionId?.ToString("D") ?? "unfiled"}"
-                : _assetOrganization,
+            _assetLibraryView == "rejected" ? "rejected"
+                : $"{_assetOrganization}:{(_collectionShowAll ? "all" : _selectedCollectionId?.ToString("D") ?? "unfiled")}",
             VisibleAssetsForSnapshot().Select(AssetSummary).ToList());
 
     private IReadOnlyList<ArtAssetView> VisibleAssetsForSnapshot()
@@ -4492,15 +4497,14 @@ else
         if (_workbench is null)
             return [];
 
+        var visible = CollectionVisibleAssets().ToList();
         return (_assetLibraryView == "rejected"
                 ? _workbench.RejectedAssets.OrderByDescending(asset => asset.CreatedAt)
                 : _assetOrganization == "guides"
-                ? GuideAssetsByLatest()
-                : _assetOrganization == "collections"
-                    ? CollectionVisibleAssets()
+                ? GuideAssetsByLatest(visible)
                 : _assetOrganization == "recipe"
-                    ? AssetRecipeGroups().SelectMany(group => group.Assets)
-                    : AssetsByLatest())
+                    ? AssetRecipeGroups(visible).SelectMany(group => group.Assets)
+                    : AssetsByLatest(visible))
             .Take(24)
             .ToList();
     }
@@ -4723,14 +4727,13 @@ else
         _ => attachment.Type.ToString()
     };
 
-    private IEnumerable<ArtAssetView> AssetsByLatest() =>
-        (_workbench?.Assets ?? [])
-            .Where(asset => asset.Kind != ArtAssetKind.SpriteGuide)
+    private static IEnumerable<ArtAssetView> AssetsByLatest(IEnumerable<ArtAssetView> assets) =>
+        assets
             .OrderByDescending(asset => asset.IsFavorite)
             .ThenByDescending(asset => asset.CreatedAt);
 
-    private IEnumerable<ArtAssetView> GuideAssetsByLatest() =>
-        (_workbench?.Assets ?? [])
+    private static IEnumerable<ArtAssetView> GuideAssetsByLatest(IEnumerable<ArtAssetView> assets) =>
+        assets
             .Where(asset => asset.Kind == ArtAssetKind.SpriteGuide)
             .OrderByDescending(asset => asset.CreatedAt);
 
@@ -4761,20 +4764,20 @@ else
         return rows;
     }
 
-    private IReadOnlyList<AssetGroup> AssetRecipeGroups()
+    private IReadOnlyList<AssetGroup> AssetRecipeGroups(IReadOnlyList<ArtAssetView> visibleAssets)
     {
         if (_workbench is null)
             return [];
 
         var groups = new List<AssetGroup>();
-        var favorites = _workbench.Assets
+        var favorites = visibleAssets
             .Where(asset => asset.IsFavorite && asset.Kind != ArtAssetKind.SpriteGuide)
             .OrderByDescending(asset => asset.CreatedAt)
             .ToList();
         if (favorites.Count > 0)
             groups.Add(new AssetGroup("Favorites", favorites));
 
-        var remaining = _workbench.Assets
+        var remaining = visibleAssets
             .Where(asset => !asset.IsFavorite && asset.Kind != ArtAssetKind.SpriteGuide)
             .ToList();
         foreach (var recipe in _workbench.Recipes)
@@ -4799,8 +4802,9 @@ else
 
     private void SetAssetOrganization(string organization)
     {
-        _assetOrganization = organization is "recipe" or "guides" or "collections" ? organization : "latest";
+        _assetOrganization = organization is "recipe" or "guides" ? organization : "latest";
         _selectedCollectionAssetIds.Clear();
+        PublishVisibleState();
     }
 
     private IEnumerable<ArtAssetView> CollectionVisibleAssets() =>
@@ -4808,11 +4812,6 @@ else
             .Where(asset => _collectionShowAll || asset.CollectionId == _selectedCollectionId)
             .OrderByDescending(asset => asset.IsFavorite)
             .ThenByDescending(asset => asset.CreatedAt);
-
-    private string CollectionNameForAsset(ArtAssetView asset) =>
-        asset.CollectionId is Guid id
-            ? _workbench?.Collections.FirstOrDefault(collection => collection.Id == id)?.Name ?? "Unfiled"
-            : "Unfiled";
 
     private string CollectionFilterClass(bool all, Guid? collectionId) =>
         _collectionShowAll == all && (all || _selectedCollectionId == collectionId)
@@ -4825,6 +4824,7 @@ else
         _selectedCollectionId = all ? null : collectionId;
         _renamingCollection = false;
         _selectedCollectionAssetIds.Clear();
+        PublishVisibleState();
     }
 
     private void SetCollectionAssetSelected(Guid assetId, bool selected)
@@ -4906,6 +4906,32 @@ else
         });
     }
 
+    private async Task ChangeAssetCollectionAsync(Guid assetId, ChangeEventArgs args)
+    {
+        if (_workbench is null)
+            return;
+
+        var destination = args.Value?.ToString();
+        Guid? collectionId = null;
+        if (!string.IsNullOrWhiteSpace(destination))
+        {
+            if (!Guid.TryParse(destination, out var parsed)
+                || !_workbench.Collections.Any(collection => collection.Id == parsed))
+            {
+                _error = "Choose an available collection.";
+                return;
+            }
+
+            collectionId = parsed;
+        }
+
+        await RunWorkflowAsync("Moving asset...", async () =>
+        {
+            await Workflow.MoveAssetsToCollectionAsync(_workbench.Project.Id, [assetId], collectionId);
+            _selectedCollectionAssetIds.Remove(assetId);
+        });
+    }
+
     private string CollectionDownloadUrl(Guid collectionId) =>
         $"/media/projects/{_workbench!.Project.Id:D}/collections/{collectionId:D}/download";
 
@@ -4914,6 +4940,8 @@ else
         _assetLibraryView = view == "rejected" ? "rejected" : "library";
         if (_assetLibraryView == "rejected")
             ResetAssetDeleteMode();
+        _selectedCollectionAssetIds.Clear();
+        PublishVisibleState();
     }
 
     private string AssetLibraryViewClass(string view) =>

@@ -76,6 +76,12 @@ collection keeps its assets as Unfiled. The collection media route streams a ZIP
 of stored image bytes with unique, safe entry names. It does not apply the
 per-asset export cleanup pipeline or use separate raw provider bytes.
 
+The Assets library keeps collection navigation in its main view: a horizontal
+selector filters the grid, with create/rename/delete/ZIP actions and bulk
+assignment beside it. Kept image and guide cards also offer direct assignment.
+Latest includes both images and guides; Art Recipe and Guides remain optional
+views within the selected collection.
+
 `IAssistantChatService` owns a scoped assistant turn and tool loop.
 `IWorkspaceChatRuntime` is app-process state that allows a turn to continue
 across renderer reloads, owns cancellable conversation compaction, and

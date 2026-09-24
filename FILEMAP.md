@@ -139,7 +139,7 @@
 
 | File | Description |
 |------|-------------|
-| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: Generate/Batches/Review/Edit/Sprites/Recipes/Assets workspaces, collection controls, prompt-named UI output presentation, asset management, chat, virtualized grids, canvas helpers, and exports. |
+| `Home.razor` / `.razor.css` / `.razor.js` | Workbench route at `/` and `/chat`: Generate/Batches/Review/Edit/Sprites/Recipes/Assets workspaces, inline Assets collection selector and assignment controls, prompt-named UI output presentation, chat, virtualized grids, canvas helpers, and exports. |
 | `NotFound.razor` | 404 page wired through status-code re-execution. |
 | `Error.razor` | Error page rendered by exception handler middleware. |
 | `Settings/Providers.razor` / `.razor.css` | Provider settings page for OpenAI account OAuth, OpenAI-compatible endpoints, model tests, thinking modes, defaults, API-key updates, and child model rows. |
