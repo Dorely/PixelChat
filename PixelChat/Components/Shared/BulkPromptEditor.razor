@@ -1,19 +1,21 @@
-<div class="form-stack">
+<div class="bulk-prompt-editor">
     <label>One prompt per line
         <textarea class="form-control" rows="8" @bind="_input" placeholder="Blue healing potion&#10;Iron sword&#10;Wooden shield"></textarea>
     </label>
-    <button type="button" class="btn btn-outline-secondary" @onclick="ParseAsync">Preview prompts</button>
-    <span>@_rows.Count prompt(s). Blank lines are ignored; order and duplicates are preserved.</span>
+    <div class="bulk-prompt-actions">
+        <button type="button" class="btn btn-outline-secondary" @onclick="ParseAsync">Preview prompts</button>
+        <span>@_rows.Count prompt(s). Blank lines are ignored; order and duplicates are preserved.</span>
+    </div>
     @foreach (var row in _rows.Skip(_page * PageSize).Take(PageSize))
     {
-        <div class="d-flex gap-2" @key="row">
+        <div class="bulk-prompt-row" @key="row">
             <input class="form-control" aria-label="Prompt" @bind="row.Text" @bind:after="PublishAsync" />
             <button type="button" class="btn btn-outline-danger" @onclick="() => RemoveAsync(row)">Remove</button>
         </div>
     }
     @if (_rows.Count > PageSize)
     {
-        <div class="d-flex gap-2">
+        <div class="bulk-prompt-pagination">
             <button type="button" class="btn btn-outline-secondary" disabled="@(_page == 0)" @onclick="() => _page--">Previous</button>
             <span>Page @(_page + 1) / @PageCount</span>
             <button type="button" class="btn btn-outline-secondary" disabled="@(_page + 1 >= PageCount)" @onclick="() => _page++">Next</button>
