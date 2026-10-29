@@ -1,0 +1,59 @@
+/* Theme tokens. styles.css reads only these variables; add a theme by defining every token. */
+:root {
+  --font-sans: 'Manrope', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'DM Mono', 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  font-family: var(--font-sans); font-synthesis: none; text-rendering: optimizeLegibility;
+  color: var(--text); background: var(--bg);
+}
+
+:root, :root[data-theme="studio"] {
+  color-scheme: dark;
+  --bg: #151716; --sidebar: #191b1a; --sunken: #141714;
+  --surface: #1c1f1d; --surface-2: #20241f; --surface-3: #262a25;
+  --line: #303631; --line-strong: #3c453c; --line-hover: #5f6c59;
+  --text: #e9e5d7; --text-2: #c9cdc1; --muted: #969b91; --quiet: #8d938a;
+  --accent: #c4f264; --accent-hover: #d0fa7c; --accent-strong: #95b73e; --accent-ink: #17200f;
+  --accent-soft: #272e24; --accent-line: #5f7a36;
+  --warn: #ef9e5b; --warn-bg: #27231a; --warn-line: #6a5634; --warn-text: #ad9778;
+  --danger: #ec847f; --danger-bg: #352220; --danger-line: #84504c; --danger-text: #ffd7cf;
+  --overlay: rgba(4, 6, 5, .72); --shadow: rgba(0, 0, 0, .5); --shadow-soft: rgba(0, 0, 0, .28);
+}
+
+:root[data-theme="midnight"] {
+  color-scheme: dark;
+  --bg: #10131a; --sidebar: #131722; --sunken: #0d1017;
+  --surface: #171c27; --surface-2: #1b2130; --surface-3: #222a3b;
+  --line: #262e40; --line-strong: #323c54; --line-hover: #4d5b7c;
+  --text: #e4e8f2; --text-2: #c3cad9; --muted: #9aa3b8; --quiet: #8892a9;
+  --accent: #8ab4ff; --accent-hover: #a9c8ff; --accent-strong: #6a95e6; --accent-ink: #0a1428;
+  --accent-soft: #1b2741; --accent-line: #3a5a8f;
+  --warn: #f2b56b; --warn-bg: #2a2418; --warn-line: #6b5733; --warn-text: #bba483;
+  --danger: #f2858f; --danger-bg: #331d24; --danger-line: #7d4552; --danger-text: #ffd6dc;
+  --overlay: rgba(4, 6, 12, .74); --shadow: rgba(0, 0, 0, .55); --shadow-soft: rgba(0, 0, 0, .3);
+}
+
+:root[data-theme="ember"] {
+  color-scheme: dark;
+  --bg: #16120f; --sidebar: #1a1512; --sunken: #120f0c;
+  --surface: #1f1915; --surface-2: #251e19; --surface-3: #2c241e;
+  --line: #352c24; --line-strong: #443830; --line-hover: #6c5948;
+  --text: #f1e6d8; --text-2: #d8c9b6; --muted: #aa9986; --quiet: #9b8b7a;
+  --accent: #ffb454; --accent-hover: #ffc678; --accent-strong: #d48e33; --accent-ink: #261603;
+  --accent-soft: #33261a; --accent-line: #7a5528;
+  --warn: #f58a6c; --warn-bg: #2c1d16; --warn-line: #74432f; --warn-text: #c79a86;
+  --danger: #f27d7d; --danger-bg: #361d1c; --danger-line: #84413f; --danger-text: #ffd5d2;
+  --overlay: rgba(8, 5, 3, .74); --shadow: rgba(0, 0, 0, .55); --shadow-soft: rgba(0, 0, 0, .3);
+}
+
+:root[data-theme="daylight"] {
+  color-scheme: light;
+  --bg: #f3f2ec; --sidebar: #eceae2; --sunken: #ebe9e1;
+  --surface: #fbfaf6; --surface-2: #ffffff; --surface-3: #e8e6dd;
+  --line: #dddacd; --line-strong: #cbc7b8; --line-hover: #a29e8d;
+  --text: #1d201b; --text-2: #3b4037; --muted: #5d6258; --quiet: #6b7066;
+  --accent: #4a7612; --accent-hover: #578a16; --accent-strong: #4a7612; --accent-ink: #ffffff;
+  --accent-soft: #e6eed6; --accent-line: #a6bf7c;
+  --warn: #b0601b; --warn-bg: #fbefe1; --warn-line: #e5c29c; --warn-text: #8a5a2e;
+  --danger: #bf3b34; --danger-bg: #fbe8e6; --danger-line: #e5b0aa; --danger-text: #8a221c;
+  --overlay: rgba(32, 34, 28, .42); --shadow: rgba(30, 32, 26, .22); --shadow-soft: rgba(30, 32, 26, .12);
+}
