@@ -8,13 +8,17 @@
   "scripts": {
     "dev": "electron-vite dev",
     "dev:browser": "npm run build && node scripts/dev-browser.mjs",
-    "build": "electron-vite build",
+    "build": "electron-vite build && node scripts/build-agent.mjs",
+    "build:agent": "node scripts/build-agent.mjs",
+    "predev": "node scripts/build-agent.mjs",
     "typecheck": "tsc --noEmit",
     "rebuild": "electron-builder install-app-deps",
     "package": "npm run build && electron-builder --win nsis --x64 --publish never",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
+    "@iarna/toml": "2.2.5",
+    "@modelcontextprotocol/server": "2.2.0",
     "better-sqlite3": "13.0.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
@@ -23,6 +27,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",
+    "@types/iarna__toml": "2.0.5",
     "@types/node": "24.13.4",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",

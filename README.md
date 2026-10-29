@@ -22,6 +22,8 @@ npm run dev:browser
 
 `npm run dev:browser` serves the built app at a printed loopback URL for browser-based checks.
 
-`npm run package` builds the unsigned NSIS installer into `release/`.
+`npm run build` also bundles the agent CLI, skill, and native helper (needs CMake or Visual
+Studio C++ build tools). `npm run package` builds the unsigned NSIS installer into `release/`.
+See [agent workbench](docs/agent-workbench.md) for the CLI, MCP server, and skill install.
 
 The app stores its library under `%APPDATA%\PixelChat`.

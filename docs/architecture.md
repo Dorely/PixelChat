@@ -18,14 +18,14 @@ The profile lives at `%APPDATA%/PixelChat`: `library.sqlite` (WAL, foreign keys 
 ## Operations and renderer bridge
 
 `src/main/operations.ts` is the single operation registry. Each operation has a strict
-zod schema and description; the UI calls it with origin `user`, and the assistant, CLI,
-and MCP will call it with origin `agent`. Failures return `{ ok: false, error: { code,
-message } }` envelopes with redacted messages.
+zod schema and description; the UI calls it with origin `user`, and the CLI and MCP
+(through the local bridge) call it with origin `agent`. Failures return `{ ok: false,
+error: { code, message } }` envelopes with redacted messages.
 
 The renderer reaches the main process through one IPC channel, `pixel:call`, limited to
 fixed commands (`snapshot`, `setActiveProject`, `operation`, `chooseDirectory`,
-`openLogs`, `uiReady`, `uiAcknowledge`, and the credential commands `codexLogin`,
-`codexCancelLogin`, `codexLogout`, `saveGeminiKey`) with zod tuple schemas. Requests from any frame
+`openLogs`, `uiReady`, `uiAcknowledge`, `installIntegration`, and the credential commands
+`codexLogin`, `codexCancelLogin`, `codexLogout`, `saveGeminiKey`) with zod tuple schemas. Requests from any frame
 other than the main window's top frame are rejected. Store changes are debounced into
 `pixel:changed`; the renderer then refreshes its snapshot. Operations can drive the view
 through `ui-port.ts`, which sends `pixel:ui-command` and waits up to 15 seconds for the
@@ -50,8 +50,8 @@ cascades. A `Default` project is created
 when none exist, and the active project is kept in the `project-active` setting.
 
 Every mutation appends an `activity` row (project, origin, kind, item or review, data).
-It is the record agents will follow for changes, and `review_history` reads it for one
-review.
+`activity_get` pages it by `seq` (optionally for one review or item) and can wait for the
+next matching change; agents follow it to see what the user did.
 
 ## Library and media
 
@@ -168,6 +168,17 @@ In the viewer, the Edit panel runs the user's prompt on the viewed version, can 
 open note threads (with pin coordinates) to the prompt, and lists the item's jobs.
 Versions show the model and a prompt excerpt; "Export to source" appears while the item
 is pending export and asks before overwriting a changed or missing file.
+
+## Agent workbench
+
+The app publishes a token-authenticated named-pipe bridge (`bridge.ts`) whose discovery
+file is DPAPI-protected. The bundled CLI (`src/cli/index.ts`, built to `out/agent/cli.cjs`
+with a pinned Node runtime) forwards operations over it and serves them as a stdio MCP
+server with review and pending-export resources. `view_image` renders a revision for
+agent vision: flattened onto a chosen backdrop, enlarged by whole pixels or reduced to a
+bound, with open note pins drawn and numbered. The skill and its references live in
+`resources/skill`; `shared/guidance.ts` embeds the same texts for the `guidance`
+operation and the installer. See [agent workbench](agent-workbench.md).
 
 ## Verification policy
 

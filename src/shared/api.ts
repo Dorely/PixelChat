@@ -19,6 +19,7 @@ export function createApi({ call, onChanged, onUiCommand, mediaUrl, hostMode }: 
     codexCancelLogin: () => call('codexCancelLogin'),
     codexLogout: () => call('codexLogout'),
     saveGeminiKey: key => call('saveGeminiKey', key),
+    installIntegration: input => call('installIntegration', input),
     uiReady: () => call('uiReady'),
     uiAcknowledge: (id, error) => call('uiAcknowledge', id, error),
   };

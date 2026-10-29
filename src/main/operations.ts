@@ -7,6 +7,8 @@ import type { MediaStore } from './media';
 import type { ImageArgs, ImageJobs } from './images';
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, MAX_IMAGE_COUNT } from '../shared/image-models';
 import type { ProviderStatus } from '../shared/types';
+import { guidanceDocuments, guidanceHash, selectGuidance } from '../shared/guidance';
+import { viewImage } from './view-image';
 
 export const idSchema = z.string().uuid();
 const nameSchema = z.string().trim().min(1).max(60);
@@ -29,6 +31,7 @@ const pinSchema = obj({ x: z.number().finite(), y: z.number().finite(), width: z
 const reviewTitle = z.string().trim().min(1).max(120);
 const instructionsSchema = z.string().max(8000);
 const noteBody = z.string().trim().min(1).max(4000);
+const waitSeconds = z.number().int().min(0).max(300);
 const imageOptions = {
   prompt: z.string().trim().min(1).max(32000),
   model: z.enum(IMAGE_MODELS.map(model => model.id) as [string, ...string[]]).optional().describe(`Default ${DEFAULT_IMAGE_MODEL}. The model selects its provider; see status for each model's qualities and transparency.`),
@@ -43,7 +46,8 @@ const imageOptions = {
 
 /** One registry serves the UI, the in-app assistant, the CLI and MCP. */
 export const operationDefinitions = {
-  status: { schema: obj({}), description: 'App readiness and provider status, without secrets.' },
+  status: { schema: obj({}), description: 'App readiness, image models, and provider status, without secrets.' },
+  guidance: { schema: obj({ topics: z.array(z.string().min(1)).min(1).max(10).optional() }), description: 'Read the PixelChat skill references by topic (workflow, library, image-editing). Omit topics for all. The hash covers the complete set; compare it with the installed skill.' },
   projects_list: { schema: obj({}), description: 'List projects.' },
   project_create: { schema: obj({ name: nameSchema }), description: 'Create a project without changing the visible project.' },
   project_get: { schema: obj(project), description: 'Inspect a project.' },
@@ -66,18 +70,19 @@ export const operationDefinitions = {
   item_delete: { schema: obj(item), description: 'Delete an item with its revisions, review entries, and notes. A linked item reappears on the next rescan while its file exists. Files in source folders are not touched. Requires explicit user intent.' },
   review_list: { schema: obj({ ...project, status: z.enum(['active', 'completed', 'all']).default('active') }), description: 'List reviews with decision counts and open notes. Defaults to active; completed finds archived reviews.' },
   review_create: { schema: obj({ ...project, title: reviewTitle, instructions: instructionsSchema.optional(), itemIds: itemIdsSchema.optional(), filter: obj(itemFilter).optional(), open: z.boolean().default(true) }), description: 'Create a review from ordered itemIds or from a search_items filter (up to 5000 items). Opens it in the PixelChat window unless open is false.' },
-  review_get: { schema: obj({ ...review, decision: decisionSchema.optional(), includeResolved: z.boolean().default(false) }), description: 'Read a review: entries with decisions (stale when the item changed after the decision) and the note threads on its items, including pins. Resolved threads are omitted unless includeResolved.' },
+  review_get: { schema: obj({ ...review, decision: decisionSchema.optional(), includeResolved: z.boolean().default(false), afterRevision: z.number().int().min(0).optional(), wait: waitSeconds.optional() }), description: 'Read a review: entries with decisions (stale when the item changed after the decision) and the note threads on its items, including pins. Resolved threads are omitted unless includeResolved. With afterRevision and wait (seconds), first wait until the review revision passes afterRevision; compare revisions to tell a change from a timeout.' },
   review_update: { schema: obj({ ...review, expectedRevision, title: reviewTitle.optional(), instructions: instructionsSchema.optional(), itemIds: itemIdsSchema.optional(), addItemIds: itemIdsSchema.optional() }), description: 'Change title, instructions, or entries only if the review revision still matches. itemIds replaces the ordered list (retained items keep decisions); addItemIds appends.' },
   review_decide: { schema: obj({ ...review, decisions: z.array(obj({ itemId: idSchema, decision: decisionSchema })).min(1).max(5000) }), description: 'Record accept, needs_changes, reject, or unreviewed for review entries. Decisions apply to each item\'s currently selected revision. Decisions are the user\'s call; agents record them only when asked.' },
   review_complete: { schema: obj({ ...review, expectedRevision }), description: 'Mark a review completed. Locks decisions, entries, and new notes until review_reopen.' },
-  review_reopen: { schema: obj({ ...review, expectedRevision }), description: 'Restore a completed review to active. Completion stays in review_history.' },
+  review_reopen: { schema: obj({ ...review, expectedRevision }), description: 'Restore a completed review to active. Completion stays in the activity log.' },
   review_delete: { schema: obj(review), description: 'Delete a review and its decisions. Notes stay on their items. Requires explicit user intent.' },
-  review_history: { schema: obj({ ...review, afterSeq: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(500).default(200) }), description: 'Attributed activity for a review in order: creation, edits, decisions, notes, completion. Page with afterSeq.' },
+  activity_get: { schema: obj({ ...project, reviewId: idSchema.optional(), itemId: idSchema.optional(), afterSeq: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(500).default(200), wait: waitSeconds.optional() }), description: 'Attributed changes in order (decisions, notes, selections, imports, jobs, exports), optionally for one review or item. Returns entries and a cursor; pass the cursor as afterSeq to continue. With wait (seconds), first wait until a matching change exists after afterSeq.' },
   generate_images: { schema: obj({ ...project, ...imageOptions, itemId: idSchema.optional(), collection: z.string().trim().min(1).max(200).optional(), name: z.string().trim().min(1).max(120).optional() }), description: `Generate images from a prompt. Billed to the user's provider account: run only for the user's request. Results become new items in collection (default "Generated"), or new versions of itemId. Returns queued jobs; follow them with jobs_get.` },
   edit_image: { schema: obj({ ...item, ...imageOptions, revisionId: idSchema.optional() }), description: `Edit an item's selected version (or revisionId) with a prompt. Billed to the user's provider account: run only for the user's request. Each result becomes a new version of the item for the user to choose; the selection is not changed. Returns queued jobs; follow them with jobs_get.` },
   jobs_get: { schema: obj({ ...project, jobIds: z.array(idSchema).min(1).max(200).optional(), batchId: idSchema.optional(), itemId: idSchema.optional(), active: z.boolean().optional(), wait: z.number().int().min(0).max(600).optional() }), description: 'List image jobs (newest first), filtered by ids, batch, item, or active. With wait (seconds), first wait until the matching jobs finish. Uncertain jobs may have been billed without a recorded result and are never replayed.' },
   job_cancel: { schema: obj({ ...project, jobId: idSchema }), description: 'Cancel a queued image job. A running request is already with the provider and cannot be cancelled.' },
   export_item: { schema: obj({ ...item, destination: z.string().min(1).max(1000).optional(), force: z.boolean().optional() }), description: `Write an item's selected version to its linked source file, making it the synced version, or to an absolute destination file. Refuses with SOURCE_CHANGED when the source file differs from what PixelChat last read, and with DESTINATION_EXISTS for an existing destination; force overwrites only with explicit user intent. Find work to export with search_items status pending_export.` },
+  view_image: { schema: obj({ ...item, revisionId: idSchema.optional(), pins: z.boolean().default(true), background: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#808080'), maxSize: z.number().int().min(256).max(2048).default(1024) }), description: 'Look at an item version (default: selected) as a PNG image: transparency flattened onto background, open note pins drawn and numbered in viewer order (dashed when written on another version). Small art is enlarged by whole pixels, large art reduced to maxSize. Use a background unlike the art to judge edges.' },
   ui_open: { schema: obj({ ...project, reviewId: idSchema.optional(), itemId: idSchema.optional() }), description: 'Show a review (optionally focused on one of its items) or a single item in the PixelChat window.' },
   note_add: { schema: obj({ ...item, body: noteBody, reviewId: idSchema.optional(), revisionId: idSchema.optional(), parentId: idSchema.optional(), pin: pinSchema.optional() }), description: 'Add a note on an item, optionally in a review and pinned to a region of a revision (default: the selected revision). parentId replies to a thread; replies inherit its review and revision and cannot be pinned.' },
   note_update: { schema: obj({ ...note, body: noteBody.optional(), pin: pinSchema.nullable().optional(), resolved: z.boolean().optional() }), description: 'Edit a note body or pin (agents: own notes only), or resolve/reopen a root thread. Resolve a thread after its change is made, and reply to say what changed.' },
@@ -111,6 +116,11 @@ export class Operations {
     const titleSource = origin === 'user' ? 'user' : 'assistant';
     switch (name) {
       case 'status': return { version: 1, ready: true, providers: await this.providers(), imageModels: IMAGE_MODELS, defaultImageModel: DEFAULT_IMAGE_MODEL };
+      case 'guidance': {
+        let documents: Record<string, string>;
+        try { documents = selectGuidance(a.topics); } catch (error) { throw new WorkbenchError('INVALID_ARGUMENTS', error instanceof Error ? error.message : 'Unknown guidance topic.'); }
+        return { version: 1, hash: guidanceHash(), topics: Object.keys(guidanceDocuments), documents };
+      }
       case 'projects_list': return store.projects();
       case 'project_create': return store.createProject(a.name);
       case 'project_get': return store.project(a.projectId);
@@ -143,13 +153,22 @@ export class Operations {
         try { await this.ui.send({ action: 'open-review', projectId: a.projectId, reviewId: created.id }); return { ...created, opened: true }; }
         catch (error) { return { ...created, opened: false, openError: error instanceof Error ? error.message : 'Could not open the review.' }; }
       }
-      case 'review_get': return store.review(a.reviewId, a.projectId, { decision: a.decision, includeResolved: a.includeResolved });
+      case 'review_get': {
+        if (a.wait && a.afterRevision !== undefined) await this.waitUntil(() => store.reviewSummary(a.reviewId, a.projectId).revision > a.afterRevision, a.wait * 1000);
+        return store.review(a.reviewId, a.projectId, { decision: a.decision, includeResolved: a.includeResolved });
+      }
       case 'review_update': { const { projectId, reviewId, expectedRevision, ...patch } = a; return store.updateReview(reviewId, projectId, expectedRevision, patch, origin); }
       case 'review_decide': return store.decide(a.reviewId, a.projectId, a.decisions, origin);
       case 'review_complete': return store.setReviewStatus(a.reviewId, a.projectId, a.expectedRevision, 'completed', origin);
       case 'review_reopen': return store.setReviewStatus(a.reviewId, a.projectId, a.expectedRevision, 'active', origin);
       case 'review_delete': store.deleteReview(a.reviewId, a.projectId, origin); return { deleted: true };
-      case 'review_history': store.reviewSummary(a.reviewId, a.projectId); return store.activity(a.projectId, { reviewId: a.reviewId, afterSeq: a.afterSeq, limit: a.limit });
+      case 'activity_get': {
+        if (a.reviewId) store.reviewSummary(a.reviewId, a.projectId);
+        const filter = { reviewId: a.reviewId, itemId: a.itemId, afterSeq: a.afterSeq };
+        if (a.wait) await this.waitUntil(() => store.activity(a.projectId, { ...filter, limit: 1 }).length > 0, a.wait * 1000);
+        const entries = store.activity(a.projectId, { ...filter, limit: a.limit });
+        return { entries, cursor: entries.at(-1)?.seq ?? a.afterSeq };
+      }
       case 'generate_images': { const { projectId, ...args } = a; return this.images.request(projectId, 'generate', args as ImageArgs, origin); }
       case 'edit_image': { const { projectId, ...args } = a; return this.images.request(projectId, 'edit', args as ImageArgs, origin); }
       case 'jobs_get': {
@@ -159,6 +178,7 @@ export class Operations {
       }
       case 'job_cancel': return store.cancelJob(a.jobId, a.projectId, origin);
       case 'export_item': return library.exportItem(a.projectId, a.itemId, { destination: a.destination, force: a.force }, origin);
+      case 'view_image': return viewImage(store, this.media, a.projectId, a.itemId, { revisionId: a.revisionId, pins: a.pins, background: a.background, maxSize: a.maxSize });
       case 'ui_open': {
         if (a.reviewId) {
           store.reviewSummary(a.reviewId, a.projectId);

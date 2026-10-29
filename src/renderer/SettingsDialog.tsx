@@ -2,11 +2,12 @@ import { createContext, useState } from 'react'
 import type { ProviderStatus } from '../shared/types'
 import { Modal } from './Dialogs'
 import Icon from './Icon'
+import AgentSettings from './AgentSettings'
 
 /** Provider readiness from the snapshot, for views that start image jobs. */
 export const ProvidersContext = createContext<ProviderStatus | null>(null)
 
-/** Provider credentials: Codex account sign-in and a Gemini API key, both kept in OS-protected storage. */
+/** Provider credentials (Codex sign-in, Gemini key; both in OS-protected storage) and agent integration. */
 export default function SettingsDialog({ providers, onClose, onError }: { providers: ProviderStatus; onClose: () => void; onError: (message: string) => void }) {
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
@@ -15,7 +16,7 @@ export default function SettingsDialog({ providers, onClose, onError }: { provid
     try { await action(); return true } catch (error) { onError(error instanceof Error ? error.message : 'The settings change failed.'); return false } finally { setBusy(false) }
   }
   const { codex, gemini } = providers
-  return <Modal eyebrow="Settings" title="Image providers" label="Settings" onClose={onClose}>
+  return <Modal eyebrow="Settings" title="Providers and agents" label="Settings" onClose={onClose}>
     <div className="project-dialog-body settings-body">
       {!providers.secureStorage && <p className="settings-error"><Icon name="warn" /> Secure storage is unavailable on this device, so credentials cannot be saved.</p>}
       <section className="settings-provider">
@@ -39,6 +40,7 @@ export default function SettingsDialog({ providers, onClose, onError }: { provid
           {gemini.ready && <button className="secondary-button" disabled={busy} onClick={() => void run(() => window.pixel.saveGeminiKey(null))}>Remove key</button>}
         </div>
       </section>
+      <AgentSettings />
     </div>
   </Modal>
 }

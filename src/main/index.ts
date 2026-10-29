@@ -7,6 +7,9 @@ import { MediaStore, MEDIA_TYPES } from './media';
 import { Library } from './library';
 import { Operations, idSchema, operationError } from './operations';
 import { RendererPort } from './ui-port';
+import { startBridge } from './bridge';
+import { installIntegration } from '../shared/install';
+import { installationSchema, type InstallationInput } from '../shared/workbench';
 import { startBrowserHost } from './browser-host';
 import { DiagnosticLog, redactText } from './diagnostics';
 import { ImageJobs } from './images';
@@ -28,6 +31,7 @@ let library: Library | null = null;
 let images: ImageJobs | null = null;
 let auth: CodexAuth | null = null;
 let rendererPort: RendererPort | null = null;
+let bridge: Awaited<ReturnType<typeof startBridge>> | null = null;
 let quitting = false;
 let eventTimer: ReturnType<typeof setTimeout> | null = null;
 const diagnostics = new DiagnosticLog(app.getPath('userData'));
@@ -49,6 +53,7 @@ const commandSchemas = {
   codexCancelLogin: z.tuple([]),
   codexLogout: z.tuple([]),
   saveGeminiKey: z.tuple([z.string().trim().max(400).nullable()]),
+  installIntegration: z.tuple([installationSchema]),
   uiReady: z.tuple([]),
   uiAcknowledge: z.tuple([z.string().uuid(), z.string().max(2000).optional()]),
 };
@@ -73,6 +78,9 @@ else {
     jobs.start();
     rendererPort = new RendererPort(() => window, db, () => browserHost);
     const ops = new Operations(db, library, media, jobs, rendererPort, providerStatus); operations = ops;
+    const agentRoot = app.isPackaged ? join(process.resourcesPath, 'agent') : join(__dirname, '../agent');
+    // Agents are optional: the workspace stays usable when the helper is missing or the pipe cannot be published.
+    try { bridge = await startBridge(root, join(agentRoot, 'pixelchat-helper.exe'), ops); } catch (error) { diagnostics.record('bridge.failed', { message: safeError(error) }); }
     const handlers: Record<Command, (...args: any[]) => unknown> = {
       snapshot: async (): Promise<Snapshot> => { const activeProjectId = db.activeProjectId(); return { projects: db.projects(), activeProjectId, sessions: db.sessions(activeProjectId), providers: await providerStatus() }; },
       setActiveProject: (id: string) => db.setActiveProject(id),
@@ -83,6 +91,7 @@ else {
       codexCancelLogin: () => codex.cancelLogin(),
       codexLogout: () => codex.logout(),
       saveGeminiKey: async (key: string | null) => { if (key) await secrets.set(GEMINI_KEY, key); else await secrets.delete(GEMINI_KEY); changed(); },
+      installIntegration: async (input: InstallationInput) => { try { return { ok: true, result: await installIntegration(input, join(agentRoot, 'pixelchat-runtime.exe'), join(agentRoot, 'cli.cjs')) }; } catch (e) { return operationError(e); } },
       uiReady: () => rendererPort!.markReady(),
       uiAcknowledge: (id: string, error?: string) => rendererPort!.acknowledge(id, error),
     };
@@ -133,6 +142,6 @@ else {
   app.on('before-quit', event => {
     if (quitting) return; event.preventDefault(); quitting = true;
     rendererPort?.unavailable();
-    void Promise.all([browserHost?.close(), operations?.close(), library?.close(), images?.close(), auth?.cancelLogin()]).finally(() => { if (eventTimer) clearTimeout(eventTimer); store?.close(); app.quit(); });
+    void Promise.all([browserHost?.close(), bridge?.close(), operations?.close(), library?.close(), images?.close(), auth?.cancelLogin()]).finally(() => { if (eventTimer) clearTimeout(eventTimer); store?.close(); app.quit(); });
   });
 }

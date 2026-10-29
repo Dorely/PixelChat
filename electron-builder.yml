@@ -4,13 +4,22 @@ directories:
   output: release
 files:
   - out/**/*
+  - '!out/agent/**/*'
+  - '!out/skill/**/*'
+  - '!out/native-build/**/*'
   - package.json
   - LICENSE
+  - THIRD_PARTY_NOTICES.md
+  - third-party/**/*
 asarUnpack:
   - node_modules/better-sqlite3/**/*
   - node_modules/sharp/**/*
   - node_modules/@img/**/*
 extraResources:
+  - from: out/agent
+    to: agent
+  - from: out/skill
+    to: skill
   - from: resources/icon.ico
     to: icon.ico
 win:
@@ -23,4 +32,5 @@ nsis:
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
   license: LICENSE
+  include: installer/agent.nsh
 npmRebuild: true

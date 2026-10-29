@@ -113,3 +113,38 @@ secure-storage, or platform integration.
   ingestion, format conversion, provenance from a real result, and the opaque-result
   warning are unverified. Codex sign-in, Gemini key save, and desktop (non-browser)
   behavior were not exercised.
+
+## 2026-10-29 — Agent workbench
+
+- `npm run typecheck` and `npm run build` succeeded, including the CLI bundle, skill
+  output, and the CMake/MSVC build of `pixelchat-helper.exe`. The pinned Node runtime
+  matched its SHA-256.
+- Browser host on the scratch eel project (5 items), through the built CLI:
+  - `status`, `tools` (41 operations), and `guidance` worked over the bridge; the
+    guidance hash matched `out/skill/guidance.json`, and an unknown topic returned
+    `INVALID_ARGUMENTS`.
+  - `review_get` with `afterRevision` and `wait: 2` returned the unchanged review after
+    about 2.2 s; with `wait: 20` it returned revision 2 about 2 s after a decision made
+    1.5 s in. A concurrent `activity_get` wait woke with `review.decided` and advanced
+    its cursor.
+  - `view_image`: the 1282×256 body reduced to 1024×204 on a cyan backdrop with a box pin
+    and a point pin numbered 1 and 2 (inspected visually); `pins: false` drew none; a
+    245×269 head was first left at scale 1, fixed to enlarge by 2 to 490×538 and checked
+    again; a non-hex background returned `INVALID_ARGUMENTS`.
+- MCP over raw stdio JSON-RPC (protocol 2025-06-18): 41 tools; `view_image` returned
+  text plus PNG image content; both resource templates listed; the pending-exports
+  resource listed `head`. With subscriptions, selecting `head`'s synced version sent
+  `resources/updated` for pending-exports, and a review decision sent it for the review.
+- `skill install --scope project --target claude --target codex --mcp` into a scratch
+  directory: dry run listed the files; install wrote both skills, `.mcp.json`, and
+  `.codex/config.toml` with absolute runtime and CLI paths; status reported them
+  up to date; uninstall removed them and kept backups.
+- Settings → Agent integration rendered in the browser host and its Installation status
+  call returned the scratch directory's file states.
+- With a stale discovery file, the CLI started the development desktop app and
+  connected. `npm run package` built `PixelChat Setup 0.3.0.exe`; the unpacked build's
+  bundled CLI started the packaged app (`app.started`, packaged) and served `status` and
+  `view_image`. All app processes were terminated.
+- Gaps: the installer itself was not run, so the NSIS PATH hooks are unverified. No
+  real Codex or Claude Code session connected; MCP was exercised with a raw client. A
+  modern-era (2026-07-28) client was not tried.

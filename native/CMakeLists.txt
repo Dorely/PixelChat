@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.15)
+project(pixelchat_helper CXX)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+add_executable(pixelchat-helper helper.cpp)
+target_compile_features(pixelchat-helper PRIVATE cxx_std_17)
+target_link_libraries(pixelchat-helper PRIVATE crypt32 advapi32 user32)
+target_compile_definitions(pixelchat-helper PRIVATE _CRT_SECURE_NO_WARNINGS UNICODE _UNICODE)

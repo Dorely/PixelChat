@@ -1,4 +1,4 @@
-import type { Origin, OperationResponse, UiCommand } from './workbench';
+import type { InstallationInput, Origin, OperationResponse, UiCommand } from './workbench';
 import type { ImageBackground, ImageFormat } from './image-models';
 
 export interface Project { id: string; name: string; createdAt: string; updatedAt: string }
@@ -87,6 +87,7 @@ export interface PixelApi {
   codexCancelLogin(): Promise<void>;
   codexLogout(): Promise<void>;
   saveGeminiKey(key: string | null): Promise<void>;
+  installIntegration(input: InstallationInput): Promise<OperationResponse>;
   uiReady(): Promise<void>;
   uiAcknowledge(id: string, error?: string): Promise<void>;
   onUiCommand(callback: (command: UiCommand) => void): () => void;
