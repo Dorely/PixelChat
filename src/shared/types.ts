@@ -67,13 +67,37 @@ export interface ImageJob {
   createdBy: Origin; createdAt: string; startedAt: string | null; finishedAt: string | null;
 }
 
+export type MessageRole = 'user' | 'assistant' | 'tool';
+export type MessageStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+/** A revision a tool showed the assistant. The UI draws its thumbnail; the rendered view is not stored. */
+export interface ChatAttachment { kind: 'image'; label: string; itemId: string; revisionId: string }
+export interface Message { id: string; sessionId: string; role: MessageRole; text: string; status: MessageStatus; attachments: ChatAttachment[]; createdAt: string }
+/** What the user is looking at when they send a message, so "this" resolves to an item or review. */
+export interface ChatFocus { reviewId?: string; itemId?: string }
+
+export type GenericProviderKind = 'chat-completions' | 'responses' | 'anthropic';
+export interface ChatProviderEntry { id: string; label: string; baseUrl: string; kind: GenericProviderKind }
+export type CapabilityFlag = true | false | 'unknown';
+/** A tested custom chat model. Vision decides whether view_image is offered. */
+export interface ChatModelEntry {
+  id: string; providerId: string; slug: string; efforts: string[]; maxTokens: number | null; vision: CapabilityFlag;
+  effortResults: Record<string, 'pass' | 'fail'>; lastTestedAt: string; testError?: string;
+}
+export interface ModelCapabilityResult { perEffort: Record<string, 'pass' | 'fail'>; failedEfforts: string[]; maxTokens: number | null; vision: CapabilityFlag; error?: string }
+export interface ActiveChatSelection { modelId: string; effort: string }
+export interface ChatModelOption { id: string; label: string; providerLabel: string; slug: string; efforts: string[]; builtIn: boolean }
+export interface ChatStatus { models: ChatModelOption[]; active: ActiveChatSelection; providers: ChatProviderEntry[] }
+export interface ChatContext { model: string; tokens: number; limit: number | null; includesHiddenReasoning: boolean; includesEstimatedMedia: boolean }
+export interface ChatProviderInput { id?: string; label: string; baseUrl: string; kind: GenericProviderKind; apiKey?: string }
+export interface ChatModelInput { id?: string; providerId: string; slug: string; efforts: string[] }
+
 export interface ProviderStatus {
   secureStorage: boolean;
   codex: { ready: boolean; pending: boolean; error: string | null };
   gemini: { ready: boolean };
 }
 /** Renderer bootstrap state; views load their own data through operations. */
-export interface Snapshot { projects: Project[]; activeProjectId: string; sessions: Session[]; providers: ProviderStatus }
+export interface Snapshot { projects: Project[]; activeProjectId: string; sessions: Session[]; providers: ProviderStatus; chat: ChatStatus; activeTurns: string[] }
 
 export interface PixelApi {
   hostMode: 'desktop' | 'browser';
@@ -88,6 +112,17 @@ export interface PixelApi {
   codexLogout(): Promise<void>;
   saveGeminiKey(key: string | null): Promise<void>;
   installIntegration(input: InstallationInput): Promise<OperationResponse>;
+  chatMessages(sessionId: string): Promise<Message[]>;
+  sendMessage(sessionId: string, text: string, focus?: ChatFocus): Promise<void>;
+  cancelTurn(sessionId: string): Promise<void>;
+  chatContext(sessionId: string, draft: string): Promise<ChatContext>;
+  setActiveChat(selection: ActiveChatSelection): Promise<ActiveChatSelection>;
+  saveChatProvider(input: ChatProviderInput): Promise<ChatProviderEntry>;
+  deleteChatProvider(id: string): Promise<void>;
+  listChatModels(providerId: string): Promise<string[]>;
+  testChatModel(input: ChatModelInput): Promise<ModelCapabilityResult>;
+  saveChatModel(input: ChatModelInput): Promise<ChatModelEntry>;
+  deleteChatModel(id: string): Promise<void>;
   uiReady(): Promise<void>;
   uiAcknowledge(id: string, error?: string): Promise<void>;
   onUiCommand(callback: (command: UiCommand) => void): () => void;

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Project, Session, Snapshot } from '../shared/types'
+import type { ChatFocus, Project, Session, Snapshot } from '../shared/types'
 import Icon from './Icon'
 import { ConfirmDialog, Modal } from './Dialogs'
 import LibraryView from './LibraryView'
 import ReviewsView from './ReviewsView'
+import ChatPanel from './ChatPanel'
 import SettingsDialog, { ProvidersContext } from './SettingsDialog'
 import { op } from './ops'
 import { THEMES, applyTheme, storedTheme, type ThemeId } from './theme'
@@ -12,7 +13,7 @@ type View = 'library' | 'reviews'
 type Deletion = { kind: 'project' | 'session'; id: string; projectId: string; name: string }
 type Target = { reviewId?: string; itemId?: string }
 
-const emptySnapshot: Snapshot = { projects: [], activeProjectId: '', sessions: [], providers: { secureStorage: false, codex: { ready: false, pending: false, error: null }, gemini: { ready: false } } }
+const emptySnapshot: Snapshot = { projects: [], activeProjectId: '', sessions: [], providers: { secureStorage: false, codex: { ready: false, pending: false, error: null }, gemini: { ready: false } }, chat: { models: [], active: { modelId: '', effort: '' }, providers: [] }, activeTurns: [] }
 const message = (error: unknown) => error instanceof Error ? error.message : 'Operation failed.'
 
 function TitleInput({ value, className, ariaLabel, onCommit, onCancel }: { value: string; className: string; ariaLabel: string; onCommit: (value: string) => void; onCancel: () => void }) {
@@ -69,8 +70,9 @@ function ThemePicker({ theme, onChange }: { theme: ThemeId; onChange: (id: Theme
   </span>
 }
 
-function ChatSidebar({ sessions, projectName, selectedId, onSelect, onNew, onRename, onDelete }: { sessions: Session[]; projectName: string; selectedId: string | null; onSelect: (id: string) => void; onNew: () => void; onRename: (id: string, title: string) => void; onDelete: () => void }) {
+function ChatSidebar({ snapshot, projectName, selectedId, focus, onSelect, onNew, onRename, onDelete, onSettings, onError }: { snapshot: Snapshot; projectName: string; selectedId: string | null; focus: ChatFocus; onSelect: (id: string) => void; onNew: () => void; onRename: (id: string, title: string) => void; onDelete: () => void; onSettings: () => void; onError: (message: string) => void }) {
   const [renamingId, setRenamingId] = useState<string | null>(null)
+  const sessions = snapshot.sessions
   return <aside className="chat-sidebar">
     <div className="brand-row"><div className="brand-mark"><Icon name="mark" /></div><div><strong>PIXELCHAT</strong><span>art review workspace</span></div><span className="live-indicator" title="Local workspace ready" /></div>
     <div className="sidebar-heading"><span>Conversations <small>{projectName}</small></span><span className="sidebar-actions"><button className="icon-button" disabled={!selectedId} onClick={onDelete} aria-label="Delete selected conversation" title="Delete selected conversation"><Icon name="trash" /></button><button className="labeled-button" onClick={onNew} aria-label="New conversation" title="New conversation"><Icon name="plus" /> New</button></span></div>
@@ -79,11 +81,12 @@ function ChatSidebar({ sessions, projectName, selectedId, onSelect, onNew, onRen
         : sessions.map(session => renamingId === session.id
           ? <div key={session.id} className="conversation-row conversation-active"><span className="conversation-dot" /><TitleInput value={session.title} className="conversation-rename" ariaLabel="Conversation title" onCommit={title => { setRenamingId(null); onRename(session.id, title) }} onCancel={() => setRenamingId(null)} /></div>
           : <button key={session.id} className={`conversation-row${session.id === selectedId ? ' conversation-active' : ''}`} onClick={() => onSelect(session.id)} onDoubleClick={() => setRenamingId(session.id)} title="Double-click to rename">
-            <span className="conversation-dot" /><span className="conversation-copy"><strong>{session.title}</strong><small>{new Date(session.updatedAt).toLocaleString()}</small></span>
+            <span className={`conversation-dot${snapshot.activeTurns.includes(session.id) ? ' conversation-busy' : ''}`} /><span className="conversation-copy"><strong>{session.title}</strong><small>{new Date(session.updatedAt).toLocaleString()}</small></span>
           </button>)}
     </div>
     <div className="sidebar-chat">
-      <div className="chat-welcome"><Icon name="spark" /><p>The inline assistant is not configured yet. External agents can connect once the PixelChat MCP server is installed.</p></div>
+      {selectedId ? <ChatPanel key={selectedId} sessionId={selectedId} snapshot={snapshot} focus={focus} onSettings={onSettings} onError={onError} />
+        : <div className="chat-welcome"><Icon name="chat" /><p>Start a conversation to work with the assistant.</p></div>}
     </div>
   </aside>
 }
@@ -101,6 +104,7 @@ export default function App() {
   const [deleteError, setDeleteError] = useState('')
   const [sidebarWidth, setSidebarWidth] = useState(34)
   const [target, setTarget] = useState<Target | null>(null)
+  const [chatFocus, setChatFocus] = useState<ChatFocus>({})
   const refreshSerial = useRef(0)
 
   const refresh = useCallback(async () => {
@@ -139,7 +143,7 @@ export default function App() {
   const projectId = snapshot.activeProjectId
   const activeProject = snapshot.projects.find(project => project.id === projectId) ?? null
   const session = snapshot.sessions.find(item => item.id === sessionId) ?? null
-  const createSession = () => call(async () => setSessionId((await op<Session>('session_create', { projectId, title: 'New conversation' })).id))
+  const createSession = () => call(async () => setSessionId((await op<Session>('session_create', { projectId })).id))
   const saveProject = async (name: string) => {
     const saved = projectDialog === 'create'
       ? await call(async () => window.pixel.setActiveProject((await op<Project>('project_create', { name })).id))
@@ -157,7 +161,7 @@ export default function App() {
   }
 
   return <div className="app-shell" style={{ '--sidebar-width': `${sidebarWidth}%` } as React.CSSProperties}>
-    <ChatSidebar sessions={snapshot.sessions} projectName={activeProject?.name ?? 'Project'} selectedId={sessionId} onSelect={setSessionId} onNew={() => void createSession()}
+    <ChatSidebar snapshot={snapshot} projectName={activeProject?.name ?? 'Project'} selectedId={sessionId} focus={chatFocus} onSelect={setSessionId} onSettings={() => setSettingsOpen(true)} onError={setUiError} onNew={() => void createSession()}
       onRename={(id, title) => void call(() => op('rename_session', { projectId, sessionId: id, title }))}
       onDelete={() => { if (session) { setDeleteError(''); setDeletion({ kind: 'session', id: session.id, projectId, name: session.title }) } }} />
     <div className="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize chat sidebar" aria-valuenow={Math.round(sidebarWidth)} aria-valuemin={24} aria-valuemax={48} tabIndex={0} onMouseDown={startResize}
@@ -173,11 +177,11 @@ export default function App() {
         <button className={view === 'reviews' ? 'tab-active' : ''} onClick={() => setView('reviews')}><Icon name="check" /> Reviews</button>
       </nav>
       <ProvidersContext.Provider value={snapshot.providers}>{!projectId ? null : view === 'library'
-        ? <LibraryView key={projectId} projectId={projectId} focusItemId={target?.reviewId ? undefined : target?.itemId} onFocusDone={clearTarget} onOpenReview={reviewId => { setTarget({ reviewId }); setView('reviews') }} onError={setUiError} />
-        : <ReviewsView key={projectId} projectId={projectId} target={target?.reviewId ? target : null} onTargetDone={clearTarget} onError={setUiError} />}</ProvidersContext.Provider>
+        ? <LibraryView key={projectId} projectId={projectId} focusItemId={target?.reviewId ? undefined : target?.itemId} onFocusDone={clearTarget} onOpenReview={reviewId => { setTarget({ reviewId }); setView('reviews') }} onChatFocus={setChatFocus} onError={setUiError} />
+        : <ReviewsView key={projectId} projectId={projectId} target={target?.reviewId ? target : null} onTargetDone={clearTarget} onChatFocus={setChatFocus} onError={setUiError} />}</ProvidersContext.Provider>
     </main>
     {uiError && <div className="error-banner" role="alert"><Icon name="info" /><span>{uiError}</span><button className="icon-button" onClick={() => setUiError('')} aria-label="Dismiss error"><Icon name="close" /></button></div>}
-    {settingsOpen && <SettingsDialog providers={snapshot.providers} onClose={() => setSettingsOpen(false)} onError={setUiError} />}
+    {settingsOpen && <SettingsDialog providers={snapshot.providers} chat={snapshot.chat} onClose={() => setSettingsOpen(false)} onError={setUiError} />}
     {projectDialog && <ProjectDialog mode={projectDialog} project={activeProject} onClose={() => setProjectDialog(null)} onSubmit={name => void saveProject(name)} />}
     {deletion && <ConfirmDialog eyebrow={deletion.kind === 'project' ? 'Delete project' : 'Delete conversation'} title={deletion.name} confirmLabel="Delete" busy={deleting} error={deleteError} onCancel={() => setDeletion(null)} onConfirm={() => void confirmDelete()}
       body={deletion.kind === 'project' ? 'The project, its reviews, notes, and stored image copies are removed permanently. Files in source folders are not touched.' : 'This conversation is removed permanently. Project art, reviews, and notes remain.'} />}

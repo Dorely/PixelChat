@@ -54,7 +54,7 @@ export const operationDefinitions = {
   project_rename: { schema: obj({ ...project, name: nameSchema }), description: 'Rename a project.' },
   project_delete: { schema: obj(project), description: 'Permanently delete a project with its workspace records and stored image copies. Files in source folders are not touched. Requires explicit user intent.' },
   sessions_list: { schema: obj(project), description: 'List conversations in a project.' },
-  session_create: { schema: obj({ ...project, title: titleSchema }), description: 'Create and label a conversation in a project.' },
+  session_create: { schema: obj({ ...project, title: titleSchema.optional() }), description: 'Create a conversation in a project. Without a title it is named from its first message.' },
   session_get: { schema: obj(session), description: 'Inspect a conversation.' },
   rename_session: { schema: obj({ ...session, title: titleSchema }), description: 'Keep a conversation label specific to the current work.' },
   session_delete: { schema: obj(session), description: 'Permanently delete a conversation. Project art, reviews and notes remain. Requires explicit user intent.' },
@@ -97,6 +97,8 @@ export function operationCatalog() {
 export class Operations {
   private pending = new Set<Promise<unknown>>();
   private stopped = false;
+  /** Set by the chat service: a conversation with a running turn cannot be deleted under it. */
+  sessionBusy?: (sessionId: string) => boolean;
   constructor(private store: Store, private library: Library, private media: MediaStore, private images: ImageJobs, private ui: UiPort, private providers: () => Promise<ProviderStatus>) {}
   async close() { this.stopped = true; await Promise.allSettled([...this.pending]); }
   call(name: string, raw: unknown, origin: Origin = 'agent'): Promise<unknown> {
@@ -127,12 +129,15 @@ export class Operations {
       case 'project_rename': return store.renameProject(a.projectId, a.name);
       case 'project_delete': {
         if (store.hasActiveJobs(a.projectId)) throw new WorkbenchError('BUSY', 'Image jobs are still running in this project. Delete it after they finish.');
+        if (store.sessions(a.projectId).some(entry => this.sessionBusy?.(entry.id))) throw new WorkbenchError('BUSY', 'The assistant is responding in this project. Stop it before deleting.');
         const files = store.projectRevisionFiles(a.projectId); store.deleteProject(a.projectId); await this.media.remove(files); return { deleted: true }; }
       case 'sessions_list': return store.sessions(a.projectId);
-      case 'session_create': return store.createSession(a.projectId, a.title, titleSource);
+      case 'session_create': return a.title ? store.createSession(a.projectId, a.title, titleSource) : store.createSession(a.projectId);
       case 'session_get': return store.session(a.sessionId, a.projectId);
       case 'rename_session': return store.renameSession(a.sessionId, a.title, titleSource);
-      case 'session_delete': store.deleteSession(a.sessionId); return { deleted: true };
+      case 'session_delete':
+        if (this.sessionBusy?.(a.sessionId)) throw new WorkbenchError('BUSY', 'The assistant is responding in this conversation. Stop it before deleting.');
+        store.deleteSession(a.sessionId); return { deleted: true };
       case 'sources_list': return library.sources(a.projectId);
       case 'source_add': return library.addSource(a.projectId, a.root, a.include ?? [], a.exclude ?? [], origin);
       case 'source_get': return a.wait ? library.waitForScan(a.projectId, a.sourceId, a.wait * 1000) : library.source(a.projectId, a.sourceId);

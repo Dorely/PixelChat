@@ -18,14 +18,17 @@ The profile lives at `%APPDATA%/PixelChat`: `library.sqlite` (WAL, foreign keys 
 ## Operations and renderer bridge
 
 `src/main/operations.ts` is the single operation registry. Each operation has a strict
-zod schema and description; the UI calls it with origin `user`, and the CLI and MCP
-(through the local bridge) call it with origin `agent`. Failures return `{ ok: false,
+zod schema and description; the UI calls it with origin `user`, and the inline assistant,
+the CLI, and MCP (through the local bridge) call it with origin `agent`. Failures return `{ ok: false,
 error: { code, message } }` envelopes with redacted messages.
 
 The renderer reaches the main process through one IPC channel, `pixel:call`, limited to
 fixed commands (`snapshot`, `setActiveProject`, `operation`, `chooseDirectory`,
 `openLogs`, `uiReady`, `uiAcknowledge`, `installIntegration`, and the credential commands
-`codexLogin`, `codexCancelLogin`, `codexLogout`, `saveGeminiKey`) with zod tuple schemas. Requests from any frame
+`codexLogin`, `codexCancelLogin`, `codexLogout`, `saveGeminiKey`, and the chat commands
+`chatMessages`, `sendMessage`, `cancelTurn`, `chatContext`, `setActiveChat`,
+`saveChatProvider`, `deleteChatProvider`, `listChatModels`, `testChatModel`,
+`saveChatModel`, `deleteChatModel`) with zod tuple schemas. Requests from any frame
 other than the main window's top frame are rejected. Store changes are debounced into
 `pixel:changed`; the renderer then refreshes its snapshot. Operations can drive the view
 through `ui-port.ts`, which sends `pixel:ui-command` and waits up to 15 seconds for the
@@ -44,9 +47,10 @@ library as the desktop app.
 
 ## Persistence
 
-Schema version 1 holds `settings`, `projects`, `sessions`, `sources`, `items`,
-`revisions`, `activity`, `reviews`, `review_items`, `notes`, and `jobs`; project deletion
-cascades. A `Default` project is created
+Schema version 2 holds `settings`, `projects`, `sessions`, `sources`, `items`,
+`revisions`, `activity`, `reviews`, `review_items`, `notes`, `jobs`, and the chat tables
+`messages`, `chat_history`, and `tool_calls`; migrations run in order, and project and
+session deletion cascade. A `Default` project is created
 when none exist, and the active project is kept in the `project-active` setting.
 
 Every mutation appends an `activity` row (project, origin, kind, item or review, data).
@@ -168,6 +172,37 @@ In the viewer, the Edit panel runs the user's prompt on the viewed version, can 
 open note threads (with pin coordinates) to the prompt, and lists the item's jobs.
 Versions show the model and a prompt excerpt; "Export to source" appears while the item
 is pending export and asks before overwriting a changed or missing file.
+
+## Inline assistant
+
+A conversation is a session. `chat.ts` runs at most one turn per conversation: it stores the
+user's message (naming an automatically titled conversation after it), then loops model
+request → tool calls → tool outputs until the model answers without calls or the user stops
+it. The provider input history is kept in `chat_history`; visible messages (user, assistant,
+and activity lines for mutating tools) in `messages`.
+
+Tools are the operation registry (`assistant.ts`) minus project and conversation
+management, with `projectId` (and `sessionId` for `rename_session`) filled in. Every call is
+recorded in the `tool_calls` ledger before it runs, and a call id already in the ledger
+returns its recorded result instead of running again. `generate_images` and `edit_image`
+get a `requestId` stored in the ledger before admission. At startup, running replies become
+failed and in-flight calls uncertain, with the requestId to recover rather than replay.
+Waiting reads stop waiting when the turn is stopped.
+
+Each request's instructions add the project's item, pending-export, active-job, and review
+counts, the conversation title and who set it, and what the user has open (the viewed
+review and item), which the renderer sends with each message. `view_image` attaches its PNG
+to the next request as an input image and shows a thumbnail in the conversation; only the
+newest eight images stay in history. Outputs over 200,000 characters are refused with a
+request to narrow.
+
+Chat models (`chat-registry.ts`) are the built-in Codex models over the ChatGPT sign-in
+(`providers/codex.ts`) plus custom endpoints (`providers/generic/`: Chat Completions,
+Responses, Anthropic Messages). A custom model is saved only after a capability test passes
+for every listed effort; the test also probes image input, and a model that cannot see
+images is not offered `view_image`. Endpoint keys are in secure storage; a direct Gemini
+endpoint uses the Gemini image key. The composer's context meter estimates tokens with
+tiktoken (images by pixel count) against the Codex default context size.
 
 ## Agent workbench
 

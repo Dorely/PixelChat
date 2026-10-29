@@ -1,14 +1,15 @@
 import { createContext, useState } from 'react'
-import type { ProviderStatus } from '../shared/types'
+import type { ChatStatus, ProviderStatus } from '../shared/types'
 import { Modal } from './Dialogs'
 import Icon from './Icon'
 import AgentSettings from './AgentSettings'
+import ChatProviderSettings from './ChatProviderSettings'
 
 /** Provider readiness from the snapshot, for views that start image jobs. */
 export const ProvidersContext = createContext<ProviderStatus | null>(null)
 
-/** Provider credentials (Codex sign-in, Gemini key; both in OS-protected storage) and agent integration. */
-export default function SettingsDialog({ providers, onClose, onError }: { providers: ProviderStatus; onClose: () => void; onError: (message: string) => void }) {
+/** Provider credentials (Codex sign-in, Gemini key; both in OS-protected storage), chat models, and agent integration. */
+export default function SettingsDialog({ providers, chat, onClose, onError }: { providers: ProviderStatus; chat: ChatStatus; onClose: () => void; onError: (message: string) => void }) {
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   const run = async (action: () => Promise<void>) => {
@@ -21,7 +22,7 @@ export default function SettingsDialog({ providers, onClose, onError }: { provid
       {!providers.secureStorage && <p className="settings-error"><Icon name="warn" /> Secure storage is unavailable on this device, so credentials cannot be saved.</p>}
       <section className="settings-provider">
         <header><strong>Codex</strong><span className={`badge ${codex.ready ? 'badge-accent' : ''}`}>{codex.ready ? 'Signed in' : codex.pending ? 'Waiting for browser' : 'Not signed in'}</span></header>
-        <p>Image 2 and 2.5 models through your ChatGPT account. Each image draws on the plan's image allowance.</p>
+        <p>The built-in chat models and the Image 2 and 2.5 models through your ChatGPT account. Chat and each image draw on the plan's allowance.</p>
         {codex.error && <p className="settings-error"><Icon name="info" /> {codex.error}</p>}
         <div className="model-row">
           {codex.pending
@@ -40,6 +41,7 @@ export default function SettingsDialog({ providers, onClose, onError }: { provid
           {gemini.ready && <button className="secondary-button" disabled={busy} onClick={() => void run(() => window.pixel.saveGeminiKey(null))}>Remove key</button>}
         </div>
       </section>
+      <ChatProviderSettings chat={chat} />
       <AgentSettings />
     </div>
   </Modal>

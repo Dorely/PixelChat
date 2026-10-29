@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { WorkbenchError } from '../shared/workbench';
 import type { ActivityEntry, Decision, ImageJob, ImageJobInput, Item, ItemSearchResult, ItemStatusFilter, ItemSummary, Note, NoteThread, Origin, Pin, Project, Review, ReviewEntry, ReviewStatus, ReviewSummary, Revision, RevisionOrigin, ScanReport, Session, Source, TitleSource } from '../shared/types';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const ACTIVE_PROJECT_KEY = 'project-active';
 const DEFAULT_PROJECT_NAME = 'Default';
 export const now = () => new Date().toISOString();
@@ -116,7 +116,18 @@ export class Store {
         CREATE INDEX jobs_project ON jobs(project_id, created_at);
         CREATE INDEX jobs_batch ON jobs(batch_id, position);
         CREATE INDEX jobs_status ON jobs(status);
-        PRAGMA user_version = ${SCHEMA_VERSION};
+        PRAGMA user_version = 1;
+      `);
+    })();
+    if (version < 2) this.db.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, role TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL,
+          attachments TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL);
+        CREATE INDEX messages_session ON messages(session_id);
+        CREATE TABLE chat_history (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, input TEXT NOT NULL);
+        CREATE TABLE tool_calls (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, id TEXT NOT NULL, name TEXT NOT NULL, args TEXT NOT NULL, status TEXT NOT NULL, result TEXT,
+          PRIMARY KEY (session_id, id));
+        PRAGMA user_version = 2;
       `);
     })();
     if (!this.db.prepare('SELECT 1 FROM projects LIMIT 1').get()) this.createProject(DEFAULT_PROJECT_NAME);
@@ -165,7 +176,7 @@ export class Store {
     if (!row || (projectId && row.project_id !== projectId)) throw new WorkbenchError('NOT_FOUND', 'Session not found in project.');
     return session(row);
   }
-  createSession(projectId: string, title = 'New session', source: TitleSource = 'auto'): Session {
+  createSession(projectId: string, title = 'New conversation', source: TitleSource = 'auto'): Session {
     this.project(projectId);
     const at = now(), id = randomUUID();
     this.tx(() => this.db.prepare('INSERT INTO sessions (id,project_id,title,title_source,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(id, projectId, title.trim(), source, at, at));

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Item, ItemSearchResult, ItemStatusFilter, ItemSummary, ReviewSummary, Source } from '../shared/types'
+import type { ChatFocus, Item, ItemSearchResult, ItemStatusFilter, ItemSummary, ReviewSummary, Source } from '../shared/types'
 import Icon from './Icon'
 import ItemCard from './ItemCard'
 import ItemViewer from './ItemViewer'
@@ -50,7 +50,7 @@ function AddSourceDialog({ projectId, onClose, onError }: { projectId: string; o
 }
 
 /** Thumbnail grid over the project library with folder, status, and text filters. */
-export default function LibraryView({ projectId, focusItemId, onFocusDone, onOpenReview, onError }: { projectId: string; focusItemId?: string; onFocusDone: () => void; onOpenReview: (reviewId: string) => void; onError: (message: string) => void }) {
+export default function LibraryView({ projectId, focusItemId, onFocusDone, onOpenReview, onChatFocus, onError }: { projectId: string; focusItemId?: string; onFocusDone: () => void; onOpenReview: (reviewId: string) => void; onChatFocus: (focus: ChatFocus) => void; onError: (message: string) => void }) {
   const [result, setResult] = useState<ItemSearchResult | null>(null)
   const [sources, setSources] = useState<Source[]>([])
   const [query, setQuery] = useState('')
@@ -62,6 +62,8 @@ export default function LibraryView({ projectId, focusItemId, onFocusDone, onOpe
   const [removeBusy, setRemoveBusy] = useState(false)
   const [removeError, setRemoveError] = useState('')
   const [viewer, setViewer] = useState<{ items: ItemSummary[]; index: number } | null>(null)
+  const viewedId = viewer?.items[viewer.index]?.id
+  useEffect(() => onChatFocus(viewedId ? { itemId: viewedId } : {}), [viewedId, onChatFocus])
   const [reviewing, setReviewing] = useState(false)
   const serial = useRef(0)
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Decision, ItemSearchResult, ItemStatusFilter, ItemSummary, Review, ReviewSummary } from '../shared/types'
+import type { ChatFocus, Decision, ItemSearchResult, ItemStatusFilter, ItemSummary, Review, ReviewSummary } from '../shared/types'
 import Icon from './Icon'
 import ItemCard, { decisionLabel } from './ItemCard'
 import ItemViewer from './ItemViewer'
@@ -56,10 +56,12 @@ export function NewReviewDialog({ projectId, initial, onClose, onCreated }: { pr
   </Modal>
 }
 
-function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onError }: { projectId: string; reviewId: string; focusItemId?: string; onBack: () => void; onError: (message: string) => void }) {
+function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onChatFocus, onError }: { projectId: string; reviewId: string; focusItemId?: string; onBack: () => void; onChatFocus: (focus: ChatFocus) => void; onError: (message: string) => void }) {
   const [review, setReview] = useState<Review | null>(null)
   const [filter, setFilter] = useState<EntryFilter>('all')
   const [viewer, setViewer] = useState<{ items: ItemSummary[]; index: number } | null>(null)
+  const viewedId = viewer?.items[viewer.index]?.id
+  useEffect(() => onChatFocus(viewedId ? { reviewId, itemId: viewedId } : { reviewId }), [reviewId, viewedId, onChatFocus])
   const [confirm, setConfirm] = useState<'delete' | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmError, setConfirmError] = useState('')
@@ -141,7 +143,7 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onError }: { pr
 }
 
 /** Review launcher and boards. A target from the app (agent navigation) opens a review and item. */
-export default function ReviewsView({ projectId, target, onTargetDone, onError }: { projectId: string; target: { reviewId?: string; itemId?: string } | null; onTargetDone: () => void; onError: (message: string) => void }) {
+export default function ReviewsView({ projectId, target, onTargetDone, onChatFocus, onError }: { projectId: string; target: { reviewId?: string; itemId?: string } | null; onTargetDone: () => void; onChatFocus: (focus: ChatFocus) => void; onError: (message: string) => void }) {
   const [reviews, setReviews] = useState<ReviewSummary[] | null>(null)
   const [status, setStatus] = useState<'active' | 'completed'>('active')
   const [openId, setOpenId] = useState<string | null>(null)
@@ -153,8 +155,8 @@ export default function ReviewsView({ projectId, target, onTargetDone, onError }
   useEffect(() => { void load(); return window.pixel.onChanged(() => void load()) }, [load])
   useEffect(() => { if (target?.reviewId) { setOpenId(target.reviewId); setFocusItemId(target.itemId); onTargetDone() } }, [target, onTargetDone])
   const back = useCallback(() => { setOpenId(null); setFocusItemId(undefined) }, [])
-
-  if (openId) return <ReviewBoard key={openId} projectId={projectId} reviewId={openId} focusItemId={focusItemId} onBack={back} onError={onError} />
+  useEffect(() => { if (!openId) onChatFocus({}) }, [openId, onChatFocus])
+  if (openId) return <ReviewBoard key={openId} projectId={projectId} reviewId={openId} focusItemId={focusItemId} onBack={back} onChatFocus={onChatFocus} onError={onError} />
   return <section className="workspace-panel">
     <div className="panel-header">
       <div><p className="eyebrow">Feedback for agents</p><h1>Reviews <span>{reviews?.length ?? 0}</span></h1></div>

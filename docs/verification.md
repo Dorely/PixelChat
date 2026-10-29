@@ -148,3 +148,27 @@ secure-storage, or platform integration.
 - Gaps: the installer itself was not run, so the NSIS PATH hooks are unverified. No
   real Codex or Claude Code session connected; MCP was exercised with a raw client. A
   modern-era (2026-07-28) client was not tried.
+
+## 2026-10-29 — Inline chat
+
+- `npm run typecheck` and `npm run build` succeeded.
+- Browser host on the scratch eel project:
+  - A new conversation was titled from its first message. The composer showed the context
+    meter (about 9,600 tokens of 272,000), the model and effort pickers, and "Viewing an
+    item" while the head viewer was open; closing the viewer cleared it. A changed effort
+    persisted in the snapshot.
+  - With Codex not signed in, a message failed with "Codex is not signed in." and a
+    diagnostic reference; no request left the machine.
+  - A focus naming an item outside the project was refused; saving an untested custom
+    model was refused.
+- A local stand-in Chat Completions server (scratch script, no billed calls) was added as a
+  custom endpoint: model listing, the capability test (vision true), save, and selection
+  worked. A turn called `view_image` on `head`: the activity line and thumbnail showed in
+  the conversation, the follow-up request carried the PNG, and the model's reply
+  completed. This found that Chat Completions requests sent Responses-shaped tools, so the
+  model saw no tool names; the client now nests them as `function` entries. The endpoint
+  was removed afterward.
+- A desktop launch recorded `app.started` with no start failure and was terminated.
+- Gaps: no live Codex, Responses, or Anthropic chat request has run. Stop during a turn,
+  startup interruption of a running turn, the billed-tool requestId path, history image
+  eviction, and chat in the desktop window were not exercised.
