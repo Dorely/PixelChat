@@ -1,11 +1,13 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { basename, extname, isAbsolute, join, posix, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, isAbsolute, join, posix, resolve } from 'node:path';
 import { WorkbenchError } from '../shared/workbench';
-import type { Origin, ScanProgress, ScanReport, Source } from '../shared/types';
+import type { Origin, Revision, ScanProgress, ScanReport, Source } from '../shared/types';
 import { IMAGE_EXTENSIONS, sha256, type MediaStore } from './media';
 import { now, type Store } from './store';
 
 const SCAN_CONCURRENCY = 4;
+const FORMAT_EXTENSIONS: Record<Revision['format'], string[]> = { png: ['.png'], webp: ['.webp'], jpeg: ['.jpg', '.jpeg'] };
 
 /** Glob over forward-slash relative paths: `**`, `*`, `?`, and `{a,b}`; case-insensitive like Windows paths. */
 export function globMatcher(patterns: string[]) {
@@ -73,6 +75,36 @@ export class Library {
       } catch (error) { failed.push({ path, error: error instanceof Error ? error.message : 'Import failed.' }); }
     }
     return { itemIds: created, failed };
+  }
+
+  /**
+   * Writes the selected revision to its linked source file, or to `destination` for any item.
+   * The source file must still match the synced revision unless `force`; otherwise SOURCE_CHANGED.
+   */
+  async exportItem(projectId: string, itemId: string, options: { destination?: string; force?: boolean }, origin: Origin) {
+    const item = this.store.item(itemId, projectId);
+    const selected = item.revisions.find(entry => entry.id === item.selectedRevisionId)!;
+    const target = options.destination ?? item.sourceFile;
+    if (!target) throw new WorkbenchError('INVALID_ARGUMENTS', 'This item has no linked source file. Pass a destination path.');
+    if (!isAbsolute(target)) throw new WorkbenchError('INVALID_ARGUMENTS', 'Destination must be an absolute path.');
+    if (!FORMAT_EXTENSIONS[selected.format].includes(extname(target).toLowerCase()))
+      throw new WorkbenchError('FORMAT_MISMATCH', `The selected version is ${selected.format.toUpperCase()}, but ${basename(target)} expects ${extname(target) || 'no extension'}. Make a version in that format first.`);
+    if (item.sourceId && this.scans.has(item.sourceId)) throw new WorkbenchError('BUSY', 'The source is scanning. Export after the scan finishes.');
+    const current = await readFile(target).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
+    if (options.destination) {
+      if (current && !options.force) throw new WorkbenchError('DESTINATION_EXISTS', 'A file already exists at the destination. Pass force to overwrite it.');
+    } else {
+      if (!item.pendingExport && !options.force) return { path: target, revisionId: selected.id, written: false };
+      const synced = item.revisions.find(entry => entry.id === item.syncedRevisionId);
+      if (!options.force && (!current || sha256(current) !== synced?.sha256))
+        throw new WorkbenchError('SOURCE_CHANGED', current ? 'The source file changed since PixelChat last read it. Rescan to bring the change in, or force to overwrite it.' : 'The source file is missing. Rescan, or force to write it again.', { state: current ? 'changed' : 'missing', path: target });
+    }
+    const bytes = await this.media.read(this.store.revisionFile(selected.id, projectId)!.file);
+    const temp = join(dirname(target), `.${basename(target)}.${randomUUID()}.partial`);
+    try { await writeFile(temp, bytes, { flag: 'wx' }); await rename(temp, target); }
+    finally { await rm(temp, { force: true }).catch(() => undefined); }
+    this.store.recordExport(projectId, itemId, selected.id, options.destination ?? null, origin);
+    return { path: target, revisionId: selected.id, written: true };
   }
 
   private startScan(projectId: string, sourceId: string, origin: Origin) {

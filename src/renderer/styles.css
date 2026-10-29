@@ -305,3 +305,32 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .dialog-filters .filter-select { width: 100%; max-width: none; }
 .library-toolbar .segmented { max-width: 100%; overflow-x: auto; }
 .library-toolbar .segmented button { flex: none; white-space: nowrap; }
+
+/* Image edits and providers */
+.edit-panel { display: flex; flex-direction: column; gap: 10px; }
+.edit-panel h3 { margin-bottom: 0; }
+.edit-panel textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; outline: 0; resize: vertical; color: var(--text); background: var(--surface-2); font: 13px/1.45 var(--font-sans); }
+.edit-panel textarea:focus { border-color: var(--accent-line); }
+.edit-panel .add-notes { align-self: flex-start; font-size: 12px; }
+.edit-panel .add-notes .icon { margin: 0 4px 0 0; }
+.edit-panel p { margin: 0; font-size: 12px; line-height: 1.45; }
+.edit-panel > small { font-size: 11px; line-height: 1.4; }
+.edit-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.edit-options label { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--quiet); font-size: 11px; }
+.edit-options label:first-child { grid-column: 1 / -1; }
+.edit-options select { width: 100%; }
+.job-list { display: grid; gap: 6px; margin: 2px 0 0; padding: 0; list-style: none; }
+.job-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); font-size: 12px; }
+.job-row .badge { flex: none; }
+.job-row .spinner { flex: none; margin-top: 3px; }
+.job-copy { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.job-copy > span, .job-copy > .text-button { overflow: hidden; color: var(--text-2); font-size: 12px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.job-copy > .text-button { color: var(--accent); }
+.job-copy small { color: var(--quiet); font-size: 11px; overflow-wrap: anywhere; }
+.warn-text { color: var(--warn-text) !important; }
+.revision-prompt { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-sans) !important; }
+.export-button { margin-bottom: 10px; }
+.settings-body { gap: 18px; }
+.settings-provider { display: grid; gap: 9px; padding-top: 14px; border-top: 1px solid var(--line); }
+.settings-provider:first-of-type { padding-top: 0; border-top: 0; }
+.settings-provider header { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; }

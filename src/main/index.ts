@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, protocol, safeStorage, shell } from 'electron';
 import { join } from 'node:path';
 import { mkdir, readFile } from 'node:fs/promises';
 import { z } from 'zod';
@@ -9,7 +9,12 @@ import { Operations, idSchema, operationError } from './operations';
 import { RendererPort } from './ui-port';
 import { startBrowserHost } from './browser-host';
 import { DiagnosticLog, redactText } from './diagnostics';
-import type { Snapshot } from '../shared/types';
+import { ImageJobs } from './images';
+import { SecureStore } from './providers/secrets';
+import { CodexAuth } from './providers/auth';
+import { CodexImages } from './providers/codex-images';
+import { GeminiImages } from './providers/gemini-images';
+import type { ProviderStatus, Snapshot } from '../shared/types';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'pixel-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }]);
 app.setName('PixelChat');
@@ -20,6 +25,8 @@ let window: BrowserWindow | null = null;
 let store: Store | null = null;
 let operations: Operations | null = null;
 let library: Library | null = null;
+let images: ImageJobs | null = null;
+let auth: CodexAuth | null = null;
 let rendererPort: RendererPort | null = null;
 let quitting = false;
 let eventTimer: ReturnType<typeof setTimeout> | null = null;
@@ -29,6 +36,7 @@ const changed = () => {
   eventTimer = setTimeout(() => { eventTimer = null; if (window && !window.isDestroyed()) window.webContents.send('pixel:changed'); browserHost?.changed(); }, 40);
 };
 const safeError = (error: unknown) => redactText(error instanceof Error ? error.message : 'Operation failed.');
+const GEMINI_KEY = 'gemini-key';
 
 /** Fixed renderer commands. Workspace behavior goes through the shared operation registry. */
 const commandSchemas = {
@@ -37,6 +45,10 @@ const commandSchemas = {
   operation: z.tuple([z.string().min(1).max(64), z.unknown()]),
   chooseDirectory: z.tuple([]),
   openLogs: z.tuple([]),
+  codexLogin: z.tuple([]),
+  codexCancelLogin: z.tuple([]),
+  codexLogout: z.tuple([]),
+  saveGeminiKey: z.tuple([z.string().trim().max(400).nullable()]),
   uiReady: z.tuple([]),
   uiAcknowledge: z.tuple([z.string().uuid(), z.string().max(2000).optional()]),
 };
@@ -51,14 +63,26 @@ else {
     const db = new Store(join(root, 'library.sqlite'), changed); store = db;
     const media = new MediaStore(root); await media.init();
     library = new Library(db, media);
+    // Credentials live only in OS-protected storage under the profile, never in the database or logs.
+    const secrets = new SecureStore({ directory: join(root, 'secrets'), encrypt: value => safeStorage.encryptString(value), decrypt: value => safeStorage.decryptString(value), isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text') });
+    const codex = new CodexAuth({ store: secrets, openExternal: url => shell.openExternal(url), onChange: status => { if (status.error) diagnostics.record('auth.failed', { message: status.error }); changed(); } }); auth = codex;
+    await codex.initialize();
+    const geminiKey = async () => (await secrets.available()) ? secrets.get(GEMINI_KEY) : null;
+    const providerStatus = async (): Promise<ProviderStatus> => ({ secureStorage: await secrets.available(), codex: codex.status, gemini: { ready: !!(await geminiKey().catch(() => null)) } });
+    const jobs = new ImageJobs(db, media, { codex: new CodexImages(codex), gemini: new GeminiImages(geminiKey) }, diagnostics); images = jobs;
+    jobs.start();
     rendererPort = new RendererPort(() => window, db, () => browserHost);
-    const ops = new Operations(db, library, media, rendererPort); operations = ops;
+    const ops = new Operations(db, library, media, jobs, rendererPort, providerStatus); operations = ops;
     const handlers: Record<Command, (...args: any[]) => unknown> = {
-      snapshot: (): Snapshot => { const activeProjectId = db.activeProjectId(); return { projects: db.projects(), activeProjectId, sessions: db.sessions(activeProjectId) }; },
+      snapshot: async (): Promise<Snapshot> => { const activeProjectId = db.activeProjectId(); return { projects: db.projects(), activeProjectId, sessions: db.sessions(activeProjectId), providers: await providerStatus() }; },
       setActiveProject: (id: string) => db.setActiveProject(id),
       operation: async (name: string, args: unknown) => { try { return { ok: true, result: await ops.call(name, args, 'user') }; } catch (e) { return operationError(e); } },
       chooseDirectory: async () => { const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; },
       openLogs: async () => { const directory = join(root, 'logs'); await mkdir(directory, { recursive: true }); const error = await shell.openPath(directory); if (error) throw new Error(error); },
+      codexLogin: () => codex.startLogin(),
+      codexCancelLogin: () => codex.cancelLogin(),
+      codexLogout: () => codex.logout(),
+      saveGeminiKey: async (key: string | null) => { if (key) await secrets.set(GEMINI_KEY, key); else await secrets.delete(GEMINI_KEY); changed(); },
       uiReady: () => rendererPort!.markReady(),
       uiAcknowledge: (id: string, error?: string) => rendererPort!.acknowledge(id, error),
     };
@@ -109,6 +133,6 @@ else {
   app.on('before-quit', event => {
     if (quitting) return; event.preventDefault(); quitting = true;
     rendererPort?.unavailable();
-    void Promise.all([browserHost?.close(), operations?.close(), library?.close()]).finally(() => { if (eventTimer) clearTimeout(eventTimer); store?.close(); app.quit(); });
+    void Promise.all([browserHost?.close(), operations?.close(), library?.close(), images?.close(), auth?.cancelLogin()]).finally(() => { if (eventTimer) clearTimeout(eventTimer); store?.close(); app.quit(); });
   });
 }

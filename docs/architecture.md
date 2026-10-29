@@ -24,7 +24,8 @@ message } }` envelopes with redacted messages.
 
 The renderer reaches the main process through one IPC channel, `pixel:call`, limited to
 fixed commands (`snapshot`, `setActiveProject`, `operation`, `chooseDirectory`,
-`openLogs`, `uiReady`, `uiAcknowledge`) with zod tuple schemas. Requests from any frame
+`openLogs`, `uiReady`, `uiAcknowledge`, and the credential commands `codexLogin`,
+`codexCancelLogin`, `codexLogout`, `saveGeminiKey`) with zod tuple schemas. Requests from any frame
 other than the main window's top frame are rejected. Store changes are debounced into
 `pixel:changed`; the renderer then refreshes its snapshot. Operations can drive the view
 through `ui-port.ts`, which sends `pixel:ui-command` and waits up to 15 seconds for the
@@ -44,7 +45,7 @@ library as the desktop app.
 ## Persistence
 
 Schema version 1 holds `settings`, `projects`, `sessions`, `sources`, `items`,
-`revisions`, `activity`, `reviews`, `review_items`, and `notes`; project deletion
+`revisions`, `activity`, `reviews`, `review_items`, `notes`, and `jobs`; project deletion
 cascades. A `Default` project is created
 when none exist, and the active project is kept in the `project-active` setting.
 
@@ -116,6 +117,57 @@ In the viewer, pins are drawn over the image's rendered content box (measured wi
 `ResizeObserver`, accounting for `object-fit`). Click places a point; drag places a box.
 Pins written against another revision are dashed. Review keys: A accept and advance,
 R reject and advance, C needs changes and focus the note composer, U clear, N note.
+
+## Image providers and jobs
+
+The model decides the provider (`src/shared/image-models.ts`): Codex models run over the
+ChatGPT sign-in (`providers/codex-images.ts`), Gemini models over an API key
+(`providers/gemini-images.ts`). Both implement one `ImageProvider.run` contract and map
+failures to `ImageProviderError`, whose `responded` flag says whether the provider
+answered. Provider details are in [knowledge](knowledge/README.md).
+
+Credentials are set only through the fixed credential commands, never through operations.
+Codex OAuth tokens and the Gemini key are kept in `<profile>/secrets` by `SecureStore`;
+the snapshot and `status` report only readiness.
+
+`generate_images` and `edit_image` (`src/main/images.ts`) validate the request and queue
+one durable `jobs` row per image. A caller `requestId` is the batch id: repeating it
+returns the original jobs, and reusing it with different arguments is a
+`REQUEST_CONFLICT`. Admission enforces model quality, input-image limits, and
+transparency: `background: auto` on a transparent source means keep transparency, which
+needs a model with native alpha and a non-JPEG format. Background instructions are chosen
+by code and appended to the user's prompt, which is otherwise sent verbatim. Edits default
+to the source's dimensions and to the format of the file they will be exported to.
+
+A scheduler runs up to four jobs at once. A 429 with a Retry-After of at most 120 seconds
+is retried up to twice; nothing else is retried. When the provider never answered
+(timeout, transport, abort), the job becomes `uncertain`: it may have been billed and is
+never replayed. Jobs running at shutdown become `uncertain` on the next start; queued jobs
+resume. Only queued jobs can be cancelled. `jobs_get` lists jobs and can wait for them.
+
+A result is stored as a new revision (`generated` or `edited`, parent = source) of the
+target item, or as a new item in the "Generated" collection. The selection does not
+change. When the provider's format differs from the requested one, the result is
+converted without resizing and the provider's bytes are kept beside it
+(`provenance.providerFile`). Provenance records the job, batch, provider, model, quality,
+background, requested and resolved size, exact prompt and instructions, input revisions,
+request and response ids, and usage. A transparency request that yields a fully opaque
+result finishes with a warning.
+
+## Export
+
+An item is pending export when its selected revision differs from its synced one.
+`export_item` writes the selected revision's exact bytes to the linked source file
+(or an absolute destination) through a temporary file and rename. It refuses with
+`FORMAT_MISMATCH` when the file extension does not match the format, `SOURCE_CHANGED`
+when the source file no longer hashes to the synced revision or is missing, and
+`DESTINATION_EXISTS` for an existing destination; `force` overrides the last two.
+Exporting to the source makes the exported revision the synced one.
+
+In the viewer, the Edit panel runs the user's prompt on the viewed version, can append
+open note threads (with pin coordinates) to the prompt, and lists the item's jobs.
+Versions show the model and a prompt excerpt; "Export to source" appears while the item
+is pending export and asks before overwriting a changed or missing file.
 
 ## Verification policy
 

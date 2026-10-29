@@ -4,6 +4,9 @@ import { redactText } from './diagnostics';
 import type { NoteInput, Store } from './store';
 import type { Library } from './library';
 import type { MediaStore } from './media';
+import type { ImageArgs, ImageJobs } from './images';
+import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, MAX_IMAGE_COUNT } from '../shared/image-models';
+import type { ProviderStatus } from '../shared/types';
 
 export const idSchema = z.string().uuid();
 const nameSchema = z.string().trim().min(1).max(60);
@@ -26,6 +29,17 @@ const pinSchema = obj({ x: z.number().finite(), y: z.number().finite(), width: z
 const reviewTitle = z.string().trim().min(1).max(120);
 const instructionsSchema = z.string().max(8000);
 const noteBody = z.string().trim().min(1).max(4000);
+const imageOptions = {
+  prompt: z.string().trim().min(1).max(32000),
+  model: z.enum(IMAGE_MODELS.map(model => model.id) as [string, ...string[]]).optional().describe(`Default ${DEFAULT_IMAGE_MODEL}. The model selects its provider; see status for each model's qualities and transparency.`),
+  quality: z.string().trim().max(20).optional().describe('Default auto. Providers may serve a different quality.'),
+  background: z.enum(['auto', 'opaque', 'transparent']).optional().describe(`transparent requests native alpha (Image 2.5 Flare or Sunburst, PNG or WebP). auto keeps an edit source's transparency. PixelChat appends the background instruction to the prompt.`),
+  format: z.enum(['png', 'webp', 'jpeg']).optional().describe(`Default: the item's file format, else PNG. Converted locally without resizing; the provider original is kept.`),
+  size: z.string().trim().max(32).optional().describe('auto, square, portrait, landscape, wide, an aspect such as 16:9, or WIDTHxHEIGHT. Edits default to the source size. The provider returns its nearest supported raster.'),
+  count: z.number().int().min(1).max(MAX_IMAGE_COUNT).optional().describe('Images to make; each is a separate provider request.'),
+  referenceItemIds: z.array(idSchema).max(4).optional().describe('Items whose selected versions are sent as reference images.'),
+  requestId: idSchema.optional().describe('Idempotency key. Repeating a request with the same requestId returns the original jobs instead of paying again.'),
+};
 
 /** One registry serves the UI, the in-app assistant, the CLI and MCP. */
 export const operationDefinitions = {
@@ -59,6 +73,11 @@ export const operationDefinitions = {
   review_reopen: { schema: obj({ ...review, expectedRevision }), description: 'Restore a completed review to active. Completion stays in review_history.' },
   review_delete: { schema: obj(review), description: 'Delete a review and its decisions. Notes stay on their items. Requires explicit user intent.' },
   review_history: { schema: obj({ ...review, afterSeq: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(500).default(200) }), description: 'Attributed activity for a review in order: creation, edits, decisions, notes, completion. Page with afterSeq.' },
+  generate_images: { schema: obj({ ...project, ...imageOptions, itemId: idSchema.optional(), collection: z.string().trim().min(1).max(200).optional(), name: z.string().trim().min(1).max(120).optional() }), description: `Generate images from a prompt. Billed to the user's provider account: run only for the user's request. Results become new items in collection (default "Generated"), or new versions of itemId. Returns queued jobs; follow them with jobs_get.` },
+  edit_image: { schema: obj({ ...item, ...imageOptions, revisionId: idSchema.optional() }), description: `Edit an item's selected version (or revisionId) with a prompt. Billed to the user's provider account: run only for the user's request. Each result becomes a new version of the item for the user to choose; the selection is not changed. Returns queued jobs; follow them with jobs_get.` },
+  jobs_get: { schema: obj({ ...project, jobIds: z.array(idSchema).min(1).max(200).optional(), batchId: idSchema.optional(), itemId: idSchema.optional(), active: z.boolean().optional(), wait: z.number().int().min(0).max(600).optional() }), description: 'List image jobs (newest first), filtered by ids, batch, item, or active. With wait (seconds), first wait until the matching jobs finish. Uncertain jobs may have been billed without a recorded result and are never replayed.' },
+  job_cancel: { schema: obj({ ...project, jobId: idSchema }), description: 'Cancel a queued image job. A running request is already with the provider and cannot be cancelled.' },
+  export_item: { schema: obj({ ...item, destination: z.string().min(1).max(1000).optional(), force: z.boolean().optional() }), description: `Write an item's selected version to its linked source file, making it the synced version, or to an absolute destination file. Refuses with SOURCE_CHANGED when the source file differs from what PixelChat last read, and with DESTINATION_EXISTS for an existing destination; force overwrites only with explicit user intent. Find work to export with search_items status pending_export.` },
   ui_open: { schema: obj({ ...project, reviewId: idSchema.optional(), itemId: idSchema.optional() }), description: 'Show a review (optionally focused on one of its items) or a single item in the PixelChat window.' },
   note_add: { schema: obj({ ...item, body: noteBody, reviewId: idSchema.optional(), revisionId: idSchema.optional(), parentId: idSchema.optional(), pin: pinSchema.optional() }), description: 'Add a note on an item, optionally in a review and pinned to a region of a revision (default: the selected revision). parentId replies to a thread; replies inherit its review and revision and cannot be pinned.' },
   note_update: { schema: obj({ ...note, body: noteBody.optional(), pin: pinSchema.nullable().optional(), resolved: z.boolean().optional() }), description: 'Edit a note body or pin (agents: own notes only), or resolve/reopen a root thread. Resolve a thread after its change is made, and reply to say what changed.' },
@@ -73,7 +92,7 @@ export function operationCatalog() {
 export class Operations {
   private pending = new Set<Promise<unknown>>();
   private stopped = false;
-  constructor(private store: Store, private library: Library, private media: MediaStore, private ui: UiPort) {}
+  constructor(private store: Store, private library: Library, private media: MediaStore, private images: ImageJobs, private ui: UiPort, private providers: () => Promise<ProviderStatus>) {}
   async close() { this.stopped = true; await Promise.allSettled([...this.pending]); }
   call(name: string, raw: unknown, origin: Origin = 'agent'): Promise<unknown> {
     if (this.stopped) return Promise.reject(new WorkbenchError('CLOSING', 'PixelChat is closing.'));
@@ -91,12 +110,14 @@ export class Operations {
     const library = this.library;
     const titleSource = origin === 'user' ? 'user' : 'assistant';
     switch (name) {
-      case 'status': return { version: 1, ready: true };
+      case 'status': return { version: 1, ready: true, providers: await this.providers(), imageModels: IMAGE_MODELS, defaultImageModel: DEFAULT_IMAGE_MODEL };
       case 'projects_list': return store.projects();
       case 'project_create': return store.createProject(a.name);
       case 'project_get': return store.project(a.projectId);
       case 'project_rename': return store.renameProject(a.projectId, a.name);
-      case 'project_delete': { const files = store.projectRevisionFiles(a.projectId); store.deleteProject(a.projectId); await this.media.remove(files); return { deleted: true }; }
+      case 'project_delete': {
+        if (store.hasActiveJobs(a.projectId)) throw new WorkbenchError('BUSY', 'Image jobs are still running in this project. Delete it after they finish.');
+        const files = store.projectRevisionFiles(a.projectId); store.deleteProject(a.projectId); await this.media.remove(files); return { deleted: true }; }
       case 'sessions_list': return store.sessions(a.projectId);
       case 'session_create': return store.createSession(a.projectId, a.title, titleSource);
       case 'session_get': return store.session(a.sessionId, a.projectId);
@@ -129,6 +150,15 @@ export class Operations {
       case 'review_reopen': return store.setReviewStatus(a.reviewId, a.projectId, a.expectedRevision, 'active', origin);
       case 'review_delete': store.deleteReview(a.reviewId, a.projectId, origin); return { deleted: true };
       case 'review_history': store.reviewSummary(a.reviewId, a.projectId); return store.activity(a.projectId, { reviewId: a.reviewId, afterSeq: a.afterSeq, limit: a.limit });
+      case 'generate_images': { const { projectId, ...args } = a; return this.images.request(projectId, 'generate', args as ImageArgs, origin); }
+      case 'edit_image': { const { projectId, ...args } = a; return this.images.request(projectId, 'edit', args as ImageArgs, origin); }
+      case 'jobs_get': {
+        const filter = { batchId: a.batchId, itemId: a.itemId, jobIds: a.jobIds, active: a.active };
+        if (a.wait) await this.waitUntil(() => !store.jobs(a.projectId, { ...filter, active: true, limit: 1 }).length, a.wait * 1000);
+        return store.jobs(a.projectId, filter);
+      }
+      case 'job_cancel': return store.cancelJob(a.jobId, a.projectId, origin);
+      case 'export_item': return library.exportItem(a.projectId, a.itemId, { destination: a.destination, force: a.force }, origin);
       case 'ui_open': {
         if (a.reviewId) {
           store.reviewSummary(a.reviewId, a.projectId);

@@ -82,3 +82,34 @@ secure-storage, or platform integration.
 - Not covered: agent-origin rules (agents editing or deleting only their own notes)
   have no agent caller until the CLI and MCP land; they are checked in code only.
 
+## 2026-10-29 — Image providers, jobs, and export
+
+- `npm run typecheck` and `npm run build` succeeded.
+- Reset the local profile database (schema v1 gained the jobs table) and imported a
+  scratch copy of the eel folder (5 items); the real game repository was not touched.
+- `npm run dev:browser`, built-in browser, with no provider signed in:
+  - Settings showed Codex "Not signed in" with a sign-in button and Gemini "No key" with
+    a key field; secure storage reported available. Sign-in and key saving were not
+    exercised.
+  - The viewer's Edit panel listed all five models as not signed in and disabled Run
+    with a sign-in hint. "Add open notes" appended both open threads, the pinned one
+    with its box coordinates.
+  - Through operations: an Image 2.5 Flare edit with count 2 queued two jobs; repeating
+    the requestId returned the same jobs, and changing the prompt returned
+    `REQUEST_CONFLICT`. Gemini 3 Pro Image on the transparent source and a transparent
+    JPEG request were refused at admission. `jobs_get` with wait returned both jobs
+    failed with "Codex is not signed in." (no network request), and the job list showed
+    them.
+  - Export on the scratch copy: flipped `head.png` and rescanned (new synced version),
+    selected the original version (pending export), then changed the file again. "Export
+    to source" opened the source-changed confirmation; overwriting wrote the selected
+    version's exact bytes (SHA-256 matched), left no temporary file, made it the synced
+    version, and cleared pending export.
+  - The viewer opened on a stale version after a selection change made just before
+    opening; it now starts from the loaded item's selection, checked again.
+  - No console errors.
+- A desktop launch recorded `app.started` with no start failure and was terminated.
+- Gaps: no live Codex or Gemini request has run, so provider wire shapes, result
+  ingestion, format conversion, provenance from a real result, and the opaque-result
+  warning are unverified. Codex sign-in, Gemini key save, and desktop (non-browser)
+  behavior were not exercised.

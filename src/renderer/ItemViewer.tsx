@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Decision, Item, ItemSummary, Pin, ReviewEntry, Revision } from '../shared/types'
+import { ConfirmDialog } from './Dialogs'
+import EditPanel from './EditPanel'
 import Icon from './Icon'
 import { DECISIONS, decisionBadge, decisionLabel } from './ItemCard'
 import { NotesPanel, PinLayer } from './NotesPanel'
-import { op } from './ops'
+import { OperationError, op } from './ops'
 
 type Backdrop = 'checker' | 'dark' | 'light'
 type Zoom = 'fit' | number
@@ -19,6 +21,12 @@ function loadPreferences(): { backdrop: Backdrop; pixelated: boolean } {
 }
 const formatBytes = (bytes: number) => bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(2)} MB`
 const alphaLabel = (revision: Revision) => !revision.hasAlpha ? 'No alpha channel' : revision.opaque ? 'Alpha channel, fully opaque' : 'Transparent pixels'
+const ORIGIN_LABELS: Record<Revision['origin'], string> = { imported: 'Imported', generated: 'Generated', edited: 'Edited' }
+/** Model and prompt excerpt for versions an image job made. */
+const provenanceLine = (revision: Revision) => {
+  const { model, prompt } = revision.provenance as { model?: string; prompt?: string }
+  return model ? `${model}${prompt ? ` · ${prompt.length > 70 ? `${prompt.slice(0, 70)}…` : prompt}` : ''}` : ''
+}
 const typing = (target: EventTarget | null) => target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
 
 /**
@@ -28,7 +36,7 @@ const typing = (target: EventTarget | null) => target instanceof HTMLElement && 
 export default function ItemViewer({ projectId, items, index, review, onIndex, onClose, onError }: { projectId: string; items: ItemSummary[]; index: number; review?: ViewerReview; onIndex: (index: number) => void; onClose: () => void; onError: (message: string) => void }) {
   const summary = items[index]!
   const [item, setItem] = useState<Item | null>(null)
-  const [viewingId, setViewingId] = useState(summary.selectedRevisionId)
+  const [viewingId, setViewingId] = useState('')
   const [zoom, setZoom] = useState<Zoom>('fit')
   const [preferences, setPreferences] = useState(loadPreferences)
   const [draft, setDraft] = useState<Pin | null>(null)
@@ -38,14 +46,20 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
   const composer = useRef<HTMLTextAreaElement>(null)
   // Focus requests wait for the notes panel, which mounts once the item loads.
   const [noteFocus, setNoteFocus] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [conflict, setConflict] = useState<'' | 'changed' | 'missing'>('')
   useEffect(() => { if (noteFocus && item) { composer.current?.focus(); setNoteFocus(false) } }, [noteFocus, item])
   const entry = review?.entries.get(summary.id)
 
   const load = useCallback(async () => {
-    try { setItem(await op<Item>('item_get', { projectId, itemId: summary.id })) }
+    try {
+      const loaded = await op<Item>('item_get', { projectId, itemId: summary.id })
+      // Opens on the selected version as loaded; the list summary may predate a selection change.
+      setItem(loaded); setViewingId(current => current || loaded.selectedRevisionId)
+    }
     catch (error) { onError(error instanceof Error ? error.message : 'Could not load the item.') }
   }, [projectId, summary.id, onError])
-  useEffect(() => { setItem(null); setViewingId(summary.selectedRevisionId); setZoom('fit'); setDraft(null); setActiveNoteId(null); void load() }, [summary.id])
+  useEffect(() => { setItem(null); setViewingId(''); setZoom('fit'); setDraft(null); setActiveNoteId(null); void load() }, [summary.id])
   useEffect(() => window.pixel.onChanged(() => void load()), [load])
   useEffect(() => { try { localStorage.setItem(PREFERENCES, JSON.stringify(preferences)) } catch { /* storage unavailable */ } }, [preferences])
 
@@ -85,6 +99,14 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
   const select = async (revisionId: string) => {
     try { setItem(await op<Item>('item_update', { projectId, itemId: summary.id, selectedRevisionId: revisionId })) }
     catch (error) { onError(error instanceof Error ? error.message : 'Could not select the version.') }
+  }
+  const exportItem = async (force = false) => {
+    setExporting(true)
+    try { await op('export_item', { projectId, itemId: summary.id, ...(force ? { force } : {}) }); setConflict('') }
+    catch (error) {
+      if (!force && error instanceof OperationError && error.code === 'SOURCE_CHANGED') setConflict((error.details as { state?: string } | undefined)?.state === 'missing' ? 'missing' : 'changed')
+      else { setConflict(''); onError(error instanceof Error ? error.message : 'Could not export the item.') }
+    } finally { setExporting(false) }
   }
   const width = revision && zoom !== 'fit' ? revision.width * zoom : undefined
 
@@ -130,14 +152,16 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
         {item && revision ? <>
           <NotesPanel ref={composer} projectId={projectId} item={item} revisionId={revision.id} reviewId={review?.id} locked={review?.completed} draft={draft} activeNoteId={activeNoteId}
             onClearDraft={() => setDraft(null)} onActivate={setActiveNoteId} onError={onError} />
+          <EditPanel projectId={projectId} item={item} revision={revision} onView={setViewingId} onError={onError} />
           <section className="viewer-section">
             <h3>Versions <span>{item.revisions.length}</span></h3>
             <div className="revision-strip">
               {[...item.revisions].reverse().map(entry => <button key={entry.id} className={`revision-card${entry.id === viewingId ? ' revision-viewing' : ''}`} onClick={() => setViewingId(entry.id)}>
                 <span className="revision-thumb checker"><img src={window.pixel.mediaUrl(`thumb/${entry.id}`)} alt="" loading="lazy" /></span>
                 <span className="revision-copy">
-                  <strong>{entry.origin === 'imported' ? 'Imported' : entry.origin === 'generated' ? 'Generated' : 'Edited'}</strong>
+                  <strong>{ORIGIN_LABELS[entry.origin]}</strong>
                   <small>{new Date(entry.createdAt).toLocaleString()}</small>
+                  {provenanceLine(entry) && <small className="revision-prompt" title={String(entry.provenance.prompt ?? '')}>{provenanceLine(entry)}</small>}
                   <span className="revision-tags">
                     {entry.id === item.selectedRevisionId && <span className="badge badge-accent">Selected</span>}
                     {entry.id === item.syncedRevisionId && <span className="badge">On disk</span>}
@@ -153,6 +177,9 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
               {item.missing && <span className="badge badge-warn">Missing from source</span>}
               {!item.sourceId && <span className="badge">Unlinked</span>}
             </div>
+            {item.pendingExport && item.sourceId && <button className="secondary-button wide export-button" disabled={exporting} onClick={() => void exportItem()} title="Write the selected version to the source file">
+              <Icon name="upload" /> {exporting ? 'Exporting…' : 'Export to source'}
+            </button>}
             <dl className="facts">
               <dt>Size</dt><dd>{revision.width} × {revision.height}</dd>
               <dt>Format</dt><dd>{revision.format.toUpperCase()} · {formatBytes(revision.bytes)}</dd>
@@ -164,5 +191,9 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
         </> : <p className="quiet-text">Loading…</p>}
       </aside>
     </div>
+    {conflict && <ConfirmDialog eyebrow="Source changed" title={summary.name} confirmLabel={conflict === 'missing' ? 'Write file' : 'Overwrite file'} busy={exporting} onCancel={() => setConflict('')} onConfirm={() => void exportItem(true)}
+      body={conflict === 'missing'
+        ? 'The source file is missing. Rescan the source to record that, or write the selected version to the file again.'
+        : 'The file on disk changed since PixelChat last read it. Rescan the source to bring the change in as a version, or overwrite the file with the selected version and lose the change.'} />}
   </div>
 }

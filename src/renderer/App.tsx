@@ -4,6 +4,7 @@ import Icon from './Icon'
 import { ConfirmDialog, Modal } from './Dialogs'
 import LibraryView from './LibraryView'
 import ReviewsView from './ReviewsView'
+import SettingsDialog, { ProvidersContext } from './SettingsDialog'
 import { op } from './ops'
 import { THEMES, applyTheme, storedTheme, type ThemeId } from './theme'
 
@@ -11,7 +12,7 @@ type View = 'library' | 'reviews'
 type Deletion = { kind: 'project' | 'session'; id: string; projectId: string; name: string }
 type Target = { reviewId?: string; itemId?: string }
 
-const emptySnapshot: Snapshot = { projects: [], activeProjectId: '', sessions: [] }
+const emptySnapshot: Snapshot = { projects: [], activeProjectId: '', sessions: [], providers: { secureStorage: false, codex: { ready: false, pending: false, error: null }, gemini: { ready: false } } }
 const message = (error: unknown) => error instanceof Error ? error.message : 'Operation failed.'
 
 function TitleInput({ value, className, ariaLabel, onCommit, onCancel }: { value: string; className: string; ariaLabel: string; onCommit: (value: string) => void; onCancel: () => void }) {
@@ -94,6 +95,7 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeId>(storedTheme)
   const [uiError, setUiError] = useState('')
   const [projectDialog, setProjectDialog] = useState<'create' | 'rename' | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [deletion, setDeletion] = useState<Deletion | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
@@ -164,17 +166,18 @@ export default function App() {
       <header className="topbar">
         <div className="breadcrumb"><ProjectSwitcher snapshot={snapshot} onSwitch={id => { if (id !== projectId) void call(() => window.pixel.setActiveProject(id)) }} onCreate={() => setProjectDialog('create')} onRename={() => setProjectDialog('rename')}
           onDelete={() => { if (activeProject) { setDeleteError(''); setDeletion({ kind: 'project', id: activeProject.id, projectId: activeProject.id, name: activeProject.name }) } }} /></div>
-        <div className="topbar-actions"><ThemePicker theme={theme} onChange={setTheme} /><button className="icon-button" onClick={() => void call(() => window.pixel.openLogs())} aria-label="Open diagnostic logs" title="Open diagnostic logs"><Icon name="file" /></button></div>
+        <div className="topbar-actions"><ThemePicker theme={theme} onChange={setTheme} /><button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Settings" title="Settings"><Icon name="settings" /></button><button className="icon-button" onClick={() => void call(() => window.pixel.openLogs())} aria-label="Open diagnostic logs" title="Open diagnostic logs"><Icon name="file" /></button></div>
       </header>
       <nav className="workspace-tabs" aria-label="Workspace views">
         <button className={view === 'library' ? 'tab-active' : ''} onClick={() => setView('library')}><Icon name="library" /> Library</button>
         <button className={view === 'reviews' ? 'tab-active' : ''} onClick={() => setView('reviews')}><Icon name="check" /> Reviews</button>
       </nav>
-      {!projectId ? null : view === 'library'
+      <ProvidersContext.Provider value={snapshot.providers}>{!projectId ? null : view === 'library'
         ? <LibraryView key={projectId} projectId={projectId} focusItemId={target?.reviewId ? undefined : target?.itemId} onFocusDone={clearTarget} onOpenReview={reviewId => { setTarget({ reviewId }); setView('reviews') }} onError={setUiError} />
-        : <ReviewsView key={projectId} projectId={projectId} target={target?.reviewId ? target : null} onTargetDone={clearTarget} onError={setUiError} />}
+        : <ReviewsView key={projectId} projectId={projectId} target={target?.reviewId ? target : null} onTargetDone={clearTarget} onError={setUiError} />}</ProvidersContext.Provider>
     </main>
     {uiError && <div className="error-banner" role="alert"><Icon name="info" /><span>{uiError}</span><button className="icon-button" onClick={() => setUiError('')} aria-label="Dismiss error"><Icon name="close" /></button></div>}
+    {settingsOpen && <SettingsDialog providers={snapshot.providers} onClose={() => setSettingsOpen(false)} onError={setUiError} />}
     {projectDialog && <ProjectDialog mode={projectDialog} project={activeProject} onClose={() => setProjectDialog(null)} onSubmit={name => void saveProject(name)} />}
     {deletion && <ConfirmDialog eyebrow={deletion.kind === 'project' ? 'Delete project' : 'Delete conversation'} title={deletion.name} confirmLabel="Delete" busy={deleting} error={deleteError} onCancel={() => setDeletion(null)} onConfirm={() => void confirmDelete()}
       body={deletion.kind === 'project' ? 'The project, its reviews, notes, and stored image copies are removed permanently. Files in source folders are not touched.' : 'This conversation is removed permanently. Project art, reviews, and notes remain.'} />}

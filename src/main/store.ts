@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { WorkbenchError } from '../shared/workbench';
-import type { ActivityEntry, Decision, Item, ItemSearchResult, ItemStatusFilter, ItemSummary, Note, NoteThread, Origin, Pin, Project, Review, ReviewEntry, ReviewStatus, ReviewSummary, Revision, RevisionOrigin, ScanReport, Session, Source, TitleSource } from '../shared/types';
+import type { ActivityEntry, Decision, ImageJob, ImageJobInput, Item, ItemSearchResult, ItemStatusFilter, ItemSummary, Note, NoteThread, Origin, Pin, Project, Review, ReviewEntry, ReviewStatus, ReviewSummary, Revision, RevisionOrigin, ScanReport, Session, Source, TitleSource } from '../shared/types';
 
 const SCHEMA_VERSION = 1;
 const ACTIVE_PROJECT_KEY = 'project-active';
@@ -49,6 +49,11 @@ const reviewSummary = (r: Row): ReviewSummary => ({
   counts: { total: r.total, unreviewed: r.total - r.accepted - r.needs_changes - r.rejected, accepted: r.accepted, needs_changes: r.needs_changes, rejected: r.rejected },
   openNotes: r.open_notes, createdAt: r.created_at, createdBy: r.created_by, updatedAt: r.updated_at, completedAt: r.completed_at, completedBy: r.completed_by,
 });
+const job = (r: Row): ImageJob => ({
+  id: r.id, projectId: r.project_id, batchId: r.batch_id, position: r.position, status: r.status, input: JSON.parse(r.input), itemId: r.item_id, revisionId: r.revision_id,
+  error: r.error, warning: r.warning, createdBy: r.created_by, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at,
+});
+const ACTIVE_JOB = "status IN ('queued', 'running')";
 const revisionConflict = (revision: number) => new WorkbenchError('REVISION_CONFLICT', `The review is at revision ${revision}. Read it again and reconcile before retrying.`, { revision });
 /** Rounds a pin to whole pixels inside the image. */
 export function clampPin(pin: Pin, width: number, height: number): Pin {
@@ -105,6 +110,12 @@ export class Store {
           pin TEXT, resolved_at TEXT, resolved_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE INDEX notes_item ON notes(item_id, created_at);
         CREATE INDEX notes_review ON notes(review_id);
+        CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, batch_id TEXT NOT NULL, position INTEGER NOT NULL, status TEXT NOT NULL,
+          input TEXT NOT NULL, request TEXT NOT NULL, item_id TEXT REFERENCES items(id) ON DELETE SET NULL, revision_id TEXT, error TEXT, warning TEXT,
+          created_by TEXT NOT NULL, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT);
+        CREATE INDEX jobs_project ON jobs(project_id, created_at);
+        CREATE INDEX jobs_batch ON jobs(batch_id, position);
+        CREATE INDEX jobs_status ON jobs(status);
         PRAGMA user_version = ${SCHEMA_VERSION};
       `);
     })();
@@ -466,6 +477,73 @@ export class Store {
       this.db.prepare('DELETE FROM notes WHERE id=?').run(id);
       this.appendActivity(projectId, origin, 'note.deleted', { itemId: row.item_id, reviewId: row.review_id ?? undefined }, { noteId: id });
     });
+  }
+
+  /** Records an export. Writing to the linked source makes the exported revision the synced one. */
+  recordExport(projectId: string, itemId: string, revisionId: string, destination: string | null, origin: Origin) {
+    this.tx(() => {
+      if (!destination) this.db.prepare('UPDATE items SET synced_revision_id=?, missing=0, updated_at=? WHERE id=?').run(revisionId, now(), itemId);
+      this.appendActivity(projectId, origin, 'item.exported', { itemId }, { revisionId, ...(destination ? { destination } : {}) });
+    });
+  }
+
+  /** Admits a batch of image jobs. A repeated batch id returns the original jobs when the request matches. */
+  createJobs(projectId: string, batchId: string, request: string, itemId: string | null, inputs: ImageJobInput[], origin: Origin): ImageJob[] {
+    const existing = this.db.prepare('SELECT project_id, request FROM jobs WHERE batch_id=? LIMIT 1').get(batchId) as Row | undefined;
+    if (existing) {
+      if (existing.project_id !== projectId || existing.request !== request) throw new WorkbenchError('REQUEST_CONFLICT', 'That requestId was already used with different arguments.');
+      return this.jobs(projectId, { batchId });
+    }
+    const at = now(), insert = this.db.prepare('INSERT INTO jobs (id,project_id,batch_id,position,status,input,request,item_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)');
+    this.tx(() => {
+      inputs.forEach((input, position) => insert.run(randomUUID(), projectId, batchId, position, 'queued', JSON.stringify(input), request, itemId, origin, at));
+      this.appendActivity(projectId, origin, 'images.requested', itemId ? { itemId } : {}, { batchId, kind: inputs[0]!.kind, model: inputs[0]!.model, count: inputs.length });
+    });
+    return this.jobs(projectId, { batchId });
+  }
+  jobs(projectId: string, filter: { batchId?: string; itemId?: string; jobIds?: string[]; active?: boolean; limit?: number }): ImageJob[] {
+    const where = ['project_id = ?'], args: unknown[] = [projectId];
+    if (filter.batchId) { where.push('batch_id = ?'); args.push(filter.batchId); }
+    if (filter.itemId) { where.push('item_id = ?'); args.push(filter.itemId); }
+    if (filter.jobIds) { where.push(`id IN (${filter.jobIds.map(() => '?').join(',')})`); args.push(...filter.jobIds); }
+    if (filter.active) where.push(ACTIVE_JOB);
+    return (this.db.prepare(`SELECT * FROM jobs WHERE ${where.join(' AND ')} ORDER BY created_at DESC, position LIMIT ?`).all(...args, filter.limit ?? 200) as Row[]).map(job);
+  }
+  job(id: string, projectId: string): ImageJob {
+    const row = this.db.prepare('SELECT * FROM jobs WHERE id=? AND project_id=?').get(id, projectId) as Row | undefined;
+    if (!row) throw new WorkbenchError('NOT_FOUND', 'Job not found in project.');
+    return job(row);
+  }
+  hasActiveJobs(projectId?: string) { return !!this.db.prepare(`SELECT 1 FROM jobs WHERE ${ACTIVE_JOB}${projectId ? ' AND project_id = ?' : ''} LIMIT 1`).get(...(projectId ? [projectId] : [])); }
+  /** Moves the oldest queued job to running. */
+  claimJob(): ImageJob | null {
+    const row = this.db.prepare("SELECT id FROM jobs WHERE status='queued' ORDER BY created_at, position LIMIT 1").get() as Row | undefined;
+    if (!row) return null;
+    this.tx(() => this.db.prepare("UPDATE jobs SET status='running', started_at=? WHERE id=?").run(now(), row.id));
+    return job(this.db.prepare('SELECT * FROM jobs WHERE id=?').get(row.id) as Row);
+  }
+  finishJob(id: string, patch: { status: 'completed' | 'failed' | 'uncertain'; itemId?: string; revisionId?: string; error?: string; warning?: string }) {
+    const current = this.db.prepare('SELECT project_id, batch_id, item_id, created_by FROM jobs WHERE id=?').get(id) as Row | undefined;
+    if (!current) return;
+    const itemId = patch.itemId ?? current.item_id;
+    this.tx(() => {
+      this.db.prepare('UPDATE jobs SET status=?, item_id=?, revision_id=?, error=?, warning=?, finished_at=? WHERE id=?')
+        .run(patch.status, itemId, patch.revisionId ?? null, patch.error ?? null, patch.warning ?? null, now(), id);
+      this.appendActivity(current.project_id, current.created_by, `job.${patch.status}`, itemId ? { itemId } : {}, { jobId: id, batchId: current.batch_id, ...(patch.revisionId ? { revisionId: patch.revisionId } : {}), ...(patch.error ? { error: patch.error } : {}) });
+    });
+  }
+  cancelJob(id: string, projectId: string, origin: Origin): ImageJob {
+    const current = this.job(id, projectId);
+    if (current.status !== 'queued') throw new WorkbenchError('INVALID_STATE', current.status === 'running' ? 'The request is already with the provider and may be billed; it cannot be cancelled.' : `The job is already ${current.status}.`);
+    this.tx(() => {
+      this.db.prepare("UPDATE jobs SET status='cancelled', finished_at=? WHERE id=?").run(now(), id);
+      this.appendActivity(projectId, origin, 'job.cancelled', current.itemId ? { itemId: current.itemId } : {}, { jobId: id, batchId: current.batchId });
+    });
+    return this.job(id, projectId);
+  }
+  /** Startup recovery: requests in flight when PixelChat stopped are recorded as uncertain, never replayed. */
+  interruptJobs() {
+    this.tx(() => this.db.prepare("UPDATE jobs SET status='uncertain', error=?, finished_at=? WHERE status='running'").run('PixelChat stopped during the provider request. It may have been billed and was not replayed.', now()));
   }
 
   /** Revision file and format, scoped to a project, for media serving. */

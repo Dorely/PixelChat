@@ -15,6 +15,10 @@ export function createApi({ call, onChanged, onUiCommand, mediaUrl, hostMode }: 
     setActiveProject: id => call('setActiveProject', id),
     chooseDirectory: () => call('chooseDirectory'),
     openLogs: () => call('openLogs'),
+    codexLogin: () => call('codexLogin'),
+    codexCancelLogin: () => call('codexCancelLogin'),
+    codexLogout: () => call('codexLogout'),
+    saveGeminiKey: key => call('saveGeminiKey', key),
     uiReady: () => call('uiReady'),
     uiAcknowledge: (id, error) => call('uiAcknowledge', id, error),
   };
