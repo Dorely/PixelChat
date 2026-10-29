@@ -3,11 +3,13 @@ import type { Project, Session, Snapshot } from '../shared/types'
 import Icon from './Icon'
 import { ConfirmDialog, Modal } from './Dialogs'
 import LibraryView from './LibraryView'
+import ReviewsView from './ReviewsView'
 import { op } from './ops'
 import { THEMES, applyTheme, storedTheme, type ThemeId } from './theme'
 
 type View = 'library' | 'reviews'
 type Deletion = { kind: 'project' | 'session'; id: string; projectId: string; name: string }
+type Target = { reviewId?: string; itemId?: string }
 
 const emptySnapshot: Snapshot = { projects: [], activeProjectId: '', sessions: [] }
 const message = (error: unknown) => error instanceof Error ? error.message : 'Operation failed.'
@@ -85,10 +87,6 @@ function ChatSidebar({ sessions, projectName, selectedId, onSelect, onNew, onRen
   </aside>
 }
 
-function EmptyView() {
-  return <div className="empty-state"><div className="empty-icon"><Icon name="check" /></div><h2>No reviews yet</h2><p>Reviews collect artwork for accept, needs-changes and reject decisions, with notes and region pins for agents to act on.</p></div>
-}
-
 export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot)
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -100,6 +98,7 @@ export default function App() {
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
   const [sidebarWidth, setSidebarWidth] = useState(34)
+  const [target, setTarget] = useState<Target | null>(null)
   const refreshSerial = useRef(0)
 
   const refresh = useCallback(async () => {
@@ -113,8 +112,12 @@ export default function App() {
   }, [])
   useEffect(() => { void refresh(); return window.pixel.onChanged(() => void refresh()) }, [refresh])
   useEffect(() => {
-    // Navigation commands arrive with later workspace views; acknowledge honestly until then.
-    const unsubscribe = window.pixel.onUiCommand(command => { void window.pixel.uiAcknowledge(command.id, `The ${command.action} view is not available yet.`) })
+    // The main process has already switched to the command's project; views pick the target up after the switch.
+    const unsubscribe = window.pixel.onUiCommand(command => {
+      setView(command.action === 'open-review' ? 'reviews' : 'library')
+      setTarget({ reviewId: command.reviewId, itemId: command.itemId })
+      void window.pixel.uiAcknowledge(command.id)
+    })
     void window.pixel.uiReady()
     const disconnected = () => setUiError('Browser host disconnected. Restart npm run dev:browser and open its printed URL.')
     window.addEventListener('pixel-host-disconnected', disconnected)
@@ -129,6 +132,7 @@ export default function App() {
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', stop)
   }
 
+  const clearTarget = useCallback(() => setTarget(null), [])
   const call = async (action: () => Promise<unknown>) => { try { await action(); void refresh(); return true } catch (error) { setUiError(message(error)); return false } }
   const projectId = snapshot.activeProjectId
   const activeProject = snapshot.projects.find(project => project.id === projectId) ?? null
@@ -166,7 +170,9 @@ export default function App() {
         <button className={view === 'library' ? 'tab-active' : ''} onClick={() => setView('library')}><Icon name="library" /> Library</button>
         <button className={view === 'reviews' ? 'tab-active' : ''} onClick={() => setView('reviews')}><Icon name="check" /> Reviews</button>
       </nav>
-      {!projectId ? null : view === 'library' ? <LibraryView key={projectId} projectId={projectId} onError={setUiError} /> : <section className="workspace-panel"><EmptyView /></section>}
+      {!projectId ? null : view === 'library'
+        ? <LibraryView key={projectId} projectId={projectId} focusItemId={target?.reviewId ? undefined : target?.itemId} onFocusDone={clearTarget} onOpenReview={reviewId => { setTarget({ reviewId }); setView('reviews') }} onError={setUiError} />
+        : <ReviewsView key={projectId} projectId={projectId} target={target?.reviewId ? target : null} onTargetDone={clearTarget} onError={setUiError} />}
     </main>
     {uiError && <div className="error-banner" role="alert"><Icon name="info" /><span>{uiError}</span><button className="icon-button" onClick={() => setUiError('')} aria-label="Dismiss error"><Icon name="close" /></button></div>}
     {projectDialog && <ProjectDialog mode={projectDialog} project={activeProject} onClose={() => setProjectDialog(null)} onSubmit={name => void saveProject(name)} />}

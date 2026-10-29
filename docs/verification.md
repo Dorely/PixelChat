@@ -45,3 +45,40 @@ secure-storage, or platform integration.
   desktop `pixel-media` protocol shares the handler exercised through the browser host but
   was not inspected visually.
 
+## 2026-10-29 — Reviews and notes
+
+- `npm run typecheck` and `npm run build` succeeded.
+- Reset the local profile database again (schema v1 gained review and note tables) and
+  re-imported `MermaidGame/assets/characters` read-only into "Validation Art": 157 items.
+- `npm run dev:browser`, built-in browser:
+  - Library filtered to `clam`, then "Review these": the dialog showed 8 items; the review
+    opened with its instructions and decision filters.
+  - "Continue reviewing" then A, R, C pressed in quick succession recorded accepted,
+    rejected, and needs changes on the first three items. The first attempt put all three
+    on one item (stale index in the key handler); fixed with a position ref and checked
+    again.
+  - Dragged a box pin and clicked a point pin on `lid`, adding a note to each; both drew
+    numbered over the image. A note typed while the previous one was saving was lost on
+    the first attempt; the composer now clears only the text it submitted.
+  - Through operations: a reply attached to its thread and inherited the review; a pinned
+    reply and a half-specified box were rejected; a pin at (9999, -20) was clamped to
+    (709, 0) with the box shrunk to fit; resolving hid the thread unless
+    `includeResolved`; `open_notes` filtered to the one item. `review_complete` with an
+    old revision returned `REVISION_CONFLICT`; after completion, decisions and new review
+    notes returned `REVIEW_COMPLETED` while replies still worked; the review moved to the
+    completed list, and reopening restored it. Reordering entries kept their decisions;
+    `review_history` listed creation, decisions, notes, resolution, completion, reopening,
+    and the update.
+  - On a scratch copy of the eel folder: after accepting all five and pinning a note on
+    `head`, replacing `head.png` and rescanning gave one changed item. The board showed
+    "Changed since" with its own filter, the viewer badge read "Accepted · changed since",
+    and the note's pin was dashed with an "Other version" badge. The scratch source and
+    its review were removed afterward.
+  - `ui_open` with a review and item opened the board viewer at that item; with only an
+    item it switched to Library and opened it, without the decision bar.
+  - After restarting the host, the review, decisions, notes, replies, and resolution
+    persisted; no error banner appeared.
+- A desktop launch recorded `app.started` with no start failure and was terminated.
+- Not covered: agent-origin rules (agents editing or deleting only their own notes)
+  have no agent caller until the CLI and MCP land; they are checked in code only.
+

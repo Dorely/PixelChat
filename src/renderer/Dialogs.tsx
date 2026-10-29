@@ -12,7 +12,7 @@ export function Modal({ eyebrow, title, label, busy = false, className = '', onC
 }
 
 /** Confirmation for destructive actions; the caller performs the action and reports its error. */
-export function ConfirmDialog({ eyebrow, title, body, confirmLabel, busy, error, onCancel, onConfirm }: { eyebrow: string; title: string; body: string; confirmLabel: string; busy: boolean; error: string; onCancel: () => void; onConfirm: () => void }) {
+export function ConfirmDialog({ eyebrow, title, body, confirmLabel, busy = false, error = '', onCancel, onConfirm }: { eyebrow: string; title: string; body: string; confirmLabel: string; busy?: boolean; error?: string; onCancel: () => void; onConfirm: () => void }) {
   return <Modal eyebrow={eyebrow} title={title} label={eyebrow} busy={busy} className="project-dialog" onClose={onCancel}>
     <div className="project-dialog-body">
       <p>{body}</p>

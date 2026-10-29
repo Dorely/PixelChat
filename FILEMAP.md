@@ -39,7 +39,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | File | Responsibility |
 | --- | --- |
 | [src/main/index.ts](src/main/index.ts) | Electron lifecycle, hardened window, fixed IPC command schemas, `pixel-media` protocol, browser-mode startup. |
-| [src/main/store.ts](src/main/store.ts) | SQLite schema and repository for settings, projects, sessions, sources, items, revisions, and the activity log. |
+| [src/main/store.ts](src/main/store.ts) | SQLite schema and repository for settings, projects, sessions, sources, items, revisions, reviews, notes, and the activity log. |
 | [src/main/media.ts](src/main/media.ts) | Stores exact original bytes and WebP thumbnails per revision; reads image facts with sharp. |
 | [src/main/library.ts](src/main/library.ts) | Source folders, background scans and rescans, glob filters, and loose-file imports. |
 | [src/main/operations.ts](src/main/operations.ts) | Shared zod-validated operation registry for UI, assistant, CLI, and MCP; error envelopes. |
@@ -65,7 +65,10 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/renderer/App.tsx](src/renderer/App.tsx) | App shell: chat sidebar, project switcher, workspace views, project dialogs, theme picker. |
 | [src/renderer/Dialogs.tsx](src/renderer/Dialogs.tsx) | Shared modal shell and destructive-action confirmation. |
 | [src/renderer/LibraryView.tsx](src/renderer/LibraryView.tsx) | Library grid with search and filters, source management, and add-folder dialog. |
-| [src/renderer/ItemViewer.tsx](src/renderer/ItemViewer.tsx) | Full-size item inspection: zoom, backdrops, facts, versions, and version selection. |
+| [src/renderer/ItemCard.tsx](src/renderer/ItemCard.tsx) | Grid card and thumbnail shared by Library and review boards; decision labels. |
+| [src/renderer/ItemViewer.tsx](src/renderer/ItemViewer.tsx) | Full-size item inspection: zoom, backdrops, versions, notes, and keyboard review decisions. |
+| [src/renderer/NotesPanel.tsx](src/renderer/NotesPanel.tsx) | Note threads, composer, and the pin overlay that turns clicks and drags into region pins. |
+| [src/renderer/ReviewsView.tsx](src/renderer/ReviewsView.tsx) | Review list, new-review dialog, and review boards with decision filters. |
 | [src/renderer/browser-api.ts](src/renderer/browser-api.ts) | Browser-host transport and host-path dialog for development. |
 | [src/renderer/ops.ts](src/renderer/ops.ts) | Calls registry operations and unwraps envelopes. |
 | [src/renderer/Icon.tsx](src/renderer/Icon.tsx) | Inline SVG icon set. |

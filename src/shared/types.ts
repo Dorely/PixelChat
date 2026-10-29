@@ -16,10 +16,10 @@ export type RevisionMeta = Pick<Revision, 'id' | 'origin' | 'width' | 'height' |
 export interface ItemSummary {
   id: string; projectId: string; sourceId: string | null; sourcePath: string | null; name: string; collection: string;
   description: string; tags: string[]; syncedRevisionId: string | null; selectedRevisionId: string;
-  pendingExport: boolean; missing: boolean; selected: RevisionMeta; createdAt: string; updatedAt: string;
+  pendingExport: boolean; missing: boolean; openNotes: number; selected: RevisionMeta; createdAt: string; updatedAt: string;
 }
-export interface Item extends ItemSummary { revisions: Revision[]; sourceFile: string | null }
-export type ItemStatusFilter = 'all' | 'pending_export' | 'missing';
+export interface Item extends ItemSummary { revisions: Revision[]; sourceFile: string | null; notes: NoteThread[] }
+export type ItemStatusFilter = 'all' | 'pending_export' | 'missing' | 'open_notes';
 export interface ItemSearchResult { total: number; items: ItemSummary[]; collections: { name: string; count: number }[] }
 
 export interface ScanReport { startedAt: string; finishedAt: string; added: number; changed: number; unchanged: number; missing: number; failed: { path: string; error: string }[] }
@@ -28,6 +28,30 @@ export interface Source {
   id: string; projectId: string; root: string; include: string[]; exclude: string[]; createdAt: string;
   itemCount: number; lastScan: ScanReport | null; scanning: ScanProgress | null;
 }
+
+/** A region in image pixels of the note's revision: a point, or a box when width and height are set. */
+export interface Pin { x: number; y: number; width?: number; height?: number }
+/** Feedback on an item. Root notes may carry a pin and be resolved; replies hang off a root. */
+export interface Note {
+  id: string; projectId: string; itemId: string; reviewId: string | null; revisionId: string; parentId: string | null;
+  author: Origin; body: string; pin: Pin | null; resolvedAt: string | null; resolvedBy: Origin | null; createdAt: string; updatedAt: string;
+}
+export interface NoteThread extends Note { replies: Note[] }
+
+export type Decision = 'unreviewed' | 'accepted' | 'needs_changes' | 'rejected';
+export type ReviewStatus = 'active' | 'completed';
+export interface ReviewSummary {
+  id: string; projectId: string; title: string; instructions: string; status: ReviewStatus; revision: number;
+  counts: Record<Decision, number> & { total: number }; openNotes: number;
+  createdAt: string; createdBy: Origin; updatedAt: string; completedAt: string | null; completedBy: Origin | null;
+}
+/** One item in a review. Stale when the item's selected revision changed after the decision. */
+export interface ReviewEntry {
+  itemId: string; position: number; decision: Decision; decidedAt: string | null; decidedBy: Origin | null; decidedRevisionId: string | null;
+  stale: boolean; item: ItemSummary;
+}
+export interface Review extends ReviewSummary { entries: ReviewEntry[]; notes: NoteThread[] }
+export interface ActivityEntry { seq: number; at: string; origin: Origin; kind: string; itemId: string | null; reviewId: string | null; data: Record<string, unknown> }
 
 /** Renderer bootstrap state; views load their own data through operations. */
 export interface Snapshot { projects: Project[]; activeProjectId: string; sessions: Session[] }

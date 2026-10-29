@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { Item, ItemSummary, Revision } from '../shared/types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { Decision, Item, ItemSummary, Pin, ReviewEntry, Revision } from '../shared/types'
 import Icon from './Icon'
+import { DECISIONS, decisionBadge, decisionLabel } from './ItemCard'
+import { NotesPanel, PinLayer } from './NotesPanel'
 import { op } from './ops'
 
 type Backdrop = 'checker' | 'dark' | 'light'
 type Zoom = 'fit' | number
 const ZOOMS = [0.25, 0.5, 1, 2, 4, 8]
 const PREFERENCES = 'pixelchat.viewer'
+
+/** Review context for the viewer: decisions per item, locked when the review is completed. */
+export interface ViewerReview { id: string; completed: boolean; entries: Map<string, ReviewEntry> }
 
 function loadPreferences(): { backdrop: Backdrop; pixelated: boolean } {
   try { const value = JSON.parse(localStorage.getItem(PREFERENCES) ?? '{}'); return { backdrop: ['checker', 'dark', 'light'].includes(value.backdrop) ? value.backdrop : 'checker', pixelated: value.pixelated === true } }
@@ -16,32 +21,60 @@ const formatBytes = (bytes: number) => bytes < 1024 * 1024 ? `${(bytes / 1024).t
 const alphaLabel = (revision: Revision) => !revision.hasAlpha ? 'No alpha channel' : revision.opaque ? 'Alpha channel, fully opaque' : 'Transparent pixels'
 const typing = (target: EventTarget | null) => target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
 
-/** Full-size inspection of one item at a time with zoom, backdrops, and its revision history. */
-export default function ItemViewer({ projectId, items, index, onIndex, onClose, onError }: { projectId: string; items: ItemSummary[]; index: number; onIndex: (index: number) => void; onClose: () => void; onError: (message: string) => void }) {
+/**
+ * Full-size inspection of one item at a time: zoom, backdrops, versions, note threads with region pins,
+ * and, inside a review, keyboard decisions.
+ */
+export default function ItemViewer({ projectId, items, index, review, onIndex, onClose, onError }: { projectId: string; items: ItemSummary[]; index: number; review?: ViewerReview; onIndex: (index: number) => void; onClose: () => void; onError: (message: string) => void }) {
   const summary = items[index]!
   const [item, setItem] = useState<Item | null>(null)
   const [viewingId, setViewingId] = useState(summary.selectedRevisionId)
   const [zoom, setZoom] = useState<Zoom>('fit')
   const [preferences, setPreferences] = useState(loadPreferences)
+  const [draft, setDraft] = useState<Pin | null>(null)
+  const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
+  const [image, setImage] = useState<HTMLImageElement | null>(null)
+  const [stage, setStage] = useState<HTMLDivElement | null>(null)
+  const composer = useRef<HTMLTextAreaElement>(null)
+  // Focus requests wait for the notes panel, which mounts once the item loads.
+  const [noteFocus, setNoteFocus] = useState(false)
+  useEffect(() => { if (noteFocus && item) { composer.current?.focus(); setNoteFocus(false) } }, [noteFocus, item])
+  const entry = review?.entries.get(summary.id)
 
   const load = useCallback(async () => {
     try { setItem(await op<Item>('item_get', { projectId, itemId: summary.id })) }
     catch (error) { onError(error instanceof Error ? error.message : 'Could not load the item.') }
   }, [projectId, summary.id, onError])
-  useEffect(() => { setItem(null); setViewingId(summary.selectedRevisionId); setZoom('fit'); void load() }, [summary.id])
+  useEffect(() => { setItem(null); setViewingId(summary.selectedRevisionId); setZoom('fit'); setDraft(null); setActiveNoteId(null); void load() }, [summary.id])
   useEffect(() => window.pixel.onChanged(() => void load()), [load])
   useEffect(() => { try { localStorage.setItem(PREFERENCES, JSON.stringify(preferences)) } catch { /* storage unavailable */ } }, [preferences])
 
-  const step = (direction: 1 | -1) => { const next = index + direction; if (next >= 0 && next < items.length) onIndex(next) }
+  // Keys can arrive faster than renders; the ref keeps rapid decisions on the right item.
+  const position = useRef(index)
+  useEffect(() => { position.current = index }, [index])
+  const step = (direction: 1 | -1) => { const next = position.current + direction; if (next >= 0 && next < items.length) { position.current = next; onIndex(next) } }
   const stepZoom = (direction: 1 | -1) => setZoom(current => {
     const value = current === 'fit' ? 1 : current
     return ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, ZOOMS.findIndex(entry => entry >= value) + direction))]!
   })
+  const decide = async (decision: Decision) => {
+    if (!review || review.completed) return
+    const itemId = items[position.current]!.id
+    if (decision === 'needs_changes') setNoteFocus(true)
+    else if (decision !== 'unreviewed') step(1)
+    try { await op('review_decide', { projectId, reviewId: review.id, decisions: [{ itemId, decision }] }) }
+    catch (error) { onError(error instanceof Error ? error.message : 'Could not record the decision.') }
+  }
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
-      if (typing(event.target) || event.ctrlKey || event.metaKey || event.altKey) return
-      const actions: Record<string, () => void> = { Escape: onClose, ArrowLeft: () => step(-1), ArrowRight: () => step(1), '0': () => setZoom('fit'), '1': () => setZoom(1), '+': () => stepZoom(1), '=': () => stepZoom(1), '-': () => stepZoom(-1) }
-      const action = actions[event.key]
+      if (typing(event.target) || event.ctrlKey || event.metaKey || event.altKey || document.querySelector('[aria-modal="true"]')) return
+      const actions: Record<string, () => void> = {
+        Escape: () => draft ? setDraft(null) : onClose(), ArrowLeft: () => step(-1), ArrowRight: () => step(1),
+        '0': () => setZoom('fit'), '1': () => setZoom(1), '+': () => stepZoom(1), '=': () => stepZoom(1), '-': () => stepZoom(-1),
+        n: () => setNoteFocus(true),
+        ...(review && !review.completed ? { a: () => void decide('accepted'), c: () => void decide('needs_changes'), r: () => void decide('rejected'), u: () => void decide('unreviewed') } : {}),
+      }
+      const action = actions[event.key.length === 1 ? event.key.toLowerCase() : event.key]
       if (action) { event.preventDefault(); action() }
     }
     window.addEventListener('keydown', handle)
@@ -59,6 +92,11 @@ export default function ItemViewer({ projectId, items, index, onIndex, onClose, 
     <header className="viewer-header">
       <button className="icon-button" onClick={onClose} aria-label="Close viewer" title="Close (Esc)"><Icon name="close" /></button>
       <div className="viewer-title"><strong>{summary.name}</strong><small>{summary.sourcePath ?? summary.collection}</small></div>
+      {review && <div className="decision-bar" role="group" aria-label="Decision">
+        {entry && entry.decision !== 'unreviewed' && <span className={`badge ${decisionBadge(entry.decision)}`}>{decisionLabel(entry.decision)}{entry.stale ? ' · changed since' : ''}</span>}
+        {DECISIONS.map(option => <button key={option.id} className={`decision-button decision-${option.id}${entry?.decision === option.id ? ' active' : ''}`} disabled={review.completed}
+          onClick={() => void decide(entry?.decision === option.id ? 'unreviewed' : option.id)} title={`${option.label} (${option.key})`}>{option.label} <kbd>{option.key}</kbd></button>)}
+      </div>}
       <div className="viewer-nav">
         <button className="icon-button" onClick={() => step(-1)} disabled={index === 0} aria-label="Previous item" title="Previous (←)"><Icon name="back" /></button>
         <span>{index + 1} / {items.length}</span>
@@ -79,28 +117,19 @@ export default function ItemViewer({ projectId, items, index, onIndex, onClose, 
             {(['checker', 'dark', 'light'] as const).map(entry => <button key={entry} className={preferences.backdrop === entry ? 'active' : ''} onClick={() => setPreferences(value => ({ ...value, backdrop: entry }))}>{entry === 'checker' ? 'Checker' : entry === 'dark' ? 'Dark' : 'Light'}</button>)}
           </span>
           <label className="toggle"><input type="checkbox" checked={preferences.pixelated} onChange={event => setPreferences(value => ({ ...value, pixelated: event.target.checked }))} /> Pixelated</label>
+          <span className="toolbar-hint">{review && !review.completed ? 'A accept · C needs changes · R reject · N note' : 'N note · click or drag to pin'}</span>
         </div>
-        <div className={`viewer-stage backdrop-${preferences.backdrop}${zoom === 'fit' ? ' stage-fit' : ''}`} onWheel={event => { if (event.ctrlKey) { event.preventDefault(); stepZoom(event.deltaY < 0 ? 1 : -1) } }}>
-          {revision && <img key={revision.id} src={window.pixel.mediaUrl(`original/${revision.id}`)} alt={summary.name} draggable={false}
+        <div ref={setStage} className={`viewer-stage backdrop-${preferences.backdrop}${zoom === 'fit' ? ' stage-fit' : ''}`} onWheel={event => { if (event.ctrlKey) { event.preventDefault(); stepZoom(event.deltaY < 0 ? 1 : -1) } }}>
+          {revision && <img ref={setImage} key={revision.id} src={window.pixel.mediaUrl(`original/${revision.id}`)} alt={summary.name} draggable={false}
             className={preferences.pixelated ? 'pixelated' : ''} style={width ? { width, maxWidth: 'none', maxHeight: 'none' } : undefined} />}
+          {item && revision && <PinLayer image={image} stage={stage} revision={revision} revisions={item.revisions} notes={item.notes} draft={draft} activeNoteId={activeNoteId}
+            onDraft={pin => { setDraft(pin); setNoteFocus(true) }} onActivate={setActiveNoteId} />}
         </div>
       </div>
       <aside className="viewer-side">
         {item && revision ? <>
-          <section className="viewer-section">
-            <div className="status-row">
-              {item.pendingExport && <span className="badge badge-accent">Pending export</span>}
-              {item.missing && <span className="badge badge-warn">Missing from source</span>}
-              {!item.sourceId && <span className="badge">Unlinked</span>}
-            </div>
-            <dl className="facts">
-              <dt>Size</dt><dd>{revision.width} × {revision.height}</dd>
-              <dt>Format</dt><dd>{revision.format.toUpperCase()} · {formatBytes(revision.bytes)}</dd>
-              <dt>Alpha</dt><dd>{alphaLabel(revision)}</dd>
-              <dt>SHA-256</dt><dd><code title={revision.sha256}>{revision.sha256.slice(0, 16)}…</code></dd>
-              {item.sourceFile && <><dt>Source</dt><dd className="break"><code>{item.sourceFile}</code></dd></>}
-            </dl>
-          </section>
+          <NotesPanel ref={composer} projectId={projectId} item={item} revisionId={revision.id} reviewId={review?.id} locked={review?.completed} draft={draft} activeNoteId={activeNoteId}
+            onClearDraft={() => setDraft(null)} onActivate={setActiveNoteId} onError={onError} />
           <section className="viewer-section">
             <h3>Versions <span>{item.revisions.length}</span></h3>
             <div className="revision-strip">
@@ -117,6 +146,20 @@ export default function ItemViewer({ projectId, items, index, onIndex, onClose, 
               </button>)}
             </div>
             {revision.id !== item.selectedRevisionId && <button className="primary-button wide" onClick={() => void select(revision.id)}><Icon name="check" /> Use this version</button>}
+          </section>
+          <section className="viewer-section">
+            <div className="status-row">
+              {item.pendingExport && <span className="badge badge-accent">Pending export</span>}
+              {item.missing && <span className="badge badge-warn">Missing from source</span>}
+              {!item.sourceId && <span className="badge">Unlinked</span>}
+            </div>
+            <dl className="facts">
+              <dt>Size</dt><dd>{revision.width} × {revision.height}</dd>
+              <dt>Format</dt><dd>{revision.format.toUpperCase()} · {formatBytes(revision.bytes)}</dd>
+              <dt>Alpha</dt><dd>{alphaLabel(revision)}</dd>
+              <dt>SHA-256</dt><dd><code title={revision.sha256}>{revision.sha256.slice(0, 16)}…</code></dd>
+              {item.sourceFile && <><dt>Source</dt><dd className="break"><code>{item.sourceFile}</code></dd></>}
+            </dl>
           </section>
         </> : <p className="quiet-text">Loading…</p>}
       </aside>

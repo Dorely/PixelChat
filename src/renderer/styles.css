@@ -220,3 +220,88 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .revision-copy small { color: var(--quiet); font: 11px var(--font-mono); }
 .revision-tags { display: flex; gap: 4px; }
 .wide { width: 100%; }
+
+/* Decisions */
+.badge-danger { border-color: var(--danger-line); color: var(--danger-text); background: var(--danger-bg); }
+.danger-text { color: var(--danger) !important; }
+.item-card.decision-accepted { border-color: var(--accent-line); }
+.item-card.decision-needs_changes { border-color: var(--warn-line); }
+.item-card.decision-rejected { border-color: var(--danger-line); opacity: .72; }
+.decision-bar { display: flex; flex-shrink: 0; align-items: center; gap: 6px; }
+.decision-button { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-2); background: var(--surface-2); font-size: 12px; font-weight: 600; }
+.decision-button:hover:not(:disabled) { border-color: var(--line-hover); color: var(--text); }
+.decision-button:disabled { opacity: .5; }
+.decision-button kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 3px; color: var(--quiet); font: 10px var(--font-mono); }
+.decision-accepted.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.decision-needs_changes.active { border-color: var(--warn); color: var(--warn-text); background: var(--warn-bg); }
+.decision-rejected.active { border-color: var(--danger); color: var(--danger-text); background: var(--danger-bg); }
+.toolbar-hint { margin-left: auto; color: var(--quiet); font: 11px var(--font-mono); }
+
+/* Pins */
+.viewer-stage { position: relative; }
+.pin-layer { position: absolute; cursor: crosshair; touch-action: none; }
+.pin-mark { position: absolute; display: grid; place-items: center; width: 22px; height: 22px; margin: -11px 0 0 -11px; padding: 0; border: 2px solid #fff; border-radius: 50%; color: #fff; background: var(--accent-strong); box-shadow: 0 1px 6px rgba(0, 0, 0, .55); font: 700 11px var(--font-mono); cursor: pointer; }
+.pin-mark.pin-box { display: block; margin: 0; border-radius: 2px; background: color-mix(in srgb, var(--accent-strong) 16%, transparent); border-color: var(--accent-strong); box-shadow: 0 0 0 1px rgba(0, 0, 0, .5); }
+.pin-mark.pin-box span { position: absolute; top: -11px; left: -11px; display: grid; place-items: center; width: 22px; height: 22px; border: 2px solid #fff; border-radius: 50%; background: var(--accent-strong); }
+.pin-mark.pin-stale { border-style: dashed; opacity: .7; }
+.pin-mark.pin-active { z-index: 2; outline: 3px solid var(--warn); outline-offset: 1px; }
+.pin-mark.pin-draft { border-color: var(--warn); background: var(--warn); pointer-events: none; }
+.pin-mark.pin-draft.pin-box { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+
+/* Notes */
+.notes-section { display: flex; flex-direction: column; gap: 12px; }
+.notes-section h3 { margin-bottom: 0; }
+.note-composer { display: grid; gap: 8px; }
+.note-composer textarea, .reply-box textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; outline: 0; resize: vertical; color: var(--text); background: var(--surface-2); font: 13px/1.45 var(--font-sans); }
+.note-composer textarea:focus, .reply-box textarea:focus { border-color: var(--accent-line); }
+.note-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+.note-actions .text-button { font-size: 12px; }
+.pin-chip { gap: 4px; margin-right: auto; }
+.pin-chip button { display: grid; place-items: center; padding: 0; border: 0; color: inherit; background: transparent; font-size: 10px; }
+.note-list { display: grid; gap: 8px; }
+.note-list > .quiet-text { margin: 0; }
+.note-thread { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); cursor: default; }
+.note-thread.note-active { border-color: var(--warn); }
+.note-thread.note-resolved { opacity: .75; }
+.note-thread header, .note-reply header { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.note-thread header small, .note-reply header small { color: var(--quiet); font-size: 11px; }
+.note-thread header .badge { margin-left: auto; }
+.note-thread p, .note-reply p { margin: 0; color: var(--text); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.note-thread > .quiet-text { margin: 0; font-size: 11px; }
+.note-author { font-size: 12px; }
+.author-agent { color: var(--accent); }
+.pin-number { display: grid; flex: none; place-items: center; width: 19px; height: 19px; border-radius: 50%; color: #fff; background: var(--accent-strong); font: 700 10px var(--font-mono); }
+.note-reply { display: grid; gap: 4px; margin-left: 10px; padding-left: 10px; border-left: 2px solid var(--line-strong); }
+.note-reply .icon-button { width: 22px; height: 22px; margin-left: auto; font-size: 11px; }
+.reply-box { display: grid; gap: 6px; }
+.resolved-notes summary { padding: 4px 0; color: var(--muted); font-size: 12px; cursor: pointer; }
+.resolved-notes[open] { display: grid; gap: 8px; }
+
+/* Reviews */
+.back-link { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 12px; }
+.panel-header h1 .badge { margin-left: 8px; vertical-align: middle; }
+.review-meta { display: grid; gap: 8px; margin: -8px 0 18px; }
+.review-meta small { color: var(--quiet); font-size: 12px; }
+.review-instructions { max-width: 760px; margin: 0; padding: 10px 12px; border-left: 3px solid var(--accent-line); color: var(--text-2); background: var(--surface); font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+.review-progress { display: flex; width: 100%; max-width: 520px; height: 6px; overflow: hidden; border-radius: 3px; background: var(--surface-3); }
+.review-progress i { height: 100%; transition: width .2s; }
+.progress-accepted { background: var(--accent); }
+.progress-needs_changes { background: var(--warn); }
+.progress-rejected { background: var(--danger); }
+.review-list { display: grid; gap: 10px; max-width: 900px; }
+.review-card { display: grid; grid-template-columns: minmax(0, 1fr) 200px; align-items: center; gap: 8px 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); text-align: left; }
+.review-card:hover { border-color: var(--line-hover); }
+.review-card-copy { display: grid; gap: 4px; min-width: 0; }
+.review-card-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.review-card-copy small { color: var(--quiet); font-size: 12px; }
+.review-card-counts { display: flex; grid-column: 1 / -1; gap: 12px; font-size: 12px; }
+.review-card-counts:empty { display: none; }
+.decision-count.decision-accepted { color: var(--accent); }
+.decision-count.decision-needs_changes { color: var(--warn); }
+.decision-count.decision-rejected { color: var(--danger); }
+.library-toolbar .segmented button .count-pill { min-width: 17px; height: 16px; font-size: 10px; }
+.dialog-filters { display: flex; gap: 12px; }
+.dialog-filters label { flex: 1; }
+.dialog-filters .filter-select { width: 100%; max-width: none; }
+.library-toolbar .segmented { max-width: 100%; overflow-x: auto; }
+.library-toolbar .segmented button { flex: none; white-space: nowrap; }

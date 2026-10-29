@@ -44,11 +44,13 @@ library as the desktop app.
 ## Persistence
 
 Schema version 1 holds `settings`, `projects`, `sessions`, `sources`, `items`,
-`revisions`, and `activity`; project deletion cascades. A `Default` project is created
+`revisions`, `activity`, `reviews`, `review_items`, and `notes`; project deletion
+cascades. A `Default` project is created
 when none exist, and the active project is kept in the `project-active` setting.
 
 Every mutation appends an `activity` row (project, origin, kind, item or review, data).
-It is the record agents will follow for changes.
+It is the record agents will follow for changes, and `review_history` reads it for one
+review.
 
 ## Library and media
 
@@ -82,6 +84,38 @@ Media is served by `pixel-media://original/<revisionId>` and
 immutable cache headers. The browser host maps `/media/...` to the same handler.
 Removing a source, item, or project deletes its stored copies; files in source folders
 are never modified by import or removal.
+
+## Reviews and notes
+
+A **review** is an ordered set of items with a title, optional instructions, and a status
+(`active` or `completed`). Each entry carries a decision (`unreviewed`, `accepted`,
+`needs_changes`, `rejected`) with who decided it, when, and against which selected
+revision. An entry is **stale** when the item's selected revision has changed since the
+decision, so revised art comes back for another look. Reviews are created from item ids
+or from a `search_items` filter (up to 5000 items).
+
+Every review change increments its `revision`. Title, instructions, entry changes,
+completion, and reopening require `expectedRevision` and fail with `REVISION_CONFLICT`
+when it is out of date. Decisions do not, because each one targets a single entry.
+Completing locks decisions, entries, and new review notes until the review is reopened;
+replies and resolution stay open so agents can answer after completion. Deleting a review
+keeps its notes on their items.
+
+A **note** belongs to an item and a revision, and optionally to a review. Root notes may
+carry a pin in that revision's pixels: a point `{x, y}` or a box `{x, y, width, height}`,
+rounded and clamped to the image. Replies hang off a root (replies to replies attach to
+the root) and carry no pin. Root notes are resolved or reopened by either side; agents may
+edit or delete only their own notes. Item summaries count open root notes, and
+`search_items` filters by `open_notes`.
+
+`ui_open` shows a review (optionally at one of its items) or a single item. The main
+process switches to the command's project; the renderer selects the view and
+acknowledges.
+
+In the viewer, pins are drawn over the image's rendered content box (measured with a
+`ResizeObserver`, accounting for `object-fit`). Click places a point; drag places a box.
+Pins written against another revision are dashed. Review keys: A accept and advance,
+R reject and advance, C needs changes and focus the note composer, U clear, N note.
 
 ## Verification policy
 
