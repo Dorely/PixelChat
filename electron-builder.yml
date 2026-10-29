@@ -1,0 +1,26 @@
+appId: com.dorely.pixelchat
+productName: PixelChat
+directories:
+  output: release
+files:
+  - out/**/*
+  - package.json
+  - LICENSE
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+  - node_modules/sharp/**/*
+  - node_modules/@img/**/*
+extraResources:
+  - from: resources/icon.ico
+    to: icon.ico
+win:
+  target: nsis
+  icon: resources/icon.ico
+  signAndEditExecutable: true
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  license: LICENSE
+npmRebuild: true

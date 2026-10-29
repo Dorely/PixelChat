@@ -1,149 +1,62 @@
-# PixelChat - Agent Operating Guidelines
+# PixelChat agent guidelines
 
-## Required Context
+## First read
 
-- At the start of every session, read `VISION.md`, `FILEMAP.md`, and
-  `docs/architecture.md` completely before doing substantive work.
-- Treat `VISION.md` as product direction, `docs/architecture.md` as the current
-  technical and product-constraint reference, and `FILEMAP.md` as a navigation
-  aid. None of them is proof that a feature is already implemented.
-- Confirm current behavior in code before planning or changing it.
-- Keep this file limited to durable agent behavior. Put product direction in
-  `VISION.md` and technical decisions, boundaries, and changing implementation
-  guidance in `docs/architecture.md`.
+- Read [VISION.md](VISION.md), [FILEMAP.md](FILEMAP.md), and [docs/architecture.md](docs/architecture.md) before substantive work.
+- Before provider, prompting, image, or credential work, read the relevant [image-provider knowledge](docs/knowledge/README.md).
+- Verify implementation from files and relevant checks. Vision and proposed architecture are intent, not evidence of working features.
+- Keep this file focused on durable working practices. Product direction belongs in VISION, technical decisions in architecture, and navigation in FILEMAP.
 
-## Repository Readiness
+## Repository workflow
 
-- Work directly on `main`. Do not create feature branches or worktrees unless
-  the user explicitly requests one.
-- Before beginning new work, inspect the current branch, working tree, index,
-  configured remotes, and upstream status.
-- Start feature work only from a clean working tree whose index matches `HEAD`.
-- If existing changes form coherent prior work, finish their verification and
-  documentation, then commit them before beginning a new feature. Never mix
-  unrelated unfinished work into a new change.
-- Inspect every existing diff before committing it. If changes are unfamiliar,
-  incomplete, unsafe to commit, or owned by another active effort, stop and ask
-  for direction instead of discarding, hiding, or overwriting them.
-- When an upstream exists, fetch its current state and ensure the working branch
-  has no unintegrated upstream commits before starting. Fast-forward when safe;
-  stop for direction if histories have diverged. Never rewrite published history
-  without explicit instruction.
-- When no remote or upstream exists, require a clean local `HEAD` and report that
-  remote synchronization could not be checked.
+- Inspect branch, working tree, index, and remotes before starting. Continue on the current branch.
+- Start new work from a clean commit. Review existing changes first; commit coherent completed work after verification. If changes are incomplete or ownership is unclear, ask for direction rather than overwriting or mixing them with new work.
+- Preserve unrelated user changes. Do not discard work, rewrite history, publish, or create remotes without authorization.
+- Finish each coherent task with a reviewed, focused commit and verify a clean working tree.
 
-## Research and Impact Analysis
+## Implementation practices
 
-- Research the codebase before implementation. Use `rg` or an equivalent fast
-  search to find every use of the feature, concept, type, route, setting, and
-  terminology being changed.
-- Trace direct and indirect impact through domain models, EF persistence and
-  migrations, repositories, services, providers, dependency registration,
-  assistant tools and prompts, app-process runtimes, visible workspace state,
-  Razor UI, JavaScript, serialization, configuration, media endpoints,
-  documentation, and build tooling wherever applicable.
-- Read callers and consumers, not only the file named in the request. Treat the
-  requested location as a starting point rather than the full scope.
-- Before replacing a concept, identify all old names, registrations, stored
-  forms, and code paths that must disappear. Search for them again after
-  implementation.
-- For nontrivial work, form an impact plan before editing and keep it current as
-  new dependencies are discovered.
+- Inspect callers and downstream effects before editing. Use `rg` for file and text discovery.
+- Keep UI interaction state separate from library operations, assistant orchestration, provider transports, and background jobs. Manual UI actions, the in-app assistant, and CLI/MCP agents use the same owning operations in the shared operation registry.
+- Preserve provider boundaries; do not spread provider-specific payloads or model names through the UI.
+- Implement only what the current milestone needs. The desktop stack is Electron with React/TypeScript; keep privileged operations in the main process and the renderer isolated.
+- Replace superseded runtime code and documentation coherently. Do not keep compatibility shims, legacy aliases, or dual paths unless the user asks for a transition.
+- This project deliberately carries no automated tests. Do not add or reintroduce
+  unit, integration, or end-to-end suites (for example Vitest, Jest, or Playwright);
+  `*.test.ts`, `*.spec.ts`, or any other test-only files; test runners, test
+  dependencies, or CI test steps; test-only fixtures, mock providers, deterministic
+  test modes, or harnesses built to exercise the app. Delete such scaffolding when you
+  encounter it rather than extending it.
+- Verify work with `npm run typecheck`, the production build, and live/manual checks
+  instead, and record what was actually run. Temporary local helpers are allowed, but
+  keep them outside the repository and delete them when the check is done.
+- For manual UI verification, use `npm run dev:browser` and control the printed
+  loopback URL with browser tools. This runs the real renderer against Electron's
+  main-process operations, actual library, and OS-backed credentials; it is not a
+  mock. Keep paid or account-metered image calls within existing authorization.
+  Use the native desktop only for desktop-specific integration checks. Stop the
+  browser development host after validation and record any coverage gaps.
+- Never point verification exports at a real game repository. Use scratch copies.
+- Use UTF-8 and LF for authored text.
 
-## Implementation Standards
+## Credentials and provider operations
 
-- Deliver the smallest coherent change that fully completes the requested
-  behavior across every affected layer.
-- Reuse or extend existing code, components, contracts, and patterns wherever
-  possible. Search for an existing implementation before creating another one.
-- Treat future maintainability as a first-class requirement. Prefer clear
-  ownership, cohesive feature areas, explicit contracts, consistent naming, and
-  straightforward control flow over locally convenient shortcuts.
-- Add an abstraction only when it creates a clear boundary or removes meaningful
-  duplication. Do not create parallel helpers or generic dumping grounds.
-- Use dependency injection for services and repositories. Keep UI components
-  focused on interaction state; put persistence, provider resolution, image
-  workflow, sprite behavior, and chat behavior in their owning services.
-- Keep provider-specific transport details behind provider-neutral contracts.
-  Put configuration in `appsettings.json` and environment variables.
-- Do not store new secrets directly on feature entities. Add them through
-  `ISecretStore`, and never log credentials, OAuth codes, or tokens.
-- **Hard rule: never leave the runtime in an obsolete state.** When a feature,
-  concept, name, model, configuration, or code path becomes unused or is
-  superseded, delete it completely in the same change.
-- Do not retain dead branches, commented-out implementations, stale
-  registrations, duplicate paths, compatibility shims, legacy aliases, or
-  outdated documentation. If persisted data or an external boundary requires a
-  transition, complete the migration and remove the old runtime path as part of
-  the feature; otherwise stop and obtain an explicit migration plan.
-- Preserve applied EF Core migrations as immutable schema history. Represent
-  schema changes with forward migrations; historical migration files are not
-  runtime compatibility paths and must not be deleted merely because their
-  original model was later superseded.
-- Preserve unrelated user changes. If they prevent a clean starting state, stop
-  and resolve ownership before implementation. Never use a destructive reset or
-  checkout to simplify the task.
+- App-configured API keys and OAuth tokens must use OS-backed secure storage through a narrow privileged boundary. Never use plaintext database storage, browser local storage, committed configuration, prompts, or logs for secret values.
+- The UI may accept a credential for saving; it should receive only readiness/masked status afterward. Resolve stored credentials inside provider operations, not assistant tool arguments.
+- Never copy sibling-app databases, auth caches, real credentials, or account tokens into this repository.
+- Revalidate provider models, capabilities, request fields, limits, and pricing against official sources when implementing or invoking them. Bundled notes are dated handoff material.
+- Keep paid work within the user's authorized scope. Never silently retry an uncertain billed generation or expand a batch indefinitely.
 
-## Code Style
+## Art evidence
 
-- Follow `.editorconfig` as the code-style and naming authority.
-- Use PascalCase for public members and `_camelCase` for private instance fields,
-  consistent with the configured naming rules.
-- Keep Electron-specific behavior in the desktop host path and provider-specific
-  behavior in the owning adapter. Shared workbench behavior belongs behind the
-  service contracts described in `docs/architecture.md`.
+- Preserve original imported and returned image bytes, exact prompts, provider/model details, request identifiers when available, hashes, and revision lineage. Preview backgrounds, zoom, and overlays never change stored bytes.
+- Distinguish technical measurements (dimensions, alpha coverage), model observations, and the user's review decisions. An agent viewing an image is an observation, not acceptance.
+- Preserve notes, pins, rejections, and uncertainty. Agent completion of a review is not human acceptance.
+- Export back to a source folder only through the export operation, which refuses to overwrite a source file that changed since it was last synced.
 
-## Documentation Maintenance
+## Documentation and verification
 
-- Update `FILEMAP.md` in the same change after adding, deleting, renaming, or
-  materially repurposing a tracked source or project-support file.
-- Keep each `FILEMAP.md` entry to one or two lines and never list generated build
-  output.
-- Update `docs/architecture.md` in the same change whenever work alters the
-  technology stack, project boundaries, component responsibilities, data flow,
-  persistence, provider behavior, platform support, security posture, or
-  validation commands.
-- Update `README.md` when user-facing capabilities, requirements, setup, run,
-  packaging, or local-data behavior changes.
-- Update `VISION.md` only when the product direction or scope has intentionally
-  changed.
-- Remove stale comments, examples, documentation, settings, and instructions as
-  part of the feature that makes them obsolete.
-
-## Verification
-
-- Verify changes in proportion to their impact using the relevant builds,
-  existing tests, static checks, and runtime checks documented in
-  `docs/architecture.md`.
-- Do not add test projects or automated tests unless the user explicitly
-  requests them. Run and maintain relevant tests when they already exist.
-- Verify normal source changes with `dotnet build PixelChat.sln`. After a
-  successful build, run `dotnet run --project PixelChat`, confirm the local host
-  starts without startup exceptions, and terminate it.
-- Never start a host, Electron shell, browser automation, or sidecar without a
-  plan to terminate it after validation.
-- Do not run Playwright, screenshots, browser UI checks, Electron window checks,
-  or manual UI validation unless the user explicitly requests them.
-- When Electron startup itself must be smoke-checked, start
-  `dotnet run --project PixelChat -- --electron`, confirm startup, and terminate
-  the app. Never leave the app running.
-- Do not claim OAuth, provider calls, image generation, local background removal,
-  packaging, or platform-specific Electron behavior works unless the relevant
-  integration and target platform have actually been exercised. Clearly report
-  any validation that remains unperformed.
-- Before completion, search for obsolete names and paths, inspect the complete
-  diff, and confirm that documentation matches the resulting code.
-
-## Completion and Commits
-
-- A feature is complete only when its full impact area is implemented, obsolete
-  runtime code is removed, documentation is current, and relevant verification
-  succeeds.
-- Once a feature is complete, inspect the final diff and status, stage only that
-  feature's files, and create a focused commit with a descriptive message.
-- Commit every completed feature before beginning another one. Do not combine
-  unrelated work in a single commit.
-- After committing, verify that the working tree is clean. Do not amend, squash,
-  force-push, or otherwise rewrite history unless explicitly requested.
-- If a required commit cannot be created, report the blocker and do not describe
-  the feature as completed.
+- Update FILEMAP whenever files are added, removed, renamed, or materially repurposed. Keep entries concise and exclude generated output.
+- Keep architecture and README synchronized with implemented behavior and verified setup commands. Change VISION when accepted product direction changes.
+- For implementation, run checks appropriate to the affected behavior and record actual evidence in [docs/verification.md](docs/verification.md). Do not claim provider, login, secure-storage, or platform integration from compilation alone.
+- Plan cleanup before starting temporary hosts or helpers and terminate those you start after validation. Never terminate a user-owned process without authorization.

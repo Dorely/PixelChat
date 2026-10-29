@@ -2,38 +2,38 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "PixelChat Electron",
-      "type": "coreclr",
+      "name": "Debug Main Process",
+      "type": "node",
       "request": "launch",
-      "preLaunchTask": "build PixelChat",
-      "program": "${workspaceFolder}/PixelChat/bin/Debug/net10.0/win-x64/PixelChat.exe",
-      "args": [
-        "--electron"
-      ],
-      "cwd": "${workspaceFolder}/PixelChat",
-      "console": "integratedTerminal",
-      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron-vite",
+      "windows": {
+        "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron-vite.cmd"
+      },
+      "runtimeArgs": ["--sourcemap"],
       "env": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "REMOTE_DEBUGGING_PORT": "9222"
       }
     },
     {
-      "name": "PixelChat Web",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build PixelChat",
-      "program": "${workspaceFolder}/PixelChat/bin/Debug/net10.0/win-x64/PixelChat.exe",
-      "args": [],
-      "cwd": "${workspaceFolder}/PixelChat",
-      "console": "integratedTerminal",
-      "stopAtEntry": false,
-      "env": {
-        "ASPNETCORE_ENVIRONMENT": "Development",
-        "ASPNETCORE_URLS": "http://localhost:1457"
-      },
-      "serverReadyAction": {
-        "action": "openExternally",
-        "pattern": "\\bNow listening on:\\s+(https?://\\S+)"
+      "name": "Debug Renderer Process",
+      "type": "chrome",
+      "request": "attach",
+      "address": "127.0.0.1",
+      "port": 9222,
+      "webRoot": "${workspaceFolder}/src/renderer",
+      "timeout": 60000,
+      "presentation": {
+        "hidden": true
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug PixelChat",
+      "configurations": ["Debug Main Process", "Debug Renderer Process"],
+      "presentation": {
+        "order": 1
       }
     }
   ]
