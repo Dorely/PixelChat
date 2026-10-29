@@ -39,7 +39,9 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | File | Responsibility |
 | --- | --- |
 | [src/main/index.ts](src/main/index.ts) | Electron lifecycle, hardened window, fixed IPC command schemas, `pixel-media` protocol, browser-mode startup. |
-| [src/main/store.ts](src/main/store.ts) | SQLite schema and repository for settings, projects, and sessions; signals changes. |
+| [src/main/store.ts](src/main/store.ts) | SQLite schema and repository for settings, projects, sessions, sources, items, revisions, and the activity log. |
+| [src/main/media.ts](src/main/media.ts) | Stores exact original bytes and WebP thumbnails per revision; reads image facts with sharp. |
+| [src/main/library.ts](src/main/library.ts) | Source folders, background scans and rescans, glob filters, and loose-file imports. |
 | [src/main/operations.ts](src/main/operations.ts) | Shared zod-validated operation registry for UI, assistant, CLI, and MCP; error envelopes. |
 | [src/main/ui-port.ts](src/main/ui-port.ts) | Acknowledged navigation commands from operations to the renderer. |
 | [src/main/browser-host.ts](src/main/browser-host.ts) | Loopback HTTP host (`/rpc`, `/events`, `/media/`) for browser development. |
@@ -60,7 +62,10 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | --- | --- |
 | [src/preload/index.ts](src/preload/index.ts) | Isolated bridge exposing `window.pixel` over IPC. |
 | [src/renderer/index.html](src/renderer/index.html), [main.tsx](src/renderer/main.tsx) | Renderer entrypoint, content security policy, and API selection. |
-| [src/renderer/App.tsx](src/renderer/App.tsx) | App shell: chat sidebar, project switcher, workspace views, dialogs, theme picker. |
+| [src/renderer/App.tsx](src/renderer/App.tsx) | App shell: chat sidebar, project switcher, workspace views, project dialogs, theme picker. |
+| [src/renderer/Dialogs.tsx](src/renderer/Dialogs.tsx) | Shared modal shell and destructive-action confirmation. |
+| [src/renderer/LibraryView.tsx](src/renderer/LibraryView.tsx) | Library grid with search and filters, source management, and add-folder dialog. |
+| [src/renderer/ItemViewer.tsx](src/renderer/ItemViewer.tsx) | Full-size item inspection: zoom, backdrops, facts, versions, and version selection. |
 | [src/renderer/browser-api.ts](src/renderer/browser-api.ts) | Browser-host transport and host-path dialog for development. |
 | [src/renderer/ops.ts](src/renderer/ops.ts) | Calls registry operations and unwraps envelopes. |
 | [src/renderer/Icon.tsx](src/renderer/Icon.tsx) | Inline SVG icon set. |

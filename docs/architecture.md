@@ -43,9 +43,45 @@ library as the desktop app.
 
 ## Persistence
 
-Schema version 1 holds `settings`, `projects`, and `sessions` (cascading on project
-delete). A `Default` project is created when none exist, and the active project is kept
-in the `project-active` setting.
+Schema version 1 holds `settings`, `projects`, `sessions`, `sources`, `items`,
+`revisions`, and `activity`; project deletion cascades. A `Default` project is created
+when none exist, and the active project is kept in the `project-active` setting.
+
+Every mutation appends an `activity` row (project, origin, kind, item or review, data).
+It is the record agents will follow for changes.
+
+## Library and media
+
+An **item** is one tracked artwork. A **revision** is an immutable image: its exact
+bytes live at `originals/<revisionId>.<ext>` under the profile, with a 384 px WebP
+thumbnail at `thumbnails/<revisionId>.webp`. Files are written to a `.partial` name and
+renamed into place. Width, height, format, alpha presence, and whether any pixel is
+transparent come from sharp. Provenance is stored as JSON per revision.
+
+A **source** links a folder (absolute root, include and exclude globs over forward-slash
+relative paths, case-insensitive). Dot-folders such as `.godot` are skipped, and only
+PNG, WebP, and JPEG files are imported. Scans run in the background, four files at a
+time, and report progress through `sources_list`/`source_get`:
+
+- a new path creates an item whose collection is its folder;
+- a path whose bytes hash differently from the synced revision gets a new revision
+  (parent = previous synced), which becomes synced, and selected too unless another
+  version was chosen;
+- linked items not seen are marked missing, and cleared when the file returns.
+
+Each linked item tracks `syncedRevisionId` (matches the file on disk) and
+`selectedRevisionId` (the version the user wants). **Pending export** means a linked item
+whose selected revision is not its synced one. Loose-file imports create unlinked items,
+which have no source to export to.
+
+Search uses `LIKE` over name, source path, description, and tags rather than FTS: the
+first libraries are a few thousand items, and the query is simple to replace later.
+
+Media is served by `pixel-media://original/<revisionId>` and
+`pixel-media://thumb/<revisionId>`, only for revisions in the active project, with
+immutable cache headers. The browser host maps `/media/...` to the same handler.
+Removing a source, item, or project deletes its stored copies; files in source folders
+are never modified by import or removal.
 
 ## Verification policy
 

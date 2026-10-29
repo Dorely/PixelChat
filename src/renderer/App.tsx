@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Project, Session, Snapshot } from '../shared/types'
 import Icon from './Icon'
+import { ConfirmDialog, Modal } from './Dialogs'
+import LibraryView from './LibraryView'
 import { op } from './ops'
 import { THEMES, applyTheme, storedTheme, type ThemeId } from './theme'
 
@@ -22,29 +24,13 @@ function TitleInput({ value, className, ariaLabel, onCommit, onCancel }: { value
 function ProjectDialog({ mode, project, onClose, onSubmit }: { mode: 'create' | 'rename'; project: Project | null; onClose: () => void; onSubmit: (name: string) => void }) {
   const [name, setName] = useState(mode === 'rename' ? project?.name ?? '' : '')
   const submit = () => { const trimmed = name.trim(); if (trimmed) onSubmit(trimmed) }
-  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-    <section className="settings-dialog project-dialog" role="dialog" aria-modal="true" aria-label={mode === 'create' ? 'New project' : 'Rename project'}>
-      <div className="drawer-header"><div><p className="eyebrow">Project</p><h2>{mode === 'create' ? 'New project' : 'Rename project'}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close project dialog"><Icon name="close" /></button></div>
-      <div className="project-dialog-body">
-        <label>Project name<input autoFocus value={name} onChange={event => setName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') submit() }} maxLength={60} placeholder="Game art" aria-label="Project name" /></label>
-        <div className="model-row"><button className="primary-button" onClick={submit} disabled={!name.trim()}>{mode === 'create' ? 'Create project' : 'Save name'}</button><button className="secondary-button" onClick={onClose}>Cancel</button></div>
-      </div>
-    </section>
-  </div>
-}
-
-function DeleteDialog({ deletion, busy, error, onCancel, onConfirm }: { deletion: Deletion; busy: boolean; error: string; onCancel: () => void; onConfirm: () => void }) {
-  const project = deletion.kind === 'project'
-  return <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onCancel() }}>
-    <section className="settings-dialog project-dialog" role="alertdialog" aria-modal="true" aria-label={`Delete ${deletion.kind}`}>
-      <div className="drawer-header"><div><p className="eyebrow">Delete {project ? 'project' : 'conversation'}</p><h2>{deletion.name}</h2></div></div>
-      <div className="project-dialog-body">
-        <p>{project ? 'Workspace records for this project are removed permanently. Source files on disk are not touched.' : 'This conversation is removed permanently. Project art, reviews and notes remain.'}</p>
-        {error && <p className="settings-error"><Icon name="info" /> {error}</p>}
-        <div className="model-row"><button className="danger-button" onClick={onConfirm} disabled={busy}><Icon name="trash" /> {busy ? 'Deleting…' : 'Delete'}</button><button className="secondary-button" onClick={onCancel} disabled={busy}>Cancel</button></div>
-      </div>
-    </section>
-  </div>
+  const title = mode === 'create' ? 'New project' : 'Rename project'
+  return <Modal eyebrow="Project" title={title} label={title} className="project-dialog" onClose={onClose}>
+    <div className="project-dialog-body">
+      <label>Project name<input autoFocus value={name} onChange={event => setName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') submit() }} maxLength={60} placeholder="Game art" aria-label="Project name" /></label>
+      <div className="model-row"><button className="primary-button" onClick={submit} disabled={!name.trim()}>{mode === 'create' ? 'Create project' : 'Save name'}</button><button className="secondary-button" onClick={onClose}>Cancel</button></div>
+    </div>
+  </Modal>
 }
 
 function ProjectSwitcher({ snapshot, onSwitch, onCreate, onRename, onDelete }: { snapshot: Snapshot; onSwitch: (id: string) => void; onCreate: () => void; onRename: () => void; onDelete: () => void }) {
@@ -99,11 +85,8 @@ function ChatSidebar({ sessions, projectName, selectedId, onSelect, onNew, onRen
   </aside>
 }
 
-function EmptyView({ view }: { view: View }) {
-  const copy = view === 'library'
-    ? { icon: 'library', title: 'Your art library is empty', body: 'Import a folder of artwork to snapshot it for review. Source files stay where they are.' }
-    : { icon: 'check', title: 'No reviews yet', body: 'Reviews collect artwork for accept, needs-changes and reject decisions, with notes and region pins for agents to act on.' }
-  return <div className="empty-state"><div className="empty-icon"><Icon name={copy.icon} /></div><h2>{copy.title}</h2><p>{copy.body}</p></div>
+function EmptyView() {
+  return <div className="empty-state"><div className="empty-icon"><Icon name="check" /></div><h2>No reviews yet</h2><p>Reviews collect artwork for accept, needs-changes and reject decisions, with notes and region pins for agents to act on.</p></div>
 }
 
 export default function App() {
@@ -183,10 +166,11 @@ export default function App() {
         <button className={view === 'library' ? 'tab-active' : ''} onClick={() => setView('library')}><Icon name="library" /> Library</button>
         <button className={view === 'reviews' ? 'tab-active' : ''} onClick={() => setView('reviews')}><Icon name="check" /> Reviews</button>
       </nav>
-      <section className="workspace-panel"><EmptyView view={view} /></section>
+      {!projectId ? null : view === 'library' ? <LibraryView key={projectId} projectId={projectId} onError={setUiError} /> : <section className="workspace-panel"><EmptyView /></section>}
     </main>
     {uiError && <div className="error-banner" role="alert"><Icon name="info" /><span>{uiError}</span><button className="icon-button" onClick={() => setUiError('')} aria-label="Dismiss error"><Icon name="close" /></button></div>}
     {projectDialog && <ProjectDialog mode={projectDialog} project={activeProject} onClose={() => setProjectDialog(null)} onSubmit={name => void saveProject(name)} />}
-    {deletion && <DeleteDialog deletion={deletion} busy={deleting} error={deleteError} onCancel={() => setDeletion(null)} onConfirm={() => void confirmDelete()} />}
+    {deletion && <ConfirmDialog eyebrow={deletion.kind === 'project' ? 'Delete project' : 'Delete conversation'} title={deletion.name} confirmLabel="Delete" busy={deleting} error={deleteError} onCancel={() => setDeletion(null)} onConfirm={() => void confirmDelete()}
+      body={deletion.kind === 'project' ? 'The project, its reviews, notes, and stored image copies are removed permanently. Files in source folders are not touched.' : 'This conversation is removed permanently. Project art, reviews, and notes remain.'} />}
   </div>
 }

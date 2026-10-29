@@ -17,7 +17,10 @@ npm install
 npm run typecheck
 npm run build
 npm run dev
+npm run dev:browser
 ```
+
+`npm run dev:browser` serves the built app at a printed loopback URL for browser-based checks.
 
 `npm run package` builds the unsigned NSIS installer into `release/`.
 

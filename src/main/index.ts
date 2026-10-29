@@ -1,8 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron';
 import { join } from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { Store } from './store';
+import { MediaStore, MEDIA_TYPES } from './media';
+import { Library } from './library';
 import { Operations, idSchema, operationError } from './operations';
 import { RendererPort } from './ui-port';
 import { startBrowserHost } from './browser-host';
@@ -17,6 +19,7 @@ let browserHost: Awaited<ReturnType<typeof startBrowserHost>> | null = null;
 let window: BrowserWindow | null = null;
 let store: Store | null = null;
 let operations: Operations | null = null;
+let library: Library | null = null;
 let rendererPort: RendererPort | null = null;
 let quitting = false;
 let eventTimer: ReturnType<typeof setTimeout> | null = null;
@@ -45,12 +48,14 @@ else {
   void app.whenReady().then(async () => {
     const root = app.getPath('userData'); await mkdir(root, { recursive: true });
     diagnostics.record('app.started', { version: app.getVersion(), packaged: app.isPackaged });
-    const library = new Store(join(root, 'library.sqlite'), changed); store = library;
-    rendererPort = new RendererPort(() => window, library, () => browserHost);
-    const ops = new Operations(library, rendererPort); operations = ops;
+    const db = new Store(join(root, 'library.sqlite'), changed); store = db;
+    const media = new MediaStore(root); await media.init();
+    library = new Library(db, media);
+    rendererPort = new RendererPort(() => window, db, () => browserHost);
+    const ops = new Operations(db, library, media, rendererPort); operations = ops;
     const handlers: Record<Command, (...args: any[]) => unknown> = {
-      snapshot: (): Snapshot => { const activeProjectId = library.activeProjectId(); return { projects: library.projects(), activeProjectId, sessions: library.sessions(activeProjectId) }; },
-      setActiveProject: (id: string) => library.setActiveProject(id),
+      snapshot: (): Snapshot => { const activeProjectId = db.activeProjectId(); return { projects: db.projects(), activeProjectId, sessions: db.sessions(activeProjectId) }; },
+      setActiveProject: (id: string) => db.setActiveProject(id),
       operation: async (name: string, args: unknown) => { try { return { ok: true, result: await ops.call(name, args, 'user') }; } catch (e) { return operationError(e); } },
       chooseDirectory: async () => { const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; },
       openLogs: async () => { const directory = join(root, 'logs'); await mkdir(directory, { recursive: true }); const error = await shell.openPath(directory); if (error) throw new Error(error); },
@@ -66,7 +71,18 @@ else {
         throw new Error(`${safeError(error)}${reference ? `\nDiagnostic reference: ${reference}.` : ''}`);
       }
     };
-    const serveMedia = async (_request: Request) => new Response(null, { status: 404 });
+    /** `pixel-media://original/<revisionId>` and `pixel-media://thumb/<revisionId>`, scoped to the active project. */
+    const serveMedia = async (request: Request): Promise<Response> => {
+      try {
+        const url = new URL(request.url);
+        const id = idSchema.safeParse(url.pathname.slice(1));
+        const revision = request.method === 'GET' && id.success ? db.revisionFile(id.data, db.activeProjectId()) : null;
+        if (!revision || !['original', 'thumb'].includes(url.hostname)) return new Response(null, { status: 404 });
+        const original = url.hostname === 'original';
+        const bytes = original ? await media.read(revision.file) : await readFile(media.thumbnailPath(id.data!));
+        return new Response(new Uint8Array(bytes), { headers: { 'content-type': original ? MEDIA_TYPES[revision.format] : 'image/webp', 'cache-control': 'private, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
+      } catch { return new Response(null, { status: 404 }); }
+    };
     protocol.handle('pixel-media', serveMedia);
     ipcMain.handle('pixel:call', async (event, method: unknown, rawArgs: unknown) => {
       if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('Untrusted application request.');
@@ -93,6 +109,6 @@ else {
   app.on('before-quit', event => {
     if (quitting) return; event.preventDefault(); quitting = true;
     rendererPort?.unavailable();
-    void Promise.all([browserHost?.close(), operations?.close()]).finally(() => { if (eventTimer) clearTimeout(eventTimer); store?.close(); app.quit(); });
+    void Promise.all([browserHost?.close(), operations?.close(), library?.close()]).finally(() => { if (eventTimer) clearTimeout(eventTimer); store?.close(); app.quit(); });
   });
 }
