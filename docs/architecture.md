@@ -141,7 +141,9 @@ Pins written against another revision are dashed. The viewer opens at Fit, which
 the art up or down to the stage. Review keys: A accept and advance, R reject and advance,
 C needs changes and focus the note composer, U clear, N note; they apply to the entry's
 version, and are off while another version of the item is shown. Review board cards carry
-Accept, Changes, and Reject buttons for deciding without opening the viewer.
+Accept, Changes, and Reject buttons for deciding without opening the viewer. A board's
+header has a menu of the project's active reviews for switching between them, and
+completing a review from its board returns to the review list.
 
 ## Image providers and jobs
 

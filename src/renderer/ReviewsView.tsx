@@ -56,8 +56,9 @@ export function NewReviewDialog({ projectId, initial, onClose, onCreated }: { pr
   </Modal>
 }
 
-function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onChatFocus, onError }: { projectId: string; reviewId: string; focusItemId?: string; onBack: () => void; onChatFocus: (focus: ChatFocus) => void; onError: (message: string) => void }) {
+function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onSwitch, onChatFocus, onError }: { projectId: string; reviewId: string; focusItemId?: string; onBack: () => void; onSwitch: (reviewId: string) => void; onChatFocus: (focus: ChatFocus) => void; onError: (message: string) => void }) {
   const [review, setReview] = useState<Review | null>(null)
+  const [active, setActive] = useState<ReviewSummary[]>([])
   const [filter, setFilter] = useState<EntryFilter>('all')
   const [viewer, setViewer] = useState<{ items: ViewerTarget[]; index: number } | null>(null)
   const viewedId = viewer?.items[viewer.index]?.item.id
@@ -68,7 +69,10 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onChatFocus, on
   const focused = useRef<string | undefined>(undefined)
 
   const load = useCallback(async () => {
-    try { setReview(await op<Review>('review_get', { projectId, reviewId, includeResolved: true })) }
+    try {
+      const [next, list] = await Promise.all([op<Review>('review_get', { projectId, reviewId, includeResolved: true }), op<ReviewSummary[]>('review_list', { projectId, status: 'active' })])
+      setReview(next); setActive(list)
+    }
     catch (error) { onError(message(error, 'Could not load the review.')); onBack() }
   }, [projectId, reviewId, onError, onBack])
   useEffect(() => { void load() }, [load])
@@ -95,7 +99,7 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onChatFocus, on
   }
   const setStatus = async (action: 'review_complete' | 'review_reopen') => {
     if (!review) return
-    try { await op(action, { projectId, reviewId, expectedRevision: review.revision }) } catch (error) { onError(message(error, 'Could not update the review.')) }
+    try { await op(action, { projectId, reviewId, expectedRevision: review.revision }); if (action === 'review_complete') onBack() } catch (error) { onError(message(error, 'Could not update the review.')) }
   }
   const remove = async () => {
     setBusy(true); setConfirmError('')
@@ -117,7 +121,13 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onChatFocus, on
   return <section className="workspace-panel library-panel">
     <div className="panel-header">
       <div>
-        <button className="text-button back-link" onClick={onBack}><Icon name="arrow-left" /> Reviews</button>
+        <div className="review-nav">
+          <button className="text-button back-link" onClick={onBack}><Icon name="arrow-left" /> Reviews</button>
+          {active.some(entry => entry.id !== reviewId) && <select className="filter-select" value={reviewId} onChange={event => onSwitch(event.target.value)} aria-label="Switch review">
+            {completed && <option value={reviewId}>{review.title} (completed)</option>}
+            {active.map(entry => <option key={entry.id} value={entry.id}>{entry.title} · {entry.counts.total - entry.counts.unreviewed}/{entry.counts.total}</option>)}
+          </select>}
+        </div>
         <h1>{review.title} {completed && <span className="badge">Completed</span>}</h1>
       </div>
       <div className="header-actions">
@@ -161,7 +171,7 @@ export default function ReviewsView({ projectId, target, onTargetDone, onChatFoc
   useEffect(() => { if (target?.reviewId) { setOpenId(target.reviewId); setFocusItemId(target.itemId); onTargetDone() } }, [target, onTargetDone])
   const back = useCallback(() => { setOpenId(null); setFocusItemId(undefined) }, [])
   useEffect(() => { if (!openId) onChatFocus({}) }, [openId, onChatFocus])
-  if (openId) return <ReviewBoard key={openId} projectId={projectId} reviewId={openId} focusItemId={focusItemId} onBack={back} onChatFocus={onChatFocus} onError={onError} />
+  if (openId) return <ReviewBoard key={openId} projectId={projectId} reviewId={openId} focusItemId={focusItemId} onBack={back} onSwitch={id => { setOpenId(id); setFocusItemId(undefined) }} onChatFocus={onChatFocus} onError={onError} />
   return <section className="workspace-panel">
     <div className="panel-header">
       <div><p className="eyebrow">Feedback for agents</p><h1>Reviews <span>{reviews?.length ?? 0}</span></h1></div>

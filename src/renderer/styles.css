@@ -283,6 +283,9 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 
 /* Reviews */
 .back-link { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 12px; }
+.review-nav { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.review-nav .back-link { margin-bottom: 0; }
+.review-nav .filter-select { height: 30px; font-size: 12px; }
 .panel-header h1 .badge { margin-left: 8px; vertical-align: middle; }
 .review-meta { display: grid; gap: 8px; margin: -8px 0 18px; }
 .review-meta small { color: var(--quiet); font-size: 12px; }

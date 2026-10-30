@@ -109,7 +109,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/renderer/SettingsDialog.tsx](src/renderer/SettingsDialog.tsx) | Codex sign-in, Gemini key, chat model, and agent settings; provider-readiness context. |
 | [src/renderer/AgentSettings.tsx](src/renderer/AgentSettings.tsx) | Settings section to install, preview, check, and remove the agent skill and MCP registration. |
 | [src/renderer/NotesPanel.tsx](src/renderer/NotesPanel.tsx) | Note threads, composer, and the pin overlay that turns clicks and drags into region pins. |
-| [src/renderer/ReviewsView.tsx](src/renderer/ReviewsView.tsx) | Review list, new-review dialog, and review boards with decision filters. |
+| [src/renderer/ReviewsView.tsx](src/renderer/ReviewsView.tsx) | Review list, new-review dialog, and review boards with decision filters and an active-review switcher. |
 | [src/renderer/browser-api.ts](src/renderer/browser-api.ts) | Browser-host transport and host-path dialog for development. |
 | [src/renderer/ops.ts](src/renderer/ops.ts) | Calls registry operations and unwraps envelopes into errors that keep their code. |
 | [src/renderer/Icon.tsx](src/renderer/Icon.tsx) | Inline SVG icon set. |

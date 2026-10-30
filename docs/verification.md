@@ -250,3 +250,15 @@ secure-storage, or platform integration.
   config changed.
 - Gaps: Fit on art smaller than the stage (the samples were all larger), a Codex client
   holding a long `review_wait`, and the MCP resource watch were not exercised.
+
+## 2026-10-30 — Review switcher and return on completion
+
+- `npm run typecheck` and `npm run build` succeeded.
+- With the user's installed app closed, `npm run dev:browser` on the real profile, in a
+  scratch project with three active reviews (copies of two stored images): the board header
+  menu listed the other active reviews with decided counts; choosing one opened it, and its
+  count updated after a card decision. Complete returned to the review list, which no
+  longer showed that review among the active ones. Opened from completed, the menu showed
+  it as "(completed)" above the active reviews. The scratch project was deleted and the
+  host stopped.
+- `npm run package` and a silent reinstall succeeded; the installed CLI answered.
