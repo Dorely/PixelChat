@@ -86,12 +86,17 @@ directory whose ACL admits only that user and SYSTEM. Both are regenerated on ev
 and the file is removed on quit. If the bridge cannot start, the app records
 `bridge.failed` in its diagnostic log and runs without agent access.
 
-The CLI checks a discovered bridge with a 5-second `status` probe. When discovery is
-missing or stale, or the probe fails, it starts the app (packaged `PixelChat.exe` beside
-`resources`, or the repository's Electron in development) and waits up to 30 seconds for
-the bridge. If the launched process exits first (it handed off to an already running
-instance whose bridge does not answer, such as one paused in a debugger), it fails at once
-with `APP_UNAVAILABLE`.
+The CLI checks a discovered bridge with a 5-second `status` probe. If the probe fails while
+the process that published discovery is still running (paused in a debugger, or hung), it
+fails at once with `APP_UNAVAILABLE`. When discovery is missing or its process is gone, it
+starts the app and waits up to 30 seconds for the bridge.
+
+The packaged `PixelChat.exe` (beside `resources`) is started through `explorer.exe`. An
+agent's MCP server may run inside a packaged app's container (Claude Desktop is MSIX), where
+a child process's `%APPDATA%` is redirected to that app's private storage; started there,
+PixelChat would keep a separate profile and publish discovery other callers cannot see. In
+development the CLI starts the repository's Electron directly, so start the development app
+yourself when an agent in such a container uses the development CLI.
 
 `pixelchat mcp` and `pixelchat tools` use the catalog built into the CLI and do not contact
 the app, so an MCP client connects immediately. Each tool call reaches the app as above;

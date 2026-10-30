@@ -189,3 +189,21 @@ secure-storage, or platform integration.
   a game project reported Connected.
 - Gaps: a cold start (no app running) launched from a tool call, and the 5-second probe
   against a paused main process, were not exercised.
+
+## 2026-10-30 — App launch outside agent containers
+
+- Claude Code's `pixelchat` tools in Claude Desktop failed with `APP_UNAVAILABLE` while the
+  installed app answered an unsandboxed CLI. Claude Desktop is MSIX: its child processes
+  read `%APPDATA%` through `Packages\AnthropicPBC.Claude_…\LocalCache\Roaming`, which
+  held a PixelChat profile from an app launched in an earlier session. Moving that copy
+  aside made the tools answer (`status`, `projects_list`, `search_items`, `review_list`).
+- From a shell inside Claude's container, a script started directly wrote its `%APPDATA%`
+  file into the container copy; the same script started through `explorer.exe` wrote to
+  the real `%APPDATA%`.
+- `npm run typecheck` and `npm run package` succeeded; the new `cli.cjs` was copied into
+  the per-user install. With PixelChat closed, the installed CLI run inside Claude's
+  container (`call projects_list`) started PixelChat and returned the real profile's
+  project in 0.8 s. The app's parent was the desktop `explorer.exe`, the real profile
+  logged `app.started` (packaged) and a new discovery file, and no container copy appeared.
+- Gaps: the fail-fast path for a running app whose bridge does not answer, and the
+  development CLI's direct Electron launch, were not exercised.

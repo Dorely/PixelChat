@@ -17,34 +17,37 @@ const root = join(process.env.APPDATA || '', 'PixelChat');
 async function discovery() {
   const bytes = await native(helper, ['unprotect'], await readFile(join(root, 'bridge', 'endpoint.bin')));
   const value = JSON.parse(bytes.toString());
-  if (value.version !== 1 || !/^\\\\\.\\pipe\\pixelchat-[a-f0-9]{64}$/.test(value.pipe) || !/^[a-f0-9]{64}$/.test(value.token)) throw new Error('Invalid bridge discovery.');
-  return value as { pipe: string; token: string };
+  if (value.version !== 1 || !/^\\\\\.\\pipe\\pixelchat-[a-f0-9]{64}$/.test(value.pipe) || !/^[a-f0-9]{64}$/.test(value.token) || !Number.isInteger(value.pid)) throw new Error('Invalid bridge discovery.');
+  return value as { pipe: string; token: string; pid: number };
 }
 async function startApp() {
   const packaged = resolve(__dirname, '../../PixelChat.exe');
-  let command = packaged, args: string[] = [];
   try { await access(packaged); } catch {
-    const repository = resolve(__dirname, '../..');
-    command = join(repository, 'node_modules/electron/dist/electron.exe'); args = [repository];
-    try { await access(command); } catch { throw new WorkbenchError('APP_NOT_FOUND', 'Install the PixelChat desktop app with its bundled CLI.'); }
+    const repository = resolve(__dirname, '../..'), electron = join(repository, 'node_modules/electron/dist/electron.exe');
+    try { await access(electron); } catch { throw new WorkbenchError('APP_NOT_FOUND', 'Install the PixelChat desktop app with its bundled CLI.'); }
+    // Development only: a caller inside a packaged app's container starts this Electron there too.
+    return launch(electron, [repository]);
   }
+  // Callers may run inside a packaged app's container (Claude Desktop is MSIX), where a child's %APPDATA% is
+  // redirected to the caller's private storage. The shell starts PixelChat outside it, on the real profile.
+  return launch(join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe'), [packaged]);
+}
+async function launch(command: string, args: string[]) {
   const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
   await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
-  return child;
 }
+function alive(pid: number) { try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; } }
 // A paused or hung app accepts the pipe but never answers; probe briefly instead of the full request timeout.
-async function reachable() { const e = await discovery(); await exchange(e, 'status', {}, AbortSignal.timeout(5000)); return e; }
+const probe = (e: { pipe: string; token: string }) => exchange(e, 'status', {}, AbortSignal.timeout(5000));
 async function endpoint() {
-  try { return await reachable(); } catch { /* absent or stale: start the owning app once */ }
-  const child = await startApp();
-  // A second instance hands off to a running app and exits; its bridge will not appear by waiting.
-  let exited = false; child.once('exit', () => { exited = true; });
+  let found: Awaited<ReturnType<typeof discovery>> | undefined;
+  try { found = await discovery(); await probe(found); return found; } catch { /* absent, stale, or not answering */ }
+  // Launching would only hand off to the app that published discovery, which is still running.
+  if (found && alive(found.pid)) throw new WorkbenchError('APP_UNAVAILABLE', 'PixelChat is open but its agent bridge is not answering. If it is paused in a debugger, resume it; otherwise restart PixelChat and check its diagnostic logs.');
+  await startApp();
   const until = Date.now() + 30000;
   while (Date.now() < until) {
-    try { return await reachable(); } catch {
-      if (exited) throw new WorkbenchError('APP_UNAVAILABLE', 'PixelChat is open but its agent bridge is not answering. If it is paused in a debugger, resume it; otherwise restart PixelChat and check its diagnostic logs.');
-      await delay(250);
-    }
+    try { const e = await discovery(); await probe(e); return e; } catch { await delay(250); }
   }
   throw new WorkbenchError('APP_UNAVAILABLE', 'PixelChat did not start its agent bridge within 30 seconds. Open PixelChat and check its diagnostic logs.');
 }
