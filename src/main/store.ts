@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { WorkbenchError } from '../shared/workbench';
 import type { ActivityEntry, Decision, ImageJob, ImageJobInput, Item, ItemSearchResult, ItemStatusFilter, ItemSummary, Note, NoteThread, Origin, Pin, Project, Review, ReviewEntry, ReviewStatus, ReviewSummary, Revision, RevisionOrigin, ScanReport, Session, Source, TitleSource } from '../shared/types';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const ACTIVE_PROJECT_KEY = 'project-active';
 const DEFAULT_PROJECT_NAME = 'Default';
 export const now = () => new Date().toISOString();
@@ -41,9 +41,9 @@ const threads = (rows: Row[]): NoteThread[] => {
   return [...roots.values()];
 };
 const REVIEW_SELECT = `SELECT v.*, COALESCE(c.total, 0) AS total, COALESCE(c.accepted, 0) AS accepted, COALESCE(c.needs_changes, 0) AS needs_changes, COALESCE(c.rejected, 0) AS rejected,
-  (SELECT COUNT(*) FROM notes n JOIN review_items x ON x.item_id = n.item_id WHERE x.review_id = v.id AND n.parent_id IS NULL AND n.resolved_at IS NULL) AS open_notes
+  (SELECT COUNT(*) FROM notes n JOIN review_entries x ON x.revision_id = n.revision_id WHERE x.review_id = v.id AND n.parent_id IS NULL AND n.resolved_at IS NULL) AS open_notes
   FROM reviews v LEFT JOIN (SELECT review_id, COUNT(*) AS total, SUM(decision = 'accepted') AS accepted, SUM(decision = 'needs_changes') AS needs_changes, SUM(decision = 'rejected') AS rejected
-  FROM review_items GROUP BY review_id) c ON c.review_id = v.id`;
+  FROM review_entries GROUP BY review_id) c ON c.review_id = v.id`;
 const reviewSummary = (r: Row): ReviewSummary => ({
   id: r.id, projectId: r.project_id, title: r.title, instructions: r.instructions, status: r.status, revision: r.revision,
   counts: { total: r.total, unreviewed: r.total - r.accepted - r.needs_changes - r.rejected, accepted: r.accepted, needs_changes: r.needs_changes, rejected: r.rejected },
@@ -54,6 +54,7 @@ const job = (r: Row): ImageJob => ({
   error: r.error, warning: r.warning, createdBy: r.created_by, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at,
 });
 const ACTIVE_JOB = "status IN ('queued', 'running')";
+const IN_COMPLETED_REVIEW = "SELECT 1 FROM review_entries x JOIN reviews v ON v.id = x.review_id WHERE v.status = 'completed' AND x.item_id IN";
 const revisionConflict = (revision: number) => new WorkbenchError('REVISION_CONFLICT', `The review is at revision ${revision}. Read it again and reconcile before retrying.`, { revision });
 /** Rounds a pin to whole pixels inside the image. */
 export function clampPin(pin: Pin, width: number, height: number): Pin {
@@ -67,7 +68,7 @@ export function clampPin(pin: Pin, width: number, height: number): Pin {
 /** Stored facts for a new revision; MediaStore writes the file first. */
 export interface RevisionInput { id: string; file: string; sha256: string; bytes: number; width: number; height: number; format: Revision['format']; hasAlpha: boolean; opaque: boolean; origin: RevisionOrigin; parentId?: string | null; provenance?: Record<string, unknown> }
 export interface ItemPatch { name?: string; description?: string; tags?: string[]; selectedRevisionId?: string }
-export interface ReviewPatch { title?: string; instructions?: string; itemIds?: string[]; addItemIds?: string[] }
+export interface ReviewPatch { title?: string; instructions?: string; revisionIds?: string[]; addRevisionIds?: string[] }
 export interface NoteInput { itemId: string; body: string; reviewId?: string; revisionId?: string; parentId?: string; pin?: Pin }
 export interface NotePatch { body?: string; pin?: Pin | null; resolved?: boolean }
 
@@ -128,6 +129,20 @@ export class Store {
         CREATE TABLE tool_calls (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, id TEXT NOT NULL, name TEXT NOT NULL, args TEXT NOT NULL, status TEXT NOT NULL, result TEXT,
           PRIMARY KEY (session_id, id));
         PRAGMA user_version = 2;
+      `);
+    })();
+    // Review entries name the exact version shown; a decided entry keeps the version it was decided on.
+    if (version < 3) this.db.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE review_entries (review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE, revision_id TEXT NOT NULL REFERENCES revisions(id) ON DELETE CASCADE,
+          item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE, position INTEGER NOT NULL, decision TEXT NOT NULL DEFAULT 'unreviewed', decided_at TEXT, decided_by TEXT,
+          PRIMARY KEY (review_id, revision_id));
+        INSERT OR IGNORE INTO review_entries (review_id, revision_id, item_id, position, decision, decided_at, decided_by)
+          SELECT x.review_id, COALESCE(x.decided_revision_id, i.selected_revision_id), x.item_id, x.position, x.decision, x.decided_at, x.decided_by FROM review_items x JOIN items i ON i.id = x.item_id;
+        DROP TABLE review_items;
+        CREATE INDEX review_entries_item ON review_entries(item_id);
+        CREATE INDEX review_entries_revision ON review_entries(revision_id);
+        PRAGMA user_version = 3;
       `);
     })();
     if (!this.db.prepare('SELECT 1 FROM projects LIMIT 1').get()) this.createProject(DEFAULT_PROJECT_NAME);
@@ -231,6 +246,8 @@ export class Store {
   }
   /** Deletes a source with its items and returns their revision files for removal. */
   deleteSource(projectId: string, sourceId: string, origin: Origin): string[] {
+    if (this.db.prepare(`${IN_COMPLETED_REVIEW} (SELECT id FROM items WHERE source_id = ?) LIMIT 1`).get(sourceId))
+      throw new WorkbenchError('IN_COMPLETED_REVIEW', 'Completed reviews show art from this source and keep it. Delete those reviews first.');
     const files = (this.db.prepare('SELECT r.file FROM revisions r JOIN items i ON i.id = r.item_id WHERE i.source_id=?').all(sourceId) as Row[]).map(r => r.file as string);
     this.tx(() => {
       this.db.prepare('DELETE FROM sources WHERE id=? AND project_id=?').run(sourceId, projectId);
@@ -261,7 +278,7 @@ export class Store {
     });
     return id;
   }
-  /** Adds a revision. A synced revision matches the source file; the selection follows it unless another version was chosen. */
+  /** Adds a version to an item's lineage. A synced revision matches the source file; the selection follows it unless another version was chosen. */
   addRevision(projectId: string, itemId: string, input: RevisionInput, synced: boolean, origin: Origin) {
     this.tx(() => {
       const before = this.db.prepare('SELECT synced_revision_id, selected_revision_id FROM items WHERE id=?').get(itemId) as Row;
@@ -313,6 +330,7 @@ export class Store {
   /** Deletes an item with its revisions and returns their files for removal. */
   deleteItem(id: string, projectId: string, origin: Origin): string[] {
     this.item(id, projectId);
+    if (this.db.prepare(`${IN_COMPLETED_REVIEW} (?) LIMIT 1`).get(id)) throw new WorkbenchError('IN_COMPLETED_REVIEW', 'A completed review shows this item and keeps it. Delete that review first.');
     const files = (this.db.prepare('SELECT file FROM revisions WHERE item_id=?').all(id) as Row[]).map(r => r.file as string);
     this.tx(() => {
       this.db.prepare('DELETE FROM items WHERE id=?').run(id);
@@ -321,13 +339,15 @@ export class Store {
     return files;
   }
   /** Ordered activity for a project, optionally narrowed to one review or item. */
-  activity(projectId: string, filter: { reviewId?: string; itemId?: string; afterSeq: number; limit: number }): ActivityEntry[] {
+  activity(projectId: string, filter: { reviewId?: string; itemId?: string; origin?: Origin; afterSeq: number; limit: number }): ActivityEntry[] {
     const where = ['project_id = ?', 'seq > ?'], args: unknown[] = [projectId, filter.afterSeq];
     if (filter.reviewId) { where.push('review_id = ?'); args.push(filter.reviewId); }
+    if (filter.origin) { where.push('origin = ?'); args.push(filter.origin); }
     if (filter.itemId) { where.push('item_id = ?'); args.push(filter.itemId); }
     return (this.db.prepare(`SELECT * FROM activity WHERE ${where.join(' AND ')} ORDER BY seq LIMIT ?`).all(...args, filter.limit) as Row[])
       .map(r => ({ seq: r.seq, at: r.at, origin: r.origin, kind: r.kind, itemId: r.item_id, reviewId: r.review_id, data: JSON.parse(r.data) }));
   }
+  latestSeq(projectId: string): number { return (this.db.prepare('SELECT MAX(seq) AS seq FROM activity WHERE project_id=?').get(projectId) as Row).seq ?? 0; }
 
   reviews(projectId: string, status: ReviewStatus | 'all'): ReviewSummary[] {
     const rows = status === 'all'
@@ -340,20 +360,35 @@ export class Store {
     if (!row) throw new WorkbenchError('NOT_FOUND', 'Review not found in project.');
     return reviewSummary(row);
   }
-  /** A review with its ordered entries and the note threads on its items. */
+  /** A review with its ordered entries (each an exact version) and the note threads on those versions. */
   review(id: string, projectId: string, filter: { decision?: Decision; includeResolved?: boolean } = {}): Review {
     const summary = this.reviewSummary(id, projectId);
-    const entries = (this.db.prepare(`SELECT ${ITEM_COLUMNS}, x.position AS x_position, x.decision AS x_decision, x.decided_at AS x_decided_at, x.decided_by AS x_decided_by,
-      x.decided_revision_id AS x_decided_revision_id ${ITEM_FROM} JOIN review_items x ON x.item_id = i.id WHERE x.review_id = ? ORDER BY x.position`).all(id) as Row[])
+    const entries = (this.db.prepare(`SELECT ${ITEM_COLUMNS}, x.revision_id AS x_revision_id, x.position AS x_position, x.decision AS x_decision, x.decided_at AS x_decided_at, x.decided_by AS x_decided_by,
+      e.origin AS e_origin, e.width AS e_width, e.height AS e_height, e.format AS e_format, e.has_alpha AS e_has_alpha, e.opaque AS e_opaque, e.created_at AS e_created_at,
+      (SELECT COUNT(*) FROM revisions later WHERE later.item_id = i.id AND later.created_at > e.created_at) AS x_newer,
+      (SELECT COUNT(*) FROM notes n WHERE n.revision_id = x.revision_id AND n.parent_id IS NULL AND n.resolved_at IS NULL) AS x_open_notes
+      ${ITEM_FROM} JOIN review_entries x ON x.item_id = i.id JOIN revisions e ON e.id = x.revision_id WHERE x.review_id = ? ORDER BY x.position`).all(id) as Row[])
       .map((r): ReviewEntry => ({
-        itemId: r.id, position: r.x_position, decision: r.x_decision, decidedAt: r.x_decided_at, decidedBy: r.x_decided_by, decidedRevisionId: r.x_decided_revision_id,
-        stale: r.x_decision !== 'unreviewed' && r.x_decided_revision_id !== r.selected_revision_id, item: itemSummary(r),
+        revisionId: r.x_revision_id, itemId: r.id, position: r.x_position, decision: r.x_decision, decidedAt: r.x_decided_at, decidedBy: r.x_decided_by,
+        revision: { id: r.x_revision_id, origin: r.e_origin, width: r.e_width, height: r.e_height, format: r.e_format, hasAlpha: !!r.e_has_alpha, opaque: !!r.e_opaque, createdAt: r.e_created_at },
+        newerVersions: r.x_newer, openNotes: r.x_open_notes, item: itemSummary(r),
       }))
       .filter(entry => !filter.decision || entry.decision === filter.decision);
-    const visible = new Set(entries.map(entry => entry.itemId));
-    const notes = threads(this.db.prepare('SELECT n.* FROM notes n JOIN review_items x ON x.item_id = n.item_id AND x.review_id = ? ORDER BY x.position, n.created_at').all(id) as Row[])
-      .filter(thread => visible.has(thread.itemId) && (filter.includeResolved || !thread.resolvedAt));
+    const visible = new Set(entries.map(entry => entry.revisionId));
+    // Replies follow their root, whichever version they name.
+    const notes = threads(this.db.prepare(`SELECT n.* FROM notes n JOIN notes root ON root.id = COALESCE(n.parent_id, n.id) JOIN review_entries x ON x.revision_id = root.revision_id AND x.review_id = ?
+      ORDER BY x.position, n.created_at`).all(id) as Row[])
+      .filter(thread => visible.has(thread.revisionId) && (filter.includeResolved || !thread.resolvedAt));
     return { ...summary, entries, notes };
+  }
+  /** Each item's selected version, for reviewing items as they are now. */
+  selectedRevisions(projectId: string, itemIds: string[]): string[] {
+    const find = this.db.prepare('SELECT selected_revision_id FROM items WHERE id=? AND project_id=?');
+    return itemIds.map(itemId => {
+      const row = find.get(itemId, projectId) as Row | undefined;
+      if (!row) throw new WorkbenchError('NOT_FOUND', `Item ${itemId} not found in project.`);
+      return row.selected_revision_id as string;
+    });
   }
   private editableReview(id: string, projectId: string, expectedRevision?: number): ReviewSummary {
     const summary = this.reviewSummary(id, projectId);
@@ -362,23 +397,27 @@ export class Store {
     return summary;
   }
   private touchReview(id: string) { this.db.prepare('UPDATE reviews SET revision = revision + 1, updated_at = ? WHERE id = ?').run(now(), id); }
-  /** Replaces the ordered entries. Retained items keep their decisions. */
-  private setEntries(projectId: string, reviewId: string, itemIds: string[]) {
-    const ids = [...new Set(itemIds)];
-    if (!ids.length) throw new WorkbenchError('INVALID_ARGUMENTS', 'A review needs at least one item.');
-    const exists = this.db.prepare('SELECT 1 FROM items WHERE id=? AND project_id=?');
-    for (const itemId of ids) if (!exists.get(itemId, projectId)) throw new WorkbenchError('NOT_FOUND', `Item ${itemId} not found in project.`);
-    const keep = new Set(ids), remove = this.db.prepare('DELETE FROM review_items WHERE review_id=? AND item_id=?');
-    for (const row of this.db.prepare('SELECT item_id FROM review_items WHERE review_id=?').all(reviewId) as Row[]) if (!keep.has(row.item_id)) remove.run(reviewId, row.item_id);
-    const upsert = this.db.prepare('INSERT INTO review_items (review_id,item_id,position) VALUES (?,?,?) ON CONFLICT(review_id,item_id) DO UPDATE SET position=excluded.position');
-    ids.forEach((itemId, position) => upsert.run(reviewId, itemId, position));
+  /** Replaces the ordered entries, one per version. Retained versions keep their decisions. */
+  private setEntries(projectId: string, reviewId: string, revisionIds: string[]) {
+    const ids = [...new Set(revisionIds)];
+    if (!ids.length) throw new WorkbenchError('INVALID_ARGUMENTS', 'A review needs at least one version.');
+    const owner = this.db.prepare('SELECT r.item_id FROM revisions r JOIN items i ON i.id = r.item_id WHERE r.id=? AND i.project_id=?');
+    const items = ids.map(revisionId => {
+      const row = owner.get(revisionId, projectId) as Row | undefined;
+      if (!row) throw new WorkbenchError('NOT_FOUND', `Version ${revisionId} not found in project.`);
+      return row.item_id as string;
+    });
+    const keep = new Set(ids), remove = this.db.prepare('DELETE FROM review_entries WHERE review_id=? AND revision_id=?');
+    for (const row of this.db.prepare('SELECT revision_id FROM review_entries WHERE review_id=?').all(reviewId) as Row[]) if (!keep.has(row.revision_id)) remove.run(reviewId, row.revision_id);
+    const upsert = this.db.prepare('INSERT INTO review_entries (review_id,revision_id,item_id,position) VALUES (?,?,?,?) ON CONFLICT(review_id,revision_id) DO UPDATE SET position=excluded.position');
+    ids.forEach((revisionId, position) => upsert.run(reviewId, revisionId, items[position], position));
   }
-  createReview(projectId: string, input: { title: string; instructions: string; itemIds: string[] }, origin: Origin): ReviewSummary {
+  createReview(projectId: string, input: { title: string; instructions: string; revisionIds: string[] }, origin: Origin): ReviewSummary {
     const id = randomUUID(), at = now();
     this.tx(() => {
       this.db.prepare('INSERT INTO reviews (id,project_id,title,instructions,status,revision,created_at,created_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?)').run(id, projectId, input.title.trim(), input.instructions.trim(), 'active', 1, at, origin, at);
-      this.setEntries(projectId, id, input.itemIds);
-      this.appendActivity(projectId, origin, 'review.created', { reviewId: id }, { title: input.title.trim(), items: new Set(input.itemIds).size });
+      this.setEntries(projectId, id, input.revisionIds);
+      this.appendActivity(projectId, origin, 'review.created', { reviewId: id }, { title: input.title.trim(), entries: new Set(input.revisionIds).size });
     });
     return this.reviewSummary(id, projectId);
   }
@@ -386,27 +425,27 @@ export class Store {
     const current = this.editableReview(id, projectId, expectedRevision);
     this.tx(() => {
       this.db.prepare('UPDATE reviews SET title=?, instructions=? WHERE id=?').run(patch.title?.trim() ?? current.title, patch.instructions?.trim() ?? current.instructions, id);
-      if (patch.itemIds || patch.addItemIds) {
-        const base = patch.itemIds ?? (this.db.prepare('SELECT item_id FROM review_items WHERE review_id=? ORDER BY position').all(id) as Row[]).map(r => r.item_id as string);
-        this.setEntries(projectId, id, [...base, ...(patch.addItemIds ?? [])]);
+      if (patch.revisionIds || patch.addRevisionIds) {
+        const base = patch.revisionIds ?? (this.db.prepare('SELECT revision_id FROM review_entries WHERE review_id=? ORDER BY position').all(id) as Row[]).map(r => r.revision_id as string);
+        this.setEntries(projectId, id, [...base, ...(patch.addRevisionIds ?? [])]);
       }
       this.touchReview(id);
       this.appendActivity(projectId, origin, 'review.updated', { reviewId: id }, { fields: Object.keys(patch) });
     });
     return this.reviewSummary(id, projectId);
   }
-  /** Records decisions against each item's currently selected revision. */
-  decide(id: string, projectId: string, decisions: { itemId: string; decision: Decision }[], origin: Origin): ReviewSummary {
+  /** Records decisions on review entries; each applies to that entry's exact version. */
+  decide(id: string, projectId: string, decisions: { revisionId: string; decision: Decision }[], origin: Origin): ReviewSummary {
     this.editableReview(id, projectId);
     this.tx(() => {
-      const entry = this.db.prepare('SELECT i.selected_revision_id FROM review_items x JOIN items i ON i.id = x.item_id WHERE x.review_id=? AND x.item_id=?');
-      const update = this.db.prepare('UPDATE review_items SET decision=?, decided_at=?, decided_by=?, decided_revision_id=? WHERE review_id=? AND item_id=?');
-      for (const { itemId, decision } of decisions) {
-        const row = entry.get(id, itemId) as Row | undefined;
-        if (!row) throw new WorkbenchError('NOT_FOUND', `Item ${itemId} is not in this review.`);
+      const entry = this.db.prepare('SELECT item_id FROM review_entries WHERE review_id=? AND revision_id=?');
+      const update = this.db.prepare('UPDATE review_entries SET decision=?, decided_at=?, decided_by=? WHERE review_id=? AND revision_id=?');
+      for (const { revisionId, decision } of decisions) {
+        const row = entry.get(id, revisionId) as Row | undefined;
+        if (!row) throw new WorkbenchError('NOT_FOUND', `Version ${revisionId} is not in this review.`);
         const decided = decision !== 'unreviewed';
-        update.run(decision, decided ? now() : null, decided ? origin : null, decided ? row.selected_revision_id : null, id, itemId);
-        this.appendActivity(projectId, origin, 'review.decided', { reviewId: id, itemId }, { decision, revisionId: decided ? row.selected_revision_id : null });
+        update.run(decision, decided ? now() : null, decided ? origin : null, id, revisionId);
+        this.appendActivity(projectId, origin, 'review.decided', { reviewId: id, itemId: row.item_id }, { decision, revisionId });
       }
       this.touchReview(id);
     });
@@ -439,10 +478,16 @@ export class Store {
     return row;
   }
   private revisionSize(id: string) { return this.db.prepare('SELECT width, height FROM revisions WHERE id=?').get(id) as { width: number; height: number }; }
-  /** Adds a root note or a reply. Pins are clamped to the referenced revision's pixels. */
+  /**
+   * Adds a root note or a reply. A review note is on one of the review's versions (default: the
+   * item's last entry there); otherwise the default is the selected version. Pins are clamped to its pixels.
+   */
   addNote(projectId: string, input: NoteInput, origin: Origin): Note {
     const item = this.item(input.itemId, projectId);
-    let reviewId = input.reviewId ?? null, revisionId = input.revisionId ?? item.selectedRevisionId, parentId: string | null = null;
+    let reviewId = input.reviewId ?? null, parentId: string | null = null;
+    const reviewed = reviewId && !input.revisionId
+      ? (this.db.prepare('SELECT revision_id FROM review_entries WHERE review_id=? AND item_id=? ORDER BY position DESC LIMIT 1').get(reviewId, item.id) as Row | undefined)?.revision_id as string | undefined : undefined;
+    let revisionId = input.revisionId ?? reviewed ?? item.selectedRevisionId;
     if (input.parentId) {
       const parent = this.noteRow(input.parentId, projectId);
       if (parent.item_id !== item.id) throw new WorkbenchError('INVALID_ARGUMENTS', 'A reply must be on the same item as its note.');
@@ -451,8 +496,8 @@ export class Store {
       reviewId = input.reviewId ?? parent.review_id;
       revisionId = input.revisionId ?? parent.revision_id;
     } else if (reviewId && this.reviewSummary(reviewId, projectId).status === 'completed') throw new WorkbenchError('REVIEW_COMPLETED', 'The review is completed. Reopen it before adding notes to it.');
-    if (reviewId && !this.db.prepare('SELECT 1 FROM review_items x JOIN reviews v ON v.id = x.review_id WHERE x.review_id=? AND x.item_id=? AND v.project_id=?').get(reviewId, item.id, projectId))
-      throw new WorkbenchError('INVALID_ARGUMENTS', 'The item is not in that review.');
+    if (reviewId && !parentId && !this.db.prepare('SELECT 1 FROM review_entries x JOIN reviews v ON v.id = x.review_id WHERE x.review_id=? AND x.revision_id=? AND v.project_id=?').get(reviewId, revisionId, projectId))
+      throw new WorkbenchError('INVALID_ARGUMENTS', 'That version is not in the review.');
     if (!item.revisions.some(entry => entry.id === revisionId)) throw new WorkbenchError('NOT_FOUND', 'Revision not found on this item.');
     const size = this.revisionSize(revisionId);
     const pin = input.pin ? clampPin(input.pin, size.width, size.height) : null;

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { operationDefinitions, type OperationName } from '../shared/operation-catalog';
 
 /** Project and conversation management stays with the user; the assistant works inside the current conversation's project. */
-const EXCLUDED: OperationName[] = ['projects_list', 'project_create', 'project_get', 'project_rename', 'project_delete', 'sessions_list', 'session_create', 'session_get', 'session_delete'];
+const EXCLUDED: OperationName[] = ['projects_list', 'project_create', 'project_get', 'project_rename', 'project_delete', 'sessions_list', 'session_create', 'session_get', 'session_delete', 'review_wait'];
 
 export const instructions = `You are the PixelChat assistant, working inside the user's art review workspace. PixelChat tracks artwork items imported from linked source folders (often a game's asset tree), immutable revisions of each item with provenance, reviews with per-item decisions, and note threads that can be pinned to a point or box in image pixels.
 Your tools act on the current project only. Call guidance with topics workflow, library, or image-editing before substantial work in that area. You cannot read arbitrary files or run commands.
@@ -31,7 +31,7 @@ const ACTIVITY: Partial<Record<OperationName, (args: Args, result: any) => strin
   source_add: args => `Linked source folder ${args.root}.`,
   source_rescan: () => 'Rescanned a source folder.',
   source_remove: () => 'Removed a source folder from the project.',
-  import_files: args => `Imported ${args.paths.length} file${args.paths.length === 1 ? '' : 's'}.`,
+  import_files: args => `Imported ${args.paths.length} file${args.paths.length === 1 ? '' : 's'}${args.itemId ? ' as new versions of an item' : ''}.`,
   item_update: args => args.selectedRevisionId ? 'Changed the selected version of an item.' : 'Updated item details.',
   item_delete: () => 'Deleted an item.',
   review_create: (_args, result) => `Created review “${result.title}”.`,

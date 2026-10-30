@@ -63,18 +63,24 @@ export class Library {
     await this.media.remove(this.store.deleteSource(projectId, sourceId, origin));
   }
 
-  /** Imports loose files as unlinked items; they have no source to export back to. */
-  async importFiles(projectId: string, paths: string[], collection: string, origin: Origin) {
-    const created: string[] = [], failed: { path: string; error: string }[] = [];
+  /**
+   * Imports loose files as unlinked items, which have no source to export back to, or as new
+   * versions in one item's lineage, each derived from the version selected at import.
+   */
+  async importFiles(projectId: string, paths: string[], target: { collection: string; itemId?: string }, origin: Origin) {
+    const lineage = target.itemId ? this.store.item(target.itemId, projectId) : null;
+    const created: string[] = [], revisions: string[] = [], failed: { path: string; error: string }[] = [];
     for (const path of paths) {
       try {
         if (!isAbsolute(path)) throw new WorkbenchError('INVALID_ARGUMENTS', 'Paths must be absolute.');
         if (!IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) throw new WorkbenchError('UNSUPPORTED_IMAGE', 'Only PNG, WebP, and JPEG files are supported.');
         const facts = await this.media.ingest(await readFile(path));
-        created.push(this.store.createItem(projectId, { sourceId: null, sourcePath: null, name: basename(path, extname(path)), collection, revision: { ...facts, origin: 'imported', provenance: { importedFrom: resolve(path) } } }, origin));
+        const revision = { ...facts, origin: 'imported' as const, provenance: { importedFrom: resolve(path) } };
+        if (lineage) { this.store.addRevision(projectId, lineage.id, { ...revision, parentId: lineage.selectedRevisionId }, false, origin); revisions.push(facts.id); }
+        else created.push(this.store.createItem(projectId, { sourceId: null, sourcePath: null, name: basename(path, extname(path)), collection: target.collection, revision }, origin));
       } catch (error) { failed.push({ path, error: error instanceof Error ? error.message : 'Import failed.' }); }
     }
-    return { itemIds: created, failed };
+    return lineage ? { itemId: lineage.id, revisionIds: revisions, failed } : { itemIds: created, failed };
   }
 
   /**

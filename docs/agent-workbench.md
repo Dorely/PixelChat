@@ -47,12 +47,21 @@ pixelchat tools
 pixelchat guidance
 pixelchat call search_items --json '{"projectId":"...","status":"pending_export"}'
 pixelchat call review_get --input request.json
+pixelchat watch-review <projectId> <reviewId> [--from user|any] [--once]
 pixelchat mcp
 ```
 
 Every command prints one JSON envelope (`{ ok, result }` or `{ ok: false, error: { code,
 message, details? } }`) and exits 1 on failure. `tools` lists every operation with its JSON
-schema. Requests time out after 11 minutes, covering the longest operation wait.
+schema. Requests time out after 31 minutes, covering the longest operation wait.
+
+`watch-review` holds one connection for a review and prints JSON lines instead of an
+envelope: `watch.started` (with the review and cursor), each activity entry as it happens
+(by default only the user's: decisions, notes, replies, resolution, entry changes), and
+`watch.ended` when the review is completed (`--once` also ends after the first batch). It
+keeps its cursor across app restarts, printing `watch.retrying` while PixelChat is
+unreachable. Run it in the background and react to each line, for example with a harness's
+output monitor.
 
 ## MCP
 
@@ -64,16 +73,18 @@ Resources, with subscription notifications (modern clients receive updates witho
 subscribing):
 
 - `pixelchat://projects/{projectId}/reviews/{reviewId}`: the review with entries,
-  decisions, and note threads. Updates when the review revision changes.
+  decisions, and note threads. Updates on any review activity, including notes.
 - `pixelchat://projects/{projectId}/pending-exports`: items whose selected version
   differs from the source file. Updates when that set or a selected version changes,
   for example after the user picks an edit result or an export lands.
 - `pixelchat://guidance`: the current references and model catalog.
 
-Notifications are a convenience. The durable path is polling with waits:
-`review_get` with `afterRevision` and `wait`, `activity_get` with `afterSeq` (the previous
-`cursor`) and `wait`, and `jobs_get` with `wait`. Background watches never launch the
-desktop; they retry with backoff while it is closed.
+Notifications are a convenience. The durable path is waiting calls: `review_wait` (pass
+the previous `cursor` as `afterSeq`), `activity_get` with `afterSeq` and `wait`, and
+`jobs_get` with `wait`. `review_wait` defaults to 50 seconds because some clients end tool
+calls after 60 (Codex's `tool_timeout_sec`); the Codex installer entry raises that to 1900
+seconds so longer waits fit. Background watches never launch the desktop; they retry with
+backoff while it is closed.
 
 ## Bridge and security
 

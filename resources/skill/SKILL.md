@@ -21,7 +21,8 @@ its database, or build a separate review page.
    are not a visual review, and file names are not evidence of content.
 4. Decisions are the user's. Record `review_decide` only when the user asks. Reply to a
    note with `note_add` and `parentId`; resolve the thread with `note_update` once the
-   change exists, and say what changed.
+   change exists, and say what changed. To respond as the user works, loop on
+   `review_wait` (or run `pixelchat watch-review`) as described in the workflow reference.
 5. Image edits and generation are billed to the user's account: run them only for the
    user's request, at the requested count. Read [image editing](references/image-editing.md)
    first. Keep the `requestId` and job ids; retry only with the same `requestId` and
@@ -31,6 +32,8 @@ its database, or build a separate review page.
    `export_item` as described in [library and export](references/library.md); never
    pass `force` without the user's explicit instruction.
 7. Art you make outside PixelChat belongs in the library before review: rescan its source
-   or use `import_files`, then show it to the user with `ui_open`.
+   or use `import_files` (with `itemId` for a new version of an item). Every version is a
+   new, unreviewed asset; add it to a review and show it with `ui_open`. A completed review
+   is final; never expect new art to appear in it.
 
 Never ask the user for credentials; providers are configured in PixelChat's Settings.

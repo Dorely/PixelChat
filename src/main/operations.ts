@@ -61,26 +61,36 @@ export class Operations {
       case 'source_get': return a.wait ? library.waitForScan(a.projectId, a.sourceId, a.wait * 1000) : library.source(a.projectId, a.sourceId);
       case 'source_rescan': return library.rescan(a.projectId, a.sourceId, origin);
       case 'source_remove': await library.removeSource(a.projectId, a.sourceId, origin); return { removed: true };
-      case 'import_files': return library.importFiles(a.projectId, a.paths, a.collection ?? 'Imported', origin);
+      case 'import_files': return library.importFiles(a.projectId, a.paths, { collection: a.collection ?? 'Imported', itemId: a.itemId }, origin);
       case 'search_items': return store.searchItems(a.projectId, { query: a.query || undefined, collection: a.collection, sourceId: a.sourceId, status: a.status, limit: a.limit ?? 100, offset: a.offset ?? 0 });
       case 'item_get': return store.item(a.itemId, a.projectId);
       case 'item_delete': await this.media.remove(store.deleteItem(a.itemId, a.projectId, origin)); return { deleted: true };
       case 'item_update': { const { projectId, itemId, ...patch } = a; return store.updateItem(itemId, projectId, patch, origin); }
       case 'review_list': return store.reviews(a.projectId, a.status);
       case 'review_create': {
-        if (!a.itemIds === !a.filter) throw new WorkbenchError('INVALID_ARGUMENTS', 'Pass either itemIds or filter.');
-        const itemIds: string[] = a.itemIds ?? store.searchItems(a.projectId, { ...a.filter, limit: 5000, offset: 0 }).items.map(entry => entry.id);
-        const created = store.createReview(a.projectId, { title: a.title, instructions: a.instructions ?? '', itemIds }, origin);
+        if ([a.itemIds, a.revisionIds, a.filter].filter(Boolean).length !== 1) throw new WorkbenchError('INVALID_ARGUMENTS', 'Pass exactly one of itemIds, revisionIds, or filter.');
+        const revisionIds: string[] = a.revisionIds ?? (a.itemIds ? store.selectedRevisions(a.projectId, a.itemIds) : store.searchItems(a.projectId, { ...a.filter, limit: 5000, offset: 0 }).items.map(entry => entry.selectedRevisionId));
+        const created = store.createReview(a.projectId, { title: a.title, instructions: a.instructions ?? '', revisionIds }, origin);
         if (!a.open) return created;
         // Creating succeeded; a missing window only means it could not be shown.
         try { await this.ui.send({ action: 'open-review', projectId: a.projectId, reviewId: created.id }); return { ...created, opened: true }; }
         catch (error) { return { ...created, opened: false, openError: error instanceof Error ? error.message : 'Could not open the review.' }; }
       }
-      case 'review_get': {
-        if (a.wait && a.afterRevision !== undefined) await this.waitUntil(() => store.reviewSummary(a.reviewId, a.projectId).revision > a.afterRevision, a.wait * 1000);
-        return store.review(a.reviewId, a.projectId, { decision: a.decision, includeResolved: a.includeResolved });
+      case 'review_get': return store.review(a.reviewId, a.projectId, { decision: a.decision, includeResolved: a.includeResolved });
+      case 'review_wait': {
+        store.reviewSummary(a.reviewId, a.projectId);
+        // Without a cursor, wait for what happens next. Filtering by origin skips the caller's own changes.
+        const filter = { reviewId: a.reviewId, origin: a.from === 'user' ? 'user' as const : undefined, afterSeq: a.afterSeq ?? store.latestSeq(a.projectId) };
+        const ready = () => a.until === 'completed' ? store.reviewSummary(a.reviewId, a.projectId).status === 'completed' : store.activity(a.projectId, { ...filter, limit: 1 }).length > 0;
+        await this.waitUntil(ready, a.wait * 1000);
+        const events = store.activity(a.projectId, { ...filter, limit: 500 });
+        return { review: store.reviewSummary(a.reviewId, a.projectId), events, cursor: events.at(-1)?.seq ?? filter.afterSeq, timedOut: !ready() };
       }
-      case 'review_update': { const { projectId, reviewId, expectedRevision, ...patch } = a; return store.updateReview(reviewId, projectId, expectedRevision, patch, origin); }
+      case 'review_update': {
+        const { projectId, reviewId, expectedRevision, addItemIds, ...patch } = a;
+        const added = [...(patch.addRevisionIds ?? []), ...(addItemIds ? store.selectedRevisions(projectId, addItemIds) : [])];
+        return store.updateReview(reviewId, projectId, expectedRevision, { ...patch, ...(added.length ? { addRevisionIds: added } : {}) }, origin);
+      }
       case 'review_decide': return store.decide(a.reviewId, a.projectId, a.decisions, origin);
       case 'review_complete': return store.setReviewStatus(a.reviewId, a.projectId, a.expectedRevision, 'completed', origin);
       case 'review_reopen': return store.setReviewStatus(a.reviewId, a.projectId, a.expectedRevision, 'active', origin);

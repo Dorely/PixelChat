@@ -157,15 +157,18 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .search-field input { flex: 1; min-width: 0; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 13px; }
 .filter-select { height: 35px; max-width: 260px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--surface); font-size: 13px; }
 .item-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; }
-.item-card { position: relative; display: flex; flex-direction: column; min-width: 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); text-align: left; content-visibility: auto; contain-intrinsic-size: auto 230px; }
+.item-card { position: relative; display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); content-visibility: auto; contain-intrinsic-size: auto 230px; }
 .item-card:hover { border-color: var(--line-hover); }
-.item-card:focus-visible { outline-offset: 0; }
+.item-open { display: flex; flex-direction: column; min-width: 0; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; }
+.item-open:focus-visible { outline-offset: -2px; }
+.card-decisions { display: flex; gap: 4px; padding: 0 8px 8px; }
+.card-decisions .decision-button { flex: 1; justify-content: center; min-width: 0; height: 26px; padding: 0 4px; font-size: 11px; }
 .item-thumb { display: grid; place-items: center; aspect-ratio: 1; overflow: hidden; }
 .thumb-image { max-width: 100%; max-height: 100%; object-fit: contain; }
 .item-copy { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 10px; border-top: 1px solid var(--line); }
 .item-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
 .item-copy small { color: var(--quiet); font: 11px var(--font-mono); }
-.item-badges { position: absolute; top: 7px; left: 7px; display: flex; flex-wrap: wrap; gap: 4px; }
+.item-badges { position: absolute; top: 7px; left: 7px; display: flex; flex-wrap: wrap; gap: 4px; pointer-events: none; }
 .source-dialog { width: min(560px, 92vw); }
 .project-dialog-body small { color: var(--quiet); font-size: 11px; }
 .project-dialog-body textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 5px; outline: 0; resize: vertical; color: var(--text); background: var(--surface-2); font: 12px var(--font-mono); }
@@ -191,8 +194,9 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .viewer-stage { flex: 1; min-height: 0; overflow: auto; padding: 24px; text-align: center; }
 .viewer-stage img { display: inline-block; vertical-align: middle; }
-.viewer-stage.stage-fit { display: grid; place-items: center; overflow: hidden; }
-.viewer-stage.stage-fit img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.viewer-stage.stage-fit { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; overflow: hidden; }
+/* Fit scales art up or down to the stage; the pin layer maps to the letterboxed content. */
+.viewer-stage.stage-fit img { width: 100%; height: 100%; object-fit: contain; }
 .backdrop-checker { background-color: #bdbdbd; background-image: conic-gradient(#8f8f8f 25%, transparent 0 50%, #8f8f8f 0 75%, transparent 0); background-size: 24px 24px; }
 .backdrop-dark { background: #121212; }
 .backdrop-light { background: #f4f4f1; }

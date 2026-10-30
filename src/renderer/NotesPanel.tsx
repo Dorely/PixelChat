@@ -81,20 +81,20 @@ function ReplyBox({ onSubmit, onCancel }: { onSubmit: (body: string) => Promise<
   </div>
 }
 
-function Thread({ thread, pinNumber, item, active, onActivate, onReply, onResolve, onDelete }: {
-  thread: NoteThread; pinNumber: number | null; item: Item; active: boolean; onActivate: () => void
+function Thread({ thread, pinNumber, revisionId, active, onActivate, onReply, onResolve, onDelete }: {
+  thread: NoteThread; pinNumber: number | null; revisionId: string; active: boolean; onActivate: () => void
   onReply: (body: string) => Promise<boolean>; onResolve: (resolved: boolean) => void; onDelete: (id: string) => void
 }) {
   const [replying, setReplying] = useState(false)
   const ref = useRef<HTMLElement>(null)
   useEffect(() => { if (active) ref.current?.scrollIntoView({ block: 'nearest' }) }, [active])
-  const older = thread.revisionId !== item.selectedRevisionId
+  const older = thread.revisionId !== revisionId
   return <article ref={ref} className={`note-thread${active ? ' note-active' : ''}${thread.resolvedAt ? ' note-resolved' : ''}`} onClick={onActivate}>
     <header>
       {pinNumber !== null && <span className="pin-number">{pinNumber}</span>}
       <strong className={`note-author author-${thread.author}`}>{author(thread.author)}</strong>
       <small>{new Date(thread.createdAt).toLocaleString()}</small>
-      {older && <span className="badge" title="Written against another version of this item">Other version</span>}
+      {older && <span className="badge" title="Written on another version of this item than the one shown">Other version</span>}
     </header>
     <p>{thread.body}</p>
     {thread.pin && pinNumber === null && <small className="quiet-text">Pinned {pinLabel(thread.pin)}</small>}
@@ -137,7 +137,7 @@ export const NotesPanel = forwardRef<HTMLTextAreaElement, {
     }
     setBusy(false)
   }
-  const thread = (entry: NoteThread) => <Thread key={entry.id} thread={entry} item={item} pinNumber={pinned.includes(entry) ? pinned.indexOf(entry) + 1 : null} active={entry.id === activeNoteId}
+  const thread = (entry: NoteThread) => <Thread key={entry.id} thread={entry} revisionId={revisionId} pinNumber={pinned.includes(entry) ? pinned.indexOf(entry) + 1 : null} active={entry.id === activeNoteId}
     onActivate={() => onActivate(entry.id === activeNoteId ? null : entry.id)}
     onReply={body => run(() => op('note_add', { projectId, itemId: item.id, parentId: entry.id, body }), 'Could not add the reply.')}
     onResolve={resolved => void run(() => op('note_update', { projectId, noteId: entry.id, resolved }), 'Could not update the note.')}

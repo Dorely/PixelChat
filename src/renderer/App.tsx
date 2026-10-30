@@ -11,7 +11,7 @@ import { THEMES, applyTheme, storedTheme, type ThemeId } from './theme'
 
 type View = 'library' | 'reviews'
 type Deletion = { kind: 'project' | 'session'; id: string; projectId: string; name: string }
-type Target = { reviewId?: string; itemId?: string }
+type Target = { projectId: string; reviewId?: string; itemId?: string }
 
 const emptySnapshot: Snapshot = { projects: [], activeProjectId: '', sessions: [], providers: { secureStorage: false, codex: { ready: false, pending: false, error: null }, gemini: { ready: false } }, chat: { models: [], active: { modelId: '', effort: '' }, providers: [] }, activeTurns: [] }
 const message = (error: unknown) => error instanceof Error ? error.message : 'Operation failed.'
@@ -121,7 +121,7 @@ export default function App() {
     // The main process has already switched to the command's project; views pick the target up after the switch.
     const unsubscribe = window.pixel.onUiCommand(command => {
       setView(command.action === 'open-review' ? 'reviews' : 'library')
-      setTarget({ reviewId: command.reviewId, itemId: command.itemId })
+      setTarget({ projectId: command.projectId, reviewId: command.reviewId, itemId: command.itemId })
       void window.pixel.uiAcknowledge(command.id)
     })
     void window.pixel.uiReady()
@@ -142,6 +142,8 @@ export default function App() {
   const call = async (action: () => Promise<unknown>) => { try { await action(); void refresh(); return true } catch (error) { setUiError(message(error)); return false } }
   const projectId = snapshot.activeProjectId
   const activeProject = snapshot.projects.find(project => project.id === projectId) ?? null
+  // A command can arrive before the snapshot reports its project switch; hold it until the switch lands.
+  const current = target?.projectId === projectId ? target : null
   const session = snapshot.sessions.find(item => item.id === sessionId) ?? null
   const createSession = () => call(async () => setSessionId((await op<Session>('session_create', { projectId })).id))
   const saveProject = async (name: string) => {
@@ -177,8 +179,8 @@ export default function App() {
         <button className={view === 'reviews' ? 'tab-active' : ''} onClick={() => setView('reviews')}><Icon name="check" /> Reviews</button>
       </nav>
       <ProvidersContext.Provider value={snapshot.providers}>{!projectId ? null : view === 'library'
-        ? <LibraryView key={projectId} projectId={projectId} focusItemId={target?.reviewId ? undefined : target?.itemId} onFocusDone={clearTarget} onOpenReview={reviewId => { setTarget({ reviewId }); setView('reviews') }} onChatFocus={setChatFocus} onError={setUiError} />
-        : <ReviewsView key={projectId} projectId={projectId} target={target?.reviewId ? target : null} onTargetDone={clearTarget} onChatFocus={setChatFocus} onError={setUiError} />}</ProvidersContext.Provider>
+        ? <LibraryView key={projectId} projectId={projectId} focusItemId={current?.reviewId ? undefined : current?.itemId} onFocusDone={clearTarget} onOpenReview={reviewId => { setTarget({ projectId, reviewId }); setView('reviews') }} onChatFocus={setChatFocus} onError={setUiError} />
+        : <ReviewsView key={projectId} projectId={projectId} target={current?.reviewId ? current : null} onTargetDone={clearTarget} onChatFocus={setChatFocus} onError={setUiError} />}</ProvidersContext.Provider>
     </main>
     {uiError && <div className="error-banner" role="alert"><Icon name="info" /><span>{uiError}</span><button className="icon-button" onClick={() => setUiError('')} aria-label="Dismiss error"><Icon name="close" /></button></div>}
     {settingsOpen && <SettingsDialog providers={snapshot.providers} chat={snapshot.chat} onClose={() => setSettingsOpen(false)} onError={setUiError} />}

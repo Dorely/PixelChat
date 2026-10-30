@@ -30,11 +30,14 @@ export async function installIntegration(raw: InstallationInput, runtime: string
     plan.push({ path, old, content: input.action === 'uninstall' ? undefined : content, status: old === undefined ? 'missing' : conflict ? 'different' : 'up-to-date' });
   }
   const entry = { command: runtime, args: [client, 'mcp'] };
+  // Codex ends tool calls after 60 seconds by default; review_wait may hold one for up to 1800.
+  const CODEX_TOOL_TIMEOUT = 1900;
   if (input.mcp) for (const target of input.targets) {
     const path = target === 'codex' ? join(input.scope === 'project' ? join(project, '.codex') : (process.env.CODEX_HOME || join(home, '.codex')), 'config.toml')
       : input.scope === 'project' ? join(project, '.mcp.json') : join(home, '.claude.json');
     const old = await read(path);
     let content: string | undefined, existing: unknown;
+    const expected = target === 'codex' ? { ...entry, tool_timeout_sec: CODEX_TOOL_TIMEOUT } : entry;
     if (target === 'codex') {
       const parsed = TOML.parse(old ?? '') as Record<string, any>;
       existing = parsed.mcp_servers?.pixelchat;
@@ -42,7 +45,7 @@ export async function installIntegration(raw: InstallationInput, runtime: string
       const text = old ?? '';
       if (existing && !/^\[mcp_servers\.pixelchat\][^\S\r\n]*\r?\n/m.test(text)) throw new WorkbenchError('INSTALL_CONFLICT', 'PixelChat MCP uses an inline/quoted TOML definition; edit that entry manually before using the installer.');
       content = text.replace(block, '');
-      if (input.action !== 'uninstall') content = content.replace(/\s*$/, '') + '\n\n[mcp_servers.pixelchat]\ncommand = ' + JSON.stringify(runtime) + '\nargs = ' + JSON.stringify(entry.args) + '\n';
+      if (input.action !== 'uninstall') content = content.replace(/\s*$/, '') + '\n\n[mcp_servers.pixelchat]\ncommand = ' + JSON.stringify(runtime) + '\nargs = ' + JSON.stringify(entry.args) + '\ntool_timeout_sec = ' + CODEX_TOOL_TIMEOUT + '\n';
       TOML.parse(content);
     } else {
       const parsed = JSON.parse(old ?? '{}');
@@ -52,7 +55,7 @@ export async function installIntegration(raw: InstallationInput, runtime: string
       if (input.action === 'uninstall') delete parsed.mcpServers.pixelchat; else parsed.mcpServers.pixelchat = entry;
       content = JSON.stringify(parsed, null, 2) + '\n';
     }
-    const identical = existing && JSON.stringify(existing) === JSON.stringify(entry);
+    const identical = existing && JSON.stringify(existing) === JSON.stringify(expected);
     if (existing && !identical && !input.force && input.action !== 'status') throw new WorkbenchError('INSTALL_CONFLICT', `MCP entry differs in ${path}; explicit force is required.`);
     if ((input.action !== 'uninstall' && identical) || (input.action === 'uninstall' && !existing)) content = old;
     plan.push({ path, old, content, status: existing ? identical ? 'up-to-date' : 'different' : 'missing' });

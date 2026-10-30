@@ -17,18 +17,20 @@ needing changes, or reject, leaving notes for the whole image or pinned to a reg
 Viewing must make art easy to judge: zoom, crisp pixel scaling, and transparency shown
 against checkerboard, light, dark, or custom backgrounds.
 
-Imports are snapshots. The library keeps the exact bytes that were reviewed together with a
-link to the source file, so notes always refer to the version the user saw. Rescanning a
-source picks up changed files as new revisions, showing what has been revised since a note
-was written.
+Imports are snapshots, and stored art is never changed in place. Every image loaded or
+made is a new asset; lineage groups the versions of one artwork. The library keeps the
+exact bytes that were reviewed together with a link to the source file, so decisions and
+notes always refer to the version the user saw. Rescanning a source picks up changed files
+as new versions, which arrive unreviewed. A completed review stays exactly as it was
+completed.
 
 ## Agents as collaborators
 
 An inline chat assistant can operate every function of the workspace. The same operations
 are offered to agents in other harnesses (Claude Code, Codex) through a bundled CLI and
 stdio MCP server, with installable skills. Agents read review decisions and notes, view the
-artwork, reply to or resolve notes, and are notified when the user changes something they
-need to act on. The workspace is where humans review; agents never need to build their own
+artwork, reply to or resolve notes, and can hold a connection on a review to respond as
+soon as the user decides, writes a note, or completes it. The workspace is where humans review; agents never need to build their own
 viewers.
 
 ## Creating and editing

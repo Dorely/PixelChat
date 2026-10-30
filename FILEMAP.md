@@ -103,8 +103,8 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/renderer/ChatProviderSettings.tsx](src/renderer/ChatProviderSettings.tsx) | Settings section for chat models and custom endpoints with capability tests. |
 | [src/renderer/Dialogs.tsx](src/renderer/Dialogs.tsx) | Shared modal shell and destructive-action confirmation. |
 | [src/renderer/LibraryView.tsx](src/renderer/LibraryView.tsx) | Library grid with search and filters, source management, and add-folder dialog. |
-| [src/renderer/ItemCard.tsx](src/renderer/ItemCard.tsx) | Grid card and thumbnail shared by Library and review boards; decision labels. |
-| [src/renderer/ItemViewer.tsx](src/renderer/ItemViewer.tsx) | Full-size item inspection: zoom, backdrops, versions, notes, edits, export, and keyboard review decisions. |
+| [src/renderer/ItemCard.tsx](src/renderer/ItemCard.tsx) | Grid card and thumbnail shared by Library and review boards; decision labels and in-card review decisions. |
+| [src/renderer/ItemViewer.tsx](src/renderer/ItemViewer.tsx) | Item inspection (opens at Fit): zoom, backdrops, versions, notes, edits, export, and keyboard decisions on a review entry's version. |
 | [src/renderer/EditPanel.tsx](src/renderer/EditPanel.tsx) | Viewer edit prompt, model options, open-notes insertion, and the item's job list. |
 | [src/renderer/SettingsDialog.tsx](src/renderer/SettingsDialog.tsx) | Codex sign-in, Gemini key, chat model, and agent settings; provider-readiness context. |
 | [src/renderer/AgentSettings.tsx](src/renderer/AgentSettings.tsx) | Settings section to install, preview, check, and remove the agent skill and MCP registration. |

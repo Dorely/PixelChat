@@ -48,19 +48,23 @@ library as the desktop app.
 
 ## Persistence
 
-Schema version 2 holds `settings`, `projects`, `sessions`, `sources`, `items`,
-`revisions`, `activity`, `reviews`, `review_items`, `notes`, `jobs`, and the chat tables
+Schema version 3 holds `settings`, `projects`, `sessions`, `sources`, `items`,
+`revisions`, `activity`, `reviews`, `review_entries`, `notes`, `jobs`, and the chat tables
 `messages`, `chat_history`, and `tool_calls`; migrations run in order, and project and
 session deletion cascade. A `Default` project is created
 when none exist, and the active project is kept in the `project-active` setting.
 
 Every mutation appends an `activity` row (project, origin, kind, item or review, data).
 `activity_get` pages it by `seq` (optionally for one review or item) and can wait for the
-next matching change; agents follow it to see what the user did.
+next matching change; agents follow it to see what the user did. `review_wait` is the
+review-shaped wait described below.
 
 ## Library and media
 
-An **item** is one tracked artwork. A **revision** is an immutable image: its exact
+A **revision** (a version) is an immutable image asset: once stored it never changes,
+and nothing is overwritten in place. An **item** is a lineage that groups the versions of
+one artwork (as imported, rescanned, generated, and edited, each with a `parentId`), with
+pointers to the selected and synced versions. A version's exact
 bytes live at `originals/<revisionId>.<ext>` under the profile, with a 384 px WebP
 thumbnail at `thumbnails/<revisionId>.webp`. Files are written to a `.partial` name and
 renamed into place. Width, height, format, alpha presence, and whether any pixel is
@@ -72,15 +76,16 @@ PNG, WebP, and JPEG files are imported. Scans run in the background, four files 
 time, and report progress through `sources_list`/`source_get`:
 
 - a new path creates an item whose collection is its folder;
-- a path whose bytes hash differently from the synced revision gets a new revision
-  (parent = previous synced), which becomes synced, and selected too unless another
-  version was chosen;
+- a path whose bytes hash differently from the synced revision gets a new version in
+  the item's lineage (parent = previous synced), which becomes synced, and selected too
+  unless another version was chosen. Reviews and notes keep the version they were made
+  on, so a rewritten file arrives unreviewed;
 - linked items not seen are marked missing, and cleared when the file returns.
 
 Each linked item tracks `syncedRevisionId` (matches the file on disk) and
 `selectedRevisionId` (the version the user wants). **Pending export** means a linked item
 whose selected revision is not its synced one. Loose-file imports create unlinked items,
-which have no source to export to.
+which have no source to export to, or, with `itemId`, new versions in that item's lineage.
 
 Search uses `LIKE` over name, source path, description, and tags rather than FTS: the
 first libraries are a few thousand items, and the query is simple to replace later.
@@ -93,21 +98,33 @@ are never modified by import or removal.
 
 ## Reviews and notes
 
-A **review** is an ordered set of items with a title, optional instructions, and a status
-(`active` or `completed`). Each entry carries a decision (`unreviewed`, `accepted`,
-`needs_changes`, `rejected`) with who decided it, when, and against which selected
-revision. An entry is **stale** when the item's selected revision has changed since the
-decision, so revised art comes back for another look. Reviews are created from item ids
-or from a `search_items` filter (up to 5000 items).
+A **review** is an ordered set of exact versions with a title, optional instructions, and
+a status (`active` or `completed`). Each entry is one revision and carries a decision
+(`unreviewed`, `accepted`, `needs_changes`, `rejected`) with who decided it and when; the
+decision belongs to those bytes. A newer version of the item never inherits it: it is a
+separate entry, added on purpose (`addItemIds` or `addRevisionIds`), that starts
+unreviewed, and entries report how many newer versions their item has. Reviews are created
+from item ids (their selected versions), revision ids, or a `search_items` filter (up to
+5000).
 
 Every review change increments its `revision`. Title, instructions, entry changes,
 completion, and reopening require `expectedRevision` and fail with `REVISION_CONFLICT`
 when it is out of date. Decisions do not, because each one targets a single entry.
-Completing locks decisions, entries, and new review notes until the review is reopened;
-replies and resolution stay open so agents can answer after completion. Deleting a review
-keeps its notes on their items.
+Completing freezes the review: decisions, entries, and new review notes are refused until
+it is reopened, and items it shows (or sources holding them) cannot be deleted. Replies and
+resolution stay open so agents can answer after completion. Deleting a review keeps its
+notes on their items.
 
-A **note** belongs to an item and a revision, and optionally to a review. Root notes may
+`review_wait` blocks until the review has activity after a cursor (decisions, notes and
+replies, resolution, entry changes, completion, reopening), by default only the user's, or
+with `until: completed` until it is completed. It returns the events, the review summary, a
+new cursor, and `timedOut`. Waits default to 50 seconds (under common MCP client tool
+timeouts) and go up to 30 minutes. `pixelchat watch-review` loops it into a JSON-lines
+stream for agents that hold one connection.
+
+A **note** belongs to an item and a revision, and optionally to a review, in which case
+the revision must be one of the review's entries (by default the item's entry there). A
+review shows the threads on its entries' versions. Root notes may
 carry a pin in that revision's pixels: a point `{x, y}` or a box `{x, y, width, height}`,
 rounded and clamped to the image. Replies hang off a root (replies to replies attach to
 the root) and carry no pin. Root notes are resolved or reopened by either side; agents may
@@ -120,8 +137,11 @@ acknowledges.
 
 In the viewer, pins are drawn over the image's rendered content box (measured with a
 `ResizeObserver`, accounting for `object-fit`). Click places a point; drag places a box.
-Pins written against another revision are dashed. Review keys: A accept and advance,
-R reject and advance, C needs changes and focus the note composer, U clear, N note.
+Pins written against another revision are dashed. The viewer opens at Fit, which scales
+the art up or down to the stage. Review keys: A accept and advance, R reject and advance,
+C needs changes and focus the note composer, U clear, N note; they apply to the entry's
+version, and are off while another version of the item is shown. Review board cards carry
+Accept, Changes, and Reject buttons for deciding without opening the viewer.
 
 ## Image providers and jobs
 

@@ -13,7 +13,10 @@ export interface Revision {
   hasAlpha: boolean; opaque: boolean; provenance: Record<string, unknown>; createdAt: string;
 }
 export type RevisionMeta = Pick<Revision, 'id' | 'origin' | 'width' | 'height' | 'format' | 'hasAlpha' | 'opaque' | 'createdAt'>;
-/** A tracked artwork. Pending export when the selected revision differs from the one on disk. */
+/**
+ * A lineage of immutable versions (revisions): one artwork as imported, regenerated, and edited.
+ * Pending export when the selected version differs from the one on disk.
+ */
 export interface ItemSummary {
   id: string; projectId: string; sourceId: string | null; sourcePath: string | null; name: string; collection: string;
   description: string; tags: string[]; syncedRevisionId: string | null; selectedRevisionId: string;
@@ -46,12 +49,17 @@ export interface ReviewSummary {
   counts: Record<Decision, number> & { total: number }; openNotes: number;
   createdAt: string; createdBy: Origin; updatedAt: string; completedAt: string | null; completedBy: Origin | null;
 }
-/** One item in a review. Stale when the item's selected revision changed after the decision. */
+/**
+ * One exact version in a review. Its decision and notes stay with those bytes; a newer version of the
+ * item is a separate entry, added on purpose, that starts unreviewed.
+ */
 export interface ReviewEntry {
-  itemId: string; position: number; decision: Decision; decidedAt: string | null; decidedBy: Origin | null; decidedRevisionId: string | null;
-  stale: boolean; item: ItemSummary;
+  revisionId: string; itemId: string; position: number; decision: Decision; decidedAt: string | null; decidedBy: Origin | null;
+  revision: RevisionMeta; newerVersions: number; openNotes: number; item: ItemSummary;
 }
 export interface Review extends ReviewSummary { entries: ReviewEntry[]; notes: NoteThread[] }
+/** What review_wait returns: activity after the cursor, the review as it is now, and whether the wait ran out. */
+export interface ReviewWait { review: ReviewSummary; events: ActivityEntry[]; cursor: number; timedOut: boolean }
 export interface ActivityEntry { seq: number; at: string; origin: Origin; kind: string; itemId: string | null; reviewId: string | null; data: Record<string, unknown> }
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'uncertain' | 'cancelled';

@@ -135,7 +135,7 @@ export default function LibraryView({ projectId, focusItemId, onFocusDone, onOpe
         : <><h2>No matching art</h2><p>Try another search or filter.</p></>}
     </div>
       : <div className="item-grid">{items.map((item, index) => <ItemCard key={item.id} item={item} onOpen={() => setViewer({ items, index })} />)}</div>}
-    {viewer && viewer.items[viewer.index] && <ItemViewer projectId={projectId} items={viewer.items} index={viewer.index} onIndex={index => setViewer(current => current && { ...current, index })} onClose={() => setViewer(null)} onError={onError} />}
+    {viewer && viewer.items[viewer.index] && <ItemViewer projectId={projectId} items={viewer.items.map(item => ({ item }))} index={viewer.index} onIndex={index => setViewer(current => current && { ...current, index })} onClose={() => setViewer(null)} onError={onError} />}
     {reviewing && <NewReviewDialog projectId={projectId} initial={{ query: query || undefined, collection: collection === ALL ? undefined : collection, status }} onClose={() => setReviewing(false)}
       onCreated={(review: ReviewSummary) => { setReviewing(false); onOpenReview(review.id) }} />}
     {adding && <AddSourceDialog projectId={projectId} onClose={added => { setAdding(false); if (added) setShowSources(true) }} onError={onError} />}

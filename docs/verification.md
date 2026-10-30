@@ -207,3 +207,46 @@ secure-storage, or platform integration.
   logged `app.started` (packaged) and a new discovery file, and no container copy appeared.
 - Gaps: the fail-fast path for a running app whose bridge does not answer, and the
   development CLI's direct Electron launch, were not exercised.
+
+## 2026-10-30 — Immutable versions, review waits, fit view, card decisions
+
+- `npm run typecheck` and `npm run build` succeeded. `@iarna/toml` parses the installer's
+  `tool_timeout_sec = 1900` as a number, so a matching Codex entry reads as identical.
+- A temporary helper outside the repository ran the real `Store` and `Operations` on a copy
+  of the profile library (the live profile untouched):
+  - The copy migrated to schema 3. The completed Chimera review kept every decision on the
+    version it was made on; the one item edited after its rejection showed the rejected
+    older version with one newer version, the rest were on their current versions.
+  - On the completed review, `review_decide`, `review_update` (add items), and a root
+    `note_add` returned `REVIEW_COMPLETED`; deleting one of its items returned
+    `IN_COMPLETED_REVIEW`.
+  - A new review created from the same item ids held 5 entries, all unreviewed, all on the
+    current versions. A review holding two versions of one item kept separate decisions.
+  - `review_wait`: a 1-second wait with no activity timed out with no events; a waiting
+    call ignored an agent note and woke about 1.05 s after a user decision, returning only
+    the decision; `from: "any"` returned both; a user note without a revision attached to
+    the reviewed version; `until: "completed"` returned the note and `review.completed`.
+- With the user's installed app closed (the profile backed up first), `npm run dev:browser`
+  started outside Claude's container on the real profile, which migrated to schema 3:
+  - The completed Chimera review showed 5 versions with their decisions; each card had
+    Accept / Changes / Reject, all disabled; the bracer card showed its rejected older
+    version with "1 newer". `review_decide` on it returned `REVIEW_COMPLETED`.
+  - In a scratch project (copies of three stored images): `import_files` with `itemId` added
+    a version to one item; a review from the item ids showed that item's entry as "1 newer".
+    Card buttons accepted and rejected entries, and a second click on Accept returned the
+    entry to unreviewed. The viewer opened in Fit. `review_update` with `addRevisionIds` put
+    the new version beside the old one as its own unreviewed entry.
+  - `pixelchat watch-review` printed each user decision as it was made. After the start
+    fix, `--from any` printed `watch.started` at once, then the agent's `review.updated`,
+    the user's `review.completed`, and `watch.ended` (completed), and exited.
+  - `ui_open` on a review in another project used to show "Review not found in project"
+    (the command reached the view before the project switch); after holding the target
+    until its project is active, the review opened. The scratch project was deleted and
+    the host stopped.
+- `npm run package` built the installer; a silent install replaced the per-user copy, and
+  the installed CLI read the migrated reviews. `skill install --scope user --mcp --force`
+  for codex and claude replaced the previous shipped skill files (identical to the last
+  commit) and added `tool_timeout_sec = 1900` to the Codex entry; nothing else in either
+  config changed.
+- Gaps: Fit on art smaller than the stage (the samples were all larger), a Codex client
+  holding a long `review_wait`, and the MCP resource watch were not exercised.

@@ -10,7 +10,7 @@ import { native } from '../shared/native';
 import { installIntegration, skillText } from '../shared/install';
 import { operationCatalog } from '../shared/operation-catalog';
 import { WorkbenchError, type OperationResponse } from '../shared/workbench';
-import type { ActivityEntry, ItemSearchResult, ReviewSummary } from '../shared/types';
+import type { ActivityEntry, ItemSearchResult, ReviewSummary, ReviewWait } from '../shared/types';
 
 const helper = join(__dirname, 'pixelchat-helper.exe');
 const root = join(process.env.APPDATA || '', 'PixelChat');
@@ -51,8 +51,8 @@ async function endpoint() {
   }
   throw new WorkbenchError('APP_UNAVAILABLE', 'PixelChat did not start its agent bridge within 30 seconds. Open PixelChat and check its diagnostic logs.');
 }
-// Long enough for the longest operation wait (jobs_get up to 600 s) plus the request itself.
-const REQUEST_TIMEOUT = 660000;
+// Long enough for the longest operation wait (review_wait up to 1800 s) plus the request itself.
+const REQUEST_TIMEOUT = 1860000;
 function exchange(e: { pipe: string; token: string }, operation: string, args: unknown, signal?: AbortSignal): Promise<OperationResponse> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(signal.reason); return; }
@@ -119,12 +119,11 @@ function serveMcp(catalog: { name: string; description: string; inputSchema: Rec
       })();
     };
     const watchReview = (initial: ReviewSummary) => {
-      let revision = initial.revision;
+      let cursor: number | undefined;
       watch(reviewUri(initial), async signal => {
         try {
-          const current = await result<ReviewSummary>('review_get', { projectId: initial.projectId, reviewId: initial.id, afterRevision: revision, wait: 30, decision: 'accepted' }, signal);
-          if (current.revision === revision) return 'same';
-          revision = current.revision; return 'changed';
+          const page = await result<ReviewWait>('review_wait', { projectId: initial.projectId, reviewId: initial.id, from: 'any', wait: 30, ...(cursor === undefined ? {} : { afterSeq: cursor }) }, signal);
+          cursor = page.cursor; return page.events.length ? 'changed' : 'same';
         } catch (error) { if (error instanceof WorkbenchError && error.code === 'NOT_FOUND') return 'gone'; throw error; }
       });
     };
@@ -162,7 +161,7 @@ function serveMcp(catalog: { name: string; description: string; inputSchema: Rec
       server.server.setRequestHandler('resources/subscribe', async request => { await read(request.params.uri); subscribed.add(request.params.uri); return {}; });
       server.server.setRequestHandler('resources/unsubscribe', async request => { subscribed.delete(request.params.uri); return {}; });
     }
-    server.registerResource('review', new ResourceTemplate('pixelchat://projects/{projectId}/reviews/{reviewId}', { list: undefined }), { mimeType: 'application/json', description: 'Review entries, decisions, and note threads with pins. Subscribe for saved changes; review_get with afterRevision and wait works without notifications.' }, async uri => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(await readReview(uri.href)) }] }));
+    server.registerResource('review', new ResourceTemplate('pixelchat://projects/{projectId}/reviews/{reviewId}', { list: undefined }), { mimeType: 'application/json', description: 'Review entries, decisions, and note threads with pins. Subscribe for saved changes; review_wait works without notifications.' }, async uri => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(await readReview(uri.href)) }] }));
     server.registerResource('pending-exports', new ResourceTemplate('pixelchat://projects/{projectId}/pending-exports', { list: undefined }), { mimeType: 'application/json', description: 'Items whose selected version differs from their source file, awaiting export_item. Subscribe to hear when the user selects a new version or an export lands; activity_get with wait works without notifications.' }, async uri => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(await readPending(uri.href)) }] }));
     server.registerResource('guidance', 'pixelchat://guidance', { mimeType: 'application/json', description: 'Full current workflow, library, and image-editing guidance.' }, async () => ({ contents: [{ uri: 'pixelchat://guidance', mimeType: 'application/json', text: JSON.stringify(await call('guidance')) }] }));
     for (const item of catalog) server.registerTool(item.name, { description: item.description, inputSchema: z.fromJSONSchema(item.inputSchema) as z.ZodObject<any> }, async (args: unknown) => {
@@ -183,15 +182,45 @@ function serveMcp(catalog: { name: string; description: string; inputSchema: Rec
   });
 }
 
+/**
+ * Streams a review's events as JSON lines until it is completed or deleted, so an agent can hold one
+ * connection and respond as the user reviews. Survives app restarts by resuming from its cursor.
+ */
+async function watchReview(projectId: string, reviewId: string, from: string, once: boolean) {
+  const line = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
+  let cursor: number | undefined, backoff = 1000;
+  for (;;) {
+    // The first call returns at once so the watch reports its start (and an already completed review) immediately.
+    let page: ReviewWait;
+    try { page = await result<ReviewWait>('review_wait', { projectId, reviewId, from, ...(cursor === undefined ? { wait: 0 } : { wait: 300, afterSeq: cursor }) }); backoff = 1000; }
+    catch (error) {
+      if (error instanceof WorkbenchError && ['NOT_FOUND', 'INVALID_ARGUMENTS'].includes(error.code)) throw error;
+      line({ kind: 'watch.retrying', error: error instanceof Error ? error.message : 'PixelChat could not be reached.' });
+      await delay(backoff); backoff = Math.min(backoff * 2, 30000); continue;
+    }
+    if (cursor === undefined) line({ kind: 'watch.started', review: page.review, cursor: page.cursor });
+    cursor = page.cursor;
+    for (const event of page.events) line(event);
+    if (page.review.status === 'completed') { line({ kind: 'watch.ended', reason: 'completed', review: page.review }); return; }
+    if (once && page.events.length) { line({ kind: 'watch.ended', reason: 'once', review: page.review, cursor }); return; }
+  }
+}
+
 async function main() {
   const { positional, flags } = argsFrom(process.argv.slice(2)); const [command, name] = positional;
   const installation = ['skill', 'install', 'uninstall'].includes(command);
-  const allowed = new Set(installation ? ['scope', 'target', 'project', 'directory', 'mcp', 'dry-run', 'force', 'help'] : ['input', 'json', 'help']);
+  const allowed = new Set(installation ? ['scope', 'target', 'project', 'directory', 'mcp', 'dry-run', 'force', 'help'] : command === 'watch-review' ? ['from', 'once', 'help'] : ['input', 'json', 'help']);
   for (const [key, values] of Object.entries(flags)) {
     if (!allowed.has(key) || (key !== 'target' && values.length !== 1)) throw new WorkbenchError('INVALID_ARGUMENTS', `Unknown or repeated option: --${key}`);
-    if (['mcp', 'dry-run', 'force', 'help'].includes(key) ? values[0] !== 'true' : values.some(v => v === 'true')) throw new WorkbenchError('INVALID_ARGUMENTS', `Invalid value for --${key}`);
+    if (['mcp', 'dry-run', 'force', 'help', 'once'].includes(key) ? values[0] !== 'true' : values.some(v => v === 'true')) throw new WorkbenchError('INVALID_ARGUMENTS', `Invalid value for --${key}`);
   }
-  if (positional.length > (['call', 'skill'].includes(command) ? 2 : 1)) throw new WorkbenchError('INVALID_ARGUMENTS', 'Unexpected positional arguments.');
+  if (positional.length > (['call', 'skill'].includes(command) ? 2 : command === 'watch-review' ? 3 : 1)) throw new WorkbenchError('INVALID_ARGUMENTS', 'Unexpected positional arguments.');
+  if (command === 'watch-review' && !flags.help) {
+    if (positional.length !== 3) throw new WorkbenchError('INVALID_ARGUMENTS', 'Usage: pixelchat watch-review <projectId> <reviewId> [--from user|any] [--once]');
+    const from = flags.from?.[0] ?? 'user';
+    if (!['user', 'any'].includes(from)) throw new WorkbenchError('INVALID_ARGUMENTS', 'Invalid value for --from');
+    await watchReview(positional[1], positional[2], from, !!flags.once); return;
+  }
   if (command === 'mcp') { serveMcp(operationCatalog()); return; }
   if (command === 'tools') { output({ ok: true, result: operationCatalog() }); return; }
   if (command === 'skill' && !name) { process.stdout.write(skillText); return; }
@@ -201,7 +230,7 @@ async function main() {
     output({ ok: true, result: installed }); return;
   }
   if (!command || command === 'help' || flags.help) {
-    output({ ok: true, result: { commands: ['status', 'tools', 'guidance', 'call <operation> --input <file.json> | --json <JSON>', 'mcp', 'skill', 'skill install|uninstall|status --scope project|user --target codex|claude [--project <absolute-directory>] [--directory <skills-parent>] [--mcp] [--dry-run] [--force]'], note: 'Operations take project IDs; image jobs return durable IDs. The app starts on demand. No provider credentials are accepted by this CLI.' } }); return;
+    output({ ok: true, result: { commands: ['status', 'tools', 'guidance', 'call <operation> --input <file.json> | --json <JSON>', 'watch-review <projectId> <reviewId> [--from user|any] [--once]', 'mcp', 'skill', 'skill install|uninstall|status --scope project|user --target codex|claude [--project <absolute-directory>] [--directory <skills-parent>] [--mcp] [--dry-run] [--force]'], note: 'Operations take project IDs; image jobs return durable IDs. The app starts on demand. No provider credentials are accepted by this CLI.' } }); return;
   }
   if (command === 'call' && !name) throw new WorkbenchError('INVALID_ARGUMENTS', 'Specify an operation; run pixelchat tools for schemas.');
   if (flags.input && flags.json) throw new WorkbenchError('INVALID_ARGUMENTS', 'Use either --input or --json.');
