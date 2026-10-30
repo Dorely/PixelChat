@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { operationDefinitions, type OperationName } from './operations';
+import { operationDefinitions, type OperationName } from '../shared/operation-catalog';
 
 /** Project and conversation management stays with the user; the assistant works inside the current conversation's project. */
 const EXCLUDED: OperationName[] = ['projects_list', 'project_create', 'project_get', 'project_rename', 'project_delete', 'sessions_list', 'session_create', 'session_get', 'session_delete'];

@@ -18,7 +18,8 @@ The profile lives at `%APPDATA%/PixelChat`: `library.sqlite` (WAL, foreign keys 
 ## Operations and renderer bridge
 
 `src/main/operations.ts` is the single operation registry. Each operation has a strict
-zod schema and description; the UI calls it with origin `user`, and the inline assistant,
+zod schema and description, defined in `src/shared/operation-catalog.ts` so the CLI can
+list tools without the app; the UI calls it with origin `user`, and the inline assistant,
 the CLI, and MCP (through the local bridge) call it with origin `agent`. Failures return `{ ok: false,
 error: { code, message } }` envelopes with redacted messages.
 
@@ -209,7 +210,8 @@ tiktoken (images by pixel count) against the Codex default context size.
 The app publishes a token-authenticated named-pipe bridge (`bridge.ts`) whose discovery
 file is DPAPI-protected. The bundled CLI (`src/cli/index.ts`, built to `out/agent/cli.cjs`
 with a pinned Node runtime) forwards operations over it and serves them as a stdio MCP
-server with review and pending-export resources. `view_image` renders a revision for
+server with review and pending-export resources. The MCP server answers from its built-in
+catalog at once and reaches (or starts) the app per call. `view_image` renders a revision for
 agent vision: flattened onto a chosen backdrop, enlarged by whole pixels or reduced to a
 bound, with open note pins drawn and numbered. The skill and its references live in
 `resources/skill`; `shared/guidance.ts` embeds the same texts for the `guidance`

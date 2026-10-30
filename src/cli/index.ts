@@ -8,6 +8,7 @@ import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
 import { native } from '../shared/native';
 import { installIntegration, skillText } from '../shared/install';
+import { operationCatalog } from '../shared/operation-catalog';
 import { WorkbenchError, type OperationResponse } from '../shared/workbench';
 import type { ActivityEntry, ItemSearchResult, ReviewSummary } from '../shared/types';
 
@@ -29,15 +30,23 @@ async function startApp() {
   }
   const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
   await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
+  return child;
 }
+// A paused or hung app accepts the pipe but never answers; probe briefly instead of the full request timeout.
+async function reachable() { const e = await discovery(); await exchange(e, 'status', {}, AbortSignal.timeout(5000)); return e; }
 async function endpoint() {
-  try { const e = await discovery(); await exchange(e, 'status', {}); return e; } catch { /* absent or stale: start the owning app once */ }
-  await startApp();
+  try { return await reachable(); } catch { /* absent or stale: start the owning app once */ }
+  const child = await startApp();
+  // A second instance hands off to a running app and exits; its bridge will not appear by waiting.
+  let exited = false; child.once('exit', () => { exited = true; });
   const until = Date.now() + 30000;
   while (Date.now() < until) {
-    try { const e = await discovery(); await exchange(e, 'status', {}); return e; } catch { await new Promise(r => setTimeout(r, 250)); }
+    try { return await reachable(); } catch {
+      if (exited) throw new WorkbenchError('APP_UNAVAILABLE', 'PixelChat is open but its agent bridge is not answering. If it is paused in a debugger, resume it; otherwise restart PixelChat and check its diagnostic logs.');
+      await delay(250);
+    }
   }
-  throw new WorkbenchError('APP_UNAVAILABLE', 'PixelChat did not start its local bridge. Open the app and inspect its diagnostic logs.');
+  throw new WorkbenchError('APP_UNAVAILABLE', 'PixelChat did not start its agent bridge within 30 seconds. Open PixelChat and check its diagnostic logs.');
 }
 // Long enough for the longest operation wait (jobs_get up to 600 s) plus the request itself.
 const REQUEST_TIMEOUT = 660000;
@@ -154,7 +163,8 @@ function serveMcp(catalog: { name: string; description: string; inputSchema: Rec
     server.registerResource('pending-exports', new ResourceTemplate('pixelchat://projects/{projectId}/pending-exports', { list: undefined }), { mimeType: 'application/json', description: 'Items whose selected version differs from their source file, awaiting export_item. Subscribe to hear when the user selects a new version or an export lands; activity_get with wait works without notifications.' }, async uri => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(await readPending(uri.href)) }] }));
     server.registerResource('guidance', 'pixelchat://guidance', { mimeType: 'application/json', description: 'Full current workflow, library, and image-editing guidance.' }, async () => ({ contents: [{ uri: 'pixelchat://guidance', mimeType: 'application/json', text: JSON.stringify(await call('guidance')) }] }));
     for (const item of catalog) server.registerTool(item.name, { description: item.description, inputSchema: z.fromJSONSchema(item.inputSchema) as z.ZodObject<any> }, async (args: unknown) => {
-      const response = await call(item.name, args);
+      // The app is reached (or started) per call, so an unreachable app is a tool error, not a failed connection.
+      const response = await call(item.name, args).catch((error): OperationResponse => ({ ok: false, error: { code: error instanceof WorkbenchError ? error.code : 'APP_UNAVAILABLE', message: error instanceof Error ? error.message : 'PixelChat could not be reached.' } }));
       if (!response.ok) return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify(response.error) }] };
       const value = response.result as any;
       const review = item.name.startsWith('review_') && value?.id && value?.projectId && typeof value?.revision === 'number' ? value as ReviewSummary : null;
@@ -179,12 +189,8 @@ async function main() {
     if (['mcp', 'dry-run', 'force', 'help'].includes(key) ? values[0] !== 'true' : values.some(v => v === 'true')) throw new WorkbenchError('INVALID_ARGUMENTS', `Invalid value for --${key}`);
   }
   if (positional.length > (['call', 'skill'].includes(command) ? 2 : 1)) throw new WorkbenchError('INVALID_ARGUMENTS', 'Unexpected positional arguments.');
-  if (command === 'mcp') {
-    const catalogResult = await call('tools');
-    if (!catalogResult.ok) throw new Error(catalogResult.error?.message);
-    serveMcp(catalogResult.result as { name: string; description: string; inputSchema: Record<string, unknown> }[]);
-    return;
-  }
+  if (command === 'mcp') { serveMcp(operationCatalog()); return; }
+  if (command === 'tools') { output({ ok: true, result: operationCatalog() }); return; }
   if (command === 'skill' && !name) { process.stdout.write(skillText); return; }
   if (command === 'skill' || command === 'install' || command === 'uninstall') {
     const action = (command === 'skill' ? name : command) as 'install' | 'uninstall' | 'status';

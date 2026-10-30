@@ -56,7 +56,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/main/chat-store.ts](src/main/chat-store.ts) | Messages, provider input history, tool-call ledger, history repair, and startup interruption. |
 | [src/main/chat-registry.ts](src/main/chat-registry.ts) | Chat model choice: built-in Codex models and tested custom endpoints with keys in secure storage. |
 | [src/main/chat-context.ts](src/main/chat-context.ts) | tiktoken context estimate with image estimates. |
-| [src/main/operations.ts](src/main/operations.ts) | Shared zod-validated operation registry for UI, assistant, CLI, and MCP; error envelopes. |
+| [src/main/operations.ts](src/main/operations.ts) | Operation registry for UI, assistant, CLI, and MCP: validation, execution, and error envelopes. |
 | [src/main/images.ts](src/main/images.ts) | Image job admission, bounded scheduler, rate-limit retry, and result revisions with provenance. |
 | [src/main/ui-port.ts](src/main/ui-port.ts) | Acknowledged navigation commands from operations to the renderer. |
 | [src/main/browser-host.ts](src/main/browser-host.ts) | Loopback HTTP host (`/rpc`, `/events`, `/media/`) for browser development. |
@@ -80,6 +80,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/shared/chat-models.ts](src/shared/chat-models.ts) | Built-in Codex chat models, efforts, context sizes, and direct-Gemini endpoint detection. |
 | [src/shared/image-models.ts](src/shared/image-models.ts) | Image model catalog (provider, qualities, alpha, input limits), size presets, and defaults. |
 | [src/shared/api.ts](src/shared/api.ts) | Builds the fixed renderer API over a transport (IPC or browser host). |
+| [src/shared/operation-catalog.ts](src/shared/operation-catalog.ts) | Operation schemas and descriptions, and the JSON tool catalog the CLI and MCP serve. |
 | [src/shared/guidance.ts](src/shared/guidance.ts) | Embedded skill references, their hash, and topic selection. |
 | [src/shared/install.ts](src/shared/install.ts) | Skill and MCP installation for Codex and Claude Code: preflight, backups, status, uninstall. |
 | [src/shared/native.ts](src/shared/native.ts) | Runs the native helper with bounded input, output, and time. |

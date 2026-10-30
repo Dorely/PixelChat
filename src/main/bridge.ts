@@ -4,7 +4,7 @@ import { mkdir, writeFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { native } from '../shared/native';
 import { WorkbenchError } from '../shared/workbench';
-import { operationCatalog, operationError, type Operations } from './operations';
+import { operationError, type Operations } from './operations';
 
 /**
  * Local agent bridge: one authenticated JSON request per connection over a random named pipe.
@@ -36,7 +36,7 @@ export async function startBridge(root: string, helper: string, operations: Oper
           if (closing) throw new WorkbenchError('CLOSING', 'PixelChat is closing.');
           // Authenticated: operations may wait for minutes (review, activity, and job waits).
           socket.setTimeout(0);
-          const result = message.operation === 'tools' ? operationCatalog() : await operations.call(message.operation, message.args ?? {});
+          const result = await operations.call(message.operation, message.args ?? {});
           if (!socket.destroyed) socket.end(JSON.stringify({ ok: true, result }) + '\n');
         } catch (e) { if (!socket.destroyed) socket.end(JSON.stringify(operationError(e)) + '\n'); }
       })();

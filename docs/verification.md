@@ -172,3 +172,20 @@ secure-storage, or platform integration.
 - Gaps: no live Codex, Responses, or Anthropic chat request has run. Stop during a turn,
   startup interruption of a running turn, the billed-tool requestId path, history image
   eviction, and chat in the desktop window were not exercised.
+
+## 2026-10-30 — MCP startup without the app
+
+- Claude Code reported `pixelchat` connection timeouts (30 s) against a debug run of the
+  app. `pixelchat mcp` waited for the app before answering `initialize`, and an
+  unreachable bridge meant a 30-second launch wait, the same as Claude Code's limit.
+- `npm run typecheck` and `npm run build` succeeded.
+- Raw stdio MCP client against the running debug app: `initialize` in about 100 ms,
+  `tools/list` 41 tools, `tools/call status` returned the app status.
+- Same client in a sandbox whose view of `%APPDATA%` held a stale discovery file:
+  `initialize` and `tools/list` answered at once; `tools/call status` returned an error
+  result with `APP_UNAVAILABLE` ("open but its agent bridge is not answering") after
+  about 0.4 s, when the launched second instance exited.
+- `pixelchat tools` listed 41 tools with no app reachable. `claude mcp get pixelchat` from
+  a game project reported Connected.
+- Gaps: a cold start (no app running) launched from a tool call, and the 5-second probe
+  against a paused main process, were not exercised.
