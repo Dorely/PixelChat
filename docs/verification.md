@@ -329,3 +329,8 @@ secure-storage, or platform integration.
   managed files (Claude and Codex skills, `.claude.json`, `config.toml`) read up-to-date and
   both installed SKILL.md files mention contests. Agent behavior with the new text was not
   exercised.
+- Regression found after the install: `SCHEMA_VERSION` was still 4, so the first launch
+  migrated the real library to 5 and every later launch refused it ("created by a newer
+  PixelChat version"; `app.start_failed` in the diagnostic log). The scratch checks never
+  restarted a migrated profile, so they missed it. Set it to 5, repackaged, and reinstalled
+  unsandboxed; the app started on the existing library and `status` answered ready.
