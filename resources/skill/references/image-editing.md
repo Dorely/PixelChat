@@ -31,6 +31,8 @@ bill the Gemini API key's project.
   raster. Sizes: `auto`, `square`, `portrait`, `landscape`, `wide`, an aspect like
   `16:9`, or `WIDTHxHEIGHT`.
 - Format defaults to the source file's format so the result can be exported in place.
+- Edit sources and references must be still PNG, WebP, or JPEG versions; GIF and animated
+  versions are refused. `view_image` with `frame` shows one frame of an animation.
 - `background: auto` keeps a transparent source transparent (needs a native-alpha model
   and PNG or WebP). `transparent` and `opaque` force a treatment. PixelChat appends the
   background instructions itself; do not repeat them in the prompt.

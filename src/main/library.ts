@@ -7,7 +7,7 @@ import { IMAGE_EXTENSIONS, sha256, type MediaStore } from './media';
 import { now, type Store } from './store';
 
 const SCAN_CONCURRENCY = 4;
-const FORMAT_EXTENSIONS: Record<Revision['format'], string[]> = { png: ['.png'], webp: ['.webp'], jpeg: ['.jpg', '.jpeg'] };
+const FORMAT_EXTENSIONS: Record<Revision['format'], string[]> = { png: ['.png'], webp: ['.webp'], jpeg: ['.jpg', '.jpeg'], gif: ['.gif'] };
 
 /** Glob over forward-slash relative paths: `**`, `*`, `?`, and `{a,b}`; case-insensitive like Windows paths. */
 export function globMatcher(patterns: string[]) {
@@ -73,7 +73,7 @@ export class Library {
     for (const path of paths) {
       try {
         if (!isAbsolute(path)) throw new WorkbenchError('INVALID_ARGUMENTS', 'Paths must be absolute.');
-        if (!IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) throw new WorkbenchError('UNSUPPORTED_IMAGE', 'Only PNG, WebP, and JPEG files are supported.');
+        if (!IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) throw new WorkbenchError('UNSUPPORTED_IMAGE', 'Only PNG, WebP, JPEG, and GIF files are supported.');
         const facts = await this.media.ingest(await readFile(path));
         const revision = { ...facts, origin: 'imported' as const, provenance: { importedFrom: resolve(path) } };
         if (lineage) { this.store.addRevision(projectId, lineage.id, { ...revision, parentId: lineage.selectedRevisionId }, false, origin); revisions.push(facts.id); }

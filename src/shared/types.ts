@@ -9,10 +9,12 @@ export type RevisionOrigin = 'imported' | 'generated' | 'edited';
 /** Immutable image bytes stored by PixelChat. Provenance records how they were made. */
 export interface Revision {
   id: string; itemId: string; parentId: string | null; origin: RevisionOrigin;
-  sha256: string; bytes: number; width: number; height: number; format: 'png' | 'webp' | 'jpeg';
+  sha256: string; bytes: number; width: number; height: number; format: 'png' | 'webp' | 'jpeg' | 'gif';
+  /** Animation frames; 1 for a still image. Width and height are one frame's. */
+  frames: number;
   hasAlpha: boolean; opaque: boolean; provenance: Record<string, unknown>; createdAt: string;
 }
-export type RevisionMeta = Pick<Revision, 'id' | 'origin' | 'width' | 'height' | 'format' | 'hasAlpha' | 'opaque' | 'createdAt'>;
+export type RevisionMeta = Pick<Revision, 'id' | 'origin' | 'width' | 'height' | 'frames' | 'format' | 'hasAlpha' | 'opaque' | 'createdAt'>;
 /**
  * A lineage of immutable versions (revisions): one artwork as imported, regenerated, and edited.
  * Pending export when the selected version differs from the one on disk.

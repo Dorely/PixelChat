@@ -7,10 +7,10 @@ import type { Revision } from '../shared/types';
 import type { RevisionInput } from './store';
 
 const THUMBNAIL_SIZE = 384;
-const EXTENSIONS: Record<Revision['format'], string> = { png: 'png', webp: 'webp', jpeg: 'jpg' };
-export const MEDIA_TYPES: Record<Revision['format'], string> = { png: 'image/png', webp: 'image/webp', jpeg: 'image/jpeg' };
-/** Imported file extensions; GIF and other formats are not reviewed yet. */
-export const IMAGE_EXTENSIONS = new Set(['.png', '.webp', '.jpg', '.jpeg']);
+const EXTENSIONS: Record<Revision['format'], string> = { png: 'png', webp: 'webp', jpeg: 'jpg', gif: 'gif' };
+export const MEDIA_TYPES: Record<Revision['format'], string> = { png: 'image/png', webp: 'image/webp', jpeg: 'image/jpeg', gif: 'image/gif' };
+/** Imported file extensions. */
+export const IMAGE_EXTENSIONS = new Set(['.png', '.webp', '.jpg', '.jpeg', '.gif']);
 
 /** Owns revision bytes under the profile: exact originals plus derived thumbnails. */
 export class MediaStore {
@@ -26,15 +26,16 @@ export class MediaStore {
   async ingest(bytes: Buffer, providerOriginal?: { data: Buffer; format: Revision['format'] }): Promise<Omit<RevisionInput, 'origin' | 'parentId' | 'provenance'> & { providerFile?: string }> {
     const metadata = await imageFacts(bytes);
     const format = metadata.format as Revision['format'];
-    const hasAlpha = !!metadata.hasAlpha;
-    const opaque = hasAlpha ? (await sharp(bytes).stats()).isOpaque : true;
+    const hasAlpha = !!metadata.hasAlpha, frames = metadata.pages ?? 1;
+    // Animated images are read with every frame, so opacity covers the whole animation and the thumbnail plays.
+    const opaque = hasAlpha ? (await sharp(bytes, { animated: true }).stats()).isOpaque : true;
     const id = randomUUID(), file = `originals/${id}.${EXTENSIONS[format]}`;
-    const thumbnail = await sharp(bytes).resize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 82, alphaQuality: 90 }).toBuffer();
+    const thumbnail = await sharp(bytes, { animated: true }).resize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 82, alphaQuality: 90 }).toBuffer();
     await this.write(this.path(file), bytes);
     await this.write(this.thumbnailPath(id), thumbnail);
     const providerFile = providerOriginal ? `originals/${id}.provider.${EXTENSIONS[providerOriginal.format]}` : undefined;
     if (providerOriginal && providerFile) await this.write(this.path(providerFile), providerOriginal.data);
-    return { ...(providerFile ? { providerFile } : {}), id, file, sha256: sha256(bytes), bytes: bytes.length, width: metadata.width, height: metadata.height, format, hasAlpha, opaque };
+    return { ...(providerFile ? { providerFile } : {}), id, file, sha256: sha256(bytes), bytes: bytes.length, width: metadata.width, height: metadata.height, frames, format, hasAlpha, opaque };
   }
   read(file: string) { return readFile(this.path(file)); }
   /** Best-effort removal of revision files whose records were deleted. */
@@ -52,10 +53,10 @@ export class MediaStore {
   }
 }
 
-/** Decoded facts for PNG, WebP, or JPEG bytes; anything else is unsupported. */
+/** Decoded facts for PNG, WebP, JPEG, or GIF bytes (width and height of one frame); anything else is unsupported. */
 export async function imageFacts(bytes: Buffer): Promise<sharp.Metadata & { format: Revision['format']; width: number; height: number }> {
   let metadata: sharp.Metadata;
-  try { metadata = await sharp(bytes).metadata(); } catch { throw new WorkbenchError('UNSUPPORTED_IMAGE', 'The bytes are not a readable PNG, WebP, or JPEG image.'); }
+  try { metadata = await sharp(bytes).metadata(); } catch { throw new WorkbenchError('UNSUPPORTED_IMAGE', 'The bytes are not a readable PNG, WebP, JPEG, or GIF image.'); }
   if (!EXTENSIONS[metadata.format as Revision['format']] || !metadata.width || !metadata.height) throw new WorkbenchError('UNSUPPORTED_IMAGE', `Unsupported image format: ${metadata.format ?? 'unknown'}.`);
   return metadata as sharp.Metadata & { format: Revision['format']; width: number; height: number };
 }

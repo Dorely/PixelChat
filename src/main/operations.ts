@@ -114,7 +114,7 @@ export class Operations {
       }
       case 'job_cancel': return store.cancelJob(a.jobId, a.projectId, origin);
       case 'export_item': return library.exportItem(a.projectId, a.itemId, { destination: a.destination, force: a.force }, origin);
-      case 'view_image': return viewImage(store, this.media, a.projectId, a.itemId, { revisionId: a.revisionId, pins: a.pins, background: a.background, maxSize: a.maxSize });
+      case 'view_image': return viewImage(store, this.media, a.projectId, a.itemId, { revisionId: a.revisionId, pins: a.pins, background: a.background, maxSize: a.maxSize, frame: a.frame });
       case 'ui_open': {
         if (a.reviewId) {
           const summary = store.reviewSummary(a.reviewId, a.projectId);

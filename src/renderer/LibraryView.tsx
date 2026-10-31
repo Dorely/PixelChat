@@ -40,7 +40,7 @@ function AddSourceDialog({ projectId, onClose, onError }: { projectId: string; o
   }
   return <Modal eyebrow="Library" title="Add source folder" label="Add source folder" busy={busy} className="source-dialog" onClose={() => onClose(false)}>
     <div className="project-dialog-body">
-      <p>PixelChat stores a copy of each PNG, WebP, and JPEG file and remembers where it came from. Rescan picks up later changes; export writes approved versions back.</p>
+      <p>PixelChat stores a copy of each PNG, WebP, JPEG, and GIF file and remembers where it came from. Rescan picks up later changes; export writes approved versions back.</p>
       <label>Folder<span className="path-row"><input value={root} onChange={event => setRoot(event.target.value)} placeholder="C:\path\to\game\assets" aria-label="Folder path" /><button className="secondary-button" onClick={() => void browse()}><Icon name="folder" /> Browse</button></span></label>
       <label>Include globs <small>One per line, relative to the folder. Empty includes everything.</small><textarea rows={2} value={include} onChange={event => setInclude(event.target.value)} placeholder="characters/**" /></label>
       <label>Exclude globs <small>Dot-folders such as .godot are always skipped.</small><textarea rows={2} value={exclude} onChange={event => setExclude(event.target.value)} placeholder="concepts/**" /></label>

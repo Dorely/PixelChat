@@ -278,3 +278,21 @@ secure-storage, or platform integration.
   - The scratch project was deleted and the host stopped.
 - `npm run package` and a silent reinstall succeeded; the installed app restarted on the
   new build and its CLI answered.
+
+## 2026-10-30 — GIF and animated versions in reviews
+
+- `npm run typecheck` and `npm run build` succeeded.
+- The user's installed app was running, so the browser host ran from a scratch Electron
+  entry (outside the repository) that pointed `appData` at a scratch profile; the real
+  library stayed at schema 3. The fresh profile migrated through schema 4.
+- Imported a scratch folder with an 8-frame and a 6-frame transparent GIF, a one-frame
+  GIF, and a PNG: four items, frames 8, 6, 1, 1, all with transparent pixels. A review of
+  all four rendered on the board; the two animated GIFs' thumbnails were animated WebP
+  (`ANMF` chunks), the stills were not, and cards read "gif · 8 frames". The viewer loaded
+  the original as `image/gif` and listed "GIF · 8 frames"; its Edit panel read "Image
+  edits need a still PNG, WebP, or JPEG version."
+- `view_image` returned frame 0 of 8 by default and different pixels for `frame: 4`;
+  `frame: 8` was refused. `edit_image` on the animation returned `UNSUPPORTED_IMAGE`.
+- Not checked: watching playback in a screenshot (the pane could not capture while the
+  window was hidden), the native desktop window, animated WebP imports, and large GIFs'
+  import time. The scratch host was shut down and its profile and entry deleted.

@@ -186,7 +186,7 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
             </button>}
             <dl className="facts">
               <dt>Size</dt><dd>{revision.width} × {revision.height}</dd>
-              <dt>Format</dt><dd>{revision.format.toUpperCase()} · {formatBytes(revision.bytes)}</dd>
+              <dt>Format</dt><dd>{revision.format.toUpperCase()}{revision.frames > 1 ? ` · ${revision.frames} frames` : ''} · {formatBytes(revision.bytes)}</dd>
               <dt>Alpha</dt><dd>{alphaLabel(revision)}</dd>
               <dt>SHA-256</dt><dd><code title={revision.sha256}>{revision.sha256.slice(0, 16)}…</code></dd>
               {item.sourceFile && <><dt>Source</dt><dd className="break"><code>{item.sourceFile}</code></dd></>}

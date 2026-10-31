@@ -48,7 +48,7 @@ library as the desktop app.
 
 ## Persistence
 
-Schema version 3 holds `settings`, `projects`, `sessions`, `sources`, `items`,
+Schema version 4 holds `settings`, `projects`, `sessions`, `sources`, `items`,
 `revisions`, `activity`, `reviews`, `review_entries`, `notes`, `jobs`, and the chat tables
 `messages`, `chat_history`, and `tool_calls`; migrations run in order, and project and
 session deletion cascade. A `Default` project is created
@@ -67,12 +67,16 @@ one artwork (as imported, rescanned, generated, and edited, each with a `parentI
 pointers to the selected and synced versions. A version's exact
 bytes live at `originals/<revisionId>.<ext>` under the profile, with a 384 px WebP
 thumbnail at `thumbnails/<revisionId>.webp`. Files are written to a `.partial` name and
-renamed into place. Width, height, format, alpha presence, and whether any pixel is
-transparent come from sharp. Provenance is stored as JSON per revision.
+renamed into place. Width, height (of one frame), frame count, format, alpha presence, and
+whether any pixel is transparent come from sharp. Animated GIF and WebP versions are read
+with every frame, so transparency covers the whole animation and the thumbnail is an
+animated WebP that plays on cards; the viewer shows the original, which the browser
+animates. Versions stored before schema 4 count as one frame. Provenance is stored as JSON
+per revision.
 
 A **source** links a folder (absolute root, include and exclude globs over forward-slash
 relative paths, case-insensitive). Dot-folders such as `.godot` are skipped, and only
-PNG, WebP, and JPEG files are imported. Scans run in the background, four files at a
+PNG, WebP, JPEG, and GIF files are imported. Scans run in the background, four files at a
 time, and report progress through `sources_list`/`source_get`:
 
 - a new path creates an item whose collection is its folder;
@@ -168,7 +172,9 @@ needs a model with native alpha and a non-JPEG format. Background instructions a
 by code and appended to the user's prompt, which is otherwise sent verbatim. Edits default
 to the source's dimensions and to the format of the file they will be exported to.
 
-A scheduler runs up to four jobs at once. A 429 with a Retry-After of at most 120 seconds
+Model inputs (the edit source and references) must be still PNG, WebP, or JPEG versions;
+GIF and animated versions are refused with `UNSUPPORTED_IMAGE`, and results never default
+to GIF. A scheduler runs up to four jobs at once. A 429 with a Retry-After of at most 120 seconds
 is retried up to twice; nothing else is retried. When the provider never answered
 (timeout, transport, abort), the job becomes `uncertain`: it may have been billed and is
 never replayed. Jobs running at shutdown become `uncertain` on the next start; queued jobs
@@ -237,7 +243,8 @@ with a pinned Node runtime) forwards operations over it and serves them as a std
 server with review and pending-export resources. The MCP server answers from its built-in
 catalog at once and reaches (or starts) the app per call. `view_image` renders a revision for
 agent vision: flattened onto a chosen backdrop, enlarged by whole pixels or reduced to a
-bound, with open note pins drawn and numbered. The skill and its references live in
+bound, with open note pins drawn and numbered. An animated version renders one chosen
+frame and reports the frame count. The skill and its references live in
 `resources/skill`; `shared/guidance.ts` embeds the same texts for the `guidance`
 operation and the installer. See [agent workbench](agent-workbench.md).
 

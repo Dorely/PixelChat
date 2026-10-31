@@ -30,7 +30,7 @@ export default function ItemCard({ item, review, onOpen }: { item: ItemSummary; 
   return <div className={`item-card${decision ? ` decision-${decision}` : ''}`}>
     <button className="item-open" onClick={onOpen} title={item.sourcePath ?? item.name}>
       <span className="item-thumb checker"><Thumbnail revisionId={version.id} alt={item.name} /></span>
-      <span className="item-copy"><strong>{item.name}</strong><small>{version.width}×{version.height} · {version.format}</small></span>
+      <span className="item-copy"><strong>{item.name}</strong><small>{version.width}×{version.height} · {version.format}{version.frames > 1 ? ` · ${version.frames} frames` : ''}</small></span>
     </button>
     {badges.length > 0 && <span className="item-badges">{badges}</span>}
     {review && <span className="card-decisions" role="group" aria-label={`Decision for ${item.name}`}>

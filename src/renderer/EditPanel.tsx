@@ -59,7 +59,8 @@ export default function EditPanel({ projectId, item, revision, onView, onError }
   const ready = (provider: 'codex' | 'gemini') => !!providers?.[provider].ready
   const sourceTransparent = revision.hasAlpha && !revision.opaque
   const needsAlpha = choices.background === 'transparent' || (choices.background === 'auto' && sourceTransparent)
-  const problem = !ready(model.provider) ? `Sign in to ${model.provider === 'codex' ? 'Codex' : 'Gemini'} in Settings to use ${model.label}.`
+  const problem = revision.format === 'gif' || revision.frames > 1 ? 'Image edits need a still PNG, WebP, or JPEG version.'
+    : !ready(model.provider) ? `Sign in to ${model.provider === 'codex' ? 'Codex' : 'Gemini'} in Settings to use ${model.label}.`
     : needsAlpha && !model.transparency ? `${model.label} cannot ${sourceTransparent && choices.background === 'auto' ? 'keep this version\'s transparency' : 'make transparent images'}. Choose Image 2.5 Flare or Sunburst, or an opaque background.`
     : needsAlpha && revision.format === 'jpeg' ? 'JPEG cannot store transparency. Choose an opaque background.' : ''
   const set = (patch: Partial<Choices>) => setChoices(value => ({ ...value, ...patch }))
