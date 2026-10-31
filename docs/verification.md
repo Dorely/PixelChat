@@ -313,3 +313,13 @@ secure-storage, or platform integration.
 - Not checked: the viewer's reference state and keys, the new-review Contest checkbox,
   agent calls over MCP/CLI, and the native window. The scratch host was shut down and its
   profile deleted.
+- Follow-up check on a fresh scratch host: the viewer on a reference entry showed a
+  "Reference" badge, no decision buttons, and the hint "Reference · N note · click or
+  drag to pin"; A on the reference did nothing, and A on a candidate picked it and moved
+  on. The new-review dialog's Contest checkbox was stacked and centered; fixed
+  (`.check-row` specificity) and rechecked. Scratch host and profile removed.
+- `npm run package` built the installer. A silent install from the sandboxed shell wrote
+  its Start Menu shortcut into Claude's virtualized `%APPDATA%` and the Finish page failed
+  to find it; re-running it unsandboxed installed cleanly (shortcut present, no wizard).
+  `skill install --scope user --target claude --target codex --mcp --force` refreshed the
+  workflow, library, and image-editing references; the installed app answered `status`.

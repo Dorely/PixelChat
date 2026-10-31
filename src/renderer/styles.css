@@ -135,8 +135,9 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .spinner { width: 12px; height: 12px; border: 2px solid var(--accent-line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .quiet-text { margin: 0 0 14px; color: var(--quiet); font-size: 12px; }
-.check-row { display: flex; align-items: center; gap: 8px; flex-direction: row; }
-.check-row input { width: auto; margin: 0; }
+.project-dialog-body .check-row { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.project-dialog-body .check-row input { width: auto; margin: 0; }
+.check-row small { flex-basis: 100%; }
 .review-section-title { margin: 22px 0 4px; font-size: 14px; }
 .badge { display: inline-flex; align-items: center; height: 19px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--muted); background: var(--surface-2); font: 10.5px var(--font-mono); letter-spacing: .02em; white-space: nowrap; }
 .badge-accent { border-color: var(--accent-line); color: var(--accent); background: var(--accent-soft); }
