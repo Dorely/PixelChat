@@ -323,3 +323,9 @@ secure-storage, or platform integration.
   to find it; re-running it unsandboxed installed cleanly (shortcut present, no wizard).
   `skill install --scope user --target claude --target codex --mcp --force` refreshed the
   workflow, library, and image-editing references; the installed app answered `status`.
+- Skill text now teaches contests and references (SKILL.md step 8, workflow reference on
+  reading the winner). `npm run package`, an unsandboxed silent reinstall, and
+  `skill install --scope user --target claude --target codex --mcp --force` followed; all 12
+  managed files (Claude and Codex skills, `.claude.json`, `config.toml`) read up-to-date and
+  both installed SKILL.md files mention contests. Agent behavior with the new text was not
+  exercised.

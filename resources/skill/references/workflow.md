@@ -14,7 +14,10 @@ an entry tells you the item has moved on since.
   at least two entries): the entries are candidates and the user picks one winner. A pick is
   `accepted`; picking another clears the earlier one, and the user may still reject or ask for
   changes on the rest. Use a contest to let the user choose between variations, not to ask
-  yes/no on each.
+  yes/no on each. Read the outcome from `review_get`: the entry with decision `accepted` is
+  the winner (`counts.accepted` is 0 or 1); none means the user has not chosen. Do not record
+  the pick yourself unless asked, and `review_wait` until the review completes or the user
+  picks.
 - Reference images give context for the decision (a style target, the current in-game art, a
   sibling asset): pass `referenceItemIds` or `referenceRevisionIds` to `review_create`, or
   `addReferenceItemIds` / `referenceRevisionIds` to `review_update`. Entries have a `role` of
