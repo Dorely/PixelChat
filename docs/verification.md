@@ -262,3 +262,19 @@ secure-storage, or platform integration.
   it as "(completed)" above the active reviews. The scratch project was deleted and the
   host stopped.
 - `npm run package` and a silent reinstall succeeded; the installed CLI answered.
+
+## 2026-10-30 — Agent navigation never leaves an open review
+
+- `npm run typecheck` and `npm run build` succeeded.
+- With the user's installed app closed, `npm run dev:browser` on the real profile, in a
+  scratch project (copies of two stored images):
+  - With "First pass" open, `review_create` "Second pass" returned `opened: false,
+    offered: true`; the board stayed on First pass and a prompt read "The agent opened
+    review Second pass." with Open. `ui_open` for a review in another project also returned
+    `offered` and named the project. Open switched project and showed that review.
+  - From the review list, `review_create` returned `opened: true` and the board opened.
+  - The banners' icon took `flex: 1` and split the width with the text (also on the error
+    banner); fixed and rechecked.
+  - The scratch project was deleted and the host stopped.
+- `npm run package` and a silent reinstall succeeded; the installed app restarted on the
+  new build and its CLI answered.

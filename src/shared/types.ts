@@ -1,4 +1,4 @@
-import type { InstallationInput, Origin, OperationResponse, UiCommand } from './workbench';
+import type { InstallationInput, Origin, OperationResponse, UiCommand, UiOutcome } from './workbench';
 import type { ImageBackground, ImageFormat } from './image-models';
 
 export interface Project { id: string; name: string; createdAt: string; updatedAt: string }
@@ -132,7 +132,7 @@ export interface PixelApi {
   saveChatModel(input: ChatModelInput): Promise<ChatModelEntry>;
   deleteChatModel(id: string): Promise<void>;
   uiReady(): Promise<void>;
-  uiAcknowledge(id: string, error?: string): Promise<void>;
+  uiAcknowledge(id: string, outcome: UiOutcome): Promise<void>;
   onUiCommand(callback: (command: UiCommand) => void): () => void;
   onChanged(callback: () => void): () => void;
 }

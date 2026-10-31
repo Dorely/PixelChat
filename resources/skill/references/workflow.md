@@ -19,7 +19,9 @@ an entry tells you the item has moved on since.
   and their items cannot be deleted. Replies and resolution still work. Do not reopen a
   review just to get around the lock; put new versions in a new review.
 - Create a review (`review_create` with `itemIds` or a `search_items` filter) to put new
-  or revised art in front of the user, then `ui_open` it.
+  or revised art in front of the user; it opens unless `open` is false. If the user is in
+  another review, PixelChat only offers it (`offered`) and leaves them where they are: say
+  it is ready rather than opening it again.
 
 ## Notes and pins
 

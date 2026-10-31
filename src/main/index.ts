@@ -10,7 +10,7 @@ import { idSchema } from '../shared/operation-catalog';
 import { RendererPort } from './ui-port';
 import { startBridge } from './bridge';
 import { installIntegration } from '../shared/install';
-import { installationSchema, type InstallationInput } from '../shared/workbench';
+import { installationSchema, type InstallationInput, type UiOutcome } from '../shared/workbench';
 import { startBrowserHost } from './browser-host';
 import { DiagnosticLog, redactText } from './diagnostics';
 import { ImageJobs } from './images';
@@ -75,7 +75,7 @@ const commandSchemas = {
   saveChatModel: z.tuple([modelInput]),
   deleteChatModel: z.tuple([idSchema]),
   uiReady: z.tuple([]),
-  uiAcknowledge: z.tuple([z.string().uuid(), z.string().max(2000).optional()]),
+  uiAcknowledge: z.tuple([z.string().uuid(), z.union([z.object({ status: z.enum(['opened', 'offered']) }).strict(), z.object({ error: z.string().max(2000) }).strict()])]),
 };
 type Command = keyof typeof commandSchemas;
 
@@ -96,7 +96,7 @@ else {
     const providerStatus = async (): Promise<ProviderStatus> => ({ secureStorage: await secrets.available(), codex: codex.status, gemini: { ready: !!(await geminiKey().catch(() => null)) } });
     const jobs = new ImageJobs(db, media, { codex: new CodexImages(codex), gemini: new GeminiImages(geminiKey) }, diagnostics); images = jobs;
     jobs.start();
-    rendererPort = new RendererPort(() => window, db, () => browserHost);
+    rendererPort = new RendererPort(() => window, () => browserHost);
     const ops = new Operations(db, library, media, jobs, rendererPort, providerStatus); operations = ops;
     const chats = new ChatStore(db); chats.interrupt();
     const registry = new ChatRegistry(db, secrets, geminiKey);
@@ -129,7 +129,7 @@ else {
       saveChatModel: async (input: ChatModelInput) => { const record = await registry.saveModel(input); changed(); return record; },
       deleteChatModel: async (id: string) => { await registry.deleteModel(id); changed(); },
       uiReady: () => rendererPort!.markReady(),
-      uiAcknowledge: (id: string, error?: string) => rendererPort!.acknowledge(id, error),
+      uiAcknowledge: (id: string, outcome: UiOutcome) => rendererPort!.acknowledge(id, outcome),
     };
     const invoke = async (method: unknown, rawArgs: unknown) => {
       if (typeof method !== 'string' || !Object.hasOwn(commandSchemas, method)) throw new Error('Unknown application request.');

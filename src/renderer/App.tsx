@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChatFocus, Project, Session, Snapshot } from '../shared/types'
+import type { UiCommand } from '../shared/workbench'
 import Icon from './Icon'
 import { ConfirmDialog, Modal } from './Dialogs'
 import LibraryView from './LibraryView'
@@ -105,6 +106,10 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(34)
   const [target, setTarget] = useState<Target | null>(null)
   const [chatFocus, setChatFocus] = useState<ChatFocus>({})
+  const [offer, setOffer] = useState<UiCommand | null>(null)
+  // The review board the user is in, if any; agent navigation never pulls them out of it.
+  const openReview = useRef<string | undefined>(undefined)
+  openReview.current = view === 'reviews' ? chatFocus.reviewId : undefined
   const refreshSerial = useRef(0)
 
   const refresh = useCallback(async () => {
@@ -117,18 +122,26 @@ export default function App() {
     } catch (error) { setUiError(message(error)) }
   }, [])
   useEffect(() => { void refresh(); return window.pixel.onChanged(() => void refresh()) }, [refresh])
+  // Views pick the target up once the snapshot reports the project switch.
+  const show = useCallback(async (command: UiCommand) => {
+    await window.pixel.setActiveProject(command.projectId)
+    setView(command.action === 'open-review' ? 'reviews' : 'library')
+    setTarget({ projectId: command.projectId, reviewId: command.reviewId, itemId: command.itemId })
+    void refresh()
+  }, [refresh])
   useEffect(() => {
-    // The main process has already switched to the command's project; views pick the target up after the switch.
     const unsubscribe = window.pixel.onUiCommand(command => {
-      setView(command.action === 'open-review' ? 'reviews' : 'library')
-      setTarget({ projectId: command.projectId, reviewId: command.reviewId, itemId: command.itemId })
-      void window.pixel.uiAcknowledge(command.id)
+      if (openReview.current && command.reviewId !== openReview.current) {
+        setOffer(command); void window.pixel.uiAcknowledge(command.id, { status: 'offered' }); return
+      }
+      setOffer(current => current?.reviewId === command.reviewId && current?.itemId === command.itemId ? null : current)
+      show(command).then(() => window.pixel.uiAcknowledge(command.id, { status: 'opened' }), error => window.pixel.uiAcknowledge(command.id, { error: message(error) }))
     })
     void window.pixel.uiReady()
     const disconnected = () => setUiError('Browser host disconnected. Restart npm run dev:browser and open its printed URL.')
     window.addEventListener('pixel-host-disconnected', disconnected)
     return () => { unsubscribe(); window.removeEventListener('pixel-host-disconnected', disconnected) }
-  }, [])
+  }, [show])
   useEffect(() => applyTheme(theme), [theme])
 
   const startResize = (event: React.MouseEvent) => {
@@ -182,6 +195,9 @@ export default function App() {
         ? <LibraryView key={projectId} projectId={projectId} focusItemId={current?.reviewId ? undefined : current?.itemId} onFocusDone={clearTarget} onOpenReview={reviewId => { setTarget({ projectId, reviewId }); setView('reviews') }} onChatFocus={setChatFocus} onError={setUiError} />
         : <ReviewsView key={projectId} projectId={projectId} target={current?.reviewId ? current : null} onTargetDone={clearTarget} onChatFocus={setChatFocus} onError={setUiError} />}</ProvidersContext.Provider>
     </main>
+    {offer && <div className="offer-banner" role="status"><Icon name="info" /><span>The agent opened {offer.action === 'open-review' ? 'review' : 'item'} <strong>{offer.label}</strong>{snapshot.projects.length > 1 && offer.projectId !== projectId ? ` in ${snapshot.projects.find(project => project.id === offer.projectId)?.name ?? 'another project'}` : ''}.</span>
+      <button className="secondary-button" onClick={() => { const command = offer; setOffer(null); void call(() => show(command)) }}>Open</button>
+      <button className="icon-button" onClick={() => setOffer(null)} aria-label="Dismiss" title="Dismiss"><Icon name="close" /></button></div>}
     {uiError && <div className="error-banner" role="alert"><Icon name="info" /><span>{uiError}</span><button className="icon-button" onClick={() => setUiError('')} aria-label="Dismiss error"><Icon name="close" /></button></div>}
     {settingsOpen && <SettingsDialog providers={snapshot.providers} chat={snapshot.chat} onClose={() => setSettingsOpen(false)} onError={setUiError} />}
     {projectDialog && <ProjectDialog mode={projectDialog} project={activeProject} onClose={() => setProjectDialog(null)} onSubmit={name => void saveProject(name)} />}

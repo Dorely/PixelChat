@@ -131,9 +131,11 @@ the root) and carry no pin. Root notes are resolved or reopened by either side; 
 edit or delete only their own notes. Item summaries count open root notes, and
 `search_items` filters by `open_notes`.
 
-`ui_open` shows a review (optionally at one of its items) or a single item. The main
-process switches to the command's project; the renderer selects the view and
-acknowledges.
+`ui_open` (and `review_create` with `open`) shows a review (optionally at one of its
+items) or a single item. The renderer owns the decision: with no review board open it
+switches project and view and acknowledges `opened`, and the main process brings the
+window forward. While the user is in a different review it leaves them there, shows an
+Open prompt for the target, and acknowledges `offered`.
 
 In the viewer, pins are drawn over the image's rendered content box (measured with a
 `ResizeObserver`, accounting for `object-fit`). Click places a point; drag places a box.

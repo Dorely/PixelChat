@@ -108,8 +108,11 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .settings-error { display: flex; gap: 6px; align-items: start; color: var(--danger) !important; }
 .error-banner { position: fixed; z-index: 20; top: 84px; left: calc(var(--sidebar-width) + 28px); right: 28px; display: flex; align-items: center; gap: 9px; min-height: 38px; padding: 7px 9px 7px 13px; color: var(--danger-text); border: 1px solid var(--danger-line); border-radius: 6px; background: var(--danger-bg); box-shadow: 0 8px 24px var(--shadow-soft); font-size: 13px; }
 .error-banner .icon-info { color: var(--danger); }
-.error-banner span { flex: 1; white-space: pre-wrap; }
+.error-banner span:not(.icon) { flex: 1; white-space: pre-wrap; }
 .error-banner .icon-button { color: var(--danger-text); }
+.offer-banner { position: fixed; z-index: 20; right: 28px; bottom: 24px; display: flex; align-items: center; gap: 9px; max-width: min(520px, calc(100vw - var(--sidebar-width) - 56px)); padding: 8px 9px 8px 13px; color: var(--text); border: 1px solid var(--accent-line); border-radius: 6px; background: var(--surface-2); box-shadow: 0 8px 24px var(--shadow-soft); font-size: 13px; }
+.offer-banner .icon-info { color: var(--accent); }
+.offer-banner span:not(.icon) { flex: 1; }
 
 /* Browser-host path dialog */
 .browser-path-dialog { width: min(560px, calc(100vw - 40px)); padding: 24px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }

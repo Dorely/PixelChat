@@ -32,6 +32,6 @@ export function createApi({ call, onChanged, onUiCommand, mediaUrl, hostMode }: 
     saveChatModel: input => call('saveChatModel', input),
     deleteChatModel: id => call('deleteChatModel', id),
     uiReady: () => call('uiReady'),
-    uiAcknowledge: (id, error) => call('uiAcknowledge', id, error),
+    uiAcknowledge: (id, outcome) => call('uiAcknowledge', id, outcome),
   };
 }

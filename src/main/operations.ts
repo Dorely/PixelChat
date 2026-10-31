@@ -10,7 +10,7 @@ import type { ProviderStatus } from '../shared/types';
 import { guidanceDocuments, guidanceHash, selectGuidance } from '../shared/guidance';
 import { viewImage } from './view-image';
 
-export interface UiPort { send(command: Omit<UiCommand, 'id'>): Promise<unknown> }
+export interface UiPort { send(command: Omit<UiCommand, 'id'>): Promise<{ status: 'opened' | 'offered' }> }
 
 export class Operations {
   private pending = new Set<Promise<unknown>>();
@@ -73,7 +73,10 @@ export class Operations {
         const created = store.createReview(a.projectId, { title: a.title, instructions: a.instructions ?? '', revisionIds }, origin);
         if (!a.open) return created;
         // Creating succeeded; a missing window only means it could not be shown.
-        try { await this.ui.send({ action: 'open-review', projectId: a.projectId, reviewId: created.id }); return { ...created, opened: true }; }
+        try {
+          const shown = await this.ui.send({ action: 'open-review', projectId: a.projectId, reviewId: created.id, label: created.title });
+          return shown.status === 'opened' ? { ...created, opened: true } : { ...created, opened: false, offered: true, openNote: 'The user has another review open, so PixelChat offered this one without switching.' };
+        }
         catch (error) { return { ...created, opened: false, openError: error instanceof Error ? error.message : 'Could not open the review.' }; }
       }
       case 'review_get': return store.review(a.reviewId, a.projectId, { decision: a.decision, includeResolved: a.includeResolved });
@@ -114,13 +117,13 @@ export class Operations {
       case 'view_image': return viewImage(store, this.media, a.projectId, a.itemId, { revisionId: a.revisionId, pins: a.pins, background: a.background, maxSize: a.maxSize });
       case 'ui_open': {
         if (a.reviewId) {
-          store.reviewSummary(a.reviewId, a.projectId);
+          const summary = store.reviewSummary(a.reviewId, a.projectId);
           if (a.itemId && !store.review(a.reviewId, a.projectId).entries.some(entry => entry.itemId === a.itemId)) throw new WorkbenchError('INVALID_ARGUMENTS', 'The item is not in that review.');
-          return this.ui.send({ action: 'open-review', projectId: a.projectId, reviewId: a.reviewId, itemId: a.itemId });
+          return this.ui.send({ action: 'open-review', projectId: a.projectId, reviewId: a.reviewId, itemId: a.itemId, label: summary.title });
         }
         if (!a.itemId) throw new WorkbenchError('INVALID_ARGUMENTS', 'Pass reviewId, itemId, or both.');
-        store.item(a.itemId, a.projectId);
-        return this.ui.send({ action: 'open-item', projectId: a.projectId, itemId: a.itemId });
+        const item = store.item(a.itemId, a.projectId);
+        return this.ui.send({ action: 'open-item', projectId: a.projectId, itemId: a.itemId, label: item.name });
       }
       case 'note_add': { const { projectId, ...input } = a; return store.addNote(projectId, input as NoteInput, origin); }
       case 'note_update': { const { projectId, noteId, ...patch } = a; return store.updateNote(noteId, projectId, patch, origin); }
