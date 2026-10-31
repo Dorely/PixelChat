@@ -10,6 +10,16 @@ it in front of the user: add it to an active review (`review_update` with `addIt
 `addRevisionIds`; it sits beside the old entry) or create a new review. `newerVersions` on
 an entry tells you the item has moved on since.
 
+- A review is `standard` (the user decides on each entry) or a `contest` (`mode: "contest"`,
+  at least two entries): the entries are candidates and the user picks one winner. A pick is
+  `accepted`; picking another clears the earlier one, and the user may still reject or ask for
+  changes on the rest. Use a contest to let the user choose between variations, not to ask
+  yes/no on each.
+- Reference images give context for the decision (a style target, the current in-game art, a
+  sibling asset): pass `referenceItemIds` or `referenceRevisionIds` to `review_create`, or
+  `addReferenceItemIds` / `referenceRevisionIds` to `review_update`. Entries have a `role` of
+  `subject` or `reference`. References show in their own section, may carry notes, take no
+  decision, and do not count toward progress. A version is one or the other.
 - `review_get` returns entries and the note threads on their versions.
 - `review_decide` names entries by `revisionId`.
 - Title, instructions, entries, completion, and reopening require `expectedRevision`.

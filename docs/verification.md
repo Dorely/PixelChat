@@ -296,3 +296,20 @@ secure-storage, or platform integration.
 - Not checked: watching playback in a screenshot (the pane could not capture while the
   window was hidden), the native desktop window, animated WebP imports, and large GIFs'
   import time. The scratch host was shut down and its profile and entry deleted.
+
+## 2026-10-31 — Contest reviews and reference entries
+
+- `npm run typecheck` and `npm run build` succeeded.
+- The user's installed app was running, so the browser host ran from a scratch Electron
+  entry (outside the repository) with a scratch `appData`; the fresh profile migrated to
+  schema 5. Five scratch PNGs were imported.
+- Through `window.pixel.operation`: a contest of three with one reference was created
+  (counts covered the three candidates); a one-candidate contest and a decision on a
+  reference were refused; accepting art1 then art2 left only art2 accepted; accepting two
+  in one call was refused. A standard review took references at creation and by
+  `addReferenceItemIds`; `referenceRevisionIds: []` cleared them and `mode` switched.
+- The board showed the Contest badge, Pick buttons, a "Picked" badge, "Picked: art2 · 1
+  reference", and a Reference section whose card has no decision buttons.
+- Not checked: the viewer's reference state and keys, the new-review Contest checkbox,
+  agent calls over MCP/CLI, and the native window. The scratch host was shut down and its
+  profile deleted.

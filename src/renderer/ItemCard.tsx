@@ -1,10 +1,12 @@
-import type { Decision, ItemSummary, RevisionMeta } from '../shared/types'
+import type { Decision, ItemSummary, ReviewMode, RevisionMeta } from '../shared/types'
 
 export const DECISIONS: { id: Decision; label: string; key: string; badge: string }[] = [
   { id: 'accepted', label: 'Accept', key: 'A', badge: 'badge-accent' },
   { id: 'needs_changes', label: 'Needs changes', key: 'C', badge: 'badge-warn' },
   { id: 'rejected', label: 'Reject', key: 'R', badge: 'badge-danger' },
 ]
+/** In a contest, accepting is picking the winner. */
+export const decisionOptions = (mode: ReviewMode) => mode === 'contest' ? DECISIONS.map(option => option.id === 'accepted' ? { ...option, label: 'Pick' } : option) : DECISIONS
 export const decisionLabel = (decision: Decision) => ({ unreviewed: 'Unreviewed', accepted: 'Accepted', needs_changes: 'Needs changes', rejected: 'Rejected' })[decision]
 export const decisionBadge = (decision: Decision) => DECISIONS.find(entry => entry.id === decision)?.badge ?? ''
 
@@ -13,15 +15,16 @@ export function Thumbnail({ revisionId, alt }: { revisionId: string; alt: string
 }
 
 /** What a review shows on a card: the entry's exact version and its decision, decidable in place unless locked. */
-export interface CardReview { version: RevisionMeta; decision: Decision; openNotes: number; newerVersions: number; locked: boolean; onDecide: (decision: Decision) => void }
+export interface CardReview { version: RevisionMeta; decision: Decision; mode: ReviewMode; reference: boolean; openNotes: number; newerVersions: number; locked: boolean; onDecide: (decision: Decision) => void }
 
 /** Grid card for an item, or for one reviewed version of it. */
 export default function ItemCard({ item, review, onOpen }: { item: ItemSummary; review?: CardReview; onOpen: () => void }) {
   const version = review?.version ?? item.selected
   const notes = review ? review.openNotes : item.openNotes
-  const decision = review?.decision
+  const decision = review?.reference ? undefined : review?.decision
   const badges = [
-    decision && decision !== 'unreviewed' && <span key="decision" className={`badge ${decisionBadge(decision)}`}>{decisionLabel(decision)}</span>,
+    review?.reference && <span key="reference" className="badge" title="Context for the decision; takes no decision">Reference</span>,
+    decision && decision !== 'unreviewed' && <span key="decision" className={`badge ${decisionBadge(decision)}`}>{review?.mode === 'contest' && decision === 'accepted' ? 'Picked' : decisionLabel(decision)}</span>,
     review && review.newerVersions > 0 && <span key="newer" className="badge" title="The item has versions made after this one">{review.newerVersions} newer</span>,
     notes > 0 && <span key="notes" className="badge" title="Open notes">{notes} {notes === 1 ? 'note' : 'notes'}</span>,
     !review && item.pendingExport && <span key="export" className="badge badge-accent" title="Selected version differs from the source file">Pending export</span>,
@@ -33,8 +36,8 @@ export default function ItemCard({ item, review, onOpen }: { item: ItemSummary; 
       <span className="item-copy"><strong>{item.name}</strong><small>{version.width}×{version.height} · {version.format}{version.frames > 1 ? ` · ${version.frames} frames` : ''}</small></span>
     </button>
     {badges.length > 0 && <span className="item-badges">{badges}</span>}
-    {review && <span className="card-decisions" role="group" aria-label={`Decision for ${item.name}`}>
-      {DECISIONS.map(option => <button key={option.id} className={`decision-button decision-${option.id}${decision === option.id ? ' active' : ''}`} disabled={review.locked}
+    {review && !review.reference && <span className="card-decisions" role="group" aria-label={`Decision for ${item.name}`}>
+      {decisionOptions(review.mode).map(option => <button key={option.id} className={`decision-button decision-${option.id}${decision === option.id ? ' active' : ''}`} disabled={review.locked}
         onClick={() => review.onDecide(decision === option.id ? 'unreviewed' : option.id)} title={decision === option.id ? `Clear ${option.label.toLowerCase()}` : option.label}>
         {option.id === 'needs_changes' ? 'Changes' : option.label}</button>)}
     </span>}

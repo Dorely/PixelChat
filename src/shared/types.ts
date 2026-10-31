@@ -46,8 +46,12 @@ export interface NoteThread extends Note { replies: Note[] }
 
 export type Decision = 'unreviewed' | 'accepted' | 'needs_changes' | 'rejected';
 export type ReviewStatus = 'active' | 'completed';
+/** standard: decide on each entry. contest: the entries are candidates and the user picks one winner (accepted). */
+export type ReviewMode = 'standard' | 'contest';
+/** subject entries are decided on (counts cover only these); reference entries are extra context with no decision. */
+export type EntryRole = 'subject' | 'reference';
 export interface ReviewSummary {
-  id: string; projectId: string; title: string; instructions: string; status: ReviewStatus; revision: number;
+  id: string; projectId: string; title: string; instructions: string; mode: ReviewMode; status: ReviewStatus; revision: number;
   counts: Record<Decision, number> & { total: number }; openNotes: number;
   createdAt: string; createdBy: Origin; updatedAt: string; completedAt: string | null; completedBy: Origin | null;
 }
@@ -56,7 +60,7 @@ export interface ReviewSummary {
  * item is a separate entry, added on purpose, that starts unreviewed.
  */
 export interface ReviewEntry {
-  revisionId: string; itemId: string; position: number; decision: Decision; decidedAt: string | null; decidedBy: Origin | null;
+  revisionId: string; itemId: string; role: EntryRole; position: number; decision: Decision; decidedAt: string | null; decidedBy: Origin | null;
   revision: RevisionMeta; newerVersions: number; openNotes: number; item: ItemSummary;
 }
 export interface Review extends ReviewSummary { entries: ReviewEntry[]; notes: NoteThread[] }

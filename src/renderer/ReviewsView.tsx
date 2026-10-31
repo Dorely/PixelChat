@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChatFocus, Decision, ItemSearchResult, ItemStatusFilter, Review, ReviewEntry, ReviewSummary } from '../shared/types'
+import type { ChatFocus, Decision, ItemSearchResult, ItemStatusFilter, Review, ReviewEntry, ReviewMode, ReviewSummary } from '../shared/types'
 import Icon from './Icon'
 import ItemCard, { decisionLabel } from './ItemCard'
 import ItemViewer, { type ViewerTarget } from './ItemViewer'
@@ -22,6 +22,7 @@ function Progress({ counts }: { counts: ReviewSummary['counts'] }) {
 export function NewReviewDialog({ projectId, initial, onClose, onCreated }: { projectId: string; initial?: ReviewFilter; onClose: () => void; onCreated: (review: ReviewSummary) => void }) {
   const [title, setTitle] = useState('')
   const [instructions, setInstructions] = useState('')
+  const [mode, setMode] = useState<ReviewMode>('standard')
   const [collection, setCollection] = useState(initial?.collection ?? ALL)
   const [status, setStatus] = useState<ItemStatusFilter>(initial?.status ?? 'all')
   const query = initial?.query
@@ -32,7 +33,7 @@ export function NewReviewDialog({ projectId, initial, onClose, onCreated }: { pr
   useEffect(() => { void op<ItemSearchResult>('search_items', { projectId, ...filter, limit: 1 }).then(setMatch, () => setMatch(null)) }, [projectId, filter])
   const submit = async () => {
     setBusy(true); setError('')
-    try { onCreated(await op<ReviewSummary>('review_create', { projectId, title, instructions, filter, open: false })) }
+    try { onCreated(await op<ReviewSummary>('review_create', { projectId, title, instructions, mode, filter, open: false })) }
     catch (failure) { setError(message(failure, 'Could not create the review.')) }
     finally { setBusy(false) }
   }
@@ -40,6 +41,7 @@ export function NewReviewDialog({ projectId, initial, onClose, onCreated }: { pr
     <div className="project-dialog-body">
       <label>Title<input autoFocus value={title} onChange={event => setTitle(event.target.value)} maxLength={120} placeholder="Character pass" aria-label="Review title" /></label>
       <label>Instructions <small>Optional. What to look for; agents read this with the notes.</small><textarea rows={3} value={instructions} onChange={event => setInstructions(event.target.value)} /></label>
+      <label className="check-row"><input type="checkbox" checked={mode === 'contest'} onChange={event => setMode(event.target.checked ? 'contest' : 'standard')} /> Contest <small>The items are candidates; you pick one winner instead of deciding on each.</small></label>
       <div className="dialog-filters">
         <label>Folder<select className="filter-select" value={collection} onChange={event => setCollection(event.target.value)} aria-label="Folder">
           <option value={ALL}>All folders</option>
@@ -51,7 +53,7 @@ export function NewReviewDialog({ projectId, initial, onClose, onCreated }: { pr
       </div>
       <p className="quiet-text">{query ? `Matching “${query}”: ` : ''}{match ? `${Math.min(match.total, 5000)} items` : '…'}{match && match.total > 5000 ? ' (first 5000)' : ''}</p>
       {error && <p className="settings-error"><Icon name="info" /> {error}</p>}
-      <div className="model-row"><button className="primary-button" onClick={() => void submit()} disabled={busy || !title.trim() || !match?.total}><Icon name="check" /> {busy ? 'Creating…' : 'Create review'}</button><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button></div>
+      <div className="model-row"><button className="primary-button" onClick={() => void submit()} disabled={busy || !title.trim() || !match?.total || (mode === 'contest' && match.total < 2)}><Icon name="check" /> {busy ? 'Creating…' : 'Create review'}</button><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button></div>
     </div>
   </Modal>
 }
@@ -82,9 +84,13 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onSwitch, onCha
     return () => { unsubscribe(); if (timer) clearTimeout(timer) }
   }, [load])
 
-  const entries = review?.entries ?? []
+  const allEntries = review?.entries ?? []
+  // Subjects are decided on; references are context beside them and take no decision.
+  const entries = allEntries.filter(entry => entry.role === 'subject')
+  const references = allEntries.filter(entry => entry.role === 'reference')
+  const contest = review?.mode === 'contest'
   const shown = entries.filter(entry => filter === 'all' || (filter === 'newer' ? entry.newerVersions > 0 : entry.decision === filter))
-  const entryMap = useMemo(() => new Map(entries.map(entry => [entry.revisionId, entry])), [entries])
+  const entryMap = useMemo(() => new Map(allEntries.map(entry => [entry.revisionId, entry])), [allEntries])
   const targets = (list: ReviewEntry[]) => list.map(entry => ({ item: entry.item, revisionId: entry.revisionId }))
   // The viewer walks a snapshot so deciding never reshuffles the list under it.
   const open = (list: ViewerTarget[], index: number) => setViewer({ items: list, index })
@@ -128,10 +134,10 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onSwitch, onCha
             {active.map(entry => <option key={entry.id} value={entry.id}>{entry.title} · {entry.counts.total - entry.counts.unreviewed}/{entry.counts.total}</option>)}
           </select>}
         </div>
-        <h1>{review.title} {completed && <span className="badge">Completed</span>}</h1>
+        <h1>{review.title} {contest && <span className="badge">Contest</span>} {completed && <span className="badge">Completed</span>}</h1>
       </div>
       <div className="header-actions">
-        {!completed && <button className="primary-button" onClick={() => open(targets(entries), Math.max(0, firstUnreviewed))} disabled={!entries.length}><Icon name="arrow" /> {firstUnreviewed >= 0 ? 'Continue reviewing' : 'Review again'}</button>}
+        {!completed && <button className="primary-button" onClick={() => open(targets(allEntries), Math.max(0, firstUnreviewed))} disabled={!entries.length}><Icon name="arrow" /> {firstUnreviewed >= 0 ? (contest ? 'Choose a winner' : 'Continue reviewing') : 'Review again'}</button>}
         {completed ? <button className="secondary-button" onClick={() => void setStatus('review_reopen')}><Icon name="undo" /> Reopen</button>
           : <button className="secondary-button" onClick={() => void setStatus('review_complete')}><Icon name="check" /> Complete</button>}
         <button className="icon-button" onClick={() => { setConfirmError(''); setConfirm('delete') }} aria-label="Delete review" title="Delete review"><Icon name="trash" /></button>
@@ -139,7 +145,7 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onSwitch, onCha
     </div>
     <div className="review-meta">
       <Progress counts={counts} />
-      <small>{counts.total - counts.unreviewed} of {counts.total} decided · {review.openNotes} open {review.openNotes === 1 ? 'note' : 'notes'}{completed && review.completedAt ? ` · completed ${new Date(review.completedAt).toLocaleString()} by ${review.completedBy === 'agent' ? 'the agent' : 'you'}` : ''}</small>
+      <small>{contest ? (counts.accepted ? `Picked: ${entries.find(entry => entry.decision === 'accepted')?.item.name ?? 'a candidate'}` : 'No pick yet') : `${counts.total - counts.unreviewed} of ${counts.total} decided`}{references.length ? ` · ${references.length} reference` : ''} · {review.openNotes} open {review.openNotes === 1 ? 'note' : 'notes'}{completed && review.completedAt ? ` · completed ${new Date(review.completedAt).toLocaleString()} by ${review.completedBy === 'agent' ? 'the agent' : 'you'}` : ''}</small>
       {review.instructions && <p className="review-instructions">{review.instructions}</p>}
     </div>
     <div className="library-toolbar">
@@ -148,9 +154,15 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onSwitch, onCha
       </span>
     </div>
     {shown.length === 0 ? <div className="empty-state"><div className="empty-icon"><Icon name="check" /></div><h2>Nothing here</h2><p>No entries match this filter.</p></div>
-      : <div className="item-grid">{shown.map((entry, index) => <ItemCard key={entry.revisionId} item={entry.item} onOpen={() => open(targets(shown), index)}
-        review={{ version: entry.revision, decision: entry.decision, openNotes: entry.openNotes, newerVersions: entry.newerVersions, locked: completed, onDecide: decision => void decide(entry.revisionId, decision) }} />)}</div>}
-    {viewer && viewer.items[viewer.index] && <ItemViewer projectId={projectId} items={viewer.items} index={viewer.index} review={{ id: review.id, completed, entries: entryMap }}
+      : <div className="item-grid">{shown.map((entry, index) => <ItemCard key={entry.revisionId} item={entry.item} onOpen={() => open([...targets(shown), ...targets(references)], index)}
+        review={{ version: entry.revision, decision: entry.decision, mode: review.mode, reference: false, openNotes: entry.openNotes, newerVersions: entry.newerVersions, locked: completed, onDecide: decision => void decide(entry.revisionId, decision) }} />)}</div>}
+    {references.length > 0 && <>
+      <h2 className="review-section-title">Reference <span className="count-pill">{references.length}</span></h2>
+      <p className="quiet-text">Context for this review. Nothing here is accepted or rejected.</p>
+      <div className="item-grid">{references.map((entry, index) => <ItemCard key={entry.revisionId} item={entry.item} onOpen={() => open([...targets(shown), ...targets(references)], shown.length + index)}
+        review={{ version: entry.revision, decision: 'unreviewed', mode: review.mode, reference: true, openNotes: entry.openNotes, newerVersions: entry.newerVersions, locked: true, onDecide: () => undefined }} />)}</div>
+    </>}
+    {viewer && viewer.items[viewer.index] && <ItemViewer projectId={projectId} items={viewer.items} index={viewer.index} review={{ id: review.id, completed, mode: review.mode, entries: entryMap }}
       onIndex={index => setViewer(current => current && { ...current, index })} onClose={() => setViewer(null)} onError={onError} />}
     {confirm && <ConfirmDialog eyebrow="Delete review" title={review.title} confirmLabel="Delete" busy={busy} error={confirmError} onCancel={() => setConfirm(null)} onConfirm={() => void remove()}
       body="The review and its decisions are removed permanently. Notes stay on their items." />}
@@ -188,7 +200,7 @@ export default function ReviewsView({ projectId, target, onTargetDone, onChatFoc
         : <><h2>No completed reviews</h2><p>Completed reviews are kept here with their decisions and notes.</p></>}
     </div>
       : <div className="review-list">{reviews?.map(review => <button key={review.id} className="review-card" onClick={() => setOpenId(review.id)}>
-        <span className="review-card-copy"><strong>{review.title}</strong><small>{review.counts.total} versions · {review.counts.total - review.counts.unreviewed} decided · {review.openNotes} open notes · updated {new Date(review.updatedAt).toLocaleString()}</small></span>
+        <span className="review-card-copy"><strong>{review.title}</strong><small>{review.mode === 'contest' ? 'Contest · ' : ''}{review.counts.total} versions · {review.counts.accepted && review.mode === 'contest' ? 'picked' : `${review.counts.total - review.counts.unreviewed} decided`} · {review.openNotes} open notes · updated {new Date(review.updatedAt).toLocaleString()}</small></span>
         <Progress counts={review.counts} />
         <span className="review-card-counts">{(['accepted', 'needs_changes', 'rejected'] as const).map(decision => review.counts[decision] > 0 && <span key={decision} className={`decision-count decision-${decision}`}>{review.counts[decision]} {decisionLabel(decision).toLowerCase()}</span>)}</span>
       </button>)}</div>}

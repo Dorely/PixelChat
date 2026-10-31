@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Decision, Item, ItemSummary, Pin, ReviewEntry, Revision } from '../shared/types'
+import type { Decision, Item, ItemSummary, Pin, ReviewEntry, ReviewMode, Revision } from '../shared/types'
 import { ConfirmDialog } from './Dialogs'
 import EditPanel from './EditPanel'
 import Icon from './Icon'
-import { DECISIONS, decisionBadge, decisionLabel } from './ItemCard'
+import { decisionBadge, decisionLabel, decisionOptions } from './ItemCard'
 import { NotesPanel, PinLayer } from './NotesPanel'
 import { OperationError, op } from './ops'
 
@@ -13,7 +13,7 @@ const ZOOMS = [0.25, 0.5, 1, 2, 4, 8]
 const PREFERENCES = 'pixelchat.viewer'
 
 /** Review context for the viewer: entries by version, locked when the review is completed. */
-export interface ViewerReview { id: string; completed: boolean; entries: Map<string, ReviewEntry> }
+export interface ViewerReview { id: string; completed: boolean; mode: ReviewMode; entries: Map<string, ReviewEntry> }
 /** One stop in the viewer: an item, opened on a given version (a review entry's) or its selected one. */
 export interface ViewerTarget { item: ItemSummary; revisionId?: string }
 
@@ -52,6 +52,8 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
   const [conflict, setConflict] = useState<'' | 'changed' | 'missing'>('')
   useEffect(() => { if (noteFocus && item) { composer.current?.focus(); setNoteFocus(false) } }, [noteFocus, item])
   const entry = targetId ? review?.entries.get(targetId) : undefined
+  // Reference entries are context: notes only, no decision.
+  const decidable = entry?.role === 'subject'
 
   const load = useCallback(async () => {
     try {
@@ -88,7 +90,7 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
         Escape: () => draft ? setDraft(null) : onClose(), ArrowLeft: () => step(-1), ArrowRight: () => step(1),
         '0': () => setZoom('fit'), '1': () => setZoom(1), '+': () => stepZoom(1), '=': () => stepZoom(1), '-': () => stepZoom(-1),
         n: () => setNoteFocus(true),
-        ...(entry && review && !review.completed ? { a: () => void decide('accepted'), c: () => void decide('needs_changes'), r: () => void decide('rejected'), u: () => void decide('unreviewed') } : {}),
+        ...(decidable && review && !review.completed ? { a: () => void decide('accepted'), c: () => void decide('needs_changes'), r: () => void decide('rejected'), u: () => void decide('unreviewed') } : {}),
       }
       const action = actions[event.key.length === 1 ? event.key.toLowerCase() : event.key]
       if (action) { event.preventDefault(); action() }
@@ -116,10 +118,11 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
     <header className="viewer-header">
       <button className="icon-button" onClick={onClose} aria-label="Close viewer" title="Close (Esc)"><Icon name="close" /></button>
       <div className="viewer-title"><strong>{summary.name}</strong><small>{summary.sourcePath ?? summary.collection}</small></div>
-      {review && entry && <div className="decision-bar" role="group" aria-label="Decision">
-        {entry.decision !== 'unreviewed' && <span className={`badge ${decisionBadge(entry.decision)}`}>{decisionLabel(entry.decision)}</span>}
+      {review && entry && !decidable && <div className="decision-bar"><span className="badge" title="Context for the decision; takes no decision">Reference</span></div>}
+      {review && entry && decidable && <div className="decision-bar" role="group" aria-label="Decision">
+        {entry.decision !== 'unreviewed' && <span className={`badge ${decisionBadge(entry.decision)}`}>{review.mode === 'contest' && entry.decision === 'accepted' ? 'Picked' : decisionLabel(entry.decision)}</span>}
         {entry.newerVersions > 0 && <span className="badge" title="The item has versions made after the reviewed one">{entry.newerVersions} newer</span>}
-        {DECISIONS.map(option => <button key={option.id} className={`decision-button decision-${option.id}${entry.decision === option.id ? ' active' : ''}`} disabled={review.completed}
+        {decisionOptions(review.mode).map(option => <button key={option.id} className={`decision-button decision-${option.id}${entry.decision === option.id ? ' active' : ''}`} disabled={review.completed}
           onClick={() => void decide(entry.decision === option.id ? 'unreviewed' : option.id)} title={`${option.label} the reviewed version (${option.key})`}>{option.label} <kbd>{option.key}</kbd></button>)}
       </div>}
       <div className="viewer-nav">
@@ -142,7 +145,7 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
             {(['checker', 'dark', 'light'] as const).map(entry => <button key={entry} className={preferences.backdrop === entry ? 'active' : ''} onClick={() => setPreferences(value => ({ ...value, backdrop: entry }))}>{entry === 'checker' ? 'Checker' : entry === 'dark' ? 'Dark' : 'Light'}</button>)}
           </span>
           <label className="toggle"><input type="checkbox" checked={preferences.pixelated} onChange={event => setPreferences(value => ({ ...value, pixelated: event.target.checked }))} /> Pixelated</label>
-          <span className="toolbar-hint">{entry && viewingId !== entry.revisionId ? 'Not the reviewed version · decisions apply to the reviewed one' : entry && !review?.completed ? 'A accept · C needs changes · R reject · N note' : 'N note · click or drag to pin'}</span>
+          <span className="toolbar-hint">{entry && viewingId !== entry.revisionId ? 'Not the reviewed version · decisions apply to the reviewed one' : decidable && !review?.completed ? (review?.mode === 'contest' ? 'A pick · C needs changes · R reject · N note' : 'A accept · C needs changes · R reject · N note') : entry && !decidable ? 'Reference · N note · click or drag to pin' : 'N note · click or drag to pin'}</span>
         </div>
         <div ref={setStage} className={`viewer-stage backdrop-${preferences.backdrop}${zoom === 'fit' ? ' stage-fit' : ''}`} onWheel={event => { if (event.ctrlKey) { event.preventDefault(); stepZoom(event.deltaY < 0 ? 1 : -1) } }}>
           {revision && <img ref={setImage} key={revision.id} src={window.pixel.mediaUrl(`original/${revision.id}`)} alt={summary.name} draggable={false}

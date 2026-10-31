@@ -70,7 +70,8 @@ export class Operations {
       case 'review_create': {
         if ([a.itemIds, a.revisionIds, a.filter].filter(Boolean).length !== 1) throw new WorkbenchError('INVALID_ARGUMENTS', 'Pass exactly one of itemIds, revisionIds, or filter.');
         const revisionIds: string[] = a.revisionIds ?? (a.itemIds ? store.selectedRevisions(a.projectId, a.itemIds) : store.searchItems(a.projectId, { ...a.filter, limit: 5000, offset: 0 }).items.map(entry => entry.selectedRevisionId));
-        const created = store.createReview(a.projectId, { title: a.title, instructions: a.instructions ?? '', revisionIds }, origin);
+        const referenceRevisionIds = [...(a.referenceRevisionIds ?? []), ...(a.referenceItemIds ? store.selectedRevisions(a.projectId, a.referenceItemIds) : [])];
+        const created = store.createReview(a.projectId, { title: a.title, instructions: a.instructions ?? '', mode: a.mode, revisionIds, referenceRevisionIds }, origin);
         if (!a.open) return created;
         // Creating succeeded; a missing window only means it could not be shown.
         try {
@@ -90,9 +91,10 @@ export class Operations {
         return { review: store.reviewSummary(a.reviewId, a.projectId), events, cursor: events.at(-1)?.seq ?? filter.afterSeq, timedOut: !ready() };
       }
       case 'review_update': {
-        const { projectId, reviewId, expectedRevision, addItemIds, ...patch } = a;
+        const { projectId, reviewId, expectedRevision, addItemIds, addReferenceItemIds, ...patch } = a;
         const added = [...(patch.addRevisionIds ?? []), ...(addItemIds ? store.selectedRevisions(projectId, addItemIds) : [])];
-        return store.updateReview(reviewId, projectId, expectedRevision, { ...patch, ...(added.length ? { addRevisionIds: added } : {}) }, origin);
+        const addedReferences = [...(patch.addReferenceRevisionIds ?? []), ...(addReferenceItemIds ? store.selectedRevisions(projectId, addReferenceItemIds) : [])];
+        return store.updateReview(reviewId, projectId, expectedRevision, { ...patch, ...(added.length ? { addRevisionIds: added } : {}), ...(addedReferences.length ? { addReferenceRevisionIds: addedReferences } : {}) }, origin);
       }
       case 'review_decide': return store.decide(a.reviewId, a.projectId, a.decisions, origin);
       case 'review_complete': return store.setReviewStatus(a.reviewId, a.projectId, a.expectedRevision, 'completed', origin);

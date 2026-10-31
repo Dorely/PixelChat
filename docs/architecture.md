@@ -135,6 +135,13 @@ the root) and carry no pin. Root notes are resolved or reopened by either side; 
 edit or delete only their own notes. Item summaries count open root notes, and
 `search_items` filters by `open_notes`.
 
+A review has a mode, `standard` or `contest`, and each entry a role, `subject` or `reference`
+(schema 5). Counts, progress, and decisions cover subjects only; `decide` refuses a reference
+entry. In a contest, accepting a candidate is the pick: the store clears any earlier accepted
+candidate in the same transaction and logs it, and one call cannot accept two. References are
+context beside the decision (notes allowed, never decided), set by `review_create` /
+`review_update` (`referenceItemIds`, `referenceRevisionIds`, `addReference*`).
+
 `ui_open` (and `review_create` with `open`) shows a review (optionally at one of its
 items) or a single item. The renderer owns the decision: with no review board open it
 switches project and view and acknowledges `opened`, and the main process brings the
