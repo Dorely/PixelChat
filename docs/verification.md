@@ -360,3 +360,11 @@ secure-storage, or platform integration.
 - Not checked: a real billed Codex masked edit, the native desktop window, physical mouse
   Ctrl+wheel and middle-drag (synthetic events only), and an agent reading drawings over
   MCP/CLI. Scratch host shut down and scratch files removed.
+- 2026-11-03: `npm run package` built the installer; the running installed app was closed
+  and an unsandboxed silent install replaced it. `skill install --scope user --target claude
+  --target codex --mcp --force` updated SKILL.md, the workflow and image-editing references,
+  and guidance.json for Claude and Codex (MCP configs already current). The installed app
+  migrated the real library and answered `status` (Codex models report `mask: true`, Gemini
+  `false`); after closing it, a fresh start answered `projects_list` with the user's three
+  projects, so the schema 6 library reopens. Masks and drawings were not exercised in the
+  installed app.
