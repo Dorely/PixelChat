@@ -49,3 +49,15 @@ bill the Gemini API key's project.
 - Use `referenceItemIds` for style or character references; the edit source counts
   toward the model's input limit.
 - Compare each result with `view_image` against the source version before reporting.
+
+## Masks
+
+- `edit_image` takes `mask`: shapes in the source version's pixels, applied in order.
+  `{ kind: "box", x, y, width, height }` or `{ kind: "stroke", points: [x1, y1, ...],
+  size }`; `erase: true` clears instead of paints. Paint the area to change.
+- Codex models only; Gemini refuses a mask. The mask uses one input-image slot.
+- It is targeting guidance, not a pixel-exact whitelist: the model may still touch pixels
+  outside it. Still describe the change and what to keep in the prompt. Never composite
+  the result back onto the source.
+- Use a mask when the user asks for one or the notes mark a clear region: a note's pin box,
+  or the bounds of its drawing from `view_image`, padded a little.

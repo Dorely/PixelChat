@@ -37,10 +37,19 @@ export interface Source {
 
 /** A region in image pixels of the note's revision: a point, or a box when width and height are set. */
 export interface Pin { x: number; y: number; width?: number; height?: number }
-/** Feedback on an item. Root notes may carry a pin and be resolved; replies hang off a root. */
+/** A freehand stroke in image pixels: flat `[x0, y0, x1, y1, …]` points, a line width, and a CSS hex color. */
+export interface Stroke { points: number[]; size: number; color: string }
+/**
+ * An edit mask shape in source pixels. Shapes apply in order: painted area is what the edit should change,
+ * `erase` takes area back. A stroke is a round-capped line of `size` width; a box is filled.
+ */
+export type MaskShape =
+  | { kind: 'stroke'; points: number[]; size: number; erase?: boolean }
+  | { kind: 'box'; x: number; y: number; width: number; height: number; erase?: boolean };
+/** Feedback on an item. Root notes may carry a pin, a freehand drawing, and be resolved; replies hang off a root. */
 export interface Note {
   id: string; projectId: string; itemId: string; reviewId: string | null; revisionId: string; parentId: string | null;
-  author: Origin; body: string; pin: Pin | null; resolvedAt: string | null; resolvedBy: Origin | null; createdAt: string; updatedAt: string;
+  author: Origin; body: string; pin: Pin | null; sketch: Stroke[] | null; resolvedAt: string | null; resolvedBy: Origin | null; createdAt: string; updatedAt: string;
 }
 export interface NoteThread extends Note { replies: Note[] }
 
@@ -69,10 +78,13 @@ export interface ReviewWait { review: ReviewSummary; events: ActivityEntry[]; cu
 export interface ActivityEntry { seq: number; at: string; origin: Origin; kind: string; itemId: string | null; reviewId: string | null; data: Record<string, unknown> }
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'uncertain' | 'cancelled';
-/** The request one image job runs, as admitted. Prompt is verbatim; `instructions` is the background text PixelChat appended. */
+/**
+ * The request one image job runs, as admitted. Prompt is verbatim; `instructions` is the background and mask text PixelChat appended.
+ * `mask` (edits only) is rasterized at the source size and sent as the last input image.
+ */
 export interface ImageJobInput {
   kind: 'generate' | 'edit'; prompt: string; instructions: string; model: string; quality: string; background: ImageBackground; format: ImageFormat; size: string;
-  sourceRevisionId: string | null; referenceRevisionIds: string[]; collection: string | null; name: string | null;
+  sourceRevisionId: string | null; referenceRevisionIds: string[]; mask?: MaskShape[] | null; collection: string | null; name: string | null;
 }
 /** One provider request producing one image. Uncertain: the request may have been billed but no result was recorded; it is never replayed. */
 export interface ImageJob {

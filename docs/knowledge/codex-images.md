@@ -42,6 +42,15 @@ to about 1.57 MP.
 - Ask for real transparency and forbid painted checkerboards, backdrops, and cast shadows;
   PixelChat appends that wording by code.
 
+## Masks
+
+Added 2026-11-02 from ImageGenCli (commits 107c97d, 7e32f15); not yet exercised live here.
+The Codex image endpoint has no mask field. PixelChat follows ImageGenCli: the mask is sent
+as the last edit image, the same size as the source, opaque white where pixels are kept and
+transparent black where they may change, with a fixed instruction appended to the prompt
+saying so. It counts as an input image. The model treats it as guidance, not a hard
+constraint, so pixels outside the mask can change.
+
 ## Failure semantics
 
 A 401 refreshes the token once. A response that arrived (any HTTP status) means the

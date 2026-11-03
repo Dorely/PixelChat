@@ -1,8 +1,8 @@
 import { useCallback, useContext, useEffect, useState } from 'react'
-import type { ImageJob, Item, Revision } from '../shared/types'
+import type { ImageJob, Item, MaskShape, Revision } from '../shared/types'
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS, MAX_IMAGE_COUNT, SIZE_PRESETS, imageModel, type ImageBackground } from '../shared/image-models'
 import Icon from './Icon'
-import { pinLabel, pinnedThreads } from './NotesPanel'
+import { markRegion, markedThreads, pinLabel } from './NotesPanel'
 import { op } from './ops'
 import { ProvidersContext } from './SettingsDialog'
 
@@ -26,21 +26,23 @@ function loadChoices(): Choices {
 const STATUS_LABELS: Record<ImageJob['status'], string> = { queued: 'Queued', running: 'Running', completed: 'Done', failed: 'Failed', uncertain: 'Uncertain', cancelled: 'Cancelled' }
 const STATUS_BADGES: Partial<Record<ImageJob['status'], string>> = { running: 'badge-accent', completed: 'badge-accent', failed: 'badge-danger', uncertain: 'badge-warn' }
 
-/** Open note threads as prompt text, numbered like their pins. */
+/** Open note threads as prompt text, numbered like their marks on the image. */
 function notesText(item: Item) {
-  const pinned = pinnedThreads(item.notes)
+  const marked = markedThreads(item.notes)
   const lines = item.notes.filter(thread => !thread.resolvedAt).map(thread => {
-    const number = pinned.indexOf(thread) + 1
-    return `- ${thread.pin ? `Pin ${number} at ${pinLabel(thread.pin)}: ` : ''}${thread.body}`
+    const number = marked.indexOf(thread) + 1
+    return `- ${number ? `Pin ${number} at ${pinLabel(markRegion(thread))}: ` : ''}${thread.body}`
   })
   return lines.length ? `Address these review notes:\n${lines.join('\n')}` : ''
 }
 
 /**
- * Runs the user's own edit prompt on the viewed version. Results arrive as new versions of the item;
- * choosing one makes the item pending export.
+ * Runs the user's own edit prompt on the viewed version, optionally with the mask painted in the viewer.
+ * Results arrive as new versions of the item; choosing one makes the item pending export.
  */
-export default function EditPanel({ projectId, item, revision, onView, onError }: { projectId: string; item: Item; revision: Revision; onView: (revisionId: string) => void; onError: (message: string) => void }) {
+export default function EditPanel({ projectId, item, revision, mask, onPaintMask, onClearMask, onView, onError }: {
+  projectId: string; item: Item; revision: Revision; mask: MaskShape[]; onPaintMask: () => void; onClearMask: () => void; onView: (revisionId: string) => void; onError: (message: string) => void
+}) {
   const providers = useContext(ProvidersContext)
   const [prompt, setPrompt] = useState('')
   const [choices, setChoices] = useState(loadChoices)
@@ -60,6 +62,7 @@ export default function EditPanel({ projectId, item, revision, onView, onError }
   const sourceTransparent = revision.hasAlpha && !revision.opaque
   const needsAlpha = choices.background === 'transparent' || (choices.background === 'auto' && sourceTransparent)
   const problem = revision.format === 'gif' || revision.frames > 1 ? 'Image edits need a still PNG, WebP, or JPEG version.'
+    : mask.length && !model.mask ? `${model.label} does not take a mask. Choose a Codex model, or clear the mask.`
     : !ready(model.provider) ? `Sign in to ${model.provider === 'codex' ? 'Codex' : 'Gemini'} in Settings to use ${model.label}.`
     : needsAlpha && !model.transparency ? `${model.label} cannot ${sourceTransparent && choices.background === 'auto' ? 'keep this version\'s transparency' : 'make transparent images'}. Choose Image 2.5 Flare or Sunburst, or an opaque background.`
     : needsAlpha && revision.format === 'jpeg' ? 'JPEG cannot store transparency. Choose an opaque background.' : ''
@@ -71,7 +74,7 @@ export default function EditPanel({ projectId, item, revision, onView, onError }
     try {
       await op('edit_image', {
         projectId, itemId: item.id, revisionId: revision.id, prompt: prompt.trim(), model: model.id, quality: choices.quality, background: choices.background,
-        count: choices.count, ...(choices.size === 'source' ? {} : { size: choices.size }), requestId: crypto.randomUUID(),
+        count: choices.count, ...(choices.size === 'source' ? {} : { size: choices.size }), ...(mask.length ? { mask } : {}), requestId: crypto.randomUUID(),
       })
       await loadJobs()
     } catch (error) { onError(error instanceof Error ? error.message : 'Could not start the edit.') }
@@ -87,6 +90,14 @@ export default function EditPanel({ projectId, item, revision, onView, onError }
     <h3>Edit <span>{revision.id === item.selectedRevisionId ? 'selected version' : 'viewed version'}</span></h3>
     <textarea value={prompt} rows={4} maxLength={32000} placeholder="Describe the change to make to this version" aria-label="Edit prompt"
       onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void run() } }} />
+    <div className="mask-row">
+      {mask.length ? <>
+        <span className="badge badge-accent">Mask · {mask.length} {mask.length === 1 ? 'stroke' : 'strokes'}</span>
+        <button className="text-button" onClick={onPaintMask} title="Paint more of the mask (M)">Paint</button>
+        <button className="text-button" onClick={onClearMask}>Clear</button>
+      </> : <button className="text-button" onClick={onPaintMask} title="Paint the area to change on the image (M)"><Icon name="edit" /> Paint a mask</button>}
+    </div>
+    {mask.length > 0 && <small className="quiet-text">The edit targets the painted area; the model may still adjust lighting or shadows outside it.</small>}
     {notes && <button className="text-button add-notes" onClick={() => setPrompt(value => value.trim() ? `${value.trim()}\n\n${notes}` : notes)}><Icon name="plus" /> Add open notes</button>}
     <div className="edit-options">
       <label>Model<select className="filter-select" value={model.id} onChange={event => { const next = imageModel(event.target.value)!; set({ model: next.id, quality: next.qualities.includes(choices.quality) ? choices.quality : 'auto' }) }}>

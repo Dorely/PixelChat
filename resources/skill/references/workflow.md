@@ -36,17 +36,21 @@ an entry tells you the item has moved on since.
   another review, PixelChat only offers it (`offered`) and leaves them where they are: say
   it is ready rather than opening it again.
 
-## Notes and pins
+## Notes, pins, and drawings
 
 Notes belong to an item and to the version they were written on; a review note is on one
 of that review's versions (`note_add` defaults to the item's entry there). A root note may carry a
-pin in that version's pixels: a point `{x, y}` or a box `{x, y, width, height}`. Pins on
-another version than the one you are looking at still describe the older pixels.
+pin in that version's pixels: a point `{x, y}` or a box `{x, y, width, height}`, and a
+drawing (`sketch`): strokes with flat `points` `[x1, y1, x2, y2, ...]`, a `size`, and a
+`color`, where the user circled, crossed out, or sketched what they mean. Marks on another
+version than the one you are looking at still describe the older pixels.
 
 - Treat open root notes as the work list. `needs_changes` with notes is a change request;
   `rejected` usually means start over, not polish.
-- `view_image` draws open pins numbered in note order with their boxes, so you can match
-  a note to the region it means. Use `revisionId` to see the version a note was written
+- `view_image` draws open pins and drawings numbered in note order (a drawing's number
+  sits where it starts) and reports each one's pin or drawing bounds, so you can match a
+  note to the region it means. Look at drawings; their shape (an arrow, an outline, a
+  sketched part) is often the feedback itself. Use `revisionId` to see the version a note was written
   on.
 - Reply with `note_add` and `parentId`. Resolve with `note_update { resolved: true }`
   after the change exists, not when you start. You may edit or delete only your own notes.

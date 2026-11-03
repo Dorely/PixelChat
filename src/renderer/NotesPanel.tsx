@@ -1,5 +1,6 @@
-import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Item, NoteThread, Pin, Revision } from '../shared/types'
+import { forwardRef, useEffect, useId, useRef, useState } from 'react'
+import type { Item, MaskShape, NoteThread, Pin, Revision, Stroke } from '../shared/types'
+import { strokeBounds, strokeStart } from '../shared/marks'
 import Icon from './Icon'
 import { ConfirmDialog } from './Dialogs'
 import { op } from './ops'
@@ -7,66 +8,132 @@ import { op } from './ops'
 const message = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 const author = (origin: string) => origin === 'agent' ? 'Agent' : 'You'
 export const pinLabel = (pin: Pin) => pin.width ? `${pin.x}, ${pin.y} · ${pin.width}×${pin.height}` : `${pin.x}, ${pin.y}`
-/** Open pinned threads in display order; their position is the pin number. */
-export const pinnedThreads = (notes: NoteThread[]) => notes.filter(thread => thread.pin && !thread.resolvedAt)
+/** Open threads with a pin or a drawing, in display order; their position is the number shown on the image. */
+export const markedThreads = (notes: NoteThread[]) => notes.filter(thread => (thread.pin || thread.sketch) && !thread.resolvedAt)
+/** Where a marked thread points: its pin, else the box around its drawing. */
+export const markRegion = (thread: NoteThread) => thread.pin ?? strokeBounds(thread.sketch ?? [])
 
-type Frame = { left: number; top: number; width: number; height: number }
+/** pin: click or drag a note pin. draw: freehand drawing for the next note. mask: paint the area an edit should change. */
+export type Tool = 'pin' | 'draw' | 'mask'
+/** Drawn note lines are this many screen pixels wide at the zoom they were drawn at. */
+const PEN_WIDTH = 3
+const round = (value: number) => Math.round(value * 10) / 10
+
+function StrokeShape({ points, size, color, dashed }: { points: number[]; size: number; color: string; dashed?: boolean }) {
+  if (points.length === 2) return <circle cx={points[0]} cy={points[1]} r={size / 2} fill={color} />
+  return <polyline points={points.join(' ')} fill="none" stroke={color} strokeWidth={size} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={dashed ? `${size * 2.5} ${size * 2}` : undefined} />
+}
+function Drawing({ strokes, dashed }: { strokes: Stroke[]; dashed?: boolean }) {
+  // A dark outline under each line keeps it readable on any art.
+  return <>
+    {strokes.map((stroke, index) => <StrokeShape key={`o${index}`} points={stroke.points} size={stroke.size * 1.8} color="rgba(0, 0, 0, .6)" dashed={dashed} />)}
+    {strokes.map((stroke, index) => <StrokeShape key={index} points={stroke.points} size={stroke.size} color={stroke.color} dashed={dashed} />)}
+  </>
+}
+const MaskShapeView = ({ shape }: { shape: MaskShape }) => shape.kind === 'box'
+  ? <rect x={shape.x} y={shape.y} width={shape.width} height={shape.height} fill={shape.erase ? '#000' : '#fff'} />
+  : <StrokeShape points={shape.points} size={shape.size} color={shape.erase ? '#000' : '#fff'} />
+
+type Point = { x: number; y: number }
+type Gesture = { screen: Point; last: Point; points: number[]; box: boolean }
 
 /**
- * Overlay over the viewed image: shows open pins and turns click or drag into a draft pin.
- * Pins are stored in the noted revision's pixels; ones from another version are drawn dashed.
+ * Overlay that fills the drawn image. Shows open pins and drawings, the draft pin, drawing, and edit mask,
+ * and turns pointer gestures into the active tool's marks. Marks are stored in image pixels of their revision;
+ * ones from another version are drawn dashed and mapped proportionally.
  */
-export function PinLayer({ image, stage, revision, revisions, notes, draft, activeNoteId, onDraft, onActivate }: {
-  image: HTMLImageElement | null; stage: HTMLElement | null; revision: Revision; revisions: Revision[]; notes: NoteThread[]; draft: Pin | null; activeNoteId: string | null
-  onDraft: (pin: Pin) => void; onActivate: (id: string | null) => void
+export function MarkLayer({ revision, revisions, notes, tool, scale, draft, sketch, mask, penColor, brush, erasing, activeNoteId, onDraft, onStroke, onMask, onActivate }: {
+  revision: Revision; revisions: Revision[]; notes: NoteThread[]; tool: Tool; scale: number; draft: Pin | null; sketch: Stroke[]; mask: MaskShape[]
+  penColor: string; brush: number; erasing: boolean; activeNoteId: string | null
+  onDraft: (pin: Pin) => void; onStroke: (stroke: Stroke) => void; onMask: (shape: MaskShape) => void; onActivate: (id: string | null) => void
 }) {
-  const [frame, setFrame] = useState<Frame | null>(null)
-  const [drag, setDrag] = useState<{ start: { x: number; y: number }; screen: { x: number; y: number }; current: Pin } | null>(null)
-  useLayoutEffect(() => {
-    if (!image || !stage) return
-    // The image may letterbox inside its box under object-fit, so map to the drawn content.
-    const measure = () => {
-      if (!image.naturalWidth || !image.clientWidth) return setFrame(null)
-      const scale = Math.min(image.clientWidth / image.naturalWidth, image.clientHeight / image.naturalHeight)
-      const width = image.naturalWidth * scale, height = image.naturalHeight * scale
-      setFrame({ left: image.offsetLeft + (image.clientWidth - width) / 2, top: image.offsetTop + (image.clientHeight - height) / 2, width, height })
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(image); observer.observe(stage)
-    image.addEventListener('load', measure)
-    return () => { observer.disconnect(); image.removeEventListener('load', measure) }
-  }, [image, stage])
-  if (!frame) return null
+  const [gesture, setGesture] = useState<Gesture | null>(null)
+  const [hover, setHover] = useState<Point | null>(null)
+  const maskId = useId()
+  const { width, height } = revision
 
-  const toImage = (event: React.PointerEvent) => {
+  const point = (event: React.PointerEvent): Point => {
     const rect = event.currentTarget.getBoundingClientRect()
-    const clamp = (value: number, max: number) => Math.min(max - 1, Math.max(0, Math.floor(value)))
-    return { x: clamp((event.clientX - rect.left) / rect.width * revision.width, revision.width), y: clamp((event.clientY - rect.top) / rect.height * revision.height, revision.height) }
+    return { x: (event.clientX - rect.left) / rect.width * width, y: (event.clientY - rect.top) / rect.height * height }
   }
-  const box = (a: { x: number; y: number }, b: { x: number; y: number }): Pin => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x) + 1, height: Math.abs(a.y - b.y) + 1 })
-  const sizes = new Map(revisions.map(entry => [entry.id, entry]))
+  const pixel = (p: Point): Point => ({ x: Math.min(width - 1, Math.max(0, Math.floor(p.x))), y: Math.min(height - 1, Math.max(0, Math.floor(p.y))) })
+  const box = (a: Point, b: Point): Required<Pin> => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x) + 1, height: Math.abs(a.y - b.y) + 1 })
+  const first = (points: number[]): Point => ({ x: points[0]!, y: points[1]! })
+  const last = (points: number[]): Point => ({ x: points.at(-2)!, y: points.at(-1)! })
   const shape = (pin: Pin, source: { width: number; height: number }) => pin.width
     ? { left: `${pin.x / source.width * 100}%`, top: `${pin.y / source.height * 100}%`, width: `${pin.width / source.width * 100}%`, height: `${(pin.height ?? 1) / source.height * 100}%` }
     : { left: `${(pin.x + 0.5) / source.width * 100}%`, top: `${(pin.y + 0.5) / source.height * 100}%` }
-  const shown = drag?.current ?? draft
+  const sizes = new Map(revisions.map(entry => [entry.id, entry]))
+  const penSize = round(Math.max(0.1, PEN_WIDTH / scale))
 
-  return <div className="pin-layer" style={frame} title="Click to pin a point, drag to pin a region"
-    onPointerDown={event => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); const start = toImage(event); setDrag({ start, screen: { x: event.clientX, y: event.clientY }, current: start }) }}
-    onPointerMove={event => { if (drag) setDrag({ ...drag, current: box(drag.start, toImage(event)) }) }}
-    onPointerUp={event => {
-      if (!drag) return
-      const moved = Math.hypot(event.clientX - drag.screen.x, event.clientY - drag.screen.y) > 4
-      onDraft(moved ? box(drag.start, toImage(event)) : drag.start); setDrag(null)
+  const finish = (event: React.PointerEvent) => {
+    if (!gesture) return
+    const points = gesture.points.map(round)
+    if (tool === 'pin') {
+      const moved = Math.hypot(event.clientX - gesture.screen.x, event.clientY - gesture.screen.y) > 4
+      onDraft(moved ? box(pixel(first(points)), pixel(last(points))) : pixel(first(points)))
+    } else if (tool === 'draw') onStroke({ points, size: penSize, color: penColor })
+    else if (gesture.box) onMask({ kind: 'box', ...box(pixel(first(points)), pixel(last(points))), ...(erasing ? { erase: true } : {}) })
+    else onMask({ kind: 'stroke', points, size: brush, ...(erasing ? { erase: true } : {}) })
+    setGesture(null)
+  }
+  // The live gesture is previewed as the mark it will become.
+  const liveBox = gesture && (tool === 'pin' || gesture.box) && gesture.points.length === 4 ? box(pixel(first(gesture.points)), pixel(last(gesture.points))) : null
+  const liveMask: MaskShape | null = gesture && tool === 'mask'
+    ? liveBox ? { kind: 'box', ...liveBox, erase: erasing } : { kind: 'stroke', points: gesture.points, size: brush, erase: erasing }
+    : null
+  const shownPin: Pin | null = tool === 'pin' && gesture ? (liveBox ?? pixel(first(gesture.points))) : draft
+  const maskShapes = liveMask ? [...mask, liveMask] : mask
+  const marked = markedThreads(notes)
+
+  return <div className={`mark-layer tool-${tool}`} title={tool === 'pin' ? 'Click to pin a point, drag to pin a region' : tool === 'draw' ? 'Draw on the image for the next note' : 'Paint the area to edit · Shift+drag for a box'}
+    onPointerDown={event => {
+      if (event.button !== 0) return
+      event.currentTarget.setPointerCapture(event.pointerId)
+      const p = point(event), screen = { x: event.clientX, y: event.clientY }
+      setGesture({ screen, last: screen, points: [p.x, p.y], box: tool === 'mask' && event.shiftKey })
     }}
-    onPointerCancel={() => setDrag(null)}>
-    {pinnedThreads(notes).map((thread, index) => {
+    onPointerMove={event => {
+      const p = point(event)
+      if (tool === 'mask') setHover(p)
+      if (!gesture) return
+      if (tool === 'pin' || gesture.box) setGesture({ ...gesture, points: [gesture.points[0]!, gesture.points[1]!, p.x, p.y] })
+      // Freehand lines keep a point every couple of screen pixels.
+      else if (Math.hypot(event.clientX - gesture.last.x, event.clientY - gesture.last.y) >= 2)
+        setGesture({ ...gesture, last: { x: event.clientX, y: event.clientY }, points: [...gesture.points, p.x, p.y] })
+    }}
+    onPointerUp={finish} onPointerCancel={() => setGesture(null)} onPointerLeave={() => setHover(null)}>
+    <svg className="mark-svg" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+      {maskShapes.length > 0 && <>
+        <defs><mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width={width} height={height}>
+          <rect width={width} height={height} fill="#000" />
+          {maskShapes.map((entry, index) => <MaskShapeView key={index} shape={entry} />)}
+        </mask></defs>
+        <rect className="mask-fill" width={width} height={height} mask={`url(#${maskId})`} />
+      </>}
+      {marked.filter(thread => thread.sketch).map(thread => {
+        const source = sizes.get(thread.revisionId) ?? revision
+        return <svg key={thread.id} viewBox={`0 0 ${source.width} ${source.height}`} width={width} height={height} preserveAspectRatio="none"
+          className={`note-drawing${thread.revisionId !== revision.id ? ' drawing-stale' : ''}`}>
+          <Drawing strokes={thread.sketch!} dashed={thread.revisionId !== revision.id} />
+        </svg>
+      })}
+      <Drawing strokes={tool === 'draw' && gesture ? [...sketch, { points: gesture.points, size: penSize, color: penColor }] : sketch} />
+      {tool === 'mask' && hover && <>
+        <circle cx={hover.x} cy={hover.y} r={brush / 2} fill="none" stroke="#000" strokeWidth={3 / scale} />
+        <circle cx={hover.x} cy={hover.y} r={brush / 2} fill="none" stroke={erasing ? '#7dd3fc' : '#fff'} strokeWidth={1.5 / scale} />
+      </>}
+    </svg>
+    {marked.map((thread, index) => {
       const source = sizes.get(thread.revisionId) ?? revision
-      return <button key={thread.id} className={`pin-mark${thread.pin!.width ? ' pin-box' : ''}${thread.revisionId !== revision.id ? ' pin-stale' : ''}${thread.id === activeNoteId ? ' pin-active' : ''}`}
-        style={shape(thread.pin!, source)} onPointerDown={event => event.stopPropagation()} onClick={() => onActivate(thread.id === activeNoteId ? null : thread.id)}
-        aria-label={`Pin ${index + 1}`} title={thread.body}><span>{index + 1}</span></button>
+      // A drawing without a pin is numbered where it starts.
+      const start = thread.sketch && strokeStart(thread.sketch)
+      const pin = thread.pin ?? { x: Math.floor(start!.x), y: Math.floor(start!.y) }
+      return <button key={thread.id} className={`pin-mark${pin.width ? ' pin-box' : ''}${thread.revisionId !== revision.id ? ' pin-stale' : ''}${thread.id === activeNoteId ? ' pin-active' : ''}`}
+        style={shape(pin, source)} onPointerDown={event => event.stopPropagation()} onClick={() => onActivate(thread.id === activeNoteId ? null : thread.id)}
+        aria-label={`Note ${index + 1}`} title={thread.body}><span>{index + 1}</span></button>
     })}
-    {shown && <span className={`pin-mark pin-draft${shown.width ? ' pin-box' : ''}`} style={shape(shown, revision)} />}
+    {shownPin && <span className={`pin-mark pin-draft${shownPin.width ? ' pin-box' : ''}`} style={shape(shownPin, revision)} />}
   </div>
 }
 
@@ -98,6 +165,7 @@ function Thread({ thread, pinNumber, revisionId, active, onActivate, onReply, on
     </header>
     <p>{thread.body}</p>
     {thread.pin && pinNumber === null && <small className="quiet-text">Pinned {pinLabel(thread.pin)}</small>}
+    {thread.sketch && <small className="quiet-text">Drawing {pinLabel(strokeBounds(thread.sketch))}</small>}
     {thread.replies.map(reply => <div key={reply.id} className="note-reply">
       <header><strong className={`note-author author-${reply.author}`}>{author(reply.author)}</strong><small>{new Date(reply.createdAt).toLocaleString()}</small>
         <button className="icon-button" onClick={event => { event.stopPropagation(); onDelete(reply.id) }} aria-label="Delete reply" title="Delete reply"><Icon name="trash" /></button></header>
@@ -115,25 +183,28 @@ function Thread({ thread, pinNumber, revisionId, active, onActivate, onReply, on
 
 /** Item note threads with a composer. Notes target the viewed revision and, in a review, that review. */
 export const NotesPanel = forwardRef<HTMLTextAreaElement, {
-  projectId: string; item: Item; revisionId: string; reviewId?: string; locked?: boolean; draft: Pin | null; activeNoteId: string | null
-  onClearDraft: () => void; onActivate: (id: string | null) => void; onError: (message: string) => void
-}>(function NotesPanel({ projectId, item, revisionId, reviewId, locked, draft, activeNoteId, onClearDraft, onActivate, onError }, composer) {
+  projectId: string; item: Item; revisionId: string; reviewId?: string; locked?: boolean; draft: Pin | null; sketch: Stroke[]; activeNoteId: string | null
+  onClearDraft: () => void; onClearSketch: () => void; onActivate: (id: string | null) => void; onError: (message: string) => void
+}>(function NotesPanel({ projectId, item, revisionId, reviewId, locked, draft, sketch, activeNoteId, onClearDraft, onClearSketch, onActivate, onError }, composer) {
   const [body, setBody] = useState('')
   const [busy, setBusy] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
   const draftRef = useRef(draft)
+  const sketchRef = useRef(sketch)
   draftRef.current = draft
-  const pinned = pinnedThreads(item.notes)
+  sketchRef.current = sketch
+  const pinned = markedThreads(item.notes)
   const open = item.notes.filter(thread => !thread.resolvedAt), resolved = item.notes.filter(thread => thread.resolvedAt)
   const run = async (action: () => Promise<unknown>, fallback: string) => { try { await action(); return true } catch (error) { onError(message(error, fallback)); return false } }
   const add = async () => {
     if (!body.trim() || busy) return
     setBusy(true)
-    const submitted = body, pin = draft
-    if (await run(() => op('note_add', { projectId, itemId: item.id, body: submitted, revisionId, ...(reviewId && !locked ? { reviewId } : {}), ...(pin ? { pin } : {}) }), 'Could not add the note.')) {
-      // Keep anything typed or pinned while the note was saving.
+    const submitted = body, pin = draft, drawing = sketch
+    if (await run(() => op('note_add', { projectId, itemId: item.id, body: submitted, revisionId, ...(reviewId && !locked ? { reviewId } : {}), ...(pin ? { pin } : {}), ...(drawing.length ? { sketch: drawing } : {}) }), 'Could not add the note.')) {
+      // Keep anything typed, pinned, or drawn while the note was saving.
       setBody(current => current === submitted ? '' : current)
       if (draftRef.current === pin) onClearDraft()
+      if (sketchRef.current === drawing) onClearSketch()
     }
     setBusy(false)
   }
@@ -147,10 +218,11 @@ export const NotesPanel = forwardRef<HTMLTextAreaElement, {
     <h3>Notes <span>{open.length}</span></h3>
     <div className="note-composer">
       <textarea ref={composer} rows={3} value={body} onChange={event => setBody(event.target.value)} aria-label="New note"
-        placeholder={draft ? 'Describe what should change in this region…' : 'Leave a note for the agent. Click or drag on the image to pin a region.'}
+        placeholder={draft || sketch.length ? 'Describe what should change where you marked…' : 'Leave a note for the agent. Click or drag on the image to pin a region, or use Draw to mark it up.'}
         onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void add() } if (event.key === 'Escape') event.currentTarget.blur() }} />
       <div className="note-actions">
         {draft && <span className="badge badge-accent pin-chip">Pin {pinLabel(draft)}<button onClick={onClearDraft} aria-label="Remove pin" title="Remove pin"><Icon name="x" /></button></span>}
+        {sketch.length > 0 && <span className="badge badge-accent pin-chip">Drawing · {sketch.length} {sketch.length === 1 ? 'line' : 'lines'}<button onClick={onClearSketch} aria-label="Remove drawing" title="Remove drawing"><Icon name="x" /></button></span>}
         <button className="primary-button" onClick={() => void add()} disabled={busy || !body.trim()} title="Add note (Ctrl+Enter)">Add note</button>
       </div>
       {locked && <small className="quiet-text">This review is completed, so new notes stay on the item only.</small>}

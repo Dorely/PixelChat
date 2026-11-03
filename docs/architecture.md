@@ -48,7 +48,7 @@ library as the desktop app.
 
 ## Persistence
 
-Schema version 4 holds `settings`, `projects`, `sessions`, `sources`, `items`,
+Schema version 6 holds `settings`, `projects`, `sessions`, `sources`, `items`,
 `revisions`, `activity`, `reviews`, `review_entries`, `notes`, `jobs`, and the chat tables
 `messages`, `chat_history`, and `tool_calls`; migrations run in order, and project and
 session deletion cascade. A `Default` project is created
@@ -130,8 +130,9 @@ A **note** belongs to an item and a revision, and optionally to a review, in whi
 the revision must be one of the review's entries (by default the item's entry there). A
 review shows the threads on its entries' versions. Root notes may
 carry a pin in that revision's pixels: a point `{x, y}` or a box `{x, y, width, height}`,
-rounded and clamped to the image. Replies hang off a root (replies to replies attach to
-the root) and carry no pin. Root notes are resolved or reopened by either side; agents may
+rounded and clamped to the image, and a drawing (`sketch`, schema 6): freehand strokes of
+flat `x, y` points with a width and a color, clamped to the image. Replies hang off a root
+(replies to replies attach to the root) and carry neither. Root notes are resolved or reopened by either side; agents may
 edit or delete only their own notes. Item summaries count open root notes, and
 `search_items` filters by `open_notes`.
 
@@ -148,10 +149,17 @@ switches project and view and acknowledges `opened`, and the main process brings
 window forward. While the user is in a different review it leaves them there, shows an
 Open prompt for the target, and acknowledges `offered`.
 
-In the viewer, pins are drawn over the image's rendered content box (measured with a
-`ResizeObserver`, accounting for `object-fit`). Click places a point; drag places a box.
-Pins written against another revision are dashed. The viewer opens at Fit, which scales
-the art up or down to the stage. Review keys: A accept and advance, R reject and advance,
+The viewer draws the image on a canvas at the exact zoomed size, with a mark layer (one
+SVG in image pixels) over it. It opens at Fit, which scales the art up or down to the stage
+(measured with a `ResizeObserver`). Ctrl+wheel zooms smoothly around the cursor (a native
+non-passive listener; the image point under the cursor is kept by adjusting the scroll in a
+layout effect); the buttons and `+`/`-` step through presets, `0` fits, `1` is 1:1, and
+displayed edges stay under 32768 pixels. Middle-drag or Space+drag pans. Tools: Pin (P;
+click a point, drag a box), Draw (D; freehand lines for the next note, in a chosen color,
+3 screen pixels wide at the zoom drawn), and Mask (M; paint the edit area with a brush,
+Shift+drag a box, E erase, `[`/`]` brush size). Ctrl+Z undoes the last stroke; Escape leaves
+a tool. The drawing and mask belong to the viewed version and are cleared when it changes.
+Marks written against another revision are dashed and mapped proportionally. Review keys: A accept and advance, R reject and advance,
 C needs changes and focus the note composer, U clear, N note; they apply to the entry's
 version, and are off while another version of the item is shown. Review board cards carry
 Accept, Changes, and Reject buttons for deciding without opening the viewer. A board's
@@ -176,7 +184,16 @@ returns the original jobs, and reusing it with different arguments is a
 `REQUEST_CONFLICT`. Admission enforces model quality, input-image limits, and
 transparency: `background: auto` on a transparent source means keep transparency, which
 needs a model with native alpha and a non-JPEG format. Background instructions are chosen
-by code and appended to the user's prompt, which is otherwise sent verbatim. Edits default
+by code and appended to the user's prompt, which is otherwise sent verbatim.
+
+`edit_image` may carry a mask: brush strokes and boxes in the source's pixels, later ones
+painting or (`erase`) clearing. Only models with `mask` support (Codex) take one; it needs a
+source, counts toward the input limit, and must cover some pixels. `src/main/mask.ts`
+rasterizes it at the source's size to the ImageGenCli format (opaque white keeps,
+transparent black edits), it is sent as the last input image, and a fixed mask instruction
+joins the background instructions. The mask is targeting guidance, not a pixel-exact
+whitelist; results are never composited back onto the source. The job input and provenance
+keep the shapes. Edits default
 to the source's dimensions and to the format of the file they will be exported to.
 
 Model inputs (the edit source and references) must be still PNG, WebP, or JPEG versions;
@@ -206,8 +223,9 @@ when the source file no longer hashes to the synced revision or is missing, and
 `DESTINATION_EXISTS` for an existing destination; `force` overrides the last two.
 Exporting to the source makes the exported revision the synced one.
 
-In the viewer, the Edit panel runs the user's prompt on the viewed version, can append
-open note threads (with pin coordinates) to the prompt, and lists the item's jobs.
+In the viewer, the Edit panel runs the user's prompt on the viewed version, with the
+painted mask when one is set, can append open note threads (with pin or drawing-box
+coordinates) to the prompt, and lists the item's jobs.
 Versions show the model and a prompt excerpt; "Export to source" appears while the item
 is pending export and asks before overwriting a changed or missing file.
 
@@ -250,7 +268,8 @@ with a pinned Node runtime) forwards operations over it and serves them as a std
 server with review and pending-export resources. The MCP server answers from its built-in
 catalog at once and reaches (or starts) the app per call. `view_image` renders a revision for
 agent vision: flattened onto a chosen backdrop, enlarged by whole pixels or reduced to a
-bound, with open note pins drawn and numbered. An animated version renders one chosen
+bound, with open note pins and drawings drawn (outlined) and numbered; the result lists
+each mark's pin or drawing bounds. An animated version renders one chosen
 frame and reports the frame count. The skill and its references live in
 `resources/skill`; `shared/guidance.ts` embeds the same texts for the `guidance`
 operation and the installer. See [agent workbench](agent-workbench.md).

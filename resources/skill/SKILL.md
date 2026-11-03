@@ -13,11 +13,12 @@ its database, or build a separate review page.
    returned documents if they differ. Discover tools through MCP or `pixelchat tools`;
    CLI calls use `pixelchat call <operation> --input <request.json>`. Choose the project
    explicitly with `projects_list`; the project visible in the window is not your context.
-2. Find the work: `review_list` and `review_get` give decisions and note threads with pins;
+2. Find the work: `review_list` and `review_get` give decisions and note threads with pins
+   and drawings;
    `search_items` with status `open_notes` or `pending_export` finds items across reviews.
    Read [review workflow](references/workflow.md) for notes, pins, and following changes.
-3. Look before you judge. `view_image` returns the image with open pins numbered and
-   drawn; use it whenever a note refers to what the art looks like. Size and alpha facts
+3. Look before you judge. `view_image` returns the image with open pins and drawings
+   numbered and drawn; use it whenever a note refers to what the art looks like. Size and alpha facts
    are not a visual review, and file names are not evidence of content.
 4. Decisions are the user's. Record `review_decide` only when the user asks. Reply to a
    note with `note_add` and `parentId`; resolve the thread with `note_update` once the

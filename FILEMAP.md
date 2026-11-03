@@ -47,7 +47,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | --- | --- |
 | [src/main/index.ts](src/main/index.ts) | Electron lifecycle, hardened window, fixed IPC command schemas, `pixel-media` protocol, bridge and browser-mode startup. |
 | [src/main/bridge.ts](src/main/bridge.ts) | Token-authenticated named-pipe bridge for the CLI with DPAPI-protected discovery. |
-| [src/main/view-image.ts](src/main/view-image.ts) | Renders a revision as a PNG for agent vision: backdrop, scaling, numbered note pins. |
+| [src/main/view-image.ts](src/main/view-image.ts) | Renders a revision as a PNG for agent vision: backdrop, scaling, numbered note pins and drawings. |
 | [src/main/store.ts](src/main/store.ts) | SQLite schema and repository for settings, projects, sessions, sources, items, revisions, reviews, notes, image jobs, and the activity log. |
 | [src/main/media.ts](src/main/media.ts) | Stores exact original bytes (plus provider originals of converted results) and WebP thumbnails per revision; reads image facts with sharp. |
 | [src/main/library.ts](src/main/library.ts) | Source folders, background scans and rescans, glob filters, loose-file imports, and conflict-checked export. |
@@ -58,6 +58,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/main/chat-context.ts](src/main/chat-context.ts) | tiktoken context estimate with image estimates. |
 | [src/main/operations.ts](src/main/operations.ts) | Operation registry for UI, assistant, CLI, and MCP: validation, execution, and error envelopes. |
 | [src/main/images.ts](src/main/images.ts) | Image job admission, bounded scheduler, rate-limit retry, and result revisions with provenance. |
+| [src/main/mask.ts](src/main/mask.ts) | Rasterizes edit-mask shapes to the transparent-black edit mask and holds the mask instruction. |
 | [src/main/ui-port.ts](src/main/ui-port.ts) | Acknowledged navigation commands from operations to the renderer. |
 | [src/main/browser-host.ts](src/main/browser-host.ts) | Loopback HTTP host (`/rpc`, `/events`, `/media/`) for browser development. |
 | [src/main/diagnostics.ts](src/main/diagnostics.ts) | Redacted JSONL diagnostic log with references for user-facing errors. |
@@ -78,7 +79,8 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/shared/types.ts](src/shared/types.ts) | Domain records, renderer snapshot, and the `window.pixel` API type. |
 | [src/shared/workbench.ts](src/shared/workbench.ts) | Operation origins, envelopes, UI commands, `WorkbenchError`, and the installation schema. |
 | [src/shared/chat-models.ts](src/shared/chat-models.ts) | Built-in Codex chat models, efforts, context sizes, and direct-Gemini endpoint detection. |
-| [src/shared/image-models.ts](src/shared/image-models.ts) | Image model catalog (provider, qualities, alpha, input limits), size presets, and defaults. |
+| [src/shared/image-models.ts](src/shared/image-models.ts) | Image model catalog (provider, qualities, alpha, mask support, input limits), size presets, and defaults. |
+| [src/shared/marks.ts](src/shared/marks.ts) | Bounds and start point of note drawings. |
 | [src/shared/api.ts](src/shared/api.ts) | Builds the fixed renderer API over a transport (IPC or browser host). |
 | [src/shared/operation-catalog.ts](src/shared/operation-catalog.ts) | Operation schemas and descriptions, and the JSON tool catalog the CLI and MCP serve. |
 | [src/shared/guidance.ts](src/shared/guidance.ts) | Embedded skill references, their hash, and topic selection. |
@@ -104,11 +106,11 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/renderer/Dialogs.tsx](src/renderer/Dialogs.tsx) | Shared modal shell and destructive-action confirmation. |
 | [src/renderer/LibraryView.tsx](src/renderer/LibraryView.tsx) | Library grid with search and filters, source management, and add-folder dialog. |
 | [src/renderer/ItemCard.tsx](src/renderer/ItemCard.tsx) | Grid card and thumbnail shared by Library and review boards; decision labels and in-card review decisions. |
-| [src/renderer/ItemViewer.tsx](src/renderer/ItemViewer.tsx) | Item inspection (opens at Fit): zoom, backdrops, versions, notes, edits, export, and keyboard decisions on a review entry's version. |
-| [src/renderer/EditPanel.tsx](src/renderer/EditPanel.tsx) | Viewer edit prompt, model options, open-notes insertion, and the item's job list. |
+| [src/renderer/ItemViewer.tsx](src/renderer/ItemViewer.tsx) | Item inspection (opens at Fit): Ctrl+wheel zoom at the cursor, panning, Pin/Draw/Mask tools, backdrops, versions, notes, edits, export, and keyboard decisions on a review entry's version. |
+| [src/renderer/EditPanel.tsx](src/renderer/EditPanel.tsx) | Viewer edit prompt, model options, mask status, open-notes insertion, and the item's job list. |
 | [src/renderer/SettingsDialog.tsx](src/renderer/SettingsDialog.tsx) | Codex sign-in, Gemini key, chat model, and agent settings; provider-readiness context. |
 | [src/renderer/AgentSettings.tsx](src/renderer/AgentSettings.tsx) | Settings section to install, preview, check, and remove the agent skill and MCP registration. |
-| [src/renderer/NotesPanel.tsx](src/renderer/NotesPanel.tsx) | Note threads, composer, and the pin overlay that turns clicks and drags into region pins. |
+| [src/renderer/NotesPanel.tsx](src/renderer/NotesPanel.tsx) | Note threads, composer, and the mark layer that draws pins, drawings, and the edit mask and turns gestures into them. |
 | [src/renderer/ReviewsView.tsx](src/renderer/ReviewsView.tsx) | Review list, new-review dialog, and review boards with decision filters and an active-review switcher. |
 | [src/renderer/browser-api.ts](src/renderer/browser-api.ts) | Browser-host transport and host-path dialog for development. |
 | [src/renderer/ops.ts](src/renderer/ops.ts) | Calls registry operations and unwraps envelopes into errors that keep their code. |

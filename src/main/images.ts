@@ -2,16 +2,17 @@ import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { WorkbenchError, type Origin } from '../shared/workbench';
 import { DEFAULT_IMAGE_MODEL, imageModel, type ImageBackground, type ImageFormat, type ImageProviderId } from '../shared/image-models';
-import type { ImageJob, ImageJobInput, Revision, RevisionMeta } from '../shared/types';
+import type { ImageJob, ImageJobInput, MaskShape, Revision, RevisionMeta } from '../shared/types';
 import { imageFacts, MEDIA_TYPES, type MediaStore } from './media';
 import type { Store } from './store';
 import { redactText, type DiagnosticLog } from './diagnostics';
 import { ImageProviderError, type ImageInput, type ImageProvider } from './providers/image-provider';
 import { resolveCodexSize, resolveGeminiSize } from './providers/image-size';
+import { MASK_INSTRUCTION, renderMask } from './mask';
 
 const CONCURRENCY = 4;
 const RATE_LIMIT_RETRIES = 2, MAX_RETRY_WAIT_SECONDS = 120;
-/** Background treatment is chosen by code and appended to the user's prompt, which is otherwise sent verbatim. */
+/** Background and mask instructions are chosen by code and appended to the user's prompt, which is otherwise sent verbatim. */
 const INSTRUCTIONS = {
   transparent: 'Background: real alpha transparency around the subject, with clean edges. No painted checkerboard, solid backdrop, scenery, floor, or cast shadow unless described above. Keep meaningful translucency.',
   keepTransparent: 'Keep the transparent alpha background: real transparency outside the subject, clean edges, and no added backdrop, checkerboard, or shadow.',
@@ -21,6 +22,8 @@ const INSTRUCTIONS = {
 export interface ImageArgs {
   prompt: string; model?: string; quality?: string; background?: ImageBackground; format?: ImageFormat; size?: string; count?: number;
   referenceItemIds?: string[]; requestId?: string;
+  /** Edit only: the area to change, in source pixels. */
+  mask?: MaskShape[];
   /** Generate: optional item to receive the results as new versions. Edit: required source item. */
   itemId?: string; revisionId?: string; collection?: string; name?: string;
 }
@@ -61,8 +64,13 @@ export class ImageJobs {
     if (source && !still(source)) throw new WorkbenchError('UNSUPPORTED_IMAGE', `Image edits need a still PNG, WebP, or JPEG version; this version is ${source.frames > 1 ? `an animation of ${source.frames} frames` : 'a GIF'}.`);
     const unusable = referenceItems.find(item => !still(item.selected));
     if (unusable) throw new WorkbenchError('UNSUPPORTED_IMAGE', `Reference "${unusable.name}" is an animated or GIF image; references must be still PNG, WebP, or JPEG versions.`);
-    if ((source ? 1 : 0) + references.length > model.maxInputs)
-      throw new WorkbenchError('INVALID_ARGUMENTS', `${model.label} takes at most ${model.maxInputs} input images per request${source ? ', including the edit source' : ''}.`);
+    const mask = args.mask?.length ? args.mask : null;
+    if (mask && !source) throw new WorkbenchError('INVALID_ARGUMENTS', 'A mask applies only to edits.');
+    if (mask && !model.mask) throw new WorkbenchError('INVALID_ARGUMENTS', `${model.label} does not take a mask. Choose a Codex model, or describe the region in the prompt.`);
+    if ((source ? 1 : 0) + references.length + (mask ? 1 : 0) > model.maxInputs)
+      throw new WorkbenchError('INVALID_ARGUMENTS', `${model.label} takes at most ${model.maxInputs} input images per request${source ? `, including the edit source${mask ? ' and the mask' : ''}` : ''}.`);
+    // Refuse a mask that covers nothing before anything is queued.
+    if (mask) await renderMask(mask, source!.width, source!.height);
 
     const sourceTransparent = !!source && source.hasAlpha && !source.opaque;
     const background = args.background ?? 'auto';
@@ -80,8 +88,8 @@ export class ImageJobs {
     const input: ImageJobInput = {
       kind, prompt: args.prompt, model: model.id, quality, format, size,
       background: alpha ? 'transparent' : background,
-      instructions: alpha ? (sourceTransparent ? INSTRUCTIONS.keepTransparent : INSTRUCTIONS.transparent) : background === 'opaque' ? INSTRUCTIONS.opaque : '',
-      sourceRevisionId: source?.id ?? null, referenceRevisionIds: references,
+      instructions: [alpha ? (sourceTransparent ? INSTRUCTIONS.keepTransparent : INSTRUCTIONS.transparent) : background === 'opaque' ? INSTRUCTIONS.opaque : '', mask ? MASK_INSTRUCTION : ''].filter(Boolean).join('\n\n'),
+      sourceRevisionId: source?.id ?? null, referenceRevisionIds: references, mask,
       collection: target ? null : args.collection ?? 'Generated', name: target ? null : args.name ?? promptName(args.prompt),
     };
     const { requestId, ...request } = args;
@@ -108,6 +116,11 @@ export class ImageJobs {
     let stored: { id: string; file: string } | null = null;
     try {
       const images = await Promise.all([input.sourceRevisionId, ...input.referenceRevisionIds].filter((id): id is string => !!id).map(id => this.imageInput(id, job.projectId)));
+      if (input.mask) {
+        // The provider has no mask field: the mask travels as the last input image, read by the appended instruction.
+        const { width, height } = this.store.revisionFile(input.sourceRevisionId!, job.projectId)!;
+        images.push({ data: await renderMask(input.mask, width, height), contentType: 'image/png' });
+      }
       const prompt = input.instructions ? `${input.prompt}\n\n${input.instructions}` : input.prompt;
       const size = model.provider === 'codex' ? resolveCodexSize(input.size).size : input.size;
       const result = await this.attempt(() => this.providers[model.provider].run({ prompt, model: model.id, quality: input.quality, size, images, signal }), signal);
@@ -119,6 +132,7 @@ export class ImageJobs {
           jobId: job.id, batchId: job.batchId, provider: model.provider, model: model.id, quality: input.quality, background: input.background, size: input.size,
           requestedRaster: model.provider === 'codex' ? size : resolveGeminiSize(input.size, model.id).size,
           prompt: input.prompt, instructions: input.instructions, sourceRevisionId: input.sourceRevisionId, referenceRevisionIds: input.referenceRevisionIds,
+          ...(input.mask ? { mask: input.mask } : {}),
           requestId: result.requestId ?? null, responseId: result.responseId ?? null, usage: result.usage ?? null,
           ...(providerFile ? { providerFile, convertedTo: input.format } : {}),
         },

@@ -334,3 +334,29 @@ secure-storage, or platform integration.
   PixelChat version"; `app.start_failed` in the diagnostic log). The scratch checks never
   restarted a migrated profile, so they missed it. Set it to 5, repackaged, and reinstalled
   unsandboxed; the app started on the existing library and `status` answered ready.
+
+## 2026-11-02 — Edit masks, note drawings, and cursor zoom
+
+- `npm run typecheck` and `npm run build` succeeded.
+- Scratch Electron host with its own `appData` (the real library stays at schema 5 for the
+  installed app), `npm run dev:browser`-style loopback renderer in the built-in browser,
+  scratch art (800×600 grid, 48×48 blob):
+  - Fit opened at 40%. Ctrl+wheel (synthetic `WheelEvent`s with `ctrlKey`) zoomed with the
+    image point under the cursor fixed horizontally within 0.6 px; vertically it recentered
+    while the image was shorter than the stage, then held. The event was default-prevented.
+    Space+drag panned without painting.
+  - Draw: a line drawn, Ctrl+Enter added the note with its `sketch`; it showed numbered at
+    the stroke start and as "Drawing x, y · w×h" in the thread.
+  - Mask: a brush stroke and a Shift+drag box registered; the Edit panel showed
+    "Mask · 2 strokes"; Ctrl+Z removed one; Escape returned to Pin.
+  - Admission: mask with a Gemini model refused; empty mask (and one fully erased) refused;
+    `generate_images` with `mask` refused as an unrecognized key; too many inputs refused
+    with "including the edit source and the mask". A Codex masked edit queued and failed
+    with "Codex is not signed in." (nothing billed), recording the instructions and mask.
+  - `view_image` drew the drawing outlined with label 1 and reported its bounds.
+- Rasterizer (an esbuild bundle of `mask.ts` outside the repo): a round stroke, an erase box
+  cut out of it, and a single-point dot came out as transparent black in an opaque white PNG
+  at the source size.
+- Not checked: a real billed Codex masked edit, the native desktop window, physical mouse
+  Ctrl+wheel and middle-drag (synthetic events only), and an agent reading drawings over
+  MCP/CLI. Scratch host shut down and scratch files removed.

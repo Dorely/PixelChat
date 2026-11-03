@@ -199,11 +199,20 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .segmented button.active { color: var(--accent); background: var(--accent-soft); }
 .zoom-value { min-width: 48px; padding: 0 6px; border-right: 1px solid var(--line); color: var(--text-2); text-align: center; font: 11px var(--font-mono); line-height: 28px; }
 .toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
-.viewer-stage { flex: 1; min-height: 0; overflow: auto; padding: 24px; text-align: center; }
-.viewer-stage img { display: inline-block; vertical-align: middle; }
-.viewer-stage.stage-fit { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; overflow: hidden; }
-/* Fit scales art up or down to the stage; the pin layer maps to the letterboxed content. */
-.viewer-stage.stage-fit img { width: 100%; height: 100%; object-fit: contain; }
+.viewer-stage { position: relative; display: flex; flex: 1; min-height: 0; overflow: auto; padding: 24px; }
+/* The canvas is the drawn image's exact size; auto margins center it until it outgrows the stage, then it scrolls. */
+.viewer-canvas { position: relative; flex: none; margin: auto; }
+.viewer-canvas img { display: block; width: 100%; height: 100%; user-select: none; }
+.stage-pan .mark-layer { cursor: grab; }
+.stage-panning .mark-layer { cursor: grabbing; }
+.tool-options { display: inline-flex; align-items: center; gap: 6px; }
+.tool-options .text-button { font-size: 12px; }
+.tool-options .text-button:disabled, .tool-options .icon-button:disabled { opacity: .4; cursor: default; }
+.swatch { width: 20px; height: 20px; padding: 0; border: 2px solid var(--line-strong); border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .35); }
+.swatch.active { border-color: var(--text); outline: 2px solid var(--accent-line); outline-offset: 1px; }
+.brush-size { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.brush-size input { width: 110px; }
+.brush-size span { min-width: 42px; color: var(--text-2); font: 11px var(--font-mono); }
 .backdrop-checker { background-color: #bdbdbd; background-image: conic-gradient(#8f8f8f 25%, transparent 0 50%, #8f8f8f 0 75%, transparent 0); background-size: 24px 24px; }
 .backdrop-dark { background: #121212; }
 .backdrop-light { background: #f4f4f1; }
@@ -249,8 +258,12 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .toolbar-hint { margin-left: auto; color: var(--quiet); font: 11px var(--font-mono); }
 
 /* Pins */
-.viewer-stage { position: relative; }
-.pin-layer { position: absolute; cursor: crosshair; touch-action: none; }
+.mark-layer { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
+.mark-layer.tool-mask { cursor: none; }
+.mark-layer.tool-mask .pin-mark { opacity: .45; pointer-events: none; }
+.mark-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.mask-fill { fill: rgba(255, 45, 85, .45); }
+.drawing-stale { opacity: .6; }
 .pin-mark { position: absolute; display: grid; place-items: center; width: 22px; height: 22px; margin: -11px 0 0 -11px; padding: 0; border: 2px solid #fff; border-radius: 50%; color: #fff; background: var(--accent-strong); box-shadow: 0 1px 6px rgba(0, 0, 0, .55); font: 700 11px var(--font-mono); cursor: pointer; }
 .pin-mark.pin-box { display: block; margin: 0; border-radius: 2px; background: color-mix(in srgb, var(--accent-strong) 16%, transparent); border-color: var(--accent-strong); box-shadow: 0 0 0 1px rgba(0, 0, 0, .5); }
 .pin-mark.pin-box span { position: absolute; top: -11px; left: -11px; display: grid; place-items: center; width: 22px; height: 22px; border: 2px solid #fff; border-radius: 50%; background: var(--accent-strong); }
@@ -268,6 +281,7 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .note-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
 .note-actions .text-button { font-size: 12px; }
 .pin-chip { gap: 4px; margin-right: auto; }
+.pin-chip:has(+ .pin-chip) { margin-right: 0; }
 .pin-chip button { display: grid; place-items: center; padding: 0; border: 0; color: inherit; background: transparent; font-size: 10px; }
 .note-list { display: grid; gap: 8px; }
 .note-list > .quiet-text { margin: 0; }
@@ -326,6 +340,9 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .edit-panel textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; outline: 0; resize: vertical; color: var(--text); background: var(--surface-2); font: 13px/1.45 var(--font-sans); }
 .edit-panel textarea:focus { border-color: var(--accent-line); }
 .edit-panel .add-notes { align-self: flex-start; font-size: 12px; }
+.mask-row { display: flex; align-items: center; gap: 10px; }
+.mask-row .text-button { font-size: 12px; }
+.mask-row .icon { margin: 0 4px 0 0; }
 .edit-panel .add-notes .icon { margin: 0 4px 0 0; }
 .edit-panel p { margin: 0; font-size: 12px; line-height: 1.45; }
 .edit-panel > small { font-size: 11px; line-height: 1.4; }

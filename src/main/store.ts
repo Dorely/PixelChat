@@ -2,9 +2,9 @@ import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { WorkbenchError } from '../shared/workbench';
-import type { ActivityEntry, Decision, ImageJob, ImageJobInput, Item, ItemSearchResult, ItemStatusFilter, ItemSummary, Note, NoteThread, Origin, Pin, Project, Review, ReviewEntry, ReviewMode, ReviewStatus, ReviewSummary, Revision, RevisionOrigin, ScanReport, Session, Source, TitleSource } from '../shared/types';
+import type { ActivityEntry, Stroke, Decision, ImageJob, ImageJobInput, Item, ItemSearchResult, ItemStatusFilter, ItemSummary, Note, NoteThread, Origin, Pin, Project, Review, ReviewEntry, ReviewMode, ReviewStatus, ReviewSummary, Revision, RevisionOrigin, ScanReport, Session, Source, TitleSource } from '../shared/types';
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const ACTIVE_PROJECT_KEY = 'project-active';
 const DEFAULT_PROJECT_NAME = 'Default';
 export const now = () => new Date().toISOString();
@@ -28,7 +28,7 @@ const itemSummary = (r: Row): ItemSummary => ({
 });
 const note = (r: Row): Note => ({
   id: r.id, projectId: r.project_id, itemId: r.item_id, reviewId: r.review_id, revisionId: r.revision_id, parentId: r.parent_id, author: r.author,
-  body: r.body, pin: r.pin ? JSON.parse(r.pin) : null, resolvedAt: r.resolved_at, resolvedBy: r.resolved_by, createdAt: r.created_at, updatedAt: r.updated_at,
+  body: r.body, pin: r.pin ? JSON.parse(r.pin) : null, sketch: r.sketch ? JSON.parse(r.sketch) : null, resolvedAt: r.resolved_at, resolvedBy: r.resolved_by, createdAt: r.created_at, updatedAt: r.updated_at,
 });
 /** Groups notes ordered by creation into root threads with their replies. */
 const threads = (rows: Row[]): NoteThread[] => {
@@ -64,6 +64,11 @@ export function clampPin(pin: Pin, width: number, height: number): Pin {
   if (pin.width === undefined || pin.height === undefined) return { x, y };
   return { x, y, width: clamp(pin.width, 1, width - x), height: clamp(pin.height, 1, height - y) };
 }
+/** Keeps drawing points inside the image, rounded to a tenth of a pixel. */
+export function clampSketch(strokes: Stroke[], width: number, height: number): Stroke[] {
+  const round = (value: number, max: number) => Math.round(Math.min(max, Math.max(0, value)) * 10) / 10;
+  return strokes.map(stroke => ({ points: stroke.points.map((value, index) => round(value, index % 2 ? height : width)), size: Math.max(0.1, Math.round(stroke.size * 10) / 10), color: stroke.color.toLowerCase() }));
+}
 
 /** Stored facts for a new revision; MediaStore writes the file first. */
 export interface RevisionInput { id: string; file: string; sha256: string; bytes: number; width: number; height: number; frames: number; format: Revision['format']; hasAlpha: boolean; opaque: boolean; origin: RevisionOrigin; parentId?: string | null; provenance?: Record<string, unknown> }
@@ -71,8 +76,8 @@ export interface ItemPatch { name?: string; description?: string; tags?: string[
 export interface ReviewPatch {
   title?: string; instructions?: string; mode?: ReviewMode; revisionIds?: string[]; addRevisionIds?: string[]; referenceRevisionIds?: string[]; addReferenceRevisionIds?: string[]
 }
-export interface NoteInput { itemId: string; body: string; reviewId?: string; revisionId?: string; parentId?: string; pin?: Pin }
-export interface NotePatch { body?: string; pin?: Pin | null; resolved?: boolean }
+export interface NoteInput { itemId: string; body: string; reviewId?: string; revisionId?: string; parentId?: string; pin?: Pin; sketch?: Stroke[] }
+export interface NotePatch { body?: string; pin?: Pin | null; sketch?: Stroke[] | null; resolved?: boolean }
 
 /** SQLite owner for every workspace record. Callers pass explicit project scope. */
 export class Store {
@@ -160,6 +165,13 @@ export class Store {
         ALTER TABLE reviews ADD COLUMN mode TEXT NOT NULL DEFAULT 'standard';
         ALTER TABLE review_entries ADD COLUMN role TEXT NOT NULL DEFAULT 'subject';
         PRAGMA user_version = 5;
+      `);
+    })();
+    // A root note may carry a freehand drawing beside or instead of its pin.
+    if (version < 6) this.db.transaction(() => {
+      this.db.exec(`
+        ALTER TABLE notes ADD COLUMN sketch TEXT;
+        PRAGMA user_version = 6;
       `);
     })();
     if (!this.db.prepare('SELECT 1 FROM projects LIMIT 1').get()) this.createProject(DEFAULT_PROJECT_NAME);
@@ -534,7 +546,7 @@ export class Store {
     if (input.parentId) {
       const parent = this.noteRow(input.parentId, projectId);
       if (parent.item_id !== item.id) throw new WorkbenchError('INVALID_ARGUMENTS', 'A reply must be on the same item as its note.');
-      if (input.pin) throw new WorkbenchError('INVALID_ARGUMENTS', 'Replies cannot carry pins. Add a new note for another region.');
+      if (input.pin || input.sketch) throw new WorkbenchError('INVALID_ARGUMENTS', 'Replies cannot carry pins or drawings. Add a new note for another region.');
       parentId = parent.parent_id ?? parent.id;
       reviewId = input.reviewId ?? parent.review_id;
       revisionId = input.revisionId ?? parent.revision_id;
@@ -544,25 +556,28 @@ export class Store {
     if (!item.revisions.some(entry => entry.id === revisionId)) throw new WorkbenchError('NOT_FOUND', 'Revision not found on this item.');
     const size = this.revisionSize(revisionId);
     const pin = input.pin ? clampPin(input.pin, size.width, size.height) : null;
+    const sketch = input.sketch ? clampSketch(input.sketch, size.width, size.height) : null;
     const id = randomUUID(), at = now();
     this.tx(() => {
-      this.db.prepare('INSERT INTO notes (id,project_id,item_id,review_id,revision_id,parent_id,author,body,pin,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-        .run(id, projectId, item.id, reviewId, revisionId, parentId, origin, input.body.trim(), pin ? JSON.stringify(pin) : null, at, at);
-      this.appendActivity(projectId, origin, 'note.added', { itemId: item.id, reviewId: reviewId ?? undefined }, { noteId: id, parentId, revisionId, pinned: !!pin });
+      this.db.prepare('INSERT INTO notes (id,project_id,item_id,review_id,revision_id,parent_id,author,body,pin,sketch,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(id, projectId, item.id, reviewId, revisionId, parentId, origin, input.body.trim(), pin ? JSON.stringify(pin) : null, sketch ? JSON.stringify(sketch) : null, at, at);
+      this.appendActivity(projectId, origin, 'note.added', { itemId: item.id, reviewId: reviewId ?? undefined }, { noteId: id, parentId, revisionId, pinned: !!pin, drawn: !!sketch });
     });
     return note(this.noteRow(id, projectId));
   }
   /** Agents may change only their own notes; anyone may resolve or reopen a thread. */
   updateNote(id: string, projectId: string, patch: NotePatch, origin: Origin): Note {
     const row = this.noteRow(id, projectId);
-    if ((patch.body !== undefined || patch.pin !== undefined) && origin === 'agent' && row.author !== 'agent') throw new WorkbenchError('FORBIDDEN', "Agents cannot edit the user's notes. Reply instead.");
-    if (row.parent_id && (patch.pin || patch.resolved !== undefined)) throw new WorkbenchError('INVALID_ARGUMENTS', 'Only root notes carry pins and resolution.');
-    let pin: string | null = row.pin;
-    if (patch.pin !== undefined) { const size = this.revisionSize(row.revision_id); pin = patch.pin ? JSON.stringify(clampPin(patch.pin, size.width, size.height)) : null; }
+    if ((patch.body !== undefined || patch.pin !== undefined || patch.sketch !== undefined) && origin === 'agent' && row.author !== 'agent') throw new WorkbenchError('FORBIDDEN', "Agents cannot edit the user's notes. Reply instead.");
+    if (row.parent_id && (patch.pin || patch.sketch || patch.resolved !== undefined)) throw new WorkbenchError('INVALID_ARGUMENTS', 'Only root notes carry pins, drawings, and resolution.');
+    const size = this.revisionSize(row.revision_id);
+    let pin: string | null = row.pin, sketch: string | null = row.sketch;
+    if (patch.pin !== undefined) pin = patch.pin ? JSON.stringify(clampPin(patch.pin, size.width, size.height)) : null;
+    if (patch.sketch !== undefined) sketch = patch.sketch ? JSON.stringify(clampSketch(patch.sketch, size.width, size.height)) : null;
     const resolving = patch.resolved !== undefined && patch.resolved !== !!row.resolved_at;
     const kind = resolving ? (patch.resolved ? 'note.resolved' : 'note.reopened') : 'note.updated';
     this.tx(() => {
-      this.db.prepare('UPDATE notes SET body=?, pin=?, resolved_at=?, resolved_by=?, updated_at=? WHERE id=?').run(patch.body?.trim() ?? row.body, pin,
+      this.db.prepare('UPDATE notes SET body=?, pin=?, sketch=?, resolved_at=?, resolved_by=?, updated_at=? WHERE id=?').run(patch.body?.trim() ?? row.body, pin, sketch,
         resolving ? (patch.resolved ? now() : null) : row.resolved_at, resolving ? (patch.resolved ? origin : null) : row.resolved_by, now(), id);
       this.appendActivity(projectId, origin, kind, { itemId: row.item_id, reviewId: row.review_id ?? undefined }, { noteId: id, fields: Object.keys(patch) });
     });
@@ -646,8 +661,8 @@ export class Store {
   }
 
   /** Revision file and format, scoped to a project, for media serving. */
-  revisionFile(id: string, projectId: string): { file: string; format: Revision['format'] } | null {
-    const row = this.db.prepare('SELECT r.file, r.format FROM revisions r JOIN items i ON i.id = r.item_id WHERE r.id=? AND i.project_id=?').get(id, projectId) as Row | undefined;
-    return row ? { file: row.file, format: row.format } : null;
+  revisionFile(id: string, projectId: string): { file: string; format: Revision['format']; width: number; height: number } | null {
+    const row = this.db.prepare('SELECT r.file, r.format, r.width, r.height FROM revisions r JOIN items i ON i.id = r.item_id WHERE r.id=? AND i.project_id=?').get(id, projectId) as Row | undefined;
+    return row ? { file: row.file, format: row.format, width: row.width, height: row.height } : null;
   }
 }
