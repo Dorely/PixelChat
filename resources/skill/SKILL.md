@@ -38,8 +38,9 @@ its database, or build a separate review page.
    is final; never expect new art to appear in it.
 
 8. Shape the review to the question. For "which of these?", create a contest
-   (`review_create` with `mode: "contest"` and at least two candidates); the winner is the
-   entry the user accepted, and none accepted means no pick yet. For yes/no or fix-it
+   (`review_create` with `mode: "contest"` and at least two candidates, and `picks` when
+   more than one should win); the winners are the entries the user accepted, the rest take no
+   decision, and fewer accepted than `picks` means the user is not done. For yes/no or fix-it
    feedback, use a standard review. Attach reference images (`referenceItemIds`: a style
    target, the art currently in the game, sibling assets) to either kind when the user needs
    context to judge; references take notes but no decision. See the workflow reference.

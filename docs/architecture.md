@@ -36,7 +36,14 @@ through `ui-port.ts`, which sends `pixel:ui-command` and waits up to 15 seconds 
 renderer's acknowledgement.
 
 The window has no menu, denies `window.open`, navigation, and permission requests, and
-loads media only through the `pixel-media://` protocol.
+loads media only through the `pixel-media://` protocol. It reopens at its last size,
+position, and maximized state (the `window-bounds` setting) when a display can still show it.
+
+Renderer preferences live in its local storage: theme, viewer and edit options, and the
+layout (`pixelchat.layout`: the workspace view and whether the chat sidebar is shown, and its
+width). Hiding the sidebar keeps it mounted, so a composer draft survives; the toggle is in
+the top bar and the viewer header. The browser host picks a new port per run, so these last
+across reloads there but not across its runs.
 
 ## Browser development host
 
@@ -48,7 +55,7 @@ library as the desktop app.
 
 ## Persistence
 
-Schema version 6 holds `settings`, `projects`, `sessions`, `sources`, `items`,
+Schema version 7 holds `settings`, `projects`, `sessions`, `sources`, `items`,
 `revisions`, `activity`, `reviews`, `review_entries`, `notes`, `jobs`, and the chat tables
 `messages`, `chat_history`, and `tool_calls`; migrations run in order, and project and
 session deletion cascade. A `Default` project is created
@@ -138,8 +145,11 @@ edit or delete only their own notes. Item summaries count open root notes, and
 
 A review has a mode, `standard` or `contest`, and each entry a role, `subject` or `reference`
 (schema 5). Counts, progress, and decisions cover subjects only; `decide` refuses a reference
-entry. In a contest, accepting a candidate is the pick: the store clears any earlier accepted
-candidate in the same transaction and logs it, and one call cannot accept two. References are
+entry. In a contest, a candidate is only picked (`accepted`) or left `unreviewed`, and the other
+decisions are refused. `picks` (schema 7, default 1, fewer than the candidates) says how many
+win; a pick past the limit clears the oldest in the same transaction and logs it, and one call
+cannot accept more than the limit. Lowering `picks` below the current picks is refused. Contests
+made before this keep any recorded rejections, shown but no longer offered. References are
 context beside the decision (notes allowed, never decided), set by `review_create` /
 `review_update` (`referenceItemIds`, `referenceRevisionIds`, `addReference*`).
 
@@ -161,8 +171,9 @@ Shift+drag a box, E erase, `[`/`]` brush size). Ctrl+Z undoes the last stroke; E
 a tool. The drawing and mask belong to the viewed version and are cleared when it changes.
 Marks written against another revision are dashed and mapped proportionally. Review keys: A accept and advance, R reject and advance,
 C needs changes and focus the note composer, U clear, N note; they apply to the entry's
-version, and are off while another version of the item is shown. Review board cards carry
-Accept, Changes, and Reject buttons for deciding without opening the viewer. A board's
+version, and are off while another version of the item is shown. A contest has only A (pick,
+staying on the candidate), U, and N. Review board cards carry Accept, Changes, and Reject
+buttons for deciding without opening the viewer, or just Pick in a contest. A board's
 header has a menu of the project's active reviews for switching between them, and
 completing a review from its board returns to the review list.
 

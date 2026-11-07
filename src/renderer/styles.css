@@ -7,7 +7,9 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Shell */
-.app-shell { display: grid; grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100dvh; background: var(--bg); overflow: hidden; }
+.app-shell { --handle-width: 5px; display: grid; grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100dvh; background: var(--bg); overflow: hidden; }
+.app-shell.chat-hidden { grid-template-columns: minmax(0, 1fr); --handle-width: 0px; }
+.app-shell.chat-hidden > .chat-sidebar, .app-shell.chat-hidden > .resize-handle { display: none; }
 .resize-handle { position: relative; z-index: 3; cursor: col-resize; background: var(--bg); }
 .resize-handle:hover, body.resizing .resize-handle { background: var(--accent-strong); }
 body.resizing, body.resizing * { cursor: col-resize !important; user-select: none; }
@@ -183,7 +185,7 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .path-row input { flex: 1; }
 
 /* Item viewer */
-.item-viewer { position: fixed; z-index: 9; top: 0; right: 0; bottom: 0; left: calc(var(--sidebar-width) + 5px); display: flex; flex-direction: column; background: var(--bg); }
+.item-viewer { position: fixed; z-index: 9; top: 0; right: 0; bottom: 0; left: calc(var(--sidebar-width) + var(--handle-width)); display: flex; flex-direction: column; background: var(--bg); }
 .viewer-header { display: flex; flex-shrink: 0; align-items: center; gap: 14px; height: 64px; padding: 0 20px; border-bottom: 1px solid var(--line); }
 .viewer-title { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
 .viewer-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }

@@ -45,7 +45,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 
 | File | Responsibility |
 | --- | --- |
-| [src/main/index.ts](src/main/index.ts) | Electron lifecycle, hardened window, fixed IPC command schemas, `pixel-media` protocol, bridge and browser-mode startup. |
+| [src/main/index.ts](src/main/index.ts) | Electron lifecycle, hardened window and its remembered placement, fixed IPC command schemas, `pixel-media` protocol, bridge and browser-mode startup. |
 | [src/main/bridge.ts](src/main/bridge.ts) | Token-authenticated named-pipe bridge for the CLI with DPAPI-protected discovery. |
 | [src/main/view-image.ts](src/main/view-image.ts) | Renders a revision as a PNG for agent vision: backdrop, scaling, numbered note pins and drawings. |
 | [src/main/store.ts](src/main/store.ts) | SQLite schema and repository for settings, projects, sessions, sources, items, revisions, reviews, notes, image jobs, and the activity log. |
@@ -99,7 +99,8 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | --- | --- |
 | [src/preload/index.ts](src/preload/index.ts) | Isolated bridge exposing `window.pixel` over IPC. |
 | [src/renderer/index.html](src/renderer/index.html), [main.tsx](src/renderer/main.tsx) | Renderer entrypoint, content security policy, and API selection. |
-| [src/renderer/App.tsx](src/renderer/App.tsx) | App shell: conversation sidebar, project switcher, workspace views and chat focus, project and settings dialogs, theme picker. |
+| [src/renderer/App.tsx](src/renderer/App.tsx) | App shell: conversation sidebar, remembered layout, project switcher, workspace views and chat focus, project and settings dialogs, theme picker. |
+| [src/renderer/ChatToggle.tsx](src/renderer/ChatToggle.tsx) | Button that hides and shows the chat sidebar, reachable from the top bar and the viewer. |
 | [src/renderer/ChatPanel.tsx](src/renderer/ChatPanel.tsx) | Conversation messages and attachments, composer, stop, and model picker. |
 | [src/renderer/ChatContextMeter.tsx](src/renderer/ChatContextMeter.tsx) | Composer context estimate. |
 | [src/renderer/ChatProviderSettings.tsx](src/renderer/ChatProviderSettings.tsx) | Settings section for chat models and custom endpoints with capability tests. |

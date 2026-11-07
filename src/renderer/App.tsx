@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatFocus, Project, Session, Snapshot } from '../shared/types'
 import type { UiCommand } from '../shared/workbench'
 import Icon from './Icon'
@@ -8,11 +8,21 @@ import ReviewsView from './ReviewsView'
 import ChatPanel from './ChatPanel'
 import SettingsDialog, { ProvidersContext } from './SettingsDialog'
 import { op } from './ops'
+import { ChatToggle, ChatVisibility } from './ChatToggle'
 import { THEMES, applyTheme, storedTheme, type ThemeId } from './theme'
 
 type View = 'library' | 'reviews'
 type Deletion = { kind: 'project' | 'session'; id: string; projectId: string; name: string }
 type Target = { projectId: string; reviewId?: string; itemId?: string }
+
+const LAYOUT = 'pixelchat.layout'
+const clampWidth = (width: number) => Math.min(48, Math.max(24, width))
+function loadLayout(): { view: View; chatOpen: boolean; chatWidth: number } {
+  try {
+    const value = JSON.parse(localStorage.getItem(LAYOUT) ?? '{}')
+    return { view: value.view === 'reviews' ? 'reviews' : 'library', chatOpen: value.chatOpen !== false, chatWidth: typeof value.chatWidth === 'number' ? clampWidth(value.chatWidth) : 34 }
+  } catch { return { view: 'library', chatOpen: true, chatWidth: 34 } }
+}
 
 const emptySnapshot: Snapshot = { projects: [], activeProjectId: '', sessions: [], providers: { secureStorage: false, codex: { ready: false, pending: false, error: null }, gemini: { ready: false } }, chat: { models: [], active: { modelId: '', effort: '' }, providers: [] }, activeTurns: [] }
 const message = (error: unknown) => error instanceof Error ? error.message : 'Operation failed.'
@@ -95,7 +105,11 @@ function ChatSidebar({ snapshot, projectName, selectedId, focus, onSelect, onNew
 export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot)
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [view, setView] = useState<View>('library')
+  const [layout, setLayout] = useState(loadLayout)
+  const { view, chatOpen, chatWidth } = layout
+  const setView = useCallback((next: View) => setLayout(value => ({ ...value, view: next })), [])
+  const setChatWidth = (next: (width: number) => number) => setLayout(value => ({ ...value, chatWidth: clampWidth(next(value.chatWidth)) }))
+  const chatVisibility = useMemo(() => ({ open: chatOpen, toggle: () => setLayout(value => ({ ...value, chatOpen: !value.chatOpen })) }), [chatOpen])
   const [theme, setTheme] = useState<ThemeId>(storedTheme)
   const [uiError, setUiError] = useState('')
   const [projectDialog, setProjectDialog] = useState<'create' | 'rename' | null>(null)
@@ -103,7 +117,6 @@ export default function App() {
   const [deletion, setDeletion] = useState<Deletion | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
-  const [sidebarWidth, setSidebarWidth] = useState(34)
   const [target, setTarget] = useState<Target | null>(null)
   const [chatFocus, setChatFocus] = useState<ChatFocus>({})
   const [offer, setOffer] = useState<UiCommand | null>(null)
@@ -128,7 +141,7 @@ export default function App() {
     setView(command.action === 'open-review' ? 'reviews' : 'library')
     setTarget({ projectId: command.projectId, reviewId: command.reviewId, itemId: command.itemId })
     void refresh()
-  }, [refresh])
+  }, [refresh, setView])
   useEffect(() => {
     const unsubscribe = window.pixel.onUiCommand(command => {
       if (openReview.current && command.reviewId !== openReview.current) {
@@ -143,10 +156,11 @@ export default function App() {
     return () => { unsubscribe(); window.removeEventListener('pixel-host-disconnected', disconnected) }
   }, [show])
   useEffect(() => applyTheme(theme), [theme])
+  useEffect(() => { try { localStorage.setItem(LAYOUT, JSON.stringify(layout)) } catch { /* storage unavailable */ } }, [layout])
 
   const startResize = (event: React.MouseEvent) => {
     event.preventDefault(); document.body.classList.add('resizing')
-    const move = (moveEvent: MouseEvent) => setSidebarWidth(Math.min(48, Math.max(24, (moveEvent.clientX / window.innerWidth) * 100)))
+    const move = (moveEvent: MouseEvent) => setChatWidth(() => (moveEvent.clientX / window.innerWidth) * 100)
     const stop = () => { document.body.classList.remove('resizing'); window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', stop) }
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', stop)
   }
@@ -175,15 +189,16 @@ export default function App() {
     finally { setDeleting(false) }
   }
 
-  return <div className="app-shell" style={{ '--sidebar-width': `${sidebarWidth}%` } as React.CSSProperties}>
+  return <div className={`app-shell${chatOpen ? '' : ' chat-hidden'}`} style={{ '--sidebar-width': chatOpen ? `${chatWidth}%` : '0px' } as React.CSSProperties}>
+    {/* Stays mounted while hidden so a draft and the scroll position survive. */}
     <ChatSidebar snapshot={snapshot} projectName={activeProject?.name ?? 'Project'} selectedId={sessionId} focus={chatFocus} onSelect={setSessionId} onSettings={() => setSettingsOpen(true)} onError={setUiError} onNew={() => void createSession()}
       onRename={(id, title) => void call(() => op('rename_session', { projectId, sessionId: id, title }))}
       onDelete={() => { if (session) { setDeleteError(''); setDeletion({ kind: 'session', id: session.id, projectId, name: session.title }) } }} />
-    <div className="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize chat sidebar" aria-valuenow={Math.round(sidebarWidth)} aria-valuemin={24} aria-valuemax={48} tabIndex={0} onMouseDown={startResize}
-      onKeyDown={event => { const step = event.key === 'ArrowLeft' ? -2 : event.key === 'ArrowRight' ? 2 : 0; if (step) { event.preventDefault(); setSidebarWidth(width => Math.min(48, Math.max(24, width + step))) } }} />
-    <main className="main-workspace">
+    <div className="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize chat sidebar" aria-valuenow={Math.round(chatWidth)} aria-valuemin={24} aria-valuemax={48} tabIndex={0} onMouseDown={startResize}
+      onKeyDown={event => { const step = event.key === 'ArrowLeft' ? -2 : event.key === 'ArrowRight' ? 2 : 0; if (step) { event.preventDefault(); setChatWidth(width => width + step) } }} />
+    <ChatVisibility.Provider value={chatVisibility}><main className="main-workspace">
       <header className="topbar">
-        <div className="breadcrumb"><ProjectSwitcher snapshot={snapshot} onSwitch={id => { if (id !== projectId) void call(() => window.pixel.setActiveProject(id)) }} onCreate={() => setProjectDialog('create')} onRename={() => setProjectDialog('rename')}
+        <div className="breadcrumb"><ChatToggle /><ProjectSwitcher snapshot={snapshot} onSwitch={id => { if (id !== projectId) void call(() => window.pixel.setActiveProject(id)) }} onCreate={() => setProjectDialog('create')} onRename={() => setProjectDialog('rename')}
           onDelete={() => { if (activeProject) { setDeleteError(''); setDeletion({ kind: 'project', id: activeProject.id, projectId: activeProject.id, name: activeProject.name }) } }} /></div>
         <div className="topbar-actions"><ThemePicker theme={theme} onChange={setTheme} /><button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Settings" title="Settings"><Icon name="settings" /></button><button className="icon-button" onClick={() => void call(() => window.pixel.openLogs())} aria-label="Open diagnostic logs" title="Open diagnostic logs"><Icon name="file" /></button></div>
       </header>
@@ -194,7 +209,7 @@ export default function App() {
       <ProvidersContext.Provider value={snapshot.providers}>{!projectId ? null : view === 'library'
         ? <LibraryView key={projectId} projectId={projectId} focusItemId={current?.reviewId ? undefined : current?.itemId} onFocusDone={clearTarget} onOpenReview={reviewId => { setTarget({ projectId, reviewId }); setView('reviews') }} onChatFocus={setChatFocus} onError={setUiError} />
         : <ReviewsView key={projectId} projectId={projectId} target={current?.reviewId ? current : null} onTargetDone={clearTarget} onChatFocus={setChatFocus} onError={setUiError} />}</ProvidersContext.Provider>
-    </main>
+    </main></ChatVisibility.Provider>
     {offer && <div className="offer-banner" role="status"><Icon name="info" /><span>The agent opened {offer.action === 'open-review' ? 'review' : 'item'} <strong>{offer.label}</strong>{snapshot.projects.length > 1 && offer.projectId !== projectId ? ` in ${snapshot.projects.find(project => project.id === offer.projectId)?.name ?? 'another project'}` : ''}.</span>
       <button className="secondary-button" onClick={() => { const command = offer; setOffer(null); void call(() => show(command)) }}>Open</button>
       <button className="icon-button" onClick={() => setOffer(null)} aria-label="Dismiss" title="Dismiss"><Icon name="close" /></button></div>}

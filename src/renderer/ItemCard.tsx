@@ -5,8 +5,8 @@ export const DECISIONS: { id: Decision; label: string; key: string; badge: strin
   { id: 'needs_changes', label: 'Needs changes', key: 'C', badge: 'badge-warn' },
   { id: 'rejected', label: 'Reject', key: 'R', badge: 'badge-danger' },
 ]
-/** In a contest, accepting is picking the winner. */
-export const decisionOptions = (mode: ReviewMode) => mode === 'contest' ? DECISIONS.map(option => option.id === 'accepted' ? { ...option, label: 'Pick' } : option) : DECISIONS
+/** A contest candidate is only picked or left alone. */
+export const decisionOptions = (mode: ReviewMode) => mode === 'contest' ? [{ ...DECISIONS[0]!, label: 'Pick' }] : DECISIONS
 export const decisionLabel = (decision: Decision) => ({ unreviewed: 'Unreviewed', accepted: 'Accepted', needs_changes: 'Needs changes', rejected: 'Rejected' })[decision]
 export const decisionBadge = (decision: Decision) => DECISIONS.find(entry => entry.id === decision)?.badge ?? ''
 

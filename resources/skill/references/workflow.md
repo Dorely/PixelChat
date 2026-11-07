@@ -11,13 +11,15 @@ it in front of the user: add it to an active review (`review_update` with `addIt
 an entry tells you the item has moved on since.
 
 - A review is `standard` (the user decides on each entry) or a `contest` (`mode: "contest"`,
-  at least two entries): the entries are candidates and the user picks one winner. A pick is
-  `accepted`; picking another clears the earlier one, and the user may still reject or ask for
-  changes on the rest. Use a contest to let the user choose between variations, not to ask
-  yes/no on each. Read the outcome from `review_get`: the entry with decision `accepted` is
-  the winner (`counts.accepted` is 0 or 1); none means the user has not chosen. Do not record
-  the pick yourself unless asked, and `review_wait` until the review completes or the user
-  picks.
+  at least two entries): the entries are candidates and the user picks the winners. `picks`
+  sets how many (default 1, fewer than the candidates); set it when you know more than one
+  should win. A pick is `accepted`; a pick past the limit clears the oldest. The other
+  candidates stay `unreviewed` and need no decision: `needs_changes` and `rejected` are
+  refused, so the user's feedback on them arrives as notes. Use a contest to let the user
+  choose between variations, not to ask yes/no on each. Read the outcome from `review_get`:
+  the entries with decision `accepted` are the winners; fewer than `picks` means the user has
+  not finished choosing. Do not record a pick yourself unless asked, and `review_wait` until
+  the review completes or the user picks.
 - Reference images give context for the decision (a style target, the current in-game art, a
   sibling asset): pass `referenceItemIds` or `referenceRevisionIds` to `review_create`, or
   `addReferenceItemIds` / `referenceRevisionIds` to `review_update`. Entries have a `role` of

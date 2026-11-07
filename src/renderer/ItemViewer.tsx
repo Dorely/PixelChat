@@ -5,6 +5,7 @@ import EditPanel from './EditPanel'
 import Icon from './Icon'
 import { decisionBadge, decisionLabel, decisionOptions } from './ItemCard'
 import { MarkLayer, NotesPanel, type Tool } from './NotesPanel'
+import { ChatToggle } from './ChatToggle'
 import { OperationError, op } from './ops'
 
 type Backdrop = 'checker' | 'dark' | 'light'
@@ -148,7 +149,8 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
     const revisionId = items[position.current]!.revisionId
     if (!review || review.completed || !revisionId) return
     if (decision === 'needs_changes') setNoteFocus(true)
-    else if (decision !== 'unreviewed') step(1)
+    // A contest pick stays on the candidate; the others need no walk-through.
+    else if (decision !== 'unreviewed' && review.mode !== 'contest') step(1)
     try { await op('review_decide', { projectId, reviewId: review.id, decisions: [{ revisionId, decision }] }) }
     catch (error) { onError(error instanceof Error ? error.message : 'Could not record the decision.') }
   }
@@ -167,7 +169,7 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
         '0': () => setZoom('fit'), '1': () => zoomAt(1), '+': () => stepZoom(1), '=': () => stepZoom(1), '-': () => stepZoom(-1),
         n: () => setNoteFocus(true), p: () => setTool('pin'), d: () => setTool('draw'), m: () => setTool('mask'),
         ...(tool === 'mask' && revision ? { e: () => setErasing(value => !value), '[': () => setBrush(value => Math.max(1, Math.round(value / 1.25))), ']': () => setBrush(value => Math.min(maxBrush(revision), Math.max(value + 1, Math.round(value * 1.25)))) } : {}),
-        ...(decidable && review && !review.completed ? { a: () => void decide('accepted'), c: () => void decide('needs_changes'), r: () => void decide('rejected'), u: () => void decide('unreviewed') } : {}),
+        ...(decidable && review && !review.completed ? { a: () => void decide('accepted'), u: () => void decide('unreviewed'), ...(review.mode === 'contest' ? {} : { c: () => void decide('needs_changes'), r: () => void decide('rejected') }) } : {}),
       }
       const action = actions[event.key.length === 1 ? event.key.toLowerCase() : event.key]
       if (action) { event.preventDefault(); action() }
@@ -195,12 +197,13 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
   const hint = tool === 'draw' ? 'Draw for the next note · Ctrl+Z undo · Esc done'
     : tool === 'mask' ? 'Paint the area to edit · Shift+drag box · E erase · [ ] brush · Ctrl+Z undo'
     : entry && viewingId !== entry.revisionId ? 'Not the reviewed version · decisions apply to the reviewed one'
-    : decidable && !review?.completed ? (review?.mode === 'contest' ? 'A pick · C needs changes · R reject · N note' : 'A accept · C needs changes · R reject · N note')
+    : decidable && !review?.completed ? (review?.mode === 'contest' ? 'A pick · U clear · N note' : 'A accept · C needs changes · R reject · N note')
     : entry && !decidable ? 'Reference · N note · click or drag to pin' : 'N note · click or drag to pin'
 
   return <div className="item-viewer" role="dialog" aria-label={`Viewing ${summary.name}`}>
     <header className="viewer-header">
       <button className="icon-button" onClick={onClose} aria-label="Close viewer" title="Close (Esc)"><Icon name="close" /></button>
+      <ChatToggle />
       <div className="viewer-title"><strong>{summary.name}</strong><small>{summary.sourcePath ?? summary.collection}</small></div>
       {review && entry && !decidable && <div className="decision-bar"><span className="badge" title="Context for the decision; takes no decision">Reference</span></div>}
       {review && entry && decidable && <div className="decision-bar" role="group" aria-label="Decision">

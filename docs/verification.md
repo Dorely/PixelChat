@@ -368,3 +368,32 @@ secure-storage, or platform integration.
   `false`); after closing it, a fresh start answered `projects_list` with the user's three
   projects, so the schema 6 library reopens. Masks and drawings were not exercised in the
   installed app.
+
+## 2026-11-06 — Pick-only contests, hideable chat, remembered layout
+
+- `npm run typecheck` and `npm run build` passed.
+- Scratch Electron host (a temporary wrapper outside the repo setting `appData` before loading
+  the built main module; the real library stayed at schema 6), scratch 64×64 PNGs. The new
+  profile opened at schema 7. Browser host in the built-in browser, through real operations:
+  - `review_create`: `picks: 4` of 4 candidates and `picks` on a standard review refused.
+  - `review_decide` on a contest: `rejected`, `needs_changes`, and two accepts in one call with
+    one pick refused. Accepting another candidate moved the pick; with `picks: 2`, a third
+    pick cleared the oldest. A standard review still took `rejected`.
+  - `review_update`: lowering `picks` below the current picks, and `picks` at the candidate
+    count, refused.
+  - Board: cards show only Pick; filters All, Picked, Not picked; "Picked 2 of 2: …"; list and
+    switcher show picks against the limit; Review again once the picks are filled.
+  - Viewer: only Pick; R and C did nothing, A picked and stayed on the candidate, U cleared.
+  - New review dialog: "Winners to pick" appears with Contest, capped below the item count.
+  - Chat toggle: from the top bar and viewer header it removed the sidebar and handle and took
+    the viewer to the window edge; a composer draft survived hiding; arrow keys changed the
+    width; hidden state and view survived a reload.
+- Native desktop window on the scratch profile, restarted with a temporary driver outside the
+  repo: chat hidden and view returned after a restart, and shown again after the next. Size and
+  position (1234×777 at 60,50) returned after closing through `CloseMainWindow`. A renderer
+  `window.close()` skips the main-process `close` event and does not save them; the app never
+  calls it.
+- Not checked: restoring a maximized window, a saved position on a disconnected display, mouse
+  dragging of the width, a contest made before schema 7 with recorded rejections, and an agent
+  creating a contest with `picks` over MCP/CLI. Not installed; the installed app and real library
+  remain at schema 6. Scratch host shut down and scratch files removed.

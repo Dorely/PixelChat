@@ -42,6 +42,7 @@ const paths: Record<string, ReactNode> = {
   warn: <><path d="M12 4 L21 19.5 H3 Z" /><path d="M12 10 V14" /><circle cx="12" cy="16.8" r="1" fill="currentColor" stroke="none" /></>,
   upload: <path d="M12 15.5 V4 M7.5 8.5 L12 4 L16.5 8.5 M4.5 14.5 V18 A1.5 1.5 0 0 0 6 19.5 H18 A1.5 1.5 0 0 0 19.5 18 V14.5" />,
   'chevron-down': <path d="M6.5 9.5 L12 15 L17.5 9.5" />,
+  panel: <><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><path d="M9.5 4.5 V19.5" /></>,
   folder: <path d="M3.5 6.5 A1.5 1.5 0 0 1 5 5 H9.5 L11.5 7 H19 A1.5 1.5 0 0 1 20.5 8.5 V17.5 A1.5 1.5 0 0 1 19 19 H5 A1.5 1.5 0 0 1 3.5 17.5 Z" />,
 }
 

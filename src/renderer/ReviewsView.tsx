@@ -7,14 +7,18 @@ import { ConfirmDialog, Modal } from './Dialogs'
 import { op } from './ops'
 
 export interface ReviewFilter { query?: string; collection?: string; status?: ItemStatusFilter }
-type EntryFilter = 'all' | Decision | 'newer'
+type EntryFilter = 'all' | Decision | 'newer' | 'not_picked'
 const ALL = '\u0000all'
 const message = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 
-function Progress({ counts }: { counts: ReviewSummary['counts'] }) {
-  const part = (value: number) => `${counts.total ? value / counts.total * 100 : 0}%`
-  return <span className="review-progress" title={`${counts.accepted} accepted, ${counts.needs_changes} need changes, ${counts.rejected} rejected, ${counts.unreviewed} unreviewed`}>
-    <i className="progress-accepted" style={{ width: part(counts.accepted) }} /><i className="progress-needs_changes" style={{ width: part(counts.needs_changes) }} /><i className="progress-rejected" style={{ width: part(counts.rejected) }} />
+const pickCount = (review: ReviewSummary) => `${review.counts.accepted} of ${review.picks} picked`
+
+/** A contest fills up with its picks; the candidates left over are not progress to make. */
+function Progress({ review }: { review: ReviewSummary }) {
+  const { counts } = review, contest = review.mode === 'contest', total = contest ? review.picks : counts.total
+  const part = (value: number) => `${total ? value / total * 100 : 0}%`
+  return <span className="review-progress" title={contest ? pickCount(review) : `${counts.accepted} accepted, ${counts.needs_changes} need changes, ${counts.rejected} rejected, ${counts.unreviewed} unreviewed`}>
+    <i className="progress-accepted" style={{ width: part(counts.accepted) }} />{!contest && <><i className="progress-needs_changes" style={{ width: part(counts.needs_changes) }} /><i className="progress-rejected" style={{ width: part(counts.rejected) }} /></>}
   </span>
 }
 
@@ -23,6 +27,7 @@ export function NewReviewDialog({ projectId, initial, onClose, onCreated }: { pr
   const [title, setTitle] = useState('')
   const [instructions, setInstructions] = useState('')
   const [mode, setMode] = useState<ReviewMode>('standard')
+  const [picks, setPicks] = useState(1)
   const [collection, setCollection] = useState(initial?.collection ?? ALL)
   const [status, setStatus] = useState<ItemStatusFilter>(initial?.status ?? 'all')
   const query = initial?.query
@@ -33,7 +38,7 @@ export function NewReviewDialog({ projectId, initial, onClose, onCreated }: { pr
   useEffect(() => { void op<ItemSearchResult>('search_items', { projectId, ...filter, limit: 1 }).then(setMatch, () => setMatch(null)) }, [projectId, filter])
   const submit = async () => {
     setBusy(true); setError('')
-    try { onCreated(await op<ReviewSummary>('review_create', { projectId, title, instructions, mode, filter, open: false })) }
+    try { onCreated(await op<ReviewSummary>('review_create', { projectId, title, instructions, mode, ...(mode === 'contest' ? { picks } : {}), filter, open: false })) }
     catch (failure) { setError(message(failure, 'Could not create the review.')) }
     finally { setBusy(false) }
   }
@@ -41,7 +46,8 @@ export function NewReviewDialog({ projectId, initial, onClose, onCreated }: { pr
     <div className="project-dialog-body">
       <label>Title<input autoFocus value={title} onChange={event => setTitle(event.target.value)} maxLength={120} placeholder="Character pass" aria-label="Review title" /></label>
       <label>Instructions <small>Optional. What to look for; agents read this with the notes.</small><textarea rows={3} value={instructions} onChange={event => setInstructions(event.target.value)} /></label>
-      <label className="check-row"><input type="checkbox" checked={mode === 'contest'} onChange={event => setMode(event.target.checked ? 'contest' : 'standard')} /> Contest <small>The items are candidates; you pick one winner instead of deciding on each.</small></label>
+      <label className="check-row"><input type="checkbox" checked={mode === 'contest'} onChange={event => setMode(event.target.checked ? 'contest' : 'standard')} /> Contest <small>The items are candidates; you pick the winners and the rest need no decision.</small></label>
+      {mode === 'contest' && <label>Winners to pick<input type="number" min={1} max={Math.max(1, (match?.total ?? 2) - 1)} value={picks} onChange={event => setPicks(Math.max(1, Math.floor(Number(event.target.value)) || 1))} aria-label="Winners to pick" /></label>}
       <div className="dialog-filters">
         <label>Folder<select className="filter-select" value={collection} onChange={event => setCollection(event.target.value)} aria-label="Folder">
           <option value={ALL}>All folders</option>
@@ -53,7 +59,7 @@ export function NewReviewDialog({ projectId, initial, onClose, onCreated }: { pr
       </div>
       <p className="quiet-text">{query ? `Matching “${query}”: ` : ''}{match ? `${Math.min(match.total, 5000)} items` : '…'}{match && match.total > 5000 ? ' (first 5000)' : ''}</p>
       {error && <p className="settings-error"><Icon name="info" /> {error}</p>}
-      <div className="model-row"><button className="primary-button" onClick={() => void submit()} disabled={busy || !title.trim() || !match?.total || (mode === 'contest' && match.total < 2)}><Icon name="check" /> {busy ? 'Creating…' : 'Create review'}</button><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button></div>
+      <div className="model-row"><button className="primary-button" onClick={() => void submit()} disabled={busy || !title.trim() || !match?.total || (mode === 'contest' && picks >= match.total)}><Icon name="check" /> {busy ? 'Creating…' : 'Create review'}</button><button className="secondary-button" onClick={onClose} disabled={busy}>Cancel</button></div>
     </div>
   </Modal>
 }
@@ -89,7 +95,7 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onSwitch, onCha
   const entries = allEntries.filter(entry => entry.role === 'subject')
   const references = allEntries.filter(entry => entry.role === 'reference')
   const contest = review?.mode === 'contest'
-  const shown = entries.filter(entry => filter === 'all' || (filter === 'newer' ? entry.newerVersions > 0 : entry.decision === filter))
+  const shown = entries.filter(entry => filter === 'all' || (filter === 'newer' ? entry.newerVersions > 0 : filter === 'not_picked' ? entry.decision !== 'accepted' : entry.decision === filter))
   const entryMap = useMemo(() => new Map(allEntries.map(entry => [entry.revisionId, entry])), [allEntries])
   const targets = (list: ReviewEntry[]) => list.map(entry => ({ item: entry.item, revisionId: entry.revisionId }))
   // The viewer walks a snapshot so deciding never reshuffles the list under it.
@@ -118,11 +124,14 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onSwitch, onCha
   const counts = review.counts
   const newerCount = entries.filter(entry => entry.newerVersions > 0).length
   const filters: { id: EntryFilter; label: string; count: number }[] = [
-    { id: 'all', label: 'All', count: counts.total }, { id: 'unreviewed', label: 'Unreviewed', count: counts.unreviewed }, { id: 'accepted', label: 'Accepted', count: counts.accepted },
-    { id: 'needs_changes', label: 'Needs changes', count: counts.needs_changes }, { id: 'rejected', label: 'Rejected', count: counts.rejected },
+    { id: 'all', label: 'All', count: counts.total },
+    ...(contest ? [{ id: 'accepted' as const, label: 'Picked', count: counts.accepted }, { id: 'not_picked' as const, label: 'Not picked', count: counts.total - counts.accepted }]
+      : [{ id: 'unreviewed' as const, label: 'Unreviewed', count: counts.unreviewed }, { id: 'accepted' as const, label: 'Accepted', count: counts.accepted }, { id: 'needs_changes' as const, label: 'Needs changes', count: counts.needs_changes }, { id: 'rejected' as const, label: 'Rejected', count: counts.rejected }]),
     ...(newerCount ? [{ id: 'newer' as const, label: 'Has newer versions', count: newerCount }] : []),
   ]
   const firstUnreviewed = entries.findIndex(entry => entry.decision === 'unreviewed')
+  const remaining = contest ? counts.accepted < review.picks : firstUnreviewed >= 0
+  const picked = entries.filter(entry => entry.decision === 'accepted').map(entry => entry.item.name)
 
   return <section className="workspace-panel library-panel">
     <div className="panel-header">
@@ -131,21 +140,21 @@ function ReviewBoard({ projectId, reviewId, focusItemId, onBack, onSwitch, onCha
           <button className="text-button back-link" onClick={onBack}><Icon name="arrow-left" /> Reviews</button>
           {active.some(entry => entry.id !== reviewId) && <select className="filter-select" value={reviewId} onChange={event => onSwitch(event.target.value)} aria-label="Switch review">
             {completed && <option value={reviewId}>{review.title} (completed)</option>}
-            {active.map(entry => <option key={entry.id} value={entry.id}>{entry.title} · {entry.counts.total - entry.counts.unreviewed}/{entry.counts.total}</option>)}
+            {active.map(entry => <option key={entry.id} value={entry.id}>{entry.title} · {entry.mode === 'contest' ? `${entry.counts.accepted}/${entry.picks}` : `${entry.counts.total - entry.counts.unreviewed}/${entry.counts.total}`}</option>)}
           </select>}
         </div>
         <h1>{review.title} {contest && <span className="badge">Contest</span>} {completed && <span className="badge">Completed</span>}</h1>
       </div>
       <div className="header-actions">
-        {!completed && <button className="primary-button" onClick={() => open(targets(allEntries), Math.max(0, firstUnreviewed))} disabled={!entries.length}><Icon name="arrow" /> {firstUnreviewed >= 0 ? (contest ? 'Choose a winner' : 'Continue reviewing') : 'Review again'}</button>}
+        {!completed && <button className="primary-button" onClick={() => open(targets(allEntries), contest ? 0 : Math.max(0, firstUnreviewed))} disabled={!entries.length}><Icon name="arrow" /> {remaining ? (contest ? (review.picks > 1 ? 'Choose winners' : 'Choose a winner') : 'Continue reviewing') : 'Review again'}</button>}
         {completed ? <button className="secondary-button" onClick={() => void setStatus('review_reopen')}><Icon name="undo" /> Reopen</button>
           : <button className="secondary-button" onClick={() => void setStatus('review_complete')}><Icon name="check" /> Complete</button>}
         <button className="icon-button" onClick={() => { setConfirmError(''); setConfirm('delete') }} aria-label="Delete review" title="Delete review"><Icon name="trash" /></button>
       </div>
     </div>
     <div className="review-meta">
-      <Progress counts={counts} />
-      <small>{contest ? (counts.accepted ? `Picked: ${entries.find(entry => entry.decision === 'accepted')?.item.name ?? 'a candidate'}` : 'No pick yet') : `${counts.total - counts.unreviewed} of ${counts.total} decided`}{references.length ? ` · ${references.length} reference` : ''} · {review.openNotes} open {review.openNotes === 1 ? 'note' : 'notes'}{completed && review.completedAt ? ` · completed ${new Date(review.completedAt).toLocaleString()} by ${review.completedBy === 'agent' ? 'the agent' : 'you'}` : ''}</small>
+      <Progress review={review} />
+      <small>{contest ? (picked.length ? `Picked ${picked.length} of ${review.picks}: ${picked.join(', ')}` : review.picks > 1 ? `Pick ${review.picks}` : 'No pick yet') : `${counts.total - counts.unreviewed} of ${counts.total} decided`}{references.length ? ` · ${references.length} reference` : ''} · {review.openNotes} open {review.openNotes === 1 ? 'note' : 'notes'}{completed && review.completedAt ? ` · completed ${new Date(review.completedAt).toLocaleString()} by ${review.completedBy === 'agent' ? 'the agent' : 'you'}` : ''}</small>
       {review.instructions && <p className="review-instructions">{review.instructions}</p>}
     </div>
     <div className="library-toolbar">
@@ -200,9 +209,9 @@ export default function ReviewsView({ projectId, target, onTargetDone, onChatFoc
         : <><h2>No completed reviews</h2><p>Completed reviews are kept here with their decisions and notes.</p></>}
     </div>
       : <div className="review-list">{reviews?.map(review => <button key={review.id} className="review-card" onClick={() => setOpenId(review.id)}>
-        <span className="review-card-copy"><strong>{review.title}</strong><small>{review.mode === 'contest' ? 'Contest · ' : ''}{review.counts.total} versions · {review.counts.accepted && review.mode === 'contest' ? 'picked' : `${review.counts.total - review.counts.unreviewed} decided`} · {review.openNotes} open notes · updated {new Date(review.updatedAt).toLocaleString()}</small></span>
-        <Progress counts={review.counts} />
-        <span className="review-card-counts">{(['accepted', 'needs_changes', 'rejected'] as const).map(decision => review.counts[decision] > 0 && <span key={decision} className={`decision-count decision-${decision}`}>{review.counts[decision]} {decisionLabel(decision).toLowerCase()}</span>)}</span>
+        <span className="review-card-copy"><strong>{review.title}</strong><small>{review.mode === 'contest' ? 'Contest · ' : ''}{review.counts.total} versions · {review.mode === 'contest' ? pickCount(review) : `${review.counts.total - review.counts.unreviewed} decided`} · {review.openNotes} open notes · updated {new Date(review.updatedAt).toLocaleString()}</small></span>
+        <Progress review={review} />
+        <span className="review-card-counts">{review.mode !== 'contest' && (['accepted', 'needs_changes', 'rejected'] as const).map(decision => review.counts[decision] > 0 && <span key={decision} className={`decision-count decision-${decision}`}>{review.counts[decision]} {decisionLabel(decision).toLowerCase()}</span>)}</span>
       </button>)}</div>}
     {creating && <NewReviewDialog projectId={projectId} onClose={() => setCreating(false)} onCreated={review => { setCreating(false); setOpenId(review.id) }} />}
   </section>

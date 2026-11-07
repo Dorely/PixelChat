@@ -55,12 +55,12 @@ export interface NoteThread extends Note { replies: Note[] }
 
 export type Decision = 'unreviewed' | 'accepted' | 'needs_changes' | 'rejected';
 export type ReviewStatus = 'active' | 'completed';
-/** standard: decide on each entry. contest: the entries are candidates and the user picks one winner (accepted). */
+/** standard: decide on each entry. contest: the entries are candidates and the user picks the winners (accepted); the rest take no decision. */
 export type ReviewMode = 'standard' | 'contest';
 /** subject entries are decided on (counts cover only these); reference entries are extra context with no decision. */
 export type EntryRole = 'subject' | 'reference';
 export interface ReviewSummary {
-  id: string; projectId: string; title: string; instructions: string; mode: ReviewMode; status: ReviewStatus; revision: number;
+  id: string; projectId: string; title: string; instructions: string; mode: ReviewMode; picks: number; status: ReviewStatus; revision: number;
   counts: Record<Decision, number> & { total: number }; openNotes: number;
   createdAt: string; createdBy: Origin; updatedAt: string; completedAt: string | null; completedBy: Origin | null;
 }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, protocol, safeStorage, screen, shell } from 'electron';
 import { join } from 'node:path';
 import { mkdir, readFile } from 'node:fs/promises';
 import { z } from 'zod';
@@ -38,6 +38,16 @@ let chat: ChatService | null = null;
 let rendererPort: RendererPort | null = null;
 let bridge: Awaited<ReturnType<typeof startBridge>> | null = null;
 let quitting = false;
+const WINDOW_BOUNDS_KEY = 'window-bounds';
+/** The last window placement, unless no connected display can show it any more. */
+function savedWindowBounds(saved: string): { x: number; y: number; width: number; height: number; maximized: boolean } | null {
+  try {
+    const value = JSON.parse(saved), { x, y, width, height } = value;
+    if (![x, y, width, height].every(Number.isInteger)) return null;
+    const visible = screen.getAllDisplays().some(({ workArea: area }) => x < area.x + area.width && x + width > area.x && y < area.y + area.height && y + height > area.y);
+    return visible ? { x, y, width, height, maximized: value.maximized === true } : null;
+  } catch { return null; }
+}
 let eventTimer: ReturnType<typeof setTimeout> | null = null;
 const diagnostics = new DiagnosticLog(app.getPath('userData'));
 const changed = () => {
@@ -163,8 +173,11 @@ else {
       return;
     }
     const icon = app.isPackaged ? join(process.resourcesPath, 'icon.ico') : join(__dirname, '../../resources/icon.ico');
-    window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1000, minHeight: 650, title: 'PixelChat', icon, backgroundColor: '#151716', show: false, webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    const placement = savedWindowBounds(db.setting(WINDOW_BOUNDS_KEY, ''));
+    window = new BrowserWindow({ ...(placement ? { x: placement.x, y: placement.y, width: placement.width, height: placement.height } : { width: 1440, height: 940 }), minWidth: 1000, minHeight: 650, title: 'PixelChat', icon, backgroundColor: '#151716', show: false, webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.removeMenu();
+    if (placement?.maximized) window.maximize();
+    window.on('close', () => { if (window) db.setSetting(WINDOW_BOUNDS_KEY, JSON.stringify({ ...window.getNormalBounds(), maximized: window.isMaximized() })); });
     window.on('closed', () => rendererPort?.unavailable());
     window.webContents.on('render-process-gone', (_event, details) => { rendererPort?.unavailable(); diagnostics.record('renderer.stopped', { reason: details.reason, exitCode: details.exitCode }); });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

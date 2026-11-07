@@ -71,7 +71,7 @@ export class Operations {
         if ([a.itemIds, a.revisionIds, a.filter].filter(Boolean).length !== 1) throw new WorkbenchError('INVALID_ARGUMENTS', 'Pass exactly one of itemIds, revisionIds, or filter.');
         const revisionIds: string[] = a.revisionIds ?? (a.itemIds ? store.selectedRevisions(a.projectId, a.itemIds) : store.searchItems(a.projectId, { ...a.filter, limit: 5000, offset: 0 }).items.map(entry => entry.selectedRevisionId));
         const referenceRevisionIds = [...(a.referenceRevisionIds ?? []), ...(a.referenceItemIds ? store.selectedRevisions(a.projectId, a.referenceItemIds) : [])];
-        const created = store.createReview(a.projectId, { title: a.title, instructions: a.instructions ?? '', mode: a.mode, revisionIds, referenceRevisionIds }, origin);
+        const created = store.createReview(a.projectId, { title: a.title, instructions: a.instructions ?? '', mode: a.mode, picks: a.picks, revisionIds, referenceRevisionIds }, origin);
         if (!a.open) return created;
         // Creating succeeded; a missing window only means it could not be shown.
         try {
