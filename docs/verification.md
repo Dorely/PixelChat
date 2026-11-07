@@ -395,5 +395,12 @@ secure-storage, or platform integration.
   calls it.
 - Not checked: restoring a maximized window, a saved position on a disconnected display, mouse
   dragging of the width, a contest made before schema 7 with recorded rejections, and an agent
-  creating a contest with `picks` over MCP/CLI. Not installed; the installed app and real library
-  remain at schema 6. Scratch host shut down and scratch files removed.
+  creating a contest with `picks` over MCP/CLI. Scratch host shut down and scratch files removed.
+- `npm run package` built the installer; with no image jobs active, the running installed app
+  was closed and an unsandboxed silent install replaced it. `skill install --scope user --target
+  claude --target codex --mcp --force` updated SKILL.md, the workflow reference, and
+  guidance.json for Claude and Codex (MCP configs already current), and all 12 managed files read
+  up-to-date. The installed app migrated the real library to schema 7 and answered `status` and
+  `projects_list` (three projects); `tools` lists `picks`. After closing it, a fresh start
+  answered both again, so the schema 7 library reopens. It was left running. Picks and the chat
+  toggle were not exercised in the installed app.
