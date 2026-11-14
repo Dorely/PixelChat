@@ -464,3 +464,13 @@ secure-storage, or platform integration.
   AppArmor's user-namespace restriction (Ubuntu 23.10+), a real keyring, the AppImage MCP
   refusal in Settings, and the GitHub release run (recorded with the first release below).
   WSL scratch copy, Node, and the WSL test profile were removed afterward.
+
+## 2026-11-14 — v0.4.0 release
+
+- `npm version minor` made `Release 0.4.0` and tag `v0.4.0`; `git push origin main
+  --follow-tags` pushed both. The tag's Build run (43632648651) passed the version check,
+  typecheck, and packaging on `windows-latest` and `ubuntu-latest` in 3m11s, and its release job
+  published https://github.com/Dorely/PixelChat/releases/tag/v0.4.0 (not a draft):
+  `PixelChat-Setup-0.4.0.exe`, `PixelChat-0.4.0-x86_64.AppImage`, `pixelchat_0.4.0_amd64.deb`,
+  and `SHA256SUMS.txt`, with the install notes ahead of the generated changelog link.
+- The published packages were not downloaded and installed.
