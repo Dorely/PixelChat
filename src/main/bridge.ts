@@ -1,21 +1,17 @@
 import { createServer, type Socket } from 'node:net';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdir, writeFile, rename, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
-import { native } from '../shared/native';
+import { prepareEndpoint, publishDiscovery, removeDiscovery } from '../shared/discovery';
 import { WorkbenchError } from '../shared/workbench';
 import { operationError, type Operations } from './operations';
 
 /**
- * Local agent bridge: one authenticated JSON request per connection over a random named pipe.
- * The pipe name and token are published only through a DPAPI-protected discovery file in an
- * owner-only directory, so only processes of the signed-in user can reach the operations.
+ * Local agent bridge: one authenticated JSON request per connection over a random named pipe
+ * (Windows) or Unix socket (Linux). The endpoint and token are published only through protected
+ * discovery (`shared/discovery.ts`), so only processes of the signed-in user can reach the operations.
  */
 export async function startBridge(root: string, helper: string, operations: Operations) {
-  const directory = join(root, 'bridge'); await mkdir(directory, { recursive: true });
-  await native(helper, ['secure-directory', directory]);
+  const pipe = await prepareEndpoint(root, helper);
   const token = randomBytes(32).toString('hex');
-  const pipe = `\\\\.\\pipe\\pixelchat-${randomBytes(32).toString('hex')}`;
   const clients = new Set<Socket>();
   let closing = false;
   const server = createServer(socket => {
@@ -44,10 +40,6 @@ export async function startBridge(root: string, helper: string, operations: Oper
   });
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(pipe, () => { server.off('error', reject); resolve(); }); });
   server.on('error', () => {});
-  const discoveryPath = join(directory, 'endpoint.bin');
-  try {
-    const encrypted = await native(helper, ['protect'], Buffer.from(JSON.stringify({ version: 1, pipe, token, pid: process.pid })));
-    await writeFile(discoveryPath + '.partial', encrypted); await rename(discoveryPath + '.partial', discoveryPath);
-  } catch (e) { server.close(); throw e; }
-  return { async close() { closing = true; await unlink(discoveryPath).catch(() => {}); for (const socket of clients) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); } };
+  try { await publishDiscovery(root, helper, { version: 1, pipe, token, pid: process.pid }); } catch (e) { server.close(); throw e; }
+  return { async close() { closing = true; await removeDiscovery(root); for (const socket of clients) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }

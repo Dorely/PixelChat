@@ -14,6 +14,20 @@
 - Preserve unrelated user changes. Do not discard work, rewrite history, publish, or create remotes without authorization.
 - Finish each coherent task with a reviewed, focused commit and verify a clean working tree.
 
+## Releases
+
+- Friends install published builds from GitHub Releases, so finishing a user-visible feature or
+  fix includes releasing it. The owner has authorized pushing `main` and release tags for this.
+- After the work is committed and verified, run
+  `npm version minor -m "Release %s"` for features (`patch` for fixes only), then
+  `git push origin main --follow-tags`. The Build workflow builds the Windows installer, the
+  Linux AppImage and .deb, and publishes them with checksums as the tag's release.
+- Watch the tag's workflow run to completion (`gh run watch`), confirm the release lists all
+  three packages and `SHA256SUMS.txt`, and record the release in verification. If the run
+  fails, fix forward with a new patch version; never move or reuse a published tag.
+- Batch small internal changes into the next feature release instead of releasing each one.
+  Never release with uncommitted, unverified, or unrelated work in the tree.
+
 ## Implementation practices
 
 - Inspect callers and downstream effects before editing. Use `rg` for file and text discovery.
@@ -36,6 +50,9 @@
   mock. Keep paid or account-metered image calls within existing authorization.
   Use the native desktop only for desktop-specific integration checks. Stop the
   browser development host after validation and record any coverage gaps.
+- Changes to platform code (bridge, CLI, paths, packaging) also need a Linux check:
+  build with `npm run package` in a scratch copy inside WSL Ubuntu (under `/tmp`, with a
+  temporary Node 22) and run the unpacked app and CLI there through WSLg.
 - Never point verification exports at a real game repository. Use scratch copies.
 - Use UTF-8 and LF for authored text.
 

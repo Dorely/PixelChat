@@ -10,7 +10,7 @@ import { idSchema } from '../shared/operation-catalog';
 import { RendererPort } from './ui-port';
 import { startBridge } from './bridge';
 import { installIntegration } from '../shared/install';
-import { installationSchema, type InstallationInput, type UiOutcome } from '../shared/workbench';
+import { installationSchema, WorkbenchError, type InstallationInput, type UiOutcome } from '../shared/workbench';
 import { startBrowserHost } from './browser-host';
 import { DiagnosticLog, redactText } from './diagnostics';
 import { ImageJobs } from './images';
@@ -119,6 +119,7 @@ else {
     };
     const agentRoot = app.isPackaged ? join(process.resourcesPath, 'agent') : join(__dirname, '../agent');
     // Agents are optional: the workspace stays usable when the helper is missing or the pipe cannot be published.
+    // The native helper is Windows-only; Linux protects discovery with file permissions.
     try { bridge = await startBridge(root, join(agentRoot, 'pixelchat-helper.exe'), ops); } catch (error) { diagnostics.record('bridge.failed', { message: safeError(error) }); }
     const handlers: Record<Command, (...args: any[]) => unknown> = {
       snapshot: async (): Promise<Snapshot> => { const activeProjectId = db.activeProjectId(); return { projects: db.projects(), activeProjectId, sessions: db.sessions(activeProjectId), providers: await providerStatus(), chat: chatStatus(), activeTurns: assistant.activeTurns() }; },
@@ -130,7 +131,13 @@ else {
       codexCancelLogin: () => codex.cancelLogin(),
       codexLogout: () => codex.logout(),
       saveGeminiKey: async (key: string | null) => { if (key) await secrets.set(GEMINI_KEY, key); else await secrets.delete(GEMINI_KEY); changed(); },
-      installIntegration: async (input: InstallationInput) => { try { return { ok: true, result: await installIntegration(input, join(agentRoot, 'pixelchat-runtime.exe'), join(agentRoot, 'cli.cjs')) }; } catch (e) { return operationError(e); } },
+      installIntegration: async (input: InstallationInput) => {
+        try {
+          // An AppImage is mounted at a new path on every run, so an MCP entry would point at nothing.
+          if (input.mcp && process.env.APPIMAGE) throw new WorkbenchError('INSTALL_UNSUPPORTED', 'The AppImage moves on every run, so MCP cannot be registered from it. Install the .deb package to register MCP; the skill installs without it.');
+          return { ok: true, result: await installIntegration(input, join(agentRoot, process.platform === 'win32' ? 'pixelchat-runtime.exe' : 'pixelchat-runtime'), join(agentRoot, 'cli.cjs')) };
+        } catch (e) { return operationError(e); }
+      },
       chatMessages: (id: string) => assistant.messages(id),
       sendMessage: (id: string, text: string, focus?: ChatFocus) => assistant.send(id, text, focus),
       cancelTurn: (id: string) => assistant.cancel(id),
@@ -176,7 +183,8 @@ else {
       process.stdout.write(`PixelChat browser: ${browserHost.url}\n`);
       return;
     }
-    const icon = app.isPackaged ? join(process.resourcesPath, 'icon.ico') : join(__dirname, '../../resources/icon.ico');
+    const iconFile = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
+    const icon = app.isPackaged ? join(process.resourcesPath, iconFile) : join(__dirname, '../../resources', iconFile);
     const placement = savedWindowBounds(db.setting(WINDOW_BOUNDS_KEY, ''));
     window = new BrowserWindow({ ...(placement ? { x: placement.x, y: placement.y, width: placement.width, height: placement.height } : { width: 1440, height: 940 }), minWidth: 1000, minHeight: 650, title: 'PixelChat', icon, backgroundColor: '#151716', show: false, webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.removeMenu();

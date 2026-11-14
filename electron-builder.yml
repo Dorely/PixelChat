@@ -20,17 +20,37 @@ extraResources:
     to: agent
   - from: out/skill
     to: skill
-  - from: resources/icon.ico
-    to: icon.ico
 win:
   target: nsis
   icon: resources/icon.ico
   signAndEditExecutable: true
+  extraResources:
+    - from: resources/icon.ico
+      to: icon.ico
 nsis:
+  artifactName: ${productName}-Setup-${version}.${ext}
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
   license: LICENSE
   include: installer/agent.nsh
+linux:
+  target:
+    - AppImage
+    - deb
+  executableName: pixelchat
+  syncDesktopName: true
+  icon: resources/icon.png
+  category: Graphics
+  maintainer: Dorely
+  synopsis: Agent-aided art review and editing
+  extraResources:
+    - from: resources/icon.png
+      to: icon.png
+appImage:
+  artifactName: ${productName}-${version}-x86_64.${ext}
+deb:
+  afterInstall: installer/linux-after-install.sh
+  afterRemove: installer/linux-after-remove.sh
 npmRebuild: true

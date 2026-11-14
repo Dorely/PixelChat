@@ -3,7 +3,8 @@
 ## Runtime and ownership
 
 PixelChat uses Electron, React/TypeScript, electron-vite, and electron-builder with a
-Windows x64 NSIS target. Exact versions live in the lockfile. This document describes
+Windows x64 NSIS target and Linux x64 AppImage and .deb targets (see Packaging and releases).
+Exact versions live in the lockfile. This document describes
 implementation; [verification](verification.md) records actual checks.
 [VISION](../VISION.md) remains product intent.
 
@@ -11,7 +12,8 @@ The main process owns persistence, media, providers, credentials, jobs, and turn
 React owns presentation, selection, and forms. The sandboxed, isolated preload exposes
 fixed typed operations. The renderer has no Node integration.
 
-The profile lives at `%APPDATA%/PixelChat`: `library.sqlite` (WAL, foreign keys on) and
+The profile lives at `%APPDATA%/PixelChat` (Linux: `$XDG_CONFIG_HOME/PixelChat`, default
+`~/.config/PixelChat`): `library.sqlite` (WAL, foreign keys on) and
 `logs/diagnostics.jsonl`. Credentials go only through `providers/secrets.ts` (Electron
 `safeStorage`); none are stored in SQLite, logs, or prompts.
 
@@ -275,8 +277,9 @@ tiktoken (images by pixel count) against the Codex default context size.
 
 ## Agent workbench
 
-The app publishes a token-authenticated named-pipe bridge (`bridge.ts`) whose discovery
-file is DPAPI-protected. The bundled CLI (`src/cli/index.ts`, built to `out/agent/cli.cjs`
+The app publishes a token-authenticated local bridge (`bridge.ts`): a named pipe with
+DPAPI-protected discovery on Windows, a Unix socket with owner-only discovery on Linux
+(`shared/discovery.ts`). The bundled CLI (`src/cli/index.ts`, built to `out/agent/cli.cjs`
 with a pinned Node runtime) forwards operations over it and serves them as a stdio MCP
 server with review and pending-export resources. The MCP server answers from its built-in
 catalog at once and reaches (or starts) the app per call. `view_image` renders a revision for
@@ -286,6 +289,21 @@ each mark's pin or drawing bounds. An animated version renders one chosen
 frame and reports the frame count. The skill and its references live in
 `resources/skill`; `shared/guidance.ts` embeds the same texts for the `guidance`
 operation and the installer. See [agent workbench](agent-workbench.md).
+
+## Packaging and releases
+
+`npm run package` builds for the current platform with `electron-builder.yml`: an unsigned
+per-user NSIS installer on Windows (`PixelChat-Setup-<version>.exe`), and on Linux an AppImage
+(`PixelChat-<version>-x86_64.AppImage`) plus a .deb (`pixelchat_<version>_amd64.deb`,
+installed to `/opt/PixelChat`). The window icon is `icon.ico` on Windows and `icon.png` on
+Linux. On Linux the secure store also refuses Electron's `basic_text` backend, so credentials
+need a Secret Service keyring; without one, readiness reports secure storage unavailable.
+
+`.github/workflows/build.yml` packages both platforms on every push to `main` and every pull
+request, uploading the packages as workflow artifacts. A pushed `v*` tag must equal
+`package.json`'s version; its run publishes a GitHub release with the three packages,
+`SHA256SUMS.txt`, the install notes in `.github/release-notes.md`, and generated notes.
+Releases do not update installed copies; users download the next one.
 
 ## Verification policy
 

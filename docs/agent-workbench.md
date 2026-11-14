@@ -1,6 +1,6 @@
 # Agent workbench
 
-PixelChat ships a Windows x64 console command and stdio MCP server for Codex, Claude Code,
+PixelChat ships a Windows and Linux x64 console command and stdio MCP server for Codex, Claude Code,
 and other harnesses. Both drive the desktop app's library, reviews, notes, image jobs, and
 exports through the same operation registry as the UI, with origin `agent`. They need no
 separate Node installation, credentials, daemon, or remote service. The desktop starts on
@@ -8,8 +8,11 @@ demand and stays open when clients disconnect.
 
 ## Install
 
-The installer adds `resources\agent` to the user PATH (removed again on uninstall). Open a
-new terminal afterward:
+The Windows installer adds `resources\agent` to the user PATH (removed again on uninstall);
+open a new terminal afterward. The Linux .deb links `/usr/bin/pixelchat` to
+`/opt/PixelChat/resources/agent/pixelchat` (the desktop app itself is `/opt/PixelChat/pixelchat`,
+started from the app menu). The AppImage is mounted at a new path on every run, so it offers no
+CLI on PATH, and Settings refuses MCP registration from it; the skill still installs.
 
 ```powershell
 pixelchat help
@@ -88,21 +91,29 @@ backoff while it is closed.
 
 ## Bridge and security
 
-The app listens on a named pipe `\\.\pipe\pixelchat-<random>` and accepts one
-newline-delimited JSON request per connection, authenticated with a random 256-bit token
-compared in constant time. Unauthenticated connections are dropped after 60 seconds and
-requests over 2 MiB are refused. The pipe name and token are written to
-`%APPDATA%\PixelChat\bridge\endpoint.bin`, encrypted with DPAPI for the current user, in a
-directory whose ACL admits only that user and SYSTEM. Both are regenerated on every start,
-and the file is removed on quit. If the bridge cannot start, the app records
-`bridge.failed` in its diagnostic log and runs without agent access.
+The app listens on a random local endpoint and accepts one newline-delimited JSON request
+per connection, authenticated with a random 256-bit token compared in constant time.
+Unauthenticated connections are dropped after 60 seconds and requests over 2 MiB are
+refused. `src/shared/discovery.ts` publishes the endpoint and token:
+
+- Windows: a named pipe `\\.\pipe\pixelchat-<random>`, written to
+  `%APPDATA%\PixelChat\bridge\endpoint.bin`, encrypted with DPAPI for the current user, in a
+  directory whose ACL admits only that user and SYSTEM.
+- Linux: a Unix socket `~/.config/PixelChat/bridge/pixelchat-<random>.sock` and a plain
+  `endpoint.json` (mode 0600), both in the owner-only (0700) `bridge` directory. Sockets left
+  by a crashed app are removed at the next start.
+
+Both are regenerated on every start, and the discovery file is removed on quit. If the
+bridge cannot start, the app records `bridge.failed` in its diagnostic log and runs without
+agent access.
 
 The CLI checks a discovered bridge with a 5-second `status` probe. If the probe fails while
 the process that published discovery is still running (paused in a debugger, or hung), it
 fails at once with `APP_UNAVAILABLE`. When discovery is missing or its process is gone, it
 starts the app and waits up to 30 seconds for the bridge.
 
-The packaged `PixelChat.exe` (beside `resources`) is started through `explorer.exe`. An
+On Linux the CLI starts the packaged `pixelchat` beside `resources` directly. On Windows the
+packaged `PixelChat.exe` is started through `explorer.exe`. An
 agent's MCP server may run inside a packaged app's container (Claude Desktop is MSIX), where
 a child process's `%APPDATA%` is redirected to that app's private storage; started there,
 PixelChat would keep a separate profile and publish discovery other callers cannot see. In
@@ -113,15 +124,19 @@ yourself when an agent in such a container uses the development CLI.
 the app, so an MCP client connects immediately. Each tool call reaches the app as above;
 when it cannot, the call returns an error result with the `APP_UNAVAILABLE` message.
 
-`native/helper.cpp` (`pixelchat-helper.exe`) does the Windows work: DPAPI protect and
+`native/helper.cpp` (`pixelchat-helper.exe`, Windows only) does the Windows work: DPAPI protect and
 unprotect, the private directory ACL, and the installer's PATH entry, which it records in
 `HKCU\Software\PixelChat` so uninstall removes only what it added.
 
 ## Build
 
 `npm run build` runs `scripts/build-agent.mjs` after the app build. It bundles the CLI to
-`out/agent/cli.cjs`, writes the skill to `out/skill`, downloads the pinned Node runtime
-(`v24.21.0`, SHA-256 checked) as `pixelchat-runtime.exe`, writes `pixelchat.cmd`, and
-builds the helper with CMake (falling back to the Visual Studio copy found by vswhere).
-electron-builder copies `out/agent` and `out/skill` to `resources\agent` and
-`resources\skill`; `installer/agent.nsh` adds and removes the PATH entry.
+`out/agent/cli.cjs`, writes the skill to `out/skill`, and downloads the pinned Node runtime
+(`v24.21.0`). On Windows it saves `node.exe` (SHA-256 checked) as `pixelchat-runtime.exe`,
+writes `pixelchat.cmd`, and builds the helper with CMake (falling back to the Visual Studio
+copy found by vswhere). On Linux it checks the official `linux-x64` archive, extracts
+`bin/node` (checked again) as `pixelchat-runtime`, and writes the `pixelchat` shell launcher,
+which follows its `/usr/bin` link to find the runtime. electron-builder copies `out/agent` and
+`out/skill` to `resources/agent` and `resources/skill`. `installer/agent.nsh` adds and removes
+the Windows PATH entry; `installer/linux-after-install.sh` and `linux-after-remove.sh` are
+electron-builder's .deb scripts with the `/usr/bin/pixelchat` alternative pointed at the CLI.

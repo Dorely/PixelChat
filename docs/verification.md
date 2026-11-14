@@ -430,3 +430,37 @@ secure-storage, or platform integration.
   answered `status` (Codex ready, so the chat counts as configured). `skill status` read all 12
   managed files up-to-date, so no skill reinstall was needed. The chat's visibility was not
   looked at in the installed window.
+
+## 2026-11-14 — Linux builds and published releases
+
+- `npm run typecheck` passed. `npm run package` on Windows built
+  `PixelChat-Setup-0.3.0.exe` (helper, runtime, and app signing steps are no-ops without a
+  certificate; the installer is unsigned).
+- Windows bridge refactor: the new `pixelchat.cmd` from `win-unpacked` read the running
+  installed app's DPAPI discovery and answered `status` and `tools` (42). The installed app was
+  not replaced and the new app was not launched (single instance). A temporary script outside
+  the repo ran `discovery.ts` against a scratch profile with the built helper: the pipe name
+  had the `\.\pipe\pixelchat-<64 hex>` shape, `readDiscovery` round-tripped it, the bridge
+  directory ACL listed only SYSTEM and the user, a client connected over the pipe, and
+  `removeDiscovery` left the directory empty.
+- Linux, WSL Ubuntu 24.04 with WSLg, a scratch copy under `/tmp` with Node 22.23.5:
+  `npm ci`, `npm run typecheck`, and `npm run package` built
+  `PixelChat-0.3.0-x86_64.AppImage` and `pixelchat_0.3.0_amd64.deb`. The pinned Node v24.21.0
+  linux-x64 archive matched nodejs.org's SHASUMS256 and the extracted `bin/node` its pin.
+  - The .deb holds `/opt/PixelChat/pixelchat`, `resources/agent/{pixelchat,pixelchat-runtime}`
+    (0755), `cli.cjs`, the skill, the AppArmor profile, and `pixelchat.desktop`
+    (`StartupWMClass=pixelchat` once `desktopName` was set). Its postinst and postrm are the
+    electron-builder templates with the `/usr/bin/pixelchat` alternative pointed at the CLI.
+  - With the app closed, a symlink to `resources/agent/pixelchat` (as `/usr/bin` would hold)
+    ran `status`: the CLI started `linux-unpacked/pixelchat` and answered, reporting secure
+    storage unavailable (WSL has no Secret Service keyring, so the `basic_text` guard applied).
+    `bridge` was 0700, `endpoint.json` 0600, the socket inside it. `tools` listed 42;
+    `projects_list` returned the new `Default` project; `import_files` imported a PNG (sharp
+    and better-sqlite3 load on Linux); `ui_open` returned `opened` from the renderer;
+    `view_image` returned a PNG. SIGTERM quit the app and left `bridge` empty.
+  - The AppImage (`--appimage-extract-and-run`; WSL lacks `libfuse2`) started, served
+    `projects_list` to the CLI over its socket, quit on SIGTERM, and cleaned up.
+- Not checked: `dpkg -i` and the maintainer scripts (no sudo in WSL), a Linux desktop with
+  AppArmor's user-namespace restriction (Ubuntu 23.10+), a real keyring, the AppImage MCP
+  refusal in Settings, and the GitHub release run (recorded with the first release below).
+  WSL scratch copy, Node, and the WSL test profile were removed afterward.

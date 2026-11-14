@@ -15,7 +15,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [FILEMAP.md](FILEMAP.md) | This map. |
 | [.gitignore](.gitignore), [.gitattributes](.gitattributes) | Ignored local data/credentials/build output; LF conventions. |
 | [.vscode/launch.json](.vscode/launch.json) | F5 source-mapped Electron main and renderer debugging. |
-| [.github/workflows/windows.yml](.github/workflows/windows.yml) | Credential-free Windows typecheck and installer artifact build. |
+| [.github/workflows/build.yml](.github/workflows/build.yml), [.github/release-notes.md](.github/release-notes.md) | Credential-free Windows and Linux typecheck and package builds; tag runs publish the GitHub release with these install notes. |
 
 ## Documentation
 
@@ -33,12 +33,13 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | --- | --- |
 | [package.json](package.json), [package-lock.json](package-lock.json) | Pinned dependencies and build/package commands. |
 | [tsconfig.json](tsconfig.json) | Strict TypeScript configuration. |
-| [electron.vite.config.ts](electron.vite.config.ts), [electron-builder.yml](electron-builder.yml) | Desktop build and unsigned Windows NSIS packaging. |
+| [electron.vite.config.ts](electron.vite.config.ts), [electron-builder.yml](electron-builder.yml) | Desktop build; unsigned Windows NSIS and Linux AppImage/.deb packaging. |
 | [resources/icon.svg](resources/icon.svg), [icon.png](resources/icon.png), [icon.ico](resources/icon.ico) | App icon master and rasters. |
 | [scripts/dev-browser.mjs](scripts/dev-browser.mjs) | Runs the built app as a loopback browser host and prints its URL. |
-| [scripts/build-agent.mjs](scripts/build-agent.mjs) | Bundles the CLI and skill, fetches the pinned Node runtime, and builds the native helper. |
+| [scripts/build-agent.mjs](scripts/build-agent.mjs) | Bundles the CLI and skill, fetches the pinned Node runtime per platform, writes the CLI launcher, and builds the Windows native helper. |
 | [native/helper.cpp](native/helper.cpp), [CMakeLists.txt](native/CMakeLists.txt) | `pixelchat-helper.exe`: DPAPI discovery protection, private directory ACL, installer PATH entry. |
 | [installer/agent.nsh](installer/agent.nsh) | NSIS hooks adding and removing the agent PATH entry. |
+| [installer/linux-after-install.sh](installer/linux-after-install.sh), [linux-after-remove.sh](installer/linux-after-remove.sh) | .deb scripts (electron-builder templates) linking `/usr/bin/pixelchat` to the agent CLI. |
 | [resources/skill/SKILL.md](resources/skill/SKILL.md), [references/](resources/skill/references) | Agent skill and its workflow, library/export, and image-editing references. |
 
 ## Main process
@@ -46,7 +47,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | File | Responsibility |
 | --- | --- |
 | [src/main/index.ts](src/main/index.ts) | Electron lifecycle, hardened window and its remembered placement, fixed IPC command schemas, `pixel-media` protocol, bridge and browser-mode startup. |
-| [src/main/bridge.ts](src/main/bridge.ts) | Token-authenticated named-pipe bridge for the CLI with DPAPI-protected discovery. |
+| [src/main/bridge.ts](src/main/bridge.ts) | Token-authenticated local bridge (named pipe or Unix socket) for the CLI. |
 | [src/main/view-image.ts](src/main/view-image.ts) | Renders a revision as a PNG for agent vision: backdrop, scaling, numbered note pins and drawings. |
 | [src/main/store.ts](src/main/store.ts) | SQLite schema and repository for settings, projects, sessions, sources, items, revisions, reviews, notes, image jobs, and the activity log. |
 | [src/main/media.ts](src/main/media.ts) | Stores exact original bytes (plus provider originals of converted results) and WebP thumbnails per revision; reads image facts with sharp. |
@@ -85,6 +86,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/shared/operation-catalog.ts](src/shared/operation-catalog.ts) | Operation schemas and descriptions, and the JSON tool catalog the CLI and MCP serve. |
 | [src/shared/guidance.ts](src/shared/guidance.ts) | Embedded skill references, their hash, and topic selection. |
 | [src/shared/install.ts](src/shared/install.ts) | Skill and MCP installation for Codex and Claude Code: preflight, backups, status, uninstall. |
+| [src/shared/discovery.ts](src/shared/discovery.ts) | Profile location and bridge endpoint discovery: DPAPI and private ACL on Windows, owner-only files on Linux. |
 | [src/shared/native.ts](src/shared/native.ts) | Runs the native helper with bounded input, output, and time. |
 
 ## Agent CLI

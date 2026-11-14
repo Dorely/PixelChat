@@ -4,6 +4,8 @@
   "description": "A desktop workspace for agent-aided art creation, editing, and review",
   "author": "Dorely",
   "license": "MIT",
+  "homepage": "https://github.com/Dorely/PixelChat",
+  "desktopName": "pixelchat.desktop",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -13,7 +15,7 @@
     "predev": "node scripts/build-agent.mjs",
     "typecheck": "tsc --noEmit",
     "rebuild": "electron-builder install-app-deps",
-    "package": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "package": "npm run build && electron-builder --x64 --publish never",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {

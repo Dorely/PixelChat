@@ -6,28 +6,25 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { setTimeout as delay } from 'node:timers/promises';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
-import { native } from '../shared/native';
+import { profileRoot, readDiscovery } from '../shared/discovery';
 import { installIntegration, skillText } from '../shared/install';
 import { operationCatalog } from '../shared/operation-catalog';
 import { WorkbenchError, type OperationResponse } from '../shared/workbench';
 import type { ActivityEntry, ItemSearchResult, ReviewSummary, ReviewWait } from '../shared/types';
 
+const windows = process.platform === 'win32';
 const helper = join(__dirname, 'pixelchat-helper.exe');
-const root = join(process.env.APPDATA || '', 'PixelChat');
-async function discovery() {
-  const bytes = await native(helper, ['unprotect'], await readFile(join(root, 'bridge', 'endpoint.bin')));
-  const value = JSON.parse(bytes.toString());
-  if (value.version !== 1 || !/^\\\\\.\\pipe\\pixelchat-[a-f0-9]{64}$/.test(value.pipe) || !/^[a-f0-9]{64}$/.test(value.token) || !Number.isInteger(value.pid)) throw new Error('Invalid bridge discovery.');
-  return value as { pipe: string; token: string; pid: number };
-}
+const root = profileRoot();
+const discovery = () => readDiscovery(root, helper);
 async function startApp() {
-  const packaged = resolve(__dirname, '../../PixelChat.exe');
+  const packaged = resolve(__dirname, '../..', windows ? 'PixelChat.exe' : 'pixelchat');
   try { await access(packaged); } catch {
-    const repository = resolve(__dirname, '../..'), electron = join(repository, 'node_modules/electron/dist/electron.exe');
+    const repository = resolve(__dirname, '../..'), electron = join(repository, 'node_modules/electron/dist', windows ? 'electron.exe' : 'electron');
     try { await access(electron); } catch { throw new WorkbenchError('APP_NOT_FOUND', 'Install the PixelChat desktop app with its bundled CLI.'); }
     // Development only: a caller inside a packaged app's container starts this Electron there too.
     return launch(electron, [repository]);
   }
+  if (!windows) return launch(packaged, []);
   // Callers may run inside a packaged app's container (Claude Desktop is MSIX), where a child's %APPDATA% is
   // redirected to the caller's private storage. The shell starts PixelChat outside it, on the real profile.
   return launch(join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe'), [packaged]);
