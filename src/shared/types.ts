@@ -112,7 +112,8 @@ export interface ChatModelEntry {
 export interface ModelCapabilityResult { perEffort: Record<string, 'pass' | 'fail'>; failedEfforts: string[]; maxTokens: number | null; vision: CapabilityFlag; error?: string }
 export interface ActiveChatSelection { modelId: string; effort: string }
 export interface ChatModelOption { id: string; label: string; providerLabel: string; slug: string; efforts: string[]; builtIn: boolean }
-export interface ChatStatus { models: ChatModelOption[]; active: ActiveChatSelection; providers: ChatProviderEntry[] }
+/** configured: a chat model can run (signed in to Codex, or a tested custom model saved); without one the chat stays hidden. */
+export interface ChatStatus { models: ChatModelOption[]; active: ActiveChatSelection; providers: ChatProviderEntry[]; configured: boolean }
 export interface ChatContext { model: string; tokens: number; limit: number | null; includesHiddenReasoning: boolean; includesEstimatedMedia: boolean }
 export interface ChatProviderInput { id?: string; label: string; baseUrl: string; kind: GenericProviderKind; apiKey?: string }
 export interface ChatModelInput { id?: string; providerId: string; slug: string; efforts: string[] }

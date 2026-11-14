@@ -42,7 +42,9 @@ position, and maximized state (the `window-bounds` setting) when a display can s
 Renderer preferences live in its local storage: theme, viewer and edit options, and the
 layout (`pixelchat.layout`: the workspace view and whether the chat sidebar is shown, and its
 width). Hiding the sidebar keeps it mounted, so a composer draft survives; the toggle is in
-the top bar and the viewer header. The browser host picks a new port per run, so these last
+the top bar and the viewer header. The snapshot's `chat.configured` says whether a chat model
+can run (Codex signed in, or a tested custom model saved); until one can, the sidebar and both
+toggles are absent, and the remembered choice is kept and applies once one is configured. The browser host picks a new port per run, so these last
 across reloads there but not across its runs.
 
 ## Browser development host

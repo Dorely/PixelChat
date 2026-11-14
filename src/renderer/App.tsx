@@ -24,7 +24,7 @@ function loadLayout(): { view: View; chatOpen: boolean; chatWidth: number } {
   } catch { return { view: 'library', chatOpen: true, chatWidth: 34 } }
 }
 
-const emptySnapshot: Snapshot = { projects: [], activeProjectId: '', sessions: [], providers: { secureStorage: false, codex: { ready: false, pending: false, error: null }, gemini: { ready: false } }, chat: { models: [], active: { modelId: '', effort: '' }, providers: [] }, activeTurns: [] }
+const emptySnapshot: Snapshot = { projects: [], activeProjectId: '', sessions: [], providers: { secureStorage: false, codex: { ready: false, pending: false, error: null }, gemini: { ready: false } }, chat: { models: [], active: { modelId: '', effort: '' }, providers: [], configured: false }, activeTurns: [] }
 const message = (error: unknown) => error instanceof Error ? error.message : 'Operation failed.'
 
 function TitleInput({ value, className, ariaLabel, onCommit, onCancel }: { value: string; className: string; ariaLabel: string; onCommit: (value: string) => void; onCancel: () => void }) {
@@ -109,7 +109,10 @@ export default function App() {
   const { view, chatOpen, chatWidth } = layout
   const setView = useCallback((next: View) => setLayout(value => ({ ...value, view: next })), [])
   const setChatWidth = (next: (width: number) => number) => setLayout(value => ({ ...value, chatWidth: clampWidth(next(value.chatWidth)) }))
-  const chatVisibility = useMemo(() => ({ open: chatOpen, toggle: () => setLayout(value => ({ ...value, chatOpen: !value.chatOpen })) }), [chatOpen])
+  // Without a chat model the sidebar stays hidden; the remembered choice applies once one is configured.
+  const chatAvailable = snapshot.chat.configured
+  const chatShown = chatAvailable && chatOpen
+  const chatVisibility = useMemo(() => ({ available: chatAvailable, open: chatOpen, toggle: () => setLayout(value => ({ ...value, chatOpen: !value.chatOpen })) }), [chatAvailable, chatOpen])
   const [theme, setTheme] = useState<ThemeId>(storedTheme)
   const [uiError, setUiError] = useState('')
   const [projectDialog, setProjectDialog] = useState<'create' | 'rename' | null>(null)
@@ -189,7 +192,7 @@ export default function App() {
     finally { setDeleting(false) }
   }
 
-  return <div className={`app-shell${chatOpen ? '' : ' chat-hidden'}`} style={{ '--sidebar-width': chatOpen ? `${chatWidth}%` : '0px' } as React.CSSProperties}>
+  return <div className={`app-shell${chatShown ? '' : ' chat-hidden'}`} style={{ '--sidebar-width': chatShown ? `${chatWidth}%` : '0px' } as React.CSSProperties}>
     {/* Stays mounted while hidden so a draft and the scroll position survive. */}
     <ChatSidebar snapshot={snapshot} projectName={activeProject?.name ?? 'Project'} selectedId={sessionId} focus={chatFocus} onSelect={setSessionId} onSettings={() => setSettingsOpen(true)} onError={setUiError} onNew={() => void createSession()}
       onRename={(id, title) => void call(() => op('rename_session', { projectId, sessionId: id, title }))}

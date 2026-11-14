@@ -404,3 +404,22 @@ secure-storage, or platform integration.
   `projects_list` (three projects); `tools` lists `picks`. After closing it, a fresh start
   answered both again, so the schema 7 library reopens. It was left running. Picks and the chat
   toggle were not exercised in the installed app.
+
+## 2026-11-14 — Chat hidden until a chat model is configured
+
+- `npm run typecheck` and `npm run build` passed.
+- Scratch browser host (a temporary wrapper outside the repo setting `appData` to a scratch
+  folder; the installed app kept the real profile), in the built-in browser:
+  - Fresh profile, Codex not signed in, no custom models: sidebar and resize handle hidden, no
+    chat toggle in the top bar; the stored layout kept `chatOpen: true`.
+  - A placeholder custom chat model written into the scratch settings (no endpoint called),
+    then a reload: sidebar shown with the top-bar toggle. Hiding stored `chatOpen: false` and
+    survived a reload with the toggle reading "Show chat"; showing again stored `true`.
+  - Removing the model from Settings hid the sidebar and toggle without a reload; the layout
+    still read `chatOpen: true`.
+  - Viewer on a scratch 64×64 PNG: its header carried "Hide chat" with a model configured;
+    deleting the model through `deleteChatModel` removed the toggle and the viewer moved to the
+    window edge (left 0).
+- Not checked: the Codex sign-in path (a scratch profile cannot sign in; `configured` reads
+  `codex.status.ready`), the native desktop window, and the installed app. Scratch host shut
+  down and scratch files removed; no virtualized profile copy was created.

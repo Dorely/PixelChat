@@ -21,7 +21,7 @@ import { GeminiImages } from './providers/gemini-images';
 import { ChatStore } from './chat-store';
 import { ChatRegistry } from './chat-registry';
 import { ChatService } from './chat';
-import type { ActiveChatSelection, ChatFocus, ChatModelInput, ChatProviderInput, ProviderStatus, Snapshot } from '../shared/types';
+import type { ActiveChatSelection, ChatFocus, ChatModelInput, ChatProviderInput, ChatStatus, ProviderStatus, Snapshot } from '../shared/types';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'pixel-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }]);
 app.setName('PixelChat');
@@ -112,7 +112,11 @@ else {
     const registry = new ChatRegistry(db, secrets, geminiKey);
     const assistant = new ChatService(db, chats, ops, registry, () => codex.getAccessToken(), diagnostics); chat = assistant;
     ops.sessionBusy = id => assistant.active(id);
-    const chatStatus = () => { const target = registry.resolveActive(); return { models: registry.options(), active: { modelId: target.selectionId, effort: target.effort }, providers: registry.providers() }; };
+    const chatStatus = (): ChatStatus => {
+      const target = registry.resolveActive(), models = registry.options();
+      // Built-in models are always listed; they only run once Codex is signed in.
+      return { models, active: { modelId: target.selectionId, effort: target.effort }, providers: registry.providers(), configured: codex.status.ready || models.some(model => !model.builtIn) };
+    };
     const agentRoot = app.isPackaged ? join(process.resourcesPath, 'agent') : join(__dirname, '../agent');
     // Agents are optional: the workspace stays usable when the helper is missing or the pipe cannot be published.
     try { bridge = await startBridge(root, join(agentRoot, 'pixelchat-helper.exe'), ops); } catch (error) { diagnostics.record('bridge.failed', { message: safeError(error) }); }
