@@ -1,5 +1,7 @@
 # PixelChat
 
+PixelChat is free to use. If it saves you time, you can [buy Dorely a coffee](https://buymeacoffee.com/dorely).
+
 A desktop workspace for Windows and Linux for agent-aided art creation, editing, and review.
 [MIT license](LICENSE).
 

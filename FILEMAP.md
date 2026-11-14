@@ -16,6 +16,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [.gitignore](.gitignore), [.gitattributes](.gitattributes) | Ignored local data/credentials/build output; LF conventions. |
 | [.vscode/launch.json](.vscode/launch.json) | F5 source-mapped Electron main and renderer debugging. |
 | [.github/workflows/build.yml](.github/workflows/build.yml), [.github/release-notes.md](.github/release-notes.md) | Credential-free Windows and Linux typecheck and package builds; tag runs publish the GitHub release with these install notes. |
+| [.github/FUNDING.yml](.github/FUNDING.yml) | GitHub Sponsor-button configuration for the Buy Me a Coffee page. |
 
 ## Documentation
 
