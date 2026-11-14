@@ -423,3 +423,10 @@ secure-storage, or platform integration.
 - Not checked: the Codex sign-in path (a scratch profile cannot sign in; `configured` reads
   `codex.status.ready`), the native desktop window, and the installed app. Scratch host shut
   down and scratch files removed; no virtualized profile copy was created.
+- `npm run package` built the installer. With no active image jobs in any of the three
+  projects, the running installed app was closed through `CloseMainWindow` and an unsandboxed
+  silent install (`/S`, exit 0) replaced it; the Start Menu shortcut is present and the
+  installed `app.asar` carries the `configured` check. The installed CLI started the app and it
+  answered `status` (Codex ready, so the chat counts as configured). `skill status` read all 12
+  managed files up-to-date, so no skill reinstall was needed. The chat's visibility was not
+  looked at in the installed window.
