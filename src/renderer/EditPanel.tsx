@@ -31,7 +31,7 @@ function notesText(item: Item) {
   const marked = markedThreads(item.notes)
   const lines = item.notes.filter(thread => !thread.resolvedAt).map(thread => {
     const number = marked.indexOf(thread) + 1
-    return `- ${number ? `Pin ${number} at ${pinLabel(markRegion(thread))}: ` : ''}${thread.body}`
+    return `- ${thread.frame === null ? '' : `Frame ${thread.frame + 1} · `}${number ? `Pin ${number} at ${pinLabel(markRegion(thread))}: ` : ''}${thread.body}`
   })
   return lines.length ? `Address these review notes:\n${lines.join('\n')}` : ''
 }
@@ -61,7 +61,7 @@ export default function EditPanel({ projectId, item, revision, mask, onPaintMask
   const ready = (provider: 'codex' | 'gemini') => !!providers?.[provider].ready
   const sourceTransparent = revision.hasAlpha && !revision.opaque
   const needsAlpha = choices.background === 'transparent' || (choices.background === 'auto' && sourceTransparent)
-  const problem = revision.format === 'gif' || revision.frames > 1 ? 'Image edits need a still PNG, WebP, or JPEG version.'
+  const problem = !['png', 'webp', 'jpeg'].includes(revision.format) || revision.frames > 1 ? 'Image edits need a still PNG, WebP, or JPEG version.'
     : mask.length && !model.mask ? `${model.label} does not take a mask. Choose a Codex model, or clear the mask.`
     : !ready(model.provider) ? `Sign in to ${model.provider === 'codex' ? 'Codex' : 'Gemini'} in Settings to use ${model.label}.`
     : needsAlpha && !model.transparency ? `${model.label} cannot ${sourceTransparent && choices.background === 'auto' ? 'keep this version\'s transparency' : 'make transparent images'}. Choose Image 2.5 Flare or Sunburst, or an opaque background.`

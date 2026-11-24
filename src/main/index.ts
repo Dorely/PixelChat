@@ -167,9 +167,9 @@ else {
         const url = new URL(request.url);
         const id = idSchema.safeParse(url.pathname.slice(1));
         const revision = request.method === 'GET' && id.success ? db.revisionFile(id.data, db.activeProjectId()) : null;
-        if (!revision || !['original', 'thumb'].includes(url.hostname)) return new Response(null, { status: 404 });
+        if (!revision || !['original', 'thumb', 'playback'].includes(url.hostname)) return new Response(null, { status: 404 });
         const original = url.hostname === 'original';
-        const bytes = original ? await media.read(revision.file) : await readFile(media.thumbnailPath(id.data!));
+        const bytes = original ? await media.read(revision.file) : await readFile(url.hostname === 'playback' ? media.playbackPath(id.data!) : media.thumbnailPath(id.data!));
         return new Response(new Uint8Array(bytes), { headers: { 'content-type': original ? MEDIA_TYPES[revision.format] : 'image/webp', 'cache-control': 'private, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
       } catch { return new Response(null, { status: 404 }); }
     };

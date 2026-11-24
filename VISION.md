@@ -14,6 +14,7 @@ library, and secure credentials.
 The first use case is bulk review of existing game art. Users import a folder tree from
 their game, browse it by folder and status, and move quickly through it: accept, mark as
 needing changes, or reject, leaving notes for the whole image or pinned to a region of it.
+For animation and sequence reviews, agents should present a playable clip. Reviewers can pause on a frame and mark the exact pixels that need attention.
 Viewing must make art easy to judge: zoom, crisp pixel scaling, and transparency shown
 against checkerboard, light, dark, or custom backgrounds.
 

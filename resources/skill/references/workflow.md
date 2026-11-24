@@ -38,6 +38,12 @@ an entry tells you the item has moved on since.
   another review, PixelChat only offers it (`offered`) and leaves them where they are: say
   it is ready rather than opening it again.
 
+## Reviewing motion
+
+Present the sequence at its intended cadence as one playable review entry. Use `import_files` with an absolute path, check `failed`, then pass the returned item or revision ID to `review_create` or `review_update`. Use the reference role when the motion is context for another decision. GIF and animated WebP import directly. MP4 and WebM use FFmpeg on the PixelChat host to prepare a silent visual preview.
+
+Opening the clip starts playback. The reviewer can pause, scrub, or step one frame at a time. Starting a pin, drawing, or note pauses on the displayed frame. Clicking a saved frame note returns to it. Frame numbers in the viewer start at 1. In `review_get`, a root note's `frame` starts at 0, and `null` means the note applies to the version as a whole. Pass the saved `revisionId` and `frame` directly to `view_image` to inspect the feedback.
+
 ## Notes, pins, and drawings
 
 Notes belong to an item and to the version they were written on; a review note is on one

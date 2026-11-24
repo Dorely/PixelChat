@@ -27,9 +27,9 @@ export async function viewImage(store: Store, media: MediaStore, projectId: stri
   const sizes = new Map(item.revisions.map(entry => [entry.id, entry]));
   const pins = options.pins ? marked.map((thread, index) => ({
     number: index + 1, noteId: thread.id, revisionId: thread.revisionId, onThisVersion: thread.revisionId === revision.id, pin: thread.pin,
-    drawing: thread.sketch ? { strokes: thread.sketch.length, colors: [...new Set(thread.sketch.map(stroke => stroke.color))], bounds: strokeBounds(thread.sketch) } : null,
+    frame: thread.frame, drawing: thread.sketch ? { strokes: thread.sketch.length, colors: [...new Set(thread.sketch.map(stroke => stroke.color))], bounds: strokeBounds(thread.sketch) } : null,
     body: thread.body.length > 200 ? `${thread.body.slice(0, 200)}…` : thread.body,
-  })) : [];
+  })).filter(pin => pin.frame === null || (pin.onThisVersion && pin.frame === options.frame)) : [];
   const marks = pins.map(({ number, onThisVersion, noteId }) => {
     const thread = marked.find(entry => entry.id === noteId)!, dash = onThisVersion ? '' : ' stroke-dasharray="8 5"';
     // Drawings and pins from another version are mapped proportionally onto this one.
@@ -60,7 +60,8 @@ export async function viewImage(store: Store, media: MediaStore, projectId: stri
       + `<text x="${labelX}" y="${labelY + 5}" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#000">${escapeXml(String(number))}</text>`;
   });
 
-  let image = sharp(await media.read(file.file), { page: options.frame }).resize(width, height, { fit: 'fill', kernel: scale >= 1 ? 'nearest' : 'lanczos3' }).flatten({ background: options.background });
+  const path = revision.format === 'mp4' || revision.format === 'webm' ? media.playbackPath(revision.id) : media.path(file.file);
+  let image = sharp(path, { page: options.frame }).resize(width, height, { fit: 'fill', kernel: scale >= 1 ? 'nearest' : 'lanczos3' }).flatten({ background: options.background });
   if (marks.length) {
     // Resize and flatten first so pins are drawn over final pixels at the output scale.
     image = sharp(await image.png().toBuffer()).composite([{ input: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${marks.join('')}</svg>`) }]);

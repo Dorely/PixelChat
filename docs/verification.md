@@ -474,3 +474,11 @@ secure-storage, or platform integration.
   `PixelChat-Setup-0.4.0.exe`, `PixelChat-0.4.0-x86_64.AppImage`, `pixelchat_0.4.0_amd64.deb`,
   and `SHA256SUMS.txt`, with the install notes ahead of the generated changelog link.
 - The published packages were not downloaded and installed.
+
+## 2026-11-24 — Motion review
+
+- Windows: `npm run typecheck` and `npm run build` passed. With the installed app running, `npm run dev:browser` built successfully and yielded to the existing instance. Started the resulting browser host with a scratch Electron profile.
+- Imported five-frame MP4, GIF, and WebM samples and created a review. In the browser, paused the MP4, scrubbed to frame 3, dragged a box and saved a note. Stepping to frame 4 hid the box. Selecting the note restored frame 3 and its box. `review_get` returned zero-based frame 2 and the box. `view_image` returned one pin for frame 2 and zero for frame 3. `note_add` rejected frame 5.
+- Reopened the scratch profile in native Electron. Imported MP4, GIF, WebM, and animated WebP as subjects and references, added a drawing on each, and inspected each frame through `view_image`. The native media protocol and ImageDecoder returned five frames and a 200 ms duration on each sampled frame. Scratch exports matched all four originals byte for byte. No provider calls.
+- WSL Ubuntu: temporary Node 22.23.5, scratch checkout and profile, FFmpeg on PATH. `npm ci`, typecheck, and `npm run package` succeeded. The unpacked app started under WSLg. Its bundled CLI imported an MP4 and GIF, opened the video in the viewer, and returned a PNG for frame 2 of 5. No installer upgrade or audio playback check. Playback is visual-only.
+- Rebuilt the skill and refreshed the local Codex copy after checking that it matched the previous bundle. The skill installer reported all five files up to date afterward.

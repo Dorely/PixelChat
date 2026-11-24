@@ -60,8 +60,8 @@ export class ImageJobs {
     const referenceItems = (args.referenceItemIds ?? []).map(id => this.store.item(id, projectId));
     const references = referenceItems.map(item => item.selectedRevisionId);
     // Image models take still PNG, WebP, or JPEG input.
-    const still = (meta: RevisionMeta) => meta.format !== 'gif' && meta.frames === 1;
-    if (source && !still(source)) throw new WorkbenchError('UNSUPPORTED_IMAGE', `Image edits need a still PNG, WebP, or JPEG version; this version is ${source.frames > 1 ? `an animation of ${source.frames} frames` : 'a GIF'}.`);
+    const still = (meta: RevisionMeta) => ['png', 'webp', 'jpeg'].includes(meta.format) && meta.frames === 1;
+    if (source && !still(source)) throw new WorkbenchError('UNSUPPORTED_IMAGE', `Image edits need a still PNG, WebP, or JPEG version; this version is ${source.frames > 1 ? `an animation of ${source.frames} frames` : source.format.toUpperCase()}.`);
     const unusable = referenceItems.find(item => !still(item.selected));
     if (unusable) throw new WorkbenchError('UNSUPPORTED_IMAGE', `Reference "${unusable.name}" is an animated or GIF image; references must be still PNG, WebP, or JPEG versions.`);
     const mask = args.mask?.length ? args.mask : null;
@@ -77,7 +77,7 @@ export class ImageJobs {
     const alpha = background === 'transparent' || (background === 'auto' && sourceTransparent);
     // Results default to the format of the file they will be exported to.
     const synced: Revision | undefined = target?.revisions.find(entry => entry.id === target.syncedRevisionId);
-    const format = args.format ?? [synced?.format, source?.format].find((value): value is ImageFormat => !!value && value !== 'gif') ?? 'png';
+    const format = args.format ?? [synced?.format, source?.format].find((value): value is ImageFormat => !!value && ['png', 'webp', 'jpeg'].includes(value)) ?? 'png';
     if (alpha && !model.transparency) throw new WorkbenchError('INVALID_ARGUMENTS', background === 'auto'
       ? `The source has transparency, which ${model.label} cannot keep. Choose Image 2.5 Flare or Sunburst, or set background to opaque.`
       : `${model.label} has no native transparency. Choose Image 2.5 Flare or Sunburst.`);

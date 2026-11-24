@@ -204,7 +204,9 @@ body.resizing, body.resizing * { cursor: col-resize !important; user-select: non
 .viewer-stage { position: relative; display: flex; flex: 1; min-height: 0; overflow: auto; padding: 24px; }
 /* The canvas is the drawn image's exact size; auto margins center it until it outgrows the stage, then it scrolls. */
 .viewer-canvas { position: relative; flex: none; margin: auto; }
-.viewer-canvas img { display: block; width: 100%; height: 100%; user-select: none; }
+.playback-bar { display: flex; align-items: center; gap: 8px; padding: 6px 16px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.playback-bar input { flex: 1; min-width: 40px; }
+.viewer-canvas canvas, .viewer-canvas img { display: block; width: 100%; height: 100%; user-select: none; }
 .stage-pan .mark-layer { cursor: grab; }
 .stage-panning .mark-layer { cursor: grabbing; }
 .tool-options { display: inline-flex; align-items: center; gap: 6px; }

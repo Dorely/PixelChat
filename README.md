@@ -26,6 +26,12 @@ Codex sign-in and the Gemini key need OS secure storage: on Linux, a Secret Serv
 such as GNOME Keyring or KWallet. The library lives under `%APPDATA%\PixelChat` on Windows and
 `~/.config/PixelChat` on Linux.
 
+## Reviewing motion
+
+Agents can import a GIF, animated WebP, MP4, or WebM and attach it as a review subject or reference. Open a clip to pause, scrub, or step through it. Click or drag to pin a region, or use Draw and add a note. Click a note's frame number to return to those pixels.
+
+MP4 and WebM import requires `ffmpeg` on PixelChat's PATH with the libwebp encoder and `-fps_mode` support. PixelChat keeps the original file and prepares a silent visual preview for frame review. GIF and animated WebP work directly.
+
 ## Development
 
 Requires Windows x64 or Linux x64 and Node.js 22.

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { WorkbenchError } from '../shared/workbench';
 import type { ActivityEntry, Stroke, Decision, ImageJob, ImageJobInput, Item, ItemSearchResult, ItemStatusFilter, ItemSummary, Note, NoteThread, Origin, Pin, Project, Review, ReviewEntry, ReviewMode, ReviewStatus, ReviewSummary, Revision, RevisionOrigin, ScanReport, Session, Source, TitleSource } from '../shared/types';
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const ACTIVE_PROJECT_KEY = 'project-active';
 const DEFAULT_PROJECT_NAME = 'Default';
 export const now = () => new Date().toISOString();
@@ -28,7 +28,7 @@ const itemSummary = (r: Row): ItemSummary => ({
 });
 const note = (r: Row): Note => ({
   id: r.id, projectId: r.project_id, itemId: r.item_id, reviewId: r.review_id, revisionId: r.revision_id, parentId: r.parent_id, author: r.author,
-  body: r.body, pin: r.pin ? JSON.parse(r.pin) : null, sketch: r.sketch ? JSON.parse(r.sketch) : null, resolvedAt: r.resolved_at, resolvedBy: r.resolved_by, createdAt: r.created_at, updatedAt: r.updated_at,
+  body: r.body, frame: r.frame, pin: r.pin ? JSON.parse(r.pin) : null, sketch: r.sketch ? JSON.parse(r.sketch) : null, resolvedAt: r.resolved_at, resolvedBy: r.resolved_by, createdAt: r.created_at, updatedAt: r.updated_at,
 });
 /** Groups notes ordered by creation into root threads with their replies. */
 const threads = (rows: Row[]): NoteThread[] => {
@@ -76,7 +76,7 @@ export interface ItemPatch { name?: string; description?: string; tags?: string[
 export interface ReviewPatch {
   title?: string; instructions?: string; mode?: ReviewMode; picks?: number; revisionIds?: string[]; addRevisionIds?: string[]; referenceRevisionIds?: string[]; addReferenceRevisionIds?: string[]
 }
-export interface NoteInput { itemId: string; body: string; reviewId?: string; revisionId?: string; parentId?: string; pin?: Pin; sketch?: Stroke[] }
+export interface NoteInput { itemId: string; body: string; reviewId?: string; revisionId?: string; parentId?: string; frame?: number; pin?: Pin; sketch?: Stroke[] }
 export interface NotePatch { body?: string; pin?: Pin | null; sketch?: Stroke[] | null; resolved?: boolean }
 
 /** SQLite owner for every workspace record. Callers pass explicit project scope. */
@@ -180,6 +180,9 @@ export class Store {
         ALTER TABLE reviews ADD COLUMN picks INTEGER NOT NULL DEFAULT 1;
         PRAGMA user_version = 7;
       `);
+    })();
+    if (version < 8) this.db.transaction(() => {
+      this.db.exec('ALTER TABLE notes ADD COLUMN frame INTEGER; PRAGMA user_version = 8;');
     })();
     if (!this.db.prepare('SELECT 1 FROM projects LIMIT 1').get()) this.createProject(DEFAULT_PROJECT_NAME);
     if (!this.setting(ACTIVE_PROJECT_KEY, '') || !this.db.prepare('SELECT 1 FROM projects WHERE id=?').get(this.setting(ACTIVE_PROJECT_KEY, '')))
@@ -560,22 +563,24 @@ export class Store {
     if (input.parentId) {
       const parent = this.noteRow(input.parentId, projectId);
       if (parent.item_id !== item.id) throw new WorkbenchError('INVALID_ARGUMENTS', 'A reply must be on the same item as its note.');
-      if (input.pin || input.sketch) throw new WorkbenchError('INVALID_ARGUMENTS', 'Replies cannot carry pins or drawings. Add a new note for another region.');
+      if (input.frame !== undefined || input.pin || input.sketch) throw new WorkbenchError('INVALID_ARGUMENTS', 'Replies cannot carry frames, pins, or drawings. Add a new note for another region.');
       parentId = parent.parent_id ?? parent.id;
       reviewId = input.reviewId ?? parent.review_id;
       revisionId = input.revisionId ?? parent.revision_id;
     } else if (reviewId && this.reviewSummary(reviewId, projectId).status === 'completed') throw new WorkbenchError('REVIEW_COMPLETED', 'The review is completed. Reopen it before adding notes to it.');
     if (reviewId && !parentId && !this.db.prepare('SELECT 1 FROM review_entries x JOIN reviews v ON v.id = x.review_id WHERE x.review_id=? AND x.revision_id=? AND v.project_id=?').get(reviewId, revisionId, projectId))
       throw new WorkbenchError('INVALID_ARGUMENTS', 'That version is not in the review.');
-    if (!item.revisions.some(entry => entry.id === revisionId)) throw new WorkbenchError('NOT_FOUND', 'Revision not found on this item.');
-    const size = this.revisionSize(revisionId);
-    const pin = input.pin ? clampPin(input.pin, size.width, size.height) : null;
-    const sketch = input.sketch ? clampSketch(input.sketch, size.width, size.height) : null;
+    const version = item.revisions.find(entry => entry.id === revisionId);
+    if (!version) throw new WorkbenchError('NOT_FOUND', 'Revision not found on this item.');
+    if (input.frame !== undefined && version.frames === 1 && version.format !== 'mp4' && version.format !== 'webm') throw new WorkbenchError('INVALID_ARGUMENTS', 'Frame notes require an animation or video.');
+    if (input.frame !== undefined && input.frame >= version.frames) throw new WorkbenchError('INVALID_ARGUMENTS', 'Frame is outside this version.');
+    const pin = input.pin ? clampPin(input.pin, version.width, version.height) : null;
+    const sketch = input.sketch ? clampSketch(input.sketch, version.width, version.height) : null;
     const id = randomUUID(), at = now();
     this.tx(() => {
-      this.db.prepare('INSERT INTO notes (id,project_id,item_id,review_id,revision_id,parent_id,author,body,pin,sketch,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(id, projectId, item.id, reviewId, revisionId, parentId, origin, input.body.trim(), pin ? JSON.stringify(pin) : null, sketch ? JSON.stringify(sketch) : null, at, at);
-      this.appendActivity(projectId, origin, 'note.added', { itemId: item.id, reviewId: reviewId ?? undefined }, { noteId: id, parentId, revisionId, pinned: !!pin, drawn: !!sketch });
+      this.db.prepare('INSERT INTO notes (id,project_id,item_id,review_id,revision_id,parent_id,author,body,pin,sketch,frame,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(id, projectId, item.id, reviewId, revisionId, parentId, origin, input.body.trim(), pin ? JSON.stringify(pin) : null, sketch ? JSON.stringify(sketch) : null, input.frame ?? null, at, at);
+      this.appendActivity(projectId, origin, 'note.added', { itemId: item.id, reviewId: reviewId ?? undefined }, { noteId: id, parentId, revisionId, frame: input.frame ?? null, pinned: !!pin, drawn: !!sketch });
     });
     return note(this.noteRow(id, projectId));
   }

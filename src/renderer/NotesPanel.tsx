@@ -42,8 +42,8 @@ type Gesture = { screen: Point; last: Point; points: number[]; box: boolean }
  * and turns pointer gestures into the active tool's marks. Marks are stored in image pixels of their revision;
  * ones from another version are drawn dashed and mapped proportionally.
  */
-export function MarkLayer({ revision, revisions, notes, tool, scale, draft, sketch, mask, penColor, brush, erasing, activeNoteId, onDraft, onStroke, onMask, onActivate }: {
-  revision: Revision; revisions: Revision[]; notes: NoteThread[]; tool: Tool; scale: number; draft: Pin | null; sketch: Stroke[]; mask: MaskShape[]
+export function MarkLayer({ frame, revision, revisions, notes, tool, scale, draft, sketch, mask, penColor, brush, erasing, activeNoteId, onDraft, onStroke, onMask, onActivate }: {
+  frame?: number; revision: Revision; revisions: Revision[]; notes: NoteThread[]; tool: Tool; scale: number; draft: Pin | null; sketch: Stroke[]; mask: MaskShape[]
   penColor: string; brush: number; erasing: boolean; activeNoteId: string | null
   onDraft: (pin: Pin) => void; onStroke: (stroke: Stroke) => void; onMask: (shape: MaskShape) => void; onActivate: (id: string | null) => void
 }) {
@@ -84,7 +84,8 @@ export function MarkLayer({ revision, revisions, notes, tool, scale, draft, sket
     : null
   const shownPin: Pin | null = tool === 'pin' && gesture ? (liveBox ?? pixel(first(gesture.points))) : draft
   const maskShapes = liveMask ? [...mask, liveMask] : mask
-  const marked = markedThreads(notes)
+  const numbered = markedThreads(notes)
+  const marked = numbered.filter(thread => thread.frame === null || (thread.frame === frame && thread.revisionId === revision.id))
 
   return <div className={`mark-layer tool-${tool}`} title={tool === 'pin' ? 'Click to pin a point, drag to pin a region' : tool === 'draw' ? 'Draw on the image for the next note' : 'Paint the area to edit · Shift+drag for a box'}
     onPointerDown={event => {
@@ -124,7 +125,8 @@ export function MarkLayer({ revision, revisions, notes, tool, scale, draft, sket
         <circle cx={hover.x} cy={hover.y} r={brush / 2} fill="none" stroke={erasing ? '#7dd3fc' : '#fff'} strokeWidth={1.5 / scale} />
       </>}
     </svg>
-    {marked.map((thread, index) => {
+    {marked.map(thread => {
+      const index = numbered.indexOf(thread)
       const source = sizes.get(thread.revisionId) ?? revision
       // A drawing without a pin is numbered where it starts.
       const start = thread.sketch && strokeStart(thread.sketch)
@@ -163,6 +165,7 @@ function Thread({ thread, pinNumber, revisionId, active, onActivate, onReply, on
       <small>{new Date(thread.createdAt).toLocaleString()}</small>
       {older && <span className="badge" title="Written on another version of this item than the one shown">Other version</span>}
     </header>
+    {thread.frame !== null && <button className="text-button" onClick={event => { event.stopPropagation(); onActivate() }}>Frame {thread.frame + 1}</button>}
     <p>{thread.body}</p>
     {thread.pin && pinNumber === null && <small className="quiet-text">Pinned {pinLabel(thread.pin)}</small>}
     {thread.sketch && <small className="quiet-text">Drawing {pinLabel(strokeBounds(thread.sketch))}</small>}
@@ -183,9 +186,10 @@ function Thread({ thread, pinNumber, revisionId, active, onActivate, onReply, on
 
 /** Item note threads with a composer. Notes target the viewed revision and, in a review, that review. */
 export const NotesPanel = forwardRef<HTMLTextAreaElement, {
+  frame?: number; loadingFrame: boolean; onCompose: () => void
   projectId: string; item: Item; revisionId: string; reviewId?: string; locked?: boolean; draft: Pin | null; sketch: Stroke[]; activeNoteId: string | null
   onClearDraft: () => void; onClearSketch: () => void; onActivate: (id: string | null) => void; onError: (message: string) => void
-}>(function NotesPanel({ projectId, item, revisionId, reviewId, locked, draft, sketch, activeNoteId, onClearDraft, onClearSketch, onActivate, onError }, composer) {
+}>(function NotesPanel({ frame, loadingFrame, onCompose, projectId, item, revisionId, reviewId, locked, draft, sketch, activeNoteId, onClearDraft, onClearSketch, onActivate, onError }, composer) {
   const [body, setBody] = useState('')
   const [busy, setBusy] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -197,10 +201,10 @@ export const NotesPanel = forwardRef<HTMLTextAreaElement, {
   const open = item.notes.filter(thread => !thread.resolvedAt), resolved = item.notes.filter(thread => thread.resolvedAt)
   const run = async (action: () => Promise<unknown>, fallback: string) => { try { await action(); return true } catch (error) { onError(message(error, fallback)); return false } }
   const add = async () => {
-    if (!body.trim() || busy) return
+    if (!body.trim() || busy || loadingFrame) return
     setBusy(true)
     const submitted = body, pin = draft, drawing = sketch
-    if (await run(() => op('note_add', { projectId, itemId: item.id, body: submitted, revisionId, ...(reviewId && !locked ? { reviewId } : {}), ...(pin ? { pin } : {}), ...(drawing.length ? { sketch: drawing } : {}) }), 'Could not add the note.')) {
+    if (await run(() => op('note_add', { projectId, itemId: item.id, body: submitted, revisionId, frame, ...(reviewId && !locked ? { reviewId } : {}), ...(pin ? { pin } : {}), ...(drawing.length ? { sketch: drawing } : {}) }), 'Could not add the note.')) {
       // Keep anything typed, pinned, or drawn while the note was saving.
       setBody(current => current === submitted ? '' : current)
       if (draftRef.current === pin) onClearDraft()
@@ -209,7 +213,7 @@ export const NotesPanel = forwardRef<HTMLTextAreaElement, {
     setBusy(false)
   }
   const thread = (entry: NoteThread) => <Thread key={entry.id} thread={entry} revisionId={revisionId} pinNumber={pinned.includes(entry) ? pinned.indexOf(entry) + 1 : null} active={entry.id === activeNoteId}
-    onActivate={() => onActivate(entry.id === activeNoteId ? null : entry.id)}
+    onActivate={() => onActivate(entry.id)}
     onReply={body => run(() => op('note_add', { projectId, itemId: item.id, parentId: entry.id, body }), 'Could not add the reply.')}
     onResolve={resolved => void run(() => op('note_update', { projectId, noteId: entry.id, resolved }), 'Could not update the note.')}
     onDelete={setDeleting} />
@@ -217,13 +221,14 @@ export const NotesPanel = forwardRef<HTMLTextAreaElement, {
   return <section className="viewer-section notes-section">
     <h3>Notes <span>{open.length}</span></h3>
     <div className="note-composer">
-      <textarea ref={composer} rows={3} value={body} onChange={event => setBody(event.target.value)} aria-label="New note"
+      <textarea onFocus={onCompose} ref={composer} rows={3} value={body} onChange={event => setBody(event.target.value)} aria-label="New note"
         placeholder={draft || sketch.length ? 'Describe what should change where you marked…' : 'Leave a note for the agent. Click or drag on the image to pin a region, or use Draw to mark it up.'}
         onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void add() } if (event.key === 'Escape') event.currentTarget.blur() }} />
       <div className="note-actions">
+        {frame !== undefined && <span className="badge">Frame {frame + 1}</span>}
         {draft && <span className="badge badge-accent pin-chip">Pin {pinLabel(draft)}<button onClick={onClearDraft} aria-label="Remove pin" title="Remove pin"><Icon name="x" /></button></span>}
         {sketch.length > 0 && <span className="badge badge-accent pin-chip">Drawing · {sketch.length} {sketch.length === 1 ? 'line' : 'lines'}<button onClick={onClearSketch} aria-label="Remove drawing" title="Remove drawing"><Icon name="x" /></button></span>}
-        <button className="primary-button" onClick={() => void add()} disabled={busy || !body.trim()} title="Add note (Ctrl+Enter)">Add note</button>
+        <button className="primary-button" onClick={() => void add()} disabled={busy || !body.trim() || loadingFrame} title="Add note (Ctrl+Enter)">Add note</button>
       </div>
       {locked && <small className="quiet-text">This review is completed, so new notes stay on the item only.</small>}
     </div>

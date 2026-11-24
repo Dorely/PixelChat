@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Decision, Item, ItemSummary, MaskShape, Pin, ReviewEntry, ReviewMode, Revision, Stroke } from '../shared/types'
+import { useAnimation } from './useAnimation'
 import { ConfirmDialog } from './Dialogs'
 import EditPanel from './EditPanel'
 import Icon from './Icon'
@@ -94,7 +95,21 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
   const step = (direction: 1 | -1) => { const next = position.current + direction; if (next >= 0 && next < items.length) { position.current = next; onIndex(next) } }
 
   const revision = item?.revisions.find(entry => entry.id === viewingId) ?? null
-  useEffect(() => { setSketch([]); setMask([]); setErasing(false); if (revision) setBrush(defaultBrush(revision)) }, [revision?.id])
+  const animation = useAnimation(revision, onError)
+  const playbackLocked = !!draft || sketch.length > 0
+  const pendingJump = useRef<{ id: string; frame: number } | null>(null)
+  useEffect(() => {
+    const jump = pendingJump.current
+    if (jump && revision?.id === jump.id && animation.frame !== undefined) { animation.seek(jump.frame); pendingJump.current = null }
+  }, [revision?.id, animation.frame])
+  const activateNote = (id: string | null) => {
+    setActiveNoteId(id)
+    const note = item?.notes.find(thread => thread.id === id)
+    if (!note || note.frame === null || playbackLocked) return
+    if (note.revisionId === revision?.id) animation.seek(note.frame)
+    else { pendingJump.current = { id: note.revisionId, frame: note.frame }; setViewingId(note.revisionId) }
+  }
+  useEffect(() => { setDraft(null); setSketch([]); setMask([]); setErasing(false); if (revision) setBrush(defaultBrush(revision)) }, [revision?.id])
   useLayoutEffect(() => {
     if (!stage) return
     const measure = () => setStageSize({ width: stage.clientWidth, height: stage.clientHeight })
@@ -253,6 +268,13 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
           <label className="toggle"><input type="checkbox" checked={preferences.pixelated} onChange={event => setPreferences(value => ({ ...value, pixelated: event.target.checked }))} /> Pixelated</label>
           <span className="toolbar-hint">{hint}</span>
         </div>
+        {animation.enabled && revision && <div className="playback-bar" aria-label="Animation playback">
+          <button className="secondary-button" disabled={animation.frame === undefined || playbackLocked} onClick={animation.playing ? animation.pause : animation.play}>{animation.playing ? 'Pause' : 'Play'}</button>
+          <button className="text-button" aria-label="Previous frame" disabled={!animation.frame || playbackLocked} onClick={() => animation.seek(animation.frame! - 1)}>‹</button>
+          <input type="range" aria-label="Review frame" min={0} max={revision.frames - 1} value={animation.frame ?? 0} disabled={animation.frame === undefined || playbackLocked} onChange={event => animation.seek(Number(event.target.value))} />
+          <button className="text-button" aria-label="Next frame" disabled={animation.frame === undefined || animation.frame >= revision.frames - 1 || playbackLocked} onClick={() => animation.seek(animation.frame! + 1)}>›</button>
+          <span>Frame {animation.frame === undefined ? '…' : animation.frame + 1} / {revision.frames}</span>
+        </div>}
         <div ref={setStage} className={`viewer-stage backdrop-${preferences.backdrop}${spaceHeld || panning ? ' stage-pan' : ''}${panning ? ' stage-panning' : ''}`}
           onPointerDownCapture={event => {
             // Middle-drag, or Space+drag, pans instead of reaching the active tool.
@@ -263,19 +285,19 @@ export default function ItemViewer({ projectId, items, index, review, onIndex, o
           }}
           onPointerMove={event => { if (pan.current && stage) { stage.scrollLeft = pan.current.left - (event.clientX - pan.current.x); stage.scrollTop = pan.current.top - (event.clientY - pan.current.y) } }}
           onPointerUp={endPan} onPointerCancel={endPan} onMouseDown={event => { if (event.button === 1) event.preventDefault() }}>
-          {revision && scale > 0 && <div ref={canvas} className="viewer-canvas" style={{ width: revision.width * scale, height: revision.height * scale }}>
-            <img key={revision.id} src={window.pixel.mediaUrl(`original/${revision.id}`)} alt={summary.name} draggable={false} className={preferences.pixelated ? 'pixelated' : ''} />
-            {item && <MarkLayer revision={revision} revisions={item.revisions} notes={item.notes} tool={tool} scale={scale} draft={draft} sketch={sketch} mask={mask}
+          {revision && scale > 0 && <div onPointerDownCapture={() => animation.pause()} ref={canvas} className="viewer-canvas" style={{ width: revision.width * scale, height: revision.height * scale }}>
+            {animation.enabled ? <canvas ref={animation.setCanvas} aria-label={summary.name} className={preferences.pixelated ? 'pixelated' : ''} /> : <img key={revision.id} src={window.pixel.mediaUrl(`original/${revision.id}`)} alt={summary.name} draggable={false} className={preferences.pixelated ? 'pixelated' : ''} />}
+            {item && (!animation.enabled || animation.frame !== undefined) && <MarkLayer frame={animation.frame} revision={revision} revisions={item.revisions} notes={item.notes} tool={tool} scale={scale} draft={draft} sketch={sketch} mask={mask}
               penColor={preferences.penColor} brush={brush} erasing={erasing} activeNoteId={activeNoteId}
               onDraft={pin => { setDraft(pin); setNoteFocus(true) }} onStroke={stroke => { setSketch(value => [...value, stroke]); setNoteFocus(true) }}
-              onMask={shape => setMask(value => [...value, shape])} onActivate={setActiveNoteId} />}
+              onMask={shape => setMask(value => [...value, shape])} onActivate={activateNote} />}
           </div>}
         </div>
       </div>
       <aside className="viewer-side">
         {item && revision ? <>
-          <NotesPanel ref={composer} projectId={projectId} item={item} revisionId={revision.id} reviewId={entry && revision.id === entry.revisionId ? review?.id : undefined} locked={review?.completed} draft={draft} sketch={sketch} activeNoteId={activeNoteId}
-            onClearDraft={() => setDraft(null)} onClearSketch={() => setSketch([])} onActivate={setActiveNoteId} onError={onError} />
+          <NotesPanel key={revision.id} ref={composer} frame={animation.enabled ? animation.frame : undefined} loadingFrame={animation.enabled && animation.frame === undefined} onCompose={animation.pause} projectId={projectId} item={item} revisionId={revision.id} reviewId={entry && revision.id === entry.revisionId ? review?.id : undefined} locked={review?.completed} draft={draft} sketch={sketch} activeNoteId={activeNoteId}
+            onClearDraft={() => setDraft(null)} onClearSketch={() => setSketch([])} onActivate={activateNote} onError={onError} />
           <EditPanel projectId={projectId} item={item} revision={revision} mask={mask} onPaintMask={() => setTool('mask')} onClearMask={() => setMask([])} onView={setViewingId} onError={onError} />
           <section className="viewer-section">
             <h3>Versions <span>{item.revisions.length}</span></h3>

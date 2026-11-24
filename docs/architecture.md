@@ -59,7 +59,7 @@ library as the desktop app.
 
 ## Persistence
 
-Schema version 7 holds `settings`, `projects`, `sessions`, `sources`, `items`,
+Schema version 8 holds `settings`, `projects`, `sessions`, `sources`, `items`,
 `revisions`, `activity`, `reviews`, `review_entries`, `notes`, `jobs`, and the chat tables
 `messages`, `chat_history`, and `tool_calls`; migrations run in order, and project and
 session deletion cascade. A `Default` project is created
@@ -72,7 +72,7 @@ review-shaped wait described below.
 
 ## Library and media
 
-A **revision** (a version) is an immutable image asset: once stored it never changes,
+A **revision** (a version) is an immutable media asset: once stored it never changes,
 and nothing is overwritten in place. An **item** is a lineage that groups the versions of
 one artwork (as imported, rescanned, generated, and edited, each with a `parentId`), with
 pointers to the selected and synced versions. A version's exact
@@ -81,13 +81,15 @@ thumbnail at `thumbnails/<revisionId>.webp`. Files are written to a `.partial` n
 renamed into place. Width, height (of one frame), frame count, format, alpha presence, and
 whether any pixel is transparent come from sharp. Animated GIF and WebP versions are read
 with every frame, so transparency covers the whole animation and the thumbnail is an
-animated WebP that plays on cards; the viewer shows the original, which the browser
-animates. Versions stored before schema 4 count as one frame. Provenance is stored as JSON
+animated WebP that plays on cards; the viewer decodes the original with ImageDecoder and draws indexed frames on a canvas.
+MP4 and WebM retain their original bytes and use FFmpeg from PATH to create a losslessly encoded,
+visual-only WebP playback copy plus a still thumbnail. The reviewer and `view_image` inspect the same
+playback frames. The `playback` media route has the same active-project scope as `original` and `thumb`. Versions stored before schema 4 count as one frame. Provenance is stored as JSON
 per revision.
 
 A **source** links a folder (absolute root, include and exclude globs over forward-slash
 relative paths, case-insensitive). Dot-folders such as `.godot` are skipped, and only
-PNG, WebP, JPEG, and GIF files are imported. Scans run in the background, four files at a
+PNG, WebP, JPEG, GIF, MP4, and WebM files are imported. Scans run in the background, four files at a
 time, and report progress through `sources_list`/`source_get`:
 
 - a new path creates an item whose collection is its folder;
@@ -136,6 +138,8 @@ with `until: completed` until it is completed. It returns the events, the review
 new cursor, and `timedOut`. Waits default to 50 seconds (under common MCP client tool
 timeouts) and go up to 30 minutes. `pixelchat watch-review` loops it into a JSON-lines
 stream for agents that hold one connection.
+
+A root note may name a zero-based `frame`. An absent frame applies across the version. Timed marks appear only on their revision and frame in both the viewer and `view_image`. Selecting a frame note seeks to it. The viewer labels frames starting at 1.
 
 A **note** belongs to an item and a revision, and optionally to a review, in which case
 the revision must be one of the review's entries (by default the item's entry there). A

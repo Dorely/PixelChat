@@ -12,7 +12,7 @@ An item is **pending export** when its selected version differs from the synced 
 
 ## Sources
 
-`source_add` links an absolute folder and imports PNG, WebP, JPEG, and GIF files (dot-folders
+`source_add` links an absolute folder and imports PNG, WebP, JPEG, GIF, MP4, and WebM files (dot-folders
 skipped; include and exclude globs use forward-slash relative paths). `source_rescan`
 reports added, changed, missing, and unchanged files; a changed file becomes a new synced
 version in the item's lineage, unreviewed (reviews keep the version they showed). To bring

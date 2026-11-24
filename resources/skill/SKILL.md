@@ -37,6 +37,8 @@ its database, or build a separate review page.
    new, unreviewed asset; add it to a review and show it with `ui_open`. A completed review
    is final; never expect new art to appear in it.
 
+   For animation or sequence feedback, prefer a playable GIF, animated WebP, MP4, or WebM clip at the intended timing. Import it and add its exact revision as the review subject, or as a reference when it demonstrates another asset. Reviewers can pause, step, pin, and draw. Inspect a frame note with `view_image` using its `revisionId` and zero-based `frame`.
+
 8. Shape the review to the question. For "which of these?", create a contest
    (`review_create` with `mode: "contest"` and at least two candidates, and `picks` when
    more than one should win); the winners are the entries the user accepted, the rest take no

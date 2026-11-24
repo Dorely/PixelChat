@@ -3,11 +3,11 @@ import { readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises
 import { basename, dirname, extname, isAbsolute, join, posix, resolve } from 'node:path';
 import { WorkbenchError } from '../shared/workbench';
 import type { Origin, Revision, ScanProgress, ScanReport, Source } from '../shared/types';
-import { IMAGE_EXTENSIONS, sha256, type MediaStore } from './media';
+import { MEDIA_EXTENSIONS, sha256, type MediaStore } from './media';
 import { now, type Store } from './store';
 
 const SCAN_CONCURRENCY = 4;
-const FORMAT_EXTENSIONS: Record<Revision['format'], string[]> = { png: ['.png'], webp: ['.webp'], jpeg: ['.jpg', '.jpeg'], gif: ['.gif'] };
+const FORMAT_EXTENSIONS: Record<Revision['format'], string[]> = { png: ['.png'], webp: ['.webp'], jpeg: ['.jpg', '.jpeg'], gif: ['.gif'], mp4: ['.mp4'], webm: ['.webm'] };
 
 /** Glob over forward-slash relative paths: `**`, `*`, `?`, and `{a,b}`; case-insensitive like Windows paths. */
 export function globMatcher(patterns: string[]) {
@@ -73,8 +73,8 @@ export class Library {
     for (const path of paths) {
       try {
         if (!isAbsolute(path)) throw new WorkbenchError('INVALID_ARGUMENTS', 'Paths must be absolute.');
-        if (!IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) throw new WorkbenchError('UNSUPPORTED_IMAGE', 'Only PNG, WebP, JPEG, and GIF files are supported.');
-        const facts = await this.media.ingest(await readFile(path));
+        if (!MEDIA_EXTENSIONS.has(extname(path).toLowerCase())) throw new WorkbenchError('UNSUPPORTED_IMAGE', 'Only PNG, WebP, JPEG, GIF, MP4, and WebM files are supported.');
+        const facts = await this.media.importMedia(await readFile(path), extname(path).toLowerCase());
         const revision = { ...facts, origin: 'imported' as const, provenance: { importedFrom: resolve(path) } };
         if (lineage) { this.store.addRevision(projectId, lineage.id, { ...revision, parentId: lineage.selectedRevisionId }, false, origin); revisions.push(facts.id); }
         else created.push(this.store.createItem(projectId, { sourceId: null, sourcePath: null, name: basename(path, extname(path)), collection: target.collection, revision }, origin));
@@ -122,7 +122,7 @@ export class Library {
   private async scan(projectId: string, sourceId: string, progress: ScanProgress, origin: Origin): Promise<ScanReport> {
     const source = this.store.source(sourceId, projectId);
     const included = globMatcher(source.include.length ? source.include : ['**']), excluded = globMatcher(source.exclude);
-    const files = (await walk(source.root)).filter(path => IMAGE_EXTENSIONS.has(posix.extname(path).toLowerCase()) && included(path) && !excluded(path));
+    const files = (await walk(source.root)).filter(path => MEDIA_EXTENSIONS.has(posix.extname(path).toLowerCase()) && included(path) && !excluded(path));
     progress.total = files.length; this.store.changed();
     const report = { startedAt: progress.startedAt, added: 0, changed: 0, unchanged: 0, failed: [] as ScanReport['failed'] };
     const seen = new Set<string>();
@@ -136,7 +136,7 @@ export class Library {
           const existing = this.store.sourceItem(sourceId, path);
           if (existing && existing.syncedSha === sha256(bytes)) report.unchanged++;
           else {
-            const facts = await this.media.ingest(bytes);
+            const facts = await this.media.importMedia(bytes, extname(path).toLowerCase());
             const provenance = { importedFrom: join(source.root, path) };
             if (existing) { this.store.addRevision(projectId, existing.id, { ...facts, origin: 'imported', parentId: existing.syncedRevisionId, provenance }, true, origin); report.changed++; }
             else { this.store.createItem(projectId, { sourceId, sourcePath: path, name: posix.basename(path, posix.extname(path)), collection: posix.dirname(path) === '.' ? '' : posix.dirname(path), revision: { ...facts, origin: 'imported', provenance } }, origin); report.added++; }

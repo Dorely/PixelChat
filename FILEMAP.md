@@ -51,7 +51,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/main/bridge.ts](src/main/bridge.ts) | Token-authenticated local bridge (named pipe or Unix socket) for the CLI. |
 | [src/main/view-image.ts](src/main/view-image.ts) | Renders a revision as a PNG for agent vision: backdrop, scaling, numbered note pins and drawings. |
 | [src/main/store.ts](src/main/store.ts) | SQLite schema and repository for settings, projects, sessions, sources, items, revisions, reviews, notes, image jobs, and the activity log. |
-| [src/main/media.ts](src/main/media.ts) | Stores exact original bytes (plus provider originals of converted results) and WebP thumbnails per revision; reads image facts with sharp. |
+| [src/main/media.ts](src/main/media.ts) | Stores exact original bytes (plus provider originals of converted results) and WebP thumbnails per revision; prepares silent video playback copies with FFmpeg and reads frame facts with sharp. |
 | [src/main/library.ts](src/main/library.ts) | Source folders, background scans and rescans, glob filters, loose-file imports, and conflict-checked export. |
 | [src/main/chat.ts](src/main/chat.ts) | Inline assistant turns: model requests, ledger-checked tool execution, image attachments, per-turn project context. |
 | [src/main/assistant.ts](src/main/assistant.ts) | Assistant instructions, tool schemas derived from the registry, and activity lines. |
@@ -110,6 +110,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/renderer/Dialogs.tsx](src/renderer/Dialogs.tsx) | Shared modal shell and destructive-action confirmation. |
 | [src/renderer/LibraryView.tsx](src/renderer/LibraryView.tsx) | Library grid with search and filters, source management, and add-folder dialog. |
 | [src/renderer/ItemCard.tsx](src/renderer/ItemCard.tsx) | Grid card and thumbnail shared by Library and review boards; decision labels and in-card review decisions. |
+| [src/renderer/useAnimation.ts](src/renderer/useAnimation.ts) | Decodes, plays, and seeks exact review frames on the viewer canvas. |
 | [src/renderer/ItemViewer.tsx](src/renderer/ItemViewer.tsx) | Item inspection (opens at Fit): Ctrl+wheel zoom at the cursor, panning, Pin/Draw/Mask tools, backdrops, versions, notes, edits, export, and keyboard decisions on a review entry's version. |
 | [src/renderer/EditPanel.tsx](src/renderer/EditPanel.tsx) | Viewer edit prompt, model options, mask status, open-notes insertion, and the item's job list. |
 | [src/renderer/SettingsDialog.tsx](src/renderer/SettingsDialog.tsx) | Codex sign-in, Gemini key, chat model, and agent settings; provider-readiness context. |
