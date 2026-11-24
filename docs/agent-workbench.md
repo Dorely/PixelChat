@@ -19,6 +19,7 @@ pixelchat help
 pixelchat skill install --scope project --project C:\work\game --target claude --target codex --mcp --dry-run
 pixelchat skill install --scope project --project C:\work\game --target claude --target codex --mcp
 pixelchat skill install --scope user --target claude --mcp
+pixelchat skill install --scope user --target antigravity
 pixelchat skill status --scope project --project C:\work\game --target claude --mcp
 pixelchat skill uninstall --scope project --project C:\work\game --target claude --mcp
 ```
@@ -31,7 +32,9 @@ conflict replacement, plus a connection check.
 | Project | `<project>/.agents/skills/pixelchat` | `<project>/.claude/skills/pixelchat` | `<project>/.codex/config.toml`, `<project>/.mcp.json` |
 | User | `~/.agents/skills/pixelchat` | `~/.claude/skills/pixelchat` | `$CODEX_HOME/config.toml` (default `~/.codex`), `~/.claude.json` |
 
-MCP registration happens only with `--mcp`. The server is named `pixelchat` and points at
+Antigravity shares the project skill directory with Codex. User-scope installation places the skill in `~/.gemini/config/skills/pixelchat`, shared by the Antigravity App, CLI, and IDE. [Google Antigravity skill locations](https://antigravity.google/docs/skills)
+
+For Codex and Claude Code, MCP registration happens only with `--mcp`. The server is named `pixelchat` and points at
 the installed runtime and CLI by absolute path, so project registration is machine-local
 and moving the app requires reinstalling. Identical files are not rewritten. Differing
 skill files or a different `pixelchat` MCP entry fail before writing unless `--force`,

@@ -484,3 +484,9 @@ secure-storage, or platform integration.
 - Rebuilt the skill and refreshed the local Codex copy after checking that it matched the previous bundle. The skill installer reported all five files up to date afterward.
 
 The v0.5.0 tag [Build run](https://github.com/Dorely/PixelChat/actions/runs/45439864426) passed both package jobs and published the [release](https://github.com/Dorely/PixelChat/releases/tag/v0.5.0). Verified the published asset list includes `PixelChat-Setup-0.5.0.exe`, `PixelChat-0.5.0-x86_64.AppImage`, `pixelchat_0.5.0_amd64.deb`, and `SHA256SUMS.txt`.
+
+## 2026-11-24 — Antigravity skill installation
+
+- Windows typecheck and production build passed. The bundled CLI installed the five skill files at user scope. Both CLI status and the real browser Settings panel reported all five up to date. With Antigravity selected alone, MCP was disabled in Settings and the CLI rejected an explicit MCP request. The browser host used a temporary profile because the installed app was running.
+- WSL Ubuntu with temporary Node 22.23.5 built the AppImage and .deb from a scratch checkout. The unpacked app ran under WSLg and its CLI returned the default project. A joint Codex and Antigravity project install wrote five files once, status found all five, and uninstall reported five backups. A subsequent manual assertion expected the directory to disappear and failed because uninstall retains backups by design.
+- Verified the files through PixelChat. Invocation inside a live Antigravity conversation was not exercised.

@@ -8,10 +8,10 @@ export class WorkbenchError extends Error {
   constructor(public code: string, message: string, public details?: unknown) { super(message); }
 }
 
-/** Skill and MCP registration for Codex and Claude Code, from the CLI or Settings. */
+/** Skill installation and optional MCP registration, from the CLI or Settings. */
 export const installationSchema = z.object({
   action: z.enum(['install', 'uninstall', 'status']).default('install'), scope: z.enum(['project', 'user']),
-  targets: z.array(z.enum(['codex', 'claude'])).default([]), projectDirectory: z.string().optional(), directory: z.string().optional(),
+  targets: z.array(z.enum(['codex', 'claude', 'antigravity'])).default([]), projectDirectory: z.string().optional(), directory: z.string().optional(),
   skill: z.boolean().default(true), mcp: z.boolean().default(false), dryRun: z.boolean().default(false), force: z.boolean().default(false),
 }).strict();
 export type InstallationInput = z.input<typeof installationSchema>;

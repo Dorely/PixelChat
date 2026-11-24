@@ -86,7 +86,7 @@ Map of authored project files. Generated output (`out/`, `release/`, `node_modul
 | [src/shared/api.ts](src/shared/api.ts) | Builds the fixed renderer API over a transport (IPC or browser host). |
 | [src/shared/operation-catalog.ts](src/shared/operation-catalog.ts) | Operation schemas and descriptions, and the JSON tool catalog the CLI and MCP serve. |
 | [src/shared/guidance.ts](src/shared/guidance.ts) | Embedded skill references, their hash, and topic selection. |
-| [src/shared/install.ts](src/shared/install.ts) | Skill and MCP installation for Codex and Claude Code: preflight, backups, status, uninstall. |
+| [src/shared/install.ts](src/shared/install.ts) | Skill installation for Codex, Claude Code, and Antigravity, plus optional MCP registration for Codex and Claude Code: preflight, backups, status, uninstall. |
 | [src/shared/discovery.ts](src/shared/discovery.ts) | Profile location and bridge endpoint discovery: DPAPI and private ACL on Windows, owner-only files on Linux. |
 | [src/shared/native.ts](src/shared/native.ts) | Runs the native helper with bounded input, output, and time. |
 

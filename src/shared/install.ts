@@ -18,12 +18,19 @@ export async function installIntegration(raw: InstallationInput, runtime: string
   if (!input.targets.length && !input.directory) throw new WorkbenchError('INVALID_ARGUMENTS', 'Choose at least one harness target or custom skills directory.');
   if (input.scope === 'project' && (!input.projectDirectory || !isAbsolute(input.projectDirectory))) throw new WorkbenchError('INVALID_PATH', 'Project scope requires an absolute projectDirectory.');
   if (input.directory && !isAbsolute(input.directory)) throw new WorkbenchError('INVALID_PATH', 'Custom skills directory must be absolute.');
-  if (input.mcp && input.directory && !input.targets.length) throw new WorkbenchError('INVALID_ARGUMENTS', 'MCP registration requires a named harness target.');
+  const mcpTargets = input.targets.filter(target => target !== 'antigravity');
+  if (input.mcp && !mcpTargets.length) throw new WorkbenchError('INVALID_ARGUMENTS', 'MCP registration requires a Codex or Claude Code target.');
   const home = homedir(), project = input.projectDirectory ? resolve(input.projectDirectory) : '';
-  const roots = input.targets.map(target => ({ target, root: join(input.scope === 'project' ? project : home, target === 'codex' ? '.agents' : '.claude', 'skills', 'pixelchat') }));
-  if (input.directory && !roots.some(entry => entry.root.toLowerCase() === join(resolve(input.directory!), 'pixelchat').toLowerCase())) roots.push({ target: 'codex', root: join(resolve(input.directory), 'pixelchat') });
+  const base = input.scope === 'project' ? project : home;
+  const folders = { codex: '.agents', claude: '.claude', antigravity: input.scope === 'project' ? '.agents' : join('.gemini', 'config') };
+  // Codex and Antigravity discover the same project skill.
+  const roots = new Set(input.targets.map(target => join(base, folders[target], 'skills', 'pixelchat')));
+  if (input.directory) {
+    const custom = join(resolve(input.directory), 'pixelchat');
+    if (process.platform !== 'win32' || ![...roots].some(root => root.toLowerCase() === custom.toLowerCase())) roots.add(custom);
+  }
   const plan: { path: string; old?: string; content?: string; status: string }[] = [];
-  if (input.skill) for (const { root } of roots) for (const [relative, content] of Object.entries(skillFiles())) {
+  if (input.skill) for (const root of roots) for (const [relative, content] of Object.entries(skillFiles())) {
     const path = join(root, relative), old = await read(path);
     const conflict = old !== undefined && old !== content;
     if (conflict && !input.force && input.action !== 'status') throw new WorkbenchError('INSTALL_CONFLICT', `File differs: ${path}. Use force only to replace/remove this customization.`);
@@ -32,7 +39,7 @@ export async function installIntegration(raw: InstallationInput, runtime: string
   const entry = { command: runtime, args: [client, 'mcp'] };
   // Codex ends tool calls after 60 seconds by default; review_wait may hold one for up to 1800.
   const CODEX_TOOL_TIMEOUT = 1900;
-  if (input.mcp) for (const target of input.targets) {
+  if (input.mcp) for (const target of mcpTargets) {
     const path = target === 'codex' ? join(input.scope === 'project' ? join(project, '.codex') : (process.env.CODEX_HOME || join(home, '.codex')), 'config.toml')
       : input.scope === 'project' ? join(project, '.mcp.json') : join(home, '.claude.json');
     const old = await read(path);
@@ -72,6 +79,6 @@ export async function installIntegration(raw: InstallationInput, runtime: string
     else { const temp = item.path + `.pixelchat-${randomUUID()}`; await writeFile(temp, item.content, { flag: 'wx' }); await rename(temp, item.path); }
     applied.push({ path: item.path, backup });
   }
-  if (input.action === 'uninstall' && !input.dryRun) for (const { root } of roots) { await rmdir(join(root, 'references')).catch(() => {}); await rmdir(root).catch(() => {}); }
+  if (input.action === 'uninstall' && !input.dryRun) for (const root of roots) { await rmdir(join(root, 'references')).catch(() => {}); await rmdir(root).catch(() => {}); }
   return { action: input.action, dryRun: input.dryRun, files: plan.map(({ path, status }) => ({ path, status })), applied };
 }

@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { profileRoot, readDiscovery } from '../shared/discovery';
 import { installIntegration, skillText } from '../shared/install';
 import { operationCatalog } from '../shared/operation-catalog';
-import { WorkbenchError, type OperationResponse } from '../shared/workbench';
+import { WorkbenchError, type InstallationInput, type OperationResponse } from '../shared/workbench';
 import type { ActivityEntry, ItemSearchResult, ReviewSummary, ReviewWait } from '../shared/types';
 
 const windows = process.platform === 'win32';
@@ -223,11 +223,11 @@ async function main() {
   if (command === 'skill' && !name) { process.stdout.write(skillText); return; }
   if (command === 'skill' || command === 'install' || command === 'uninstall') {
     const action = (command === 'skill' ? name : command) as 'install' | 'uninstall' | 'status';
-    const installed = await installIntegration({ action, scope: flags.scope?.[0] as 'project' | 'user', targets: flags.target as ('codex' | 'claude')[] ?? [], projectDirectory: flags.project?.[0] ? resolve(flags.project[0]) : undefined, directory: flags.directory?.[0] ? resolve(flags.directory[0]) : undefined, skill: true, mcp: !!flags.mcp, dryRun: !!flags['dry-run'], force: !!flags.force }, process.execPath, join(__dirname, 'cli.cjs'));
+    const installed = await installIntegration({ action, scope: flags.scope?.[0] as 'project' | 'user', targets: flags.target as InstallationInput['targets'] ?? [], projectDirectory: flags.project?.[0] ? resolve(flags.project[0]) : undefined, directory: flags.directory?.[0] ? resolve(flags.directory[0]) : undefined, skill: true, mcp: !!flags.mcp, dryRun: !!flags['dry-run'], force: !!flags.force }, process.execPath, join(__dirname, 'cli.cjs'));
     output({ ok: true, result: installed }); return;
   }
   if (!command || command === 'help' || flags.help) {
-    output({ ok: true, result: { commands: ['status', 'tools', 'guidance', 'call <operation> --input <file.json> | --json <JSON>', 'watch-review <projectId> <reviewId> [--from user|any] [--once]', 'mcp', 'skill', 'skill install|uninstall|status --scope project|user --target codex|claude [--project <absolute-directory>] [--directory <skills-parent>] [--mcp] [--dry-run] [--force]'], note: 'Operations take project IDs; image jobs return durable IDs. The app starts on demand. No provider credentials are accepted by this CLI.' } }); return;
+    output({ ok: true, result: { commands: ['status', 'tools', 'guidance', 'call <operation> --input <file.json> | --json <JSON>', 'watch-review <projectId> <reviewId> [--from user|any] [--once]', 'mcp', 'skill', 'skill install|uninstall|status --scope project|user --target codex|claude|antigravity [--project <absolute-directory>] [--directory <skills-parent>] [--mcp] [--dry-run] [--force]'], note: 'Operations take project IDs; image jobs return durable IDs. The app starts on demand. No provider credentials are accepted by this CLI.' } }); return;
   }
   if (command === 'call' && !name) throw new WorkbenchError('INVALID_ARGUMENTS', 'Specify an operation; run pixelchat tools for schemas.');
   if (flags.input && flags.json) throw new WorkbenchError('INVALID_ARGUMENTS', 'Use either --input or --json.');

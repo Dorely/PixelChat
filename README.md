@@ -26,6 +26,8 @@ Codex sign-in and the Gemini key need OS secure storage: on Linux, a Secret Serv
 such as GNOME Keyring or KWallet. The library lives under `%APPDATA%\PixelChat` on Windows and
 `~/.config/PixelChat` on Linux.
 
+Install the PixelChat skill for Antigravity across your workspaces with `pixelchat skill install --scope user --target antigravity`, or select Antigravity in Settings → Agent integration.
+
 ## Reviewing motion
 
 Agents can import a GIF, animated WebP, MP4, or WebM and attach it as a review subject or reference. Open a clip to pause, scrub, or step through it. Click or drag to pin a region, or use Draw and add a note. Click a note's frame number to return to those pixels.

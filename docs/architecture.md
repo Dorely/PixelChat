@@ -292,7 +292,7 @@ bound, with open note pins and drawings drawn (outlined) and numbered; the resul
 each mark's pin or drawing bounds. An animated version renders one chosen
 frame and reports the frame count. The skill and its references live in
 `resources/skill`; `shared/guidance.ts` embeds the same texts for the `guidance`
-operation and the installer. See [agent workbench](agent-workbench.md).
+operation and the installer. Antigravity and Codex share the project skill directory. Antigravity user installs use `~/.gemini/config/skills/pixelchat`. See [agent workbench](agent-workbench.md).
 
 ## Packaging and releases
 
